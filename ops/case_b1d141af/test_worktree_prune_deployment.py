@@ -28,10 +28,10 @@ INSTALLER = ROOT / "systemd" / "install-worktree-prune.sh"
 WRAPPER = ROOT / "ops" / "case_b1d141af" / "run-worktree-prune.sh"
 
 PAYLOAD = [
-    "ops/lib/atomic_state.py",
-    "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
     "ops/case_b1d141af/run-worktree-prune.sh",
     "ops/case_b1d141af/terminal_worktree_prune.py",
+    "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
+    "ops/lib/atomic_state.py",
     "systemd/install-worktree-prune.sh",
     "systemd/paperclip-worktree-prune.service",
     "systemd/paperclip-worktree-prune.timer",
@@ -412,9 +412,9 @@ class InstallMechanism(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         with tarfile.open(capture) as tar:
             self.assertEqual(sorted(tar.getnames()),
-                             ["ops/lib/atomic_state.py",
+                             ["ops/case_b1d141af/terminal_worktree_prune.py",
                               "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
-                              "ops/case_b1d141af/terminal_worktree_prune.py"])
+                              "ops/lib/atomic_state.py"])
 
 
 if __name__ == "__main__":

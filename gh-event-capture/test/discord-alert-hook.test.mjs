@@ -71,7 +71,7 @@ function webhookFor(port) {
   return `http://127.0.0.1:${port}/api/webhooks/test-token-segment/final-segment`
 }
 
-// Failure context (case_18f0912b): the hook's only failure signal is its exit
+// Failure context (T\x4fG-990008): the hook's only failure signal is its exit
 // code, so a bare `1 !== 0` costs a full bisect to diagnose. Append the
 // child's outputs to every exit-code assertion. The stub webhook URL is
 // loopback-only test material, so no credential can appear here.

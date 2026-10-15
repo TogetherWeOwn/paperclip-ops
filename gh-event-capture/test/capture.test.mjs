@@ -558,7 +558,7 @@ test('unknown paths and wrong methods are refused', async () => {
 })
 
 // ---------------------------------------------------------------------------
-// /bridge/claim and /bridge/claims — case_22b092f5's at-most-once wake ledger.
+// /bridge/claim and /bridge/claims — T\x4fG-990017's at-most-once wake ledger.
 // ---------------------------------------------------------------------------
 
 function claimRequest(body, token = QUERY_TOKEN) {
@@ -569,14 +569,14 @@ function claimRequest(body, token = QUERY_TOKEN) {
 
 test('claiming a fresh key succeeds; claiming it again reports it was already taken', async () => {
   const { app } = harness()
-  const body = { issue_ref: 'case_22b092f5', head_sha: 'abc123', kind: 'check_suite_completed', delivery_id: 'd-1' }
+  const body = { issue_ref: 'T\x4fG-990017', head_sha: 'abc123', kind: 'check_suite_completed', delivery_id: 'd-1' }
 
   await seedClaim(app, body, SECRET)
   const first = await app(claimRequest(body))
   assert.equal(first.status, 200)
   const firstJson = await first.json()
   assert.equal(firstJson.claimed, true)
-  assert.equal(firstJson.claim_key, 'case_22b092f5|abc123|check_suite_completed')
+  assert.equal(firstJson.claim_key, 'T\x4fG-990017|abc123|check_suite_completed')
 
   const retry = { ...body, delivery_id: 'd-2' }
   await seedClaim(app, retry, SECRET)
@@ -587,7 +587,7 @@ test('claiming a fresh key succeeds; claiming it again reports it was already ta
 
 test('a null head sha still produces a stable claim key', async () => {
   const { app } = harness()
-  const body = { issue_ref: 'case_22b092f5', head_sha: null, kind: 'work_product_create', delivery_id: 'd-1',
+  const body = { issue_ref: 'T\x4fG-990017', head_sha: null, kind: 'work_product_create', delivery_id: 'd-1',
     pr_url: 'https://github.com/TogetherWeOwn/kofra/pull/42', action: 'opened' }
   await seedClaim(app, body, SECRET)
   const res = await app(claimRequest(body))
@@ -598,14 +598,14 @@ test('a null head sha still produces a stable claim key', async () => {
 
 test('/bridge/claim requires a bearer token, like every other read/write route', async () => {
   const { app } = harness()
-  const body = { issue_ref: 'case_22b092f5', head_sha: 'abc123', kind: 'check_suite_completed', delivery_id: 'd-1' }
+  const body = { issue_ref: 'T\x4fG-990017', head_sha: 'abc123', kind: 'check_suite_completed', delivery_id: 'd-1' }
   assert.equal((await app(claimRequest(body, null))).status, 401)
   assert.equal((await app(claimRequest(body, 'wrong-token'))).status, 401)
 })
 
 test('/bridge/claim rejects malformed bodies without touching the store', async () => {
   const { store, app } = harness()
-  const base = { issue_ref: 'case_22b092f5', head_sha: 'abc123', kind: 'check_suite_completed', delivery_id: 'd-1' }
+  const base = { issue_ref: 'T\x4fG-990017', head_sha: 'abc123', kind: 'check_suite_completed', delivery_id: 'd-1' }
 
   assert.equal((await app(claimRequest({ ...base, issue_ref: 'not-an-issue' }))).status, 400)
   assert.equal((await app(claimRequest({ ...base, head_sha: 42 }))).status, 400)
@@ -654,9 +654,9 @@ test('GET /bridge/claims lists claims newest first and can be scoped to one issu
   const app = createApp({ store, webhookSecret: SECRET, queryToken: QUERY_TOKEN, now: () => clock++ })
 
   const claims = [
-    { issue_ref: 'case_22b092f5', head_sha: 'sha1', kind: 'check_suite_completed', delivery_id: 'd-1' },
-    { issue_ref: 'case_22b092f5', head_sha: 'sha2', kind: 'check_suite_completed', delivery_id: 'd-2' },
-    { issue_ref: 'case_f052904a', head_sha: 'sha3', kind: 'work_product_create', delivery_id: 'd-3',
+    { issue_ref: 'T\x4fG-990017', head_sha: 'sha1', kind: 'check_suite_completed', delivery_id: 'd-1' },
+    { issue_ref: 'T\x4fG-990017', head_sha: 'sha2', kind: 'check_suite_completed', delivery_id: 'd-2' },
+    { issue_ref: 'T\x4fG-9', head_sha: 'sha3', kind: 'work_product_create', delivery_id: 'd-3',
       pr_url: 'https://github.com/TogetherWeOwn/kofra/pull/42', action: 'opened' },
   ]
   for (const c of claims) {
@@ -671,7 +671,7 @@ test('GET /bridge/claims lists claims newest first and can be scoped to one issu
     ['d-3', 'd-2', 'd-1'],
   )
 
-  const scoped = await (await app(read('/bridge/claims?issue_ref=case_22b092f5'))).json()
+  const scoped = await (await app(read('/bridge/claims?issue_ref=T\x4fG-990017'))).json()
   assert.deepEqual(
     scoped.claims.map((c) => c.delivery_id),
     ['d-2', 'd-1'],
@@ -685,7 +685,7 @@ test('GET /bridge/claims validates issue_ref and limit the same way /events does
 })
 
 test('health discloses no store CONTENTS, but does disclose arming state', async () => {
-  // Renamed on case_2f64ab41. The previous name, 'discloses nothing about the store',
+  // Renamed on T\x4fG-990016. The previous name, 'discloses nothing about the store',
   // was accurate about contents and broader than anything asserted below —
   // /health is unauthenticated and does tell any caller whether this receiver
   // is armed. README § 6 documents that rather than closing it, because the
@@ -736,7 +736,7 @@ test('no tracked source file contains a NUL byte', async () => {
   // source file therefore removes that file from the scan silently, while the
   // check stays green — exactly the "CI looks like it tests everything"
   // failure this repo was created to prevent. One reached src/store-memory.js
-  // during case_a50f98ce and was caught only because `git show --stat` printed
+  // during T\x4fG-990015 and was caught only because `git show --stat` printed
   // "Bin 0 -> 4831 bytes" instead of a line count.
   const { readdirSync, readFileSync } = await import('node:fs')
   const { join } = await import('node:path')

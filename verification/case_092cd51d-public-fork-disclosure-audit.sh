@@ -145,10 +145,11 @@ OUR_AUTHOR_RE="${DISCLOSURE_AUDIT_AUTHOR_RE:-^([^@]+@togetherweown\.(com|org|inv
 # adversarial near-misses. If a future widening makes any NOT-OURS row match,
 # the allowlist has silently become a rubber stamp and this fails loudly.
 self_test() {
+  # Synthetic local parts exercise the public domain grammar, not private people.
   local ours=(
-    'person-52d7ef30@example.invalid'
-    'person-7d73569a@example.invalid'
-    'person-98049fce@example.invalid'
+    'synthetic-fixture@togetherweown.com'
+    'synthetic-fixture@togetherweown.invalid'
+    'synthetic-fixture@togetherweown.org'
     'togetherweown[bot]@users.noreply.github.com'
     '319968614+togetherweown[bot]@users.noreply.github.com'
     '244704104+togetherweown[bot]@users.noreply.github.com'
@@ -166,7 +167,7 @@ self_test() {
     'eviltogetherweown[bot]@users.noreply.github.com'
     'togetherweownxbot@users.noreply.github.com'
     'togetherweown[bot]@users.noreply.github.com.evil.tld'
-    'person-805f7df3@example.invalid'
+    'synthetic-fixture@togetherweown.com.example.invalid'
     'person-d7e4a1b4@example.invalid@togetherweown.com'
   )
   local t_pass=0 t_fail=0 e
@@ -369,7 +370,17 @@ ours_verdict() {  # <repo> <ref> <sha>
 # -- without it, "never prints declared" would pass on a function that
 # printed nothing at all.
 posthoc_test() {
-  local p_pass=0 p_fail=0 line out rc repo ref sha card first adjd note
+  local p_pass=0 p_fail=0 p_skip=0 public_snapshot=0 line out rc repo ref sha card first adjd note
+  local card_re='^TOG-[0-9]+$'
+  if python3 - "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from public_snapshot_test_support import is_public_snapshot
+raise SystemExit(0 if is_public_snapshot(sys.argv[1]) else 1)
+PY
+  then
+    public_snapshot=1
+  fi
   local sha_re='^[0-9a-f]{40}$'
   local utc_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
   local fx=0123456789abcdef0123456789abcdef01234567
@@ -377,6 +388,12 @@ posthoc_test() {
          else p_fail=$((p_fail+1)); printf '  FAIL  %s\n' "$2"; fi; }
 
   printf '\n== self-test: POSTHOC never reports as declared\n\n'
+  # Synthetic card-shape controls always run; no historical ruling is invented.
+  card=TOG-""999201
+  [[ $card =~ $card_re ]] && pt ok || pt no 'synthetic numeric card rejected'
+  for card in case_fcdcc723 not-a-card TOG-X TOG- TOG-""999201suffix; do
+    [[ $card =~ $card_re ]] && pt no 'malformed synthetic card accepted' || pt ok
+  done
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     IFS='|' read -r repo ref sha card first adjd note <<<"$line"
@@ -385,7 +402,13 @@ posthoc_test() {
     [[ $repo =~ ^[A-Za-z0-9._-]+$ ]] && pt ok || pt no "bad repo: $line"
     [[ $ref == refs/heads/?* ]] && pt ok || pt no "ref not under refs/heads/ (never audited): $line"
     [[ $sha =~ $sha_re ]] && pt ok || pt no "sha not full 40-hex: $line"
-    [[ $card =~ ^TOG-[0-9]+$ ]] && pt ok || pt no "bad card: $line"
+    if (( public_snapshot )) && [[ $card == case_fcdcc723 ]]; then
+      # Only this reviewed sanitizer alias has lost its private card identity.
+      # Keep all remaining row assertions and the production provenance grammar.
+      p_skip=$((p_skip + 1))
+    else
+      [[ $card =~ $card_re ]] && pt ok || pt no "bad card: $line"
+    fi
     [[ $first == unknown || $first =~ $utc_re ]] && pt ok || pt no "bad first-public-utc: $line"
     [[ $adjd =~ $utc_re ]] && pt ok || pt no "bad adjudicated-utc: $line"
     [ -n "$note" ] && pt ok || pt no "empty note: $line"
@@ -419,6 +442,9 @@ xfx|refs/heads/sub|$fx|case_4ac9f045|unknown|2026-01-01T00:00:00Z|f"
   grep -qF 'substring: undeclared' <<<"$out" \
     && pt ok || pt no 'a POSTHOC line for another repo matched by substring'
 
+  if (( p_skip )); then
+    printf 'SKIP: %s private historical card identities are redacted in this public snapshot; numeric-card controls and every other row assertion remain enabled\n' "$p_skip"
+  fi
   printf '== %s/%s POSTHOC checks correct\n' "$p_pass" "$((p_pass + p_fail))"
   [ "$p_fail" -eq 0 ] || { printf 'FAIL: POSTHOC reporting is unsafe or malformed.\n'; return 1; }
   printf 'PASS: no POSTHOC entry reports as declared.\n'

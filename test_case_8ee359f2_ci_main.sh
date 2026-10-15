@@ -289,6 +289,17 @@ done
 if grep -En '://' "$YAML"; then bad "8d. yaml carries a URL literal"; else ok "8d. yaml has no URL literals"; fi
 [[ "$(grep -c 'GATUS_EXTERNAL_TOKEN' "$YAML")" -ge 7 ]] \
   && ok "8e. token only via env reference" || bad "8e. token reference missing"
+# Only the private measured-baseline integration check is absent in the public
+# snapshot. All synthetic runtime, boundary, refusal and mutation checks run.
+if python3 - "$HERE" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from public_snapshot_test_support import private_artifact_absent
+raise SystemExit(0 if private_artifact_absent(sys.argv[1], "ops/case_c542accd/job_baselines.json") else 1)
+PY
+then
+  printf '%s\n' 'SKIP: historical private CI runtime measurements are excluded from the fresh public snapshot; synthetic runtime and mutation tests remain enabled.'
+else
 python3 - "$BASE" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -303,6 +314,7 @@ for r, spec in repos.items():
 print("baselines ok")
 PY
 [[ $? -eq 0 ]] && ok "8f. baselines cover three repos with seeded positive entries" || bad "8f. baselines shape"
+fi
 # Scoped to ops/case_c542accd only: this suite file itself carries the planted
 # webhook positive control below, so scanning it would self-trip.
 if grep -rnE 'discord\.com/api/webhooks/[0-9]|^(DISCORD_WEBHOOK_URL|AKMATORI_ALERTMANAGER_URL|AKMATORI_WEBHOOK_SECRET|GATUS_EXTERNAL_TOKEN)=[^<"$'"'"'[:space:]$]|Bearer [A-Za-z0-9._~-]{8,}' "$HERE/ops/case_c542accd" | grep -v SENTINELTOKEN; then

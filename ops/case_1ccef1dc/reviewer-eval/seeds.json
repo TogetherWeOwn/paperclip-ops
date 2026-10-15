@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "note": "Synthetic textual mutations against public PR source. Historical private survival results are omitted: ci_silent is unknown until independently measured in isolation. Seed edits and ground truth are never exposed to reviewer sandboxes.",
+  "seeds": [
+    {
+      "id": "S01", "pr": 314, "file": "src/sessions.ts",
+      "old": "where user_id = ${userId} and token_hash != ${exceptTokenHash} and revoked_at is null",
+      "new": "where token_hash != ${exceptTokenHash} and revoked_at is null",
+      "class": "security-missing-filter", "severity": "P0",
+      "desc": "Postgres revokeUserSessions drops the user_id predicate, so one sign-in revokes every other user's sessions."
+    },
+    {
+      "id": "S02", "pr": 343, "file": "src/not-found-suggestions.ts",
+      "old": "expiresAt: Date.now() + NOT_FOUND_SUGGESTIONS_TTL_MS }",
+      "new": "expiresAt: Date.now() + NOT_FOUND_SUGGESTIONS_TTL_MS * 1000 }",
+      "class": "units-staleness", "severity": "P1",
+      "desc": "TTL multiplied by 1000: cached 404 suggestions live ~16.7 hours instead of 60 s and show ended events."
+    },
+    {
+      "id": "S02b", "pr": 343, "file": "src/not-found-suggestions.ts",
+      "old": "const ASSET_LIKE_PATH = /(?:^|\\/)\\.|\\.[a-z0-9]{1,8}$/i;",
+      "new": "const ASSET_LIKE_PATH = /(?:^|\\/)\\.|\\.[a-z0-9]{1,8}/i;",
+      "class": "regex-anchor", "severity": "P2",
+      "desc": "Dropped end anchor: any path containing a dot followed by alphanumerics is treated as an asset probe and gets no suggestions."
+    },
+    {
+      "id": "S03", "pr": 321, "file": "src/up.ts",
+      "old": "return typeof value !== \"string\" || value.trim() === \"\";",
+      "new": "return typeof value !== \"string\" || value === \"\";",
+      "class": "validation-gap", "severity": "P2",
+      "desc": "Whitespace-only secrets no longer count as missing, so readiness stays green with a blank secret."
+    },
+    {
+      "id": "S04", "pr": 196, "file": "src/csp-report-uri.ts",
+      "old": "`${url.origin}${url.pathname}`.slice(0, MAX_CSP_REPORT_URI_LENGTH)",
+      "new": "`${url.origin}${url.pathname}${url.search}`.slice(0, MAX_CSP_REPORT_URI_LENGTH)",
+      "class": "security-secret-leak", "severity": "P1",
+      "desc": "Reconstructed URI now includes the query string, so credentials in query parameters reach logs."
+    },
+    {
+      "id": "S05", "pr": 146, "file": "src/admin/record-id.ts",
+      "old": "id > 0 && id <= MAX_RECORD_ID", "new": "id >= 0 && id <= MAX_RECORD_ID",
+      "class": "boundary", "severity": "P2",
+      "desc": "Record id 0 is admitted although serial ids start at 1."
+    },
+    {
+      "id": "S06", "pr": 289, "file": "src/admin/validation.ts",
+      "old": "new Date(fold === \"later\" ? Math.max(...instants) : Math.min(...instants))",
+      "new": "new Date(fold === \"later\" ? Math.min(...instants) : Math.max(...instants))",
+      "class": "inverted-condition", "severity": "P1",
+      "desc": "Fold preference inverted: single events resolve to the earlier occurrence and series to the later one."
+    },
+    {
+      "id": "S07", "pr": 269, "file": "src/events/reads.ts",
+      "old": "rows: await withGoing(db, rows.slice(0, PAGE_SIZE).filter(isRenderableEventWindow)),",
+      "new": "rows: await withGoing(db, rows.slice(0, PAGE_SIZE)),",
+      "class": "missing-behavior", "severity": "P1",
+      "desc": "The archive page no longer filters unrenderable windows, so one poison row 500s the whole archive."
+    },
+    {
+      "id": "S08", "pr": 288, "file": "src/discord-widget.ts",
+      "old": "available = res.status === 429 ? previous : res.ok;", "new": "available = res.ok;",
+      "class": "error-handling", "severity": "P2",
+      "desc": "A 429 from Discord now marks the widget down and flips every visitor to the static fallback."
+    },
+    {
+      "id": "S09", "pr": 377, "file": "src/featured-image.ts",
+      "old": "  if (hasUrlUserinfo(raw)) return false;\n", "new": "",
+      "class": "missing-check", "severity": "P1",
+      "desc": "featuredImageAllowed no longer refuses userinfo URLs, so legacy rows with credentials render."
+    },
+    {
+      "id": "S10", "pr": 141, "file": "src/index.tsx",
+      "old": "  if (!admitted || !store || !code) return c.redirect(\"/?n=signin_failed\", 302);",
+      "new": "  if (!store || !code) return c.redirect(\"/?n=signin_failed\", 302);",
+      "class": "security-missing-check", "severity": "P0",
+      "desc": "The single-use journey check is dropped from the OAuth callback, so a replayed callback is accepted."
+    },
+    {
+      "id": "S11", "pr": 141, "file": "src/index.tsx",
+      "old": "const botBlank = c.env.DISCORD_BOT_TOKEN.trim() === \"\";",
+      "new": "const botBlank = c.env.DISCORD_BOT_TOKEN === \"\";",
+      "class": "validation-gap", "severity": "P2",
+      "desc": "A whitespace-only bot token is no longer treated as blank, so sign-in calls Discord with an unusable token."
+    },
+    {
+      "id": "S12", "pr": 346, "file": "bin/erase-member.mjs",
+      "old": "if (isProductionDatabaseUrl(raw) && target !== \"production\") {",
+      "new": "if (isProductionDatabaseUrl(raw) && target === undefined) {",
+      "class": "guard-bypass", "severity": "P1",
+      "desc": "`--target staging` now satisfies the production guard, so an erase can run against a production connection string."
+    },
+    {
+      "id": "S13", "pr": 288, "file": "src/discord-widget.ts",
+      "old": "if (background && !inflight && (!current || now() - current.checkedAt >= ttlMs)) {",
+      "new": "if (background && (!current || now() - current.checkedAt >= ttlMs)) {",
+      "class": "concurrency", "severity": "P2",
+      "desc": "The in-flight guard is dropped, so every request while the verdict is stale starts its own Discord probe."
+    },
+    {
+      "id": "S14", "pr": 343, "file": "src/not-found-suggestions.ts",
+      "old": "if (cache?.source === source && Date.now() < cache.expiresAt) return cache.value;",
+      "new": "if (cache && Date.now() < cache.expiresAt) return cache.value;",
+      "class": "stale-cache-scope", "severity": "P2",
+      "desc": "The cache no longer checks which database source filled it, so a binding change serves another source's rows."
+    },
+    {
+      "id": "S15", "pr": 114, "file": "src/admin/recurrence.ts",
+      "old": "n < 1 || n > MAX_OCCURRENCES ||", "new": "n < 1 || n >= MAX_OCCURRENCES ||",
+      "class": "boundary", "severity": "P2",
+      "desc": "The largest permitted occurrence count is now refused."
+    }
+  ]
+}

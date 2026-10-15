@@ -1,5 +1,4 @@
 """Cold, credential-free controls for this repo's selected vendor contract."""
-import gzip
 import hashlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import io
@@ -21,8 +20,9 @@ COMMIT = TOOLKIT["commit"]
 FIX_COMMIT = "533c7ae2b013340bfae20cfcc711220048295855"
 FIX_ARCHIVE_SHA256 = "3f88a7325590b81250ed6779d87ee13def109ea3e64ca1afa80f539ada215092"
 FIX_GUARD_SHA256 = "93b14debe4cfb5fd7a059103a431cc87afbc36e66fa0705d0e4ba77cf3019874"
-# Immutable, gzip-compressed test subjects, not replacement implementations.
-# The old subject makes the unchanged baseline runnable even in a cold tree.
+# Immutable public dependency bytes, not replacement implementations.
+# Run scripts/sync-toolkit.sh before this suite, as the CI setup does. Do not
+# republish excluded historical archives merely to reconstruct a test subject.
 GUARD_SUBJECTS = {
     "637aff8ead6766016ca830fc726a0c91a58df02a":
         "9c6d54ac6d2ee64afaeb504ebd56be35bb29cec78803db659399f71be249d46b",
@@ -227,8 +227,9 @@ cp "$source" "$dest"
 
     def prepare_guard(self):
         self.assertIn(COMMIT, GUARD_SUBJECTS, "add a verified immutable test subject for this pin")
-        fixture = ROOT / "tests/fixtures/toolkit-sibling-guard" / f"{COMMIT}.sh.gz"
-        subject = gzip.decompress(fixture.read_bytes())
+        fixture = ROOT / "sibling_guard.sh"
+        self.assertTrue(fixture.is_file(), "restore pinned public dependencies with scripts/sync-toolkit.sh")
+        subject = fixture.read_bytes()
         self.assertEqual(hashlib.sha256(subject).hexdigest(), GUARD_SUBJECTS[COMMIT])
         contract = json.loads((ROOT / "vendor/offline-ci-contract.json").read_text())
         self.assertEqual(contract["restored_files_sha256"]["sibling_guard.sh"],
@@ -267,10 +268,10 @@ cp "$source" "$dest"
                 path = urlsplit(self.path).path
                 if path == "/repos/stub/acceptance/pulls":
                     code, body = owner.pulls_status, owner.pulls
-                elif path in ("/api/issues/case_63ac0cf0", "/api/issues/case-clear"):
-                    code, body = 200, {"id": "case-clear", "identifier": "case_63ac0cf0"}
+                elif path in ("/api/issues/CASE-1001", "/api/issues/case-clear"):
+                    code, body = 200, {"id": "case-clear", "identifier": "CASE-1001"}
                 elif path == "/api/companies/stub-company/issues":
-                    code, body = 200, [{"id": "case-clear", "identifier": "case_63ac0cf0"}]
+                    code, body = 200, [{"id": "case-clear", "identifier": "CASE-1001"}]
                 elif path == "/api/issues/case-clear/runs":
                     code, body = owner.runs_status, owner.runs_body
                 else:
@@ -346,7 +347,7 @@ cp "$source" "$dest"
         return self.run_guard(phase=phase, expected=expected)
 
     def run_guard(self, *, phase="start", expected=0):
-        result = subprocess.run(["/usr/bin/bash", str(self.guard), "case_63ac0cf0",
+        result = subprocess.run(["/usr/bin/bash", str(self.guard), "CASE-1001",
                                  "--repo=stub/acceptance", f"--phase={phase}"],
                                 cwd=self.checkout, env=self.guard_env,
                                 capture_output=True, text=True, timeout=20)
@@ -361,46 +362,46 @@ cp "$source" "$dest"
         self.prepare_guard_world()
         for phase in ("start", "prepush"):
             with self.subTest(phase=phase):
-                self.run_guard_case("Related: case_63ac0cf0\nRefs: case_ae44b2f7\n", phase=phase)
+                self.run_guard_case("Related: CASE-1001\nRefs: CASE-1002\n", phase=phase)
 
     def test_different_head_procedure_body_mention_is_not_ownership(self):
         self.prepare_guard_world()
         for phase in ("start", "prepush"):
             with self.subTest(phase=phase):
-                self.run_guard_case("Procedure: run ./sibling_guard.sh case_63ac0cf0 before pushing.\n",
+                self.run_guard_case("Procedure: run ./sibling_guard.sh CASE-1001 before pushing.\n",
                                     phase=phase)
 
     def test_different_head_mid_sentence_refs_is_not_ownership(self):
         self.prepare_guard_world()
         for phase in ("start", "prepush"):
             with self.subTest(phase=phase):
-                self.run_guard_case("Related work (see Refs: case_63ac0cf0 for procedure).\n",
+                self.run_guard_case("Related work (see Refs: CASE-1001 for procedure).\n",
                                     phase=phase)
 
     def test_different_head_matching_refs_line_is_a_duplicate(self):
         self.prepare_guard_world()
         for phase in ("start", "prepush"):
             with self.subTest(phase=phase):
-                self.run_guard_case("Description\nRefs: case_63ac0cf0\n", phase=phase, expected=1)
+                self.run_guard_case("Description\nRefs: CASE-1001\n", phase=phase, expected=1)
 
     def test_title_and_branch_attribution_still_refuse_duplicates(self):
         self.prepare_guard_world()
-        for kwargs in ({"title": "fix case_63ac0cf0"}, {"head": "case_63ac0cf0-other"}):
+        for kwargs in ({"title": "fix CASE-1001"}, {"head": "CASE-1001-other"}):
             with self.subTest(kwargs=kwargs):
                 self.run_guard_case(expected=1, **kwargs)
 
     def test_same_head_own_and_unclaimed_prs_remain_clear(self):
         self.prepare_guard_world()
-        for body in ("Refs: case_63ac0cf0\n", "Refs: case_63ac0cf0, case_ae44b2f7\n",
-                     "no refs line", "Related (see Refs: case_ae44b2f7)"):
+        for body in ("Refs: CASE-1001\n", "Refs: CASE-1001, CASE-1002\n",
+                     "no refs line", "Related (see Refs: CASE-1002)"):
             for phase in ("start", "prepush"):
                 with self.subTest(body=body, phase=phase):
                     self.run_guard_case(body, head="acceptance-work", phase=phase)
 
     def test_same_head_foreign_claim_refuses_only_at_prepush(self):
         self.prepare_guard_world()
-        self.run_guard_case("Refs: case_ae44b2f7\n", head="acceptance-work", phase="start")
-        self.run_guard_case("Refs: case_ae44b2f7\n", head="acceptance-work",
+        self.run_guard_case("Refs: CASE-1002\n", head="acceptance-work", phase="start")
+        self.run_guard_case("Refs: CASE-1002\n", head="acceptance-work",
                             phase="prepush", expected=1)
 
     def test_pr_api_errors_are_indeterminate_not_clear(self):

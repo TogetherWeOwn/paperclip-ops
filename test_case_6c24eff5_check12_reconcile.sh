@@ -42,7 +42,20 @@ bad() { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; FAIL=$((FAIL+1)); }
 hdr() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 [[ -r "$REVIEW" ]] || { echo "no readable org_access_review.sh at $REVIEW" >&2; exit 2; }
-[[ -r "$MAP" ]] || { echo "no readable tool_grant_expectations.json at $MAP" >&2; exit 2; }
+SKIP_PRIVATE_MAP=0
+if [[ -z "${TOOL_GRANT_MAP+x}" ]] && python3 - "$HERE" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from public_snapshot_test_support import private_artifact_absent
+raise SystemExit(0 if private_artifact_absent(
+    sys.argv[1], "tool_grant_expectations.json") else 1)
+PY
+then
+  SKIP_PRIVATE_MAP=1
+  printf '%s\n' 'SKIP: private deployed tool-grant map and accepted-risk record are excluded from the fresh public snapshot; synthetic two-layer admission and refusal controls remain enabled'
+else
+  [[ -r "$MAP" ]] || { echo "no readable tool_grant_expectations.json at $MAP" >&2; exit 2; }
+fi
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
@@ -135,6 +148,7 @@ grep -q "IFS='|' read -r pid pstrict prepos pperms prepo isfleet" <<<"$BLOCK" \
   || bad "the layer-2 read loop does not split on pipe"
 
 hdr "2c. Script and map agree on the accepted-risk record"
+if (( ! SKIP_PRIVATE_MAP )); then
 doc_sh="$(sed -n 's/^  ACCEPTED_RISK_DOC="\(.*\)"/\1/p' <<<"$BLOCK")"
 rev_sh="$(sed -n 's/^  ACCEPTED_RISK_REV="\(.*\)"/\1/p' <<<"$BLOCK")"
 doc_map="$(jq -r '._acceptedRiskTOG3443.docId // empty' "$MAP")"
@@ -145,11 +159,12 @@ if [[ -n "$doc_sh" && "$doc_sh" == "$doc_map" && -n "$rev_sh" && "$rev_sh" == "$
 else
   bad "script/map drift: script wants doc '${doc_sh:-?}' rev '${rev_sh:-?}', map holds doc '${doc_map:-?}' rev '${rev_map:-?}' fleet '${fleet_map:-?}'"
 fi
+fi
 
 # --- §4's harness: run the REAL block with a stubbed sql() ------------------
 # Canned verdict-loop rows are role|template|title|actual, the shape of the
 # layer-1 SQL output. Templates resolve against a minimal map written per run.
-STANDARD_MAP='{"templateDefaults":{"B2_TECH_CHIEF":"write","P3_AUDIT_RISK":"read","C1_DIRECTOR_BUILDER":"write"},"titleOverrides":{"Web Engineer":"write"},"_acceptedRiskTOG3443":{"docId":"00000000-0000-4000-8000-000000000192","rev":1,"owner":"P4_PROVISIONING_STEWARD","fleetProjectId":"fleet-proj-1"}}'
+STANDARD_MAP='{"templateDefaults":{"B2_TECH_CHIEF":"write","P3_AUDIT_RISK":"read","C1_DIRECTOR_BUILDER":"write"},"titleOverrides":{"Web Engineer":"write"},"_acceptedRiskTOG3443":{"docId":"40405f9b-5f44-4925-8589-51e9f1b32302","rev":1,"owner":"P4_PROVISIONING_STEWARD","fleetProjectId":"fleet-proj-1"}}'
 DRIFTED_MAP='{"templateDefaults":{"B2_TECH_CHIEF":"write"},"_acceptedRiskTOG3443":{"docId":"00000000-0000-4000-8000-000000000183","rev":99,"owner":"P4_PROVISIONING_STEWARD","fleetProjectId":"fleet-proj-1"}}'
 ALL_ROWS='|B2_TECH_CHIEF|CTO Platform|destructive
 |P3_AUDIT_RISK|Staff Auditor|none
@@ -277,7 +292,9 @@ bash -n "$MUTANT" 2>/dev/null \
 
 hdr "5. The tool and the map still parse"
 bash -n "$REVIEW" 2>/dev/null && ok "org_access_review.sh parses" || bad "org_access_review.sh does not parse"
-jq -e . "$MAP" >/dev/null 2>&1 && ok "tool_grant_expectations.json parses" || bad "tool_grant_expectations.json does not parse"
+if (( ! SKIP_PRIVATE_MAP )); then
+  jq -e . "$MAP" >/dev/null 2>&1 && ok "tool_grant_expectations.json parses" || bad "tool_grant_expectations.json does not parse"
+fi
 
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

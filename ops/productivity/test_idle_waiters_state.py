@@ -290,8 +290,8 @@ class ParkWrites(Base):
         super().setUp()
         self.write_json({'touched': {}, 'flagged': SIX})
         self.before = self.state.read_bytes()
-        self.board = Board(waiters=[waiter('uuid-300', 'case_e224f2ef', 'Card three hundred', 'no-op: waiting on case_3d790dcb')],
-                           cards={'case_3d790dcb': [DOER, 'in_progress', AGENT, 'Build parser', '0']})
+        self.board = Board(waiters=[waiter('uuid-300', 'case_e224f2ef', 'Card three hundred', 'no-op: waiting on TOG-' '999999301')],
+                           cards={'TOG-' '999999301': [DOER, 'in_progress', AGENT, 'Build parser', '0']})
 
     def test_failed_save_before_a_park_parks_nothing_and_the_retry_parks_once(self):
         with mock.patch.object(a.os, 'fsync', side_effect=OSError(errno.ENOSPC, 'No space left on device')):
@@ -425,8 +425,8 @@ class Normal(Base):
 
     def test_park_patches_the_doer_blocker_and_records_touched(self):
         self.write_json({'touched': {}, 'flagged': {}})
-        self.board = Board(waiters=[waiter('uuid-300', 'case_e224f2ef', 'Card three hundred', 'no-op: waiting on case_3d790dcb')],
-                           cards={'case_3d790dcb': [DOER, 'in_progress', AGENT, 'Build parser', '0']})
+        self.board = Board(waiters=[waiter('uuid-300', 'case_e224f2ef', 'Card three hundred', 'no-op: waiting on TOG-' '999999301')],
+                           cards={'TOG-' '999999301': [DOER, 'in_progress', AGENT, 'Build parser', '0']})
         self.run_apply()
         self.api.assert_called_once()
         method, path, body = self.api.call_args.args

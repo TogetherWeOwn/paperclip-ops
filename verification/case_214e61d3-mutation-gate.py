@@ -33,7 +33,7 @@ import tempfile
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 COPY = ["upstream_gate.sh", "upstream_lint.py", "upstream_reputation.py", "upstream_prepush_hook.sh",
         "upstream_watch.sh", "test_upstream_gate.sh", "test_upstream_lint.py", "test_upstream_reputation.py",
-        "upstream-memory/paperclipai__paperclip.json"]
+        "tests/fixtures/upstream-public-template.json"]
 SUITES = {
     "lint": ["python3", "-m", "unittest", "test_upstream_lint"],
     "rep": ["python3", "-m", "unittest", "test_upstream_reputation"],

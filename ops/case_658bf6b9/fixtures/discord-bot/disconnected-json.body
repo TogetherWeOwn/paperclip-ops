@@ -1,0 +1,1 @@
+{"components":[["process","ready"],["gateway","down"],["database","ready"],["token_invalid","ready"]],"jobs":{},"gateway_failure":{"phase":"durable_gateway","class":"gateway_runtime_failed"},"build_revision":"offline","build_id":"offline"}

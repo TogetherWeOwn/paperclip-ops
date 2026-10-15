@@ -1,7 +1,7 @@
-"""RUNNER_NAME guard fixtures + refusal proofs (case_eafea2da).
+"""Public runner attestation and private-canary predicate refusal proofs.
 
-Fully offline: exercises the exact guard predicates from
-.github/workflows/ci.yml (static-fleet allowlist) and
+Fully offline: exercises the exact public guard predicate from
+.github/workflows/ci.yml (hosted attestation) and the optional private
 .github/workflows/garm-canary.yml (GARM prefix tripwire) in disposable
 `bash -c` subprocesses with a controlled RUNNER_NAME/RUNNER_ENVIRONMENT
 only. No host, no network, no credentials, no runner. Run from repo root:
@@ -25,18 +25,10 @@ _ROOT = _HERE.parent
 _CI = _ROOT / ".github" / "workflows" / "ci.yml"
 _CANARY = _ROOT / ".github" / "workflows" / "garm-canary.yml"
 
-# Exact live-anchored guard semantics (asserted present below).
-# Three-way since the CI-overflow rebase: static-fleet prefixes plus the
-# github-hosted environment arm. With RUNNER_ENVIRONMENT unset the third
-# arm is false and the predicate collapses to the static allowlist.
-STATIC_GUARD = ('[[ "${RUNNER_NAME:-}" == coolify-vps-* || '
-                '"${RUNNER_NAME:-}" == ci-node7b1ff338-iso-* || '
-                '"${RUNNER_NAME:-}" == garm-* || '
-                '"${RUNNER_ENVIRONMENT:-}" == github-hosted ]]')
-STATIC_ANCHORS = ('"${RUNNER_NAME:-}" == coolify-vps-*',
-                  '"${RUNNER_NAME:-}" == ci-node7b1ff338-iso-*',
-                  '"${RUNNER_NAME:-}" == garm-*',
-                  '"${RUNNER_ENVIRONMENT:-}" == github-hosted')
+# Public CI requires the platform-provided hosted-environment attestation.
+# A runner name alone must never admit private infrastructure.
+STATIC_GUARD = '[[ "${RUNNER_ENVIRONMENT:-}" == github-hosted ]]'
+STATIC_ANCHORS = ('"${RUNNER_ENVIRONMENT:-}" == github-hosted',)
 CANARY_GUARD = 'case "${RUNNER_NAME:-}" in garm-*) ;; *) exit 1 ;; esac'
 CANARY_ANCHOR = 'garm-*) ;;'
 
@@ -57,6 +49,10 @@ class RunnerNameGuardTest(unittest.TestCase):
         ci = _CI.read_text()
         for anchor in STATIC_ANCHORS:
             self.assertIn(anchor, ci, "static guard anchor moved: " + anchor)
+
+    @unittest.skipUnless(_CANARY.is_file(),
+                         "Public snapshot excludes the private live GARM canary workflow; offline predicate tests still run")
+    def test_private_canary_anchor_present(self):
         canary = _CANARY.read_text()
         self.assertIn(CANARY_ANCHOR, canary, "canary guard anchor moved")
         # The canary tripwire must stay fail-closed on unset: no bare
@@ -64,14 +60,13 @@ class RunnerNameGuardTest(unittest.TestCase):
         # reaching the ::error arm.
         self.assertNotIn('case "$RUNNER_NAME"', canary)
 
-    def test_static_guard_admits_all_fleets(self):
-        # Owner 2026-10-04: ephemeral GARM pools carry two-isolated and
-        # replace the static fleets, so GARM names are admitted too.
+    def test_public_guard_refuses_private_fleets_without_attestation(self):
+        # Historical fleet names are negative controls, not an allowlist.
         for name in ("coolify-vps-6", "coolify-vps-1",
                      "ci-node7b1ff338-iso-1", "ci-node7b1ff338-iso-7",
                      "garm-two-abc123", "garm-old-xyz", "garm-1"):
             with self.subTest(runner=name):
-                self.assertEqual(run_guard(STATIC_GUARD, name), 0)
+                self.assertNotEqual(run_guard(STATIC_GUARD, name), 0)
 
     def test_static_guard_refuses_mislabeled_runner(self):
         # Foreign statics, case variants and empty/unset must all fail.
@@ -107,12 +102,11 @@ class RunnerNameGuardTest(unittest.TestCase):
                 self.assertNotEqual(run_guard(CANARY_GUARD, name), 0)
         self.assertNotEqual(run_guard(CANARY_GUARD, unset=True), 0)
 
-    def test_garm_names_pass_both_guards(self):
-        # Since GARM joined the isolated allowlist the guards overlap on
-        # garm-* by design; static names still fail the canary tripwire.
+    def test_garm_names_do_not_bypass_public_isolation(self):
+        # A private canary name predicate is not public runner attestation.
         for name in ("garm-two-abc123", "garm-old-xyz"):
             with self.subTest(runner=name):
-                self.assertEqual(run_guard(STATIC_GUARD, name), 0)
+                self.assertNotEqual(run_guard(STATIC_GUARD, name), 0)
                 self.assertEqual(run_guard(CANARY_GUARD, name), 0)
         for name in ("coolify-vps-6", "ci-node7b1ff338-iso-1"):
             with self.subTest(runner=name):

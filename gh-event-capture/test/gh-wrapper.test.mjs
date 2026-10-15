@@ -92,7 +92,7 @@ if (process.argv.includes('--fail-with-3')) process.exit(3)
   return { home, secure, bin, out, probe, run }
 }
 
-// Failure context (case_18f0912b): the wrapper's only failure signal is its exit
+// Failure context (T\x4fG-990008): the wrapper's only failure signal is its exit
 // code, so a bare `1 !== 0` costs a full bisect to diagnose. Append the
 // child's outputs to every exit-code assertion. Tokens here are throwaway
 // stub values and the suite already asserts none reach the outputs.

@@ -1,0 +1,1374 @@
+#!/usr/bin/env bash
+# Regression suite for sibling_guard.sh — the duplicate-implementation guard.
+#
+# THE BUG THIS EXISTS FOR (EXAMPLE-345). Two runs of one agent implemented EXAMPLE-258
+# end to end, independently; PR #28 was closed as a duplicate of #27. EXAMPLE-253
+# (#15/#16) is the same incident. The losing run HAD checked for a sibling: it
+# read `ps` (silently empty in this container, for every process including its
+# own) and worktree mtimes (indistinguishable from a live run parked on CI).
+# Both came back "nothing", and "nothing" was read as "nothing found".
+#
+# So most of the assertions below are not about detecting a sibling. They are
+# about the tool REFUSING TO REPORT CLEAR when a detector could not run: no API
+# key, a 500, an unparseable body, no GitHub credential, an unfetchable remote.
+# Every one of those must exit 3, never 0. A guard that goes green while blind
+# is the original defect, re-implemented in a script where it will be trusted
+# forever rather than re-derived and doubted each time.
+#
+# The other half is false POSITIVES, which are their own failure mode: a guard
+# that cries sibling on every issue gets skipped, and a skipped guard detects
+# nothing. Measured 2026-08-25: `GET /api/issues/{id}/runs` is NOT
+# issue-exclusive — a run holding the shared workspace's environment lease
+# appears in the run list of every issue in the company. So a foreign agentId,
+# a terminal row, the caller's own row, and the caller's own branch must all
+# come back clear.
+#
+# HERMETIC BY CONSTRUCTION. Real git against a local bare "origin" — real refs,
+# real `merge-base --is-ancestor`, no network — plus one node stub on 127.0.0.1
+# serving both the Paperclip and the GitHub API. Nothing leaves the loopback and
+# no credential of any kind is needed to run it. Requires bash, git, node, curl.
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOOL="$HERE/sibling_guard.sh"
+PASS=0; FAIL=0
+
+ok()  { printf '  \033[32mPASS\033[0m  %s\n' "$1"; PASS=$((PASS+1)); }
+bad() { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; FAIL=$((FAIL+1)); }
+hdr() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+
+# assert <status> <label> [diagnostic]
+#
+# ONE label per assertion, printed identically whether it passes or fails, so a
+# ci.yml mutation gate can pin a mutation to the exact assertion it must redden.
+# Detail goes in the diagnostic argument, never in the label.
+assert() {
+  local status="$1" label="$2" diag="${3:-}"
+  if [[ "$status" -eq 0 ]]; then ok "$label"; else
+    bad "$label"
+    [[ -n "$diag" ]] && printf '        %s\n' "$diag"
+  fi
+  return 0
+}
+
+for c in git node curl; do
+  command -v "$c" >/dev/null 2>&1 || { echo "test_sibling_guard: $c is required" >&2; exit 2; }
+done
+[[ -x "$TOOL" ]] || { echo "test_sibling_guard: $TOOL is not executable" >&2; exit 2; }
+
+TMP="$(mktemp -d)"
+cleanup() {
+  [[ -n "${STUB_PID:-}" ]] && kill "$STUB_PID" 2>/dev/null
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
+
+# ---------------------------------------------------------------------------
+# Stub API — one server, both APIs. The case is selected by the issue id in the
+# Paperclip path and by the repo NAME in the GitHub path, so every branch of the
+# tool is reachable without any per-case server state.
+#
+# Deliberately permissive where it matters: `case-500` and `pulls-denied` return
+# clean errors rather than hanging, because a tool that folded an error into
+# "nothing found" would still look completely healthy from the outside.
+# ---------------------------------------------------------------------------
+cat > "$TMP/stub.js" <<'STUB'
+const http = require('http')
+
+const ME        = 'run-me'
+const MY_AGENT  = 'agent-me'
+const OTHER     = 'agent-other'
+
+const row = (o) => Object.assign({
+  runId: 'run-x', status: 'running', agentId: MY_AGENT,
+  adapterType: 'claude_local', startedAt: '2026-08-25T10:00:00.000Z',
+  finishedAt: null, createdAt: '2026-08-25T10:00:00.000Z',
+}, o)
+
+const myOwnRow = row({ runId: ME, agentId: MY_AGENT })
+
+const RUNS = {
+  // Only the caller's own row. The baseline: this MUST be clear, or every
+  // assertion below is satisfied by a tool that always says "sibling".
+  'case-clear':    [myOwnRow],
+  // The EXAMPLE-258 shape: a second live run of the SAME agent.
+  'case-mine':     [myOwnRow, row({ runId: 'run-sib', agentId: MY_AGENT })],
+  // The environment-lease leak: another agent's live run, joined to this issue
+  // because it holds the shared workspace. Measured on EXAMPLE-345 2026-08-25.
+  'case-foreign':  [myOwnRow, row({ runId: 'run-foreign', agentId: OTHER })],
+  // Same agent, but finished. History is not a sibling.
+  'case-terminal': [myOwnRow,
+                    row({ runId: 'run-done', agentId: MY_AGENT, status: 'succeeded', finishedAt: '2026-08-25T09:00:00.000Z' }),
+                    row({ runId: 'run-fail', agentId: MY_AGENT, status: 'failed',    finishedAt: '2026-08-25T09:30:00.000Z' })],
+  // A terminal status carrying a null finishedAt: neither test alone is enough.
+  'case-terminal-nullfinish': [myOwnRow,
+                    row({ runId: 'run-cancelled', agentId: MY_AGENT, status: 'cancelled', finishedAt: null })],
+  // A live row with no finishedAt and a status the tool has never seen. Unknown
+  // must be treated as live, not skipped.
+  'case-unknown-status': [myOwnRow, row({ runId: 'run-weird', agentId: MY_AGENT, status: 'provisioning' })],
+}
+
+const ISSUES = Object.keys(RUNS).map((id, i) => ({
+  id, identifier: 'EXAMPLE-90' + i, title: 'stub issue ' + id,
+})).concat([{ id: 'case-500', identifier: 'EXAMPLE-950' }, { id: 'case-badjson', identifier: 'EXAMPLE-951' }])
+
+// Older than the 500-row company list, so the list never returns them. Only
+// GET /api/issues/<key> resolves these.
+const OLD_ISSUES = [{ id: 'case-old', identifier: 'OPS-7' }]
+const OLD_RUNS   = { 'case-old': [myOwnRow] }
+// A 200 that names a different issue must not resolve the key that was asked for.
+const MISMATCHED = { 'OPS-8': { id: 'case-old', identifier: 'OPS-9' } }
+
+// Uuid-shaped stub ids: the same-head ownership check reads the caller's own
+// key off GET /api/issues/<uuid>, so these exercise the 200, the 404 and the
+// unparseable body. Each has a clear run list, so the verdict below isolates
+// the ownership lookup instead of the control-plane detector.
+const UUID_OK = '11111111-2222-3333-4444-555555555555'
+const UUID_404 = '22222222-3333-4444-5555-666666666666'
+const UUID_BADJSON = '33333333-4444-5555-6666-777777777777'
+OLD_ISSUES.push({ id: UUID_OK, identifier: 'EXAMPLE-900' })
+OLD_RUNS[UUID_OK] = [myOwnRow]
+OLD_RUNS[UUID_404] = [myOwnRow]
+OLD_RUNS[UUID_BADJSON] = [myOwnRow]
+
+const PULLS = {
+  none:   [],
+  hit:    [{ number: 77, title: 'Do the thing (EXAMPLE-900)', body: '', head: { ref: 'feature-x' } }],
+  head:   [{ number: 78, title: 'unrelated title', body: '', head: { ref: 'example-900-sibling' } }],
+  mine:   [{ number: 79, title: 'mine (EXAMPLE-900)', body: '', head: { ref: 'CURRENT' } }],
+  // Same-head fixtures. The body Refs line is the attribution source:
+  // `foreign` is claimed by a different card, `self` by this one,
+  // `unclaimed` names no card. Titles carry no card key on purpose, so the
+  // refusal below can only come from the Refs line, never a substring.
+  // STUB_CURRENT_BRANCH is spliced into CURRENT below, so the caller head
+  // sits on each of these branches in turn.
+  foreign: [{ number: 881, title: 'shared branch work', body: 'Refs: EXAMPLE-907', head: { ref: 'CURRENT' } }],
+  self:    [{ number: 882, title: 'mine (EXAMPLE-900)', body: 'Refs: EXAMPLE-900', head: { ref: 'CURRENT' } }],
+  unclaimed: [{ number: 883, title: 'no refs line', body: 'just a description', head: { ref: 'CURRENT' } }],
+  // A Refs line naming our own key among others is still ours (multi-key
+  // Refs lines are common); a key-shaped parenthetical (SHA-256) is not a
+  // card. A Refs line naming only other cards still refuses, and a Refs
+  // mention that does not start a line is not attribution at all.
+  multiref: [{ number: 884, title: 'shared branch work', body: 'Refs: EXAMPLE-900, EXAMPLE-907', head: { ref: 'CURRENT' } }],
+  shaparens: [{ number: 885, title: 'shared branch work', body: 'Refs: EXAMPLE-900 (pins SHA-256 digests)', head: { ref: 'CURRENT' } }],
+  multiforeign: [{ number: 886, title: 'shared branch work', body: 'Refs: EXAMPLE-907, EXAMPLE-908', head: { ref: 'CURRENT' } }],
+  midline: [{ number: 887, title: 'shared branch work', body: 'Related work (see Refs: EXAMPLE-907 for detail)', head: { ref: 'CURRENT' } }],
+  // Same-commit fixtures (EXAMPLE-20982): the PR sits on a DIFFERENT branch name
+  // but carries the caller exact commit. Titles carry no card key on purpose,
+  // so the verdict below can only come from the Refs line, never a substring.
+  // sha 'SAMESHA' is replaced per request with the caller head under test
+  // (read off STUB_SHA_FILE, written by the fixture before each run);
+  // 'DISTINCT' is forty zeros and never equals a real commit.
+  shaforeign: [{ number: 891, title: 'sibling head work', body: 'Refs: EXAMPLE-907', head: { ref: 'example-907-sibling-branch', sha: 'SAMESHA' } }],
+  shaown: [{ number: 892, title: 'my renamed branch', body: 'Refs: EXAMPLE-900', head: { ref: 'example-907-sibling-branch', sha: 'SAMESHA' } }],
+  shanone: [{ number: 893, title: 'unclaimed head work', body: 'just a description', head: { ref: 'example-907-sibling-branch', sha: 'SAMESHA' } }],
+  shadistinct: [{ number: 894, title: 'other work', body: 'Refs: EXAMPLE-907', head: { ref: 'example-907-sibling-branch', sha: 'DISTINCT' } }],
+  // Same-commit with the key in the title or branch but no anchored Refs line:
+  // unclaimed same-commit rows stay in the generic path so the title/branch
+  // match still refuses as on base (identical commit plus the key in the title
+  // is the strongest duplicate evidence).
+  shatitle: [{ number: 898, title: 'Do the thing (EXAMPLE-900)', body: 'just a description', head: { ref: 'example-907-sibling-branch', sha: 'SAMESHA' } }],
+  shabranch: [{ number: 899, title: 'other work', body: 'just a description', head: { ref: 'example-900-feature', sha: 'SAMESHA' } }],
+  // EXAMPLE-23152: non-samehead body attribution. Titles/branches carry no key
+  // on purpose, so the verdict can only come from the body Refs line.
+  bodymention: [{ number: 895, title: 'wire suite foo', body: 'Related: EXAMPLE-900 procedure reference, see ratchet', head: { ref: 'suite-foo-branch' } }],
+  bodymidrefs: [{ number: 897, title: 'wire suite bar', body: 'Related work (see Refs: EXAMPLE-900 for detail)', head: { ref: 'suite-bar-branch' } }],
+  bodyrefs: [{ number: 896, title: 'wire suite foo', body: 'Refs: EXAMPLE-900', head: { ref: 'suite-foo-branch' } }],
+  // Cross-branch generic Refs ownership. Every fixture sits on a
+  // DIFFERENT branch name with a DISTINCT head commit (forty zeros, never a
+  // real commit), so same-head and same-SHA rules cannot fire — the verdict
+  // can only come from generic Refs attribution. Titles/branches that carry
+  // EXAMPLE-900 are relevant candidates; the Refs line attributes ownership.
+  crossown: [{ number: 911, title: 'Do the thing (EXAMPLE-900)', body: 'Refs: EXAMPLE-900', head: { ref: 'quality/meta-only-assets', sha: 'DISTINCT' } }],
+  crossmixed: [{ number: 912, title: 'Do the thing (EXAMPLE-900)', body: 'Refs: EXAMPLE-900, EXAMPLE-907', head: { ref: 'quality/meta-only-assets', sha: 'DISTINCT' } }],
+  crossforeign: [{ number: 913, title: 'Do the thing (EXAMPLE-900)', body: 'Refs: EXAMPLE-907', head: { ref: 'quality/meta-only-assets', sha: 'DISTINCT' } }],
+  crossbranchown: [{ number: 914, title: 'unrelated title', body: 'Refs: EXAMPLE-900', head: { ref: 'example-900-feature', sha: 'DISTINCT' } }],
+  crossbranchforeign: [{ number: 915, title: 'unrelated title', body: 'Refs: EXAMPLE-907', head: { ref: 'example-900-feature', sha: 'DISTINCT' } }],
+  // The cross-card branch from 5a/5b WITH an open PR: our key is only a
+  // secondary token of another card's branch, the title carries no key, and
+  // the Refs line names only the foreign card — not relevant, stays clear.
+  crosscardpr: [{ number: 927, title: 'bump pin', body: 'Refs: EXAMPLE-907', head: { ref: 'example-907-bump-pin-so-example-900-reruns-green', sha: 'DISTINCT' } }],
+  // Namespaced / segment open-PR heads whose primary key is ours: titles carry
+  // no key, so relevance can only come from the branch segment rule at the
+  // generic open-PR call site (not title, not same-head, not same-SHA).
+  nsprprefix: [{ number: 928, title: 'widget', body: 'just a description', head: { ref: 'ops/example-900-widget', sha: 'DISTINCT' } }],
+  nsprseg: [{ number: 929, title: 'widget', body: 'just a description', head: { ref: 'example-900/widget', sha: 'DISTINCT' } }],
+  nsprforeign: [{ number: 930, title: 'widget', body: 'Refs: EXAMPLE-907', head: { ref: 'ops/example-900-widget', sha: 'DISTINCT' } }],
+  nsprown: [{ number: 931, title: 'widget', body: 'Refs: EXAMPLE-900', head: { ref: 'ops/example-900-widget', sha: 'DISTINCT' } }],
+  // Uppercase head ref (the fleet's real `TOG-NNNN-...` form): title and body
+  // carry no key, so relevance can only come from the lowercased branch rule
+  // at the generic open-PR call site.
+  upperpr: [{ number: 932, title: 'widget', body: 'just a description', head: { ref: 'EXAMPLE-900-widget', sha: 'DISTINCT' } }],
+  crosslower: [{ number: 916, title: 'Do the thing (EXAMPLE-900)', body: 'refs: example-900', head: { ref: 'quality/meta-only-assets', sha: 'DISTINCT' } }],
+  crossexact: [{ number: 917, title: 'Do the thing (EXAMPLE-900)', body: 'Refs: EXAMPLE-9000', head: { ref: 'quality/meta-only-assets', sha: 'DISTINCT' } }],
+  crossmidrelevant: [{ number: 918, title: 'Do the thing (EXAMPLE-900)', body: 'Related work (see Refs: EXAMPLE-900 for detail)', head: { ref: 'quality/meta-only-assets', sha: 'DISTINCT' } }],
+  crossunrelated: [{ number: 919, title: 'other work', body: 'Refs: EXAMPLE-907', head: { ref: 'unrelated-branch', sha: 'DISTINCT' } }],
+  // No anchored claim and no key-like token in title or branch: provably
+  // irrelevant, so a uuid caller skips the key lookup and stays clear even
+  // when the lookup would fail.
+  crossnoclaimsunrelated: [{ number: 921, title: 'other work', body: 'just a description', head: { ref: 'unrelated-branch', sha: 'DISTINCT' } }],
+  // Relevant title or branch with no anchored Refs line: the uuid pre-scan
+  // must still treat the row as a candidate, so a working lookup refuses and
+  // a failing lookup goes indeterminate (never clear).
+  uuidreltitle: [{ number: 922, title: 'Do the thing (EXAMPLE-900)', body: 'just a description', head: { ref: 'quality/x', sha: 'DISTINCT' } }],
+  uuidrelbranch: [{ number: 923, title: 'other work', body: 'just a description', head: { ref: 'example-900-feature', sha: 'DISTINCT' } }],
+  // Unclaimed same-commit row with a relevant title: stays in the generic
+  // path, so a uuid caller with a failing lookup still goes indeterminate.
+  uuidrelsha: [{ number: 924, title: 'Do the thing (EXAMPLE-900)', body: 'just a description', head: { ref: 'example-907-sibling-branch', sha: 'SAMESHA' } }],
+  // Vacuous-HEAD fixtures: claimed same-commit rows with a relevant title.
+  // On a HEAD with no local commits SAMESHA skips them, so the generic path
+  // must refuse as on base instead of dropping the refusal.
+  shavacown: [{ number: 925, title: 'Do the thing (EXAMPLE-900)', body: 'Refs: EXAMPLE-900', head: { ref: 'example-907-sibling-branch', sha: 'SAMESHA' } }],
+  shavacforeign: [{ number: 926, title: 'Do the thing (EXAMPLE-900)', body: 'Refs: EXAMPLE-907', head: { ref: 'example-907-sibling-branch', sha: 'SAMESHA' } }],
+  crossown901: [{ number: 920, title: 'Do the thing (EXAMPLE-901)', body: 'Refs: EXAMPLE-901', head: { ref: 'quality/meta-only-assets', sha: 'DISTINCT' } }],
+  denied: 403,
+  bad:    'not json at all',
+}
+
+const srv = http.createServer((req, res) => {
+  const url = req.url.split('?')[0]
+  const send = (code, body) => {
+    res.writeHead(code, { 'content-type': 'application/json' })
+    res.end(typeof body === 'string' ? body : JSON.stringify(body))
+  }
+
+  let m
+  if ((m = url.match(/^\/api\/companies\/[^/]+\/issues$/))) return send(200, ISSUES)
+  // Listed keys 404 here on purpose: they must reach the list fallback, which
+  // stays under test. Only the old tail is served by key.
+  if ((m = url.match(/^\/api\/issues\/([^/]+)$/))) {
+    if (MISMATCHED[m[1]]) return send(200, MISMATCHED[m[1]])
+    if (m[1] === UUID_BADJSON) return send(200, '<html>not json</html>')
+    const hit = OLD_ISSUES.find(i => i.identifier === m[1] || i.id === m[1])
+    return hit ? send(200, hit) : send(404, { error: 'no such issue' })
+  }
+  if ((m = url.match(/^\/api\/issues\/([^/]+)\/runs$/))) {
+    const id = m[1]
+    if (id === 'case-500') return send(500, { error: 'boom' })
+    if (id === 'case-badjson') return send(200, '<html>not json</html>')
+    if (RUNS[id] || OLD_RUNS[id]) return send(200, RUNS[id] || OLD_RUNS[id])
+    return send(404, { error: 'no such issue' })
+  }
+  if ((m = url.match(/^\/repos\/[^/]+\/([^/]+)\/pulls$/))) {
+    const v = PULLS[m[1]]
+    if (v === undefined) return send(404, { error: 'no such repo' })
+    if (v === 403) return send(403, { message: 'Resource not accessible' })
+    if (typeof v === 'string') return send(200, v)
+    const branch = process.env.STUB_CURRENT_BRANCH || ''
+    let sameSha = ''
+    try { sameSha = require('fs').readFileSync(process.env.STUB_SHA_FILE || '', 'utf8').trim() } catch (e) { sameSha = '' }
+    return send(200, v.map(p => {
+      let head = p.head
+      if (head && head.ref === 'CURRENT') head = Object.assign({}, head, { ref: branch })
+      if (head && head.sha === 'SAMESHA') head = Object.assign({}, head, { sha: sameSha })
+      if (head && head.sha === 'DISTINCT') head = Object.assign({}, head, { sha: '0000000000000000000000000000000000000000' })
+      return (head === p.head) ? p : Object.assign({}, p, { head })
+    }))
+  }
+  return send(404, { error: 'API route not found' })
+})
+srv.listen(0, '127.0.0.1', () => console.log(srv.address().port))
+STUB
+
+STUB_CURRENT_BRANCH="example-900-work" STUB_SHA_FILE="$TMP/sha.txt" node "$TMP/stub.js" > "$TMP/port.txt" 2>"$TMP/stub.err" &
+STUB_PID=$!
+for _ in $(seq 1 50); do [[ -s "$TMP/port.txt" ]] && break; sleep 0.1; done
+PORT="$(tr -d '\n' < "$TMP/port.txt")"
+[[ -n "$PORT" ]] || { echo "test_sibling_guard: stub server did not start: $(cat "$TMP/stub.err")" >&2; exit 2; }
+BASE="http://127.0.0.1:$PORT"
+
+# ---------------------------------------------------------------------------
+# Git fixtures. A bare "origin" plus clones. Real refs, real ancestry, no
+# network — the ancestor test in particular is worth exercising for real, since
+# a hand-stubbed `merge-base` would only prove the stub agrees with the tool.
+#
+# `credential.helper=` (empty) and GIT_TERMINAL_PROMPT=0 make the tool's
+# credential fallback return nothing instead of reaching this box's real broker
+# helper. That is also the fixture for "no GitHub credential".
+# ---------------------------------------------------------------------------
+export GIT_TERMINAL_PROMPT=0
+export GIT_CONFIG_GLOBAL="$TMP/gitconfig"
+export GIT_CONFIG_SYSTEM=/dev/null
+cat > "$GIT_CONFIG_GLOBAL" <<'GC'
+[user]
+	name = suite
+	email = suite@example.invalid
+[init]
+	defaultBranch = main
+[credential]
+	helper =
+[protocol]
+	allow = always
+GC
+
+ORIGIN="$TMP/origin.git"
+git init --quiet --bare -b main "$ORIGIN"
+SEED="$TMP/seed"
+git init --quiet -b main "$SEED" && (
+  cd "$SEED"
+  echo one > file.txt
+  git add file.txt && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -m "seed"
+  git remote add origin "$ORIGIN" && git push --quiet -u origin main
+)
+
+# mkclone <dir> — a fresh clone of origin on main.
+mkclone() { git clone --quiet "$ORIGIN" "$1"; }
+
+# run_guard <cwd> <issue> [extra args...] — invoke the tool with the stub wired
+# in. Stdout+stderr land in $OUT, the exit code in $RC.
+OUT=""; RC=0
+run_guard() {
+  local cwd="$1" issue="$2"; shift 2
+  # OVERRIDE_GH_TOKEN="" must survive the broker shim: the shim re-mints a real
+  # GH_TOKEN from PAPERCLIP_GITHUB_BROKER_TOKEN even when GH_TOKEN was cleared,
+  # so the "no credential" case never goes blind. Clearing both broker vars
+  # makes the shim report capability_missing and leave GH_TOKEN empty, which
+  # then makes `git credential fill` fail — the fixture for that case.
+  if [[ "${OVERRIDE_GH_TOKEN-sentinel}" == "" ]]; then
+    OUT="$( cd "$cwd" && \
+      PAPERCLIP_API_URL="$BASE" \
+      PAPERCLIP_API_KEY="${OVERRIDE_KEY-stub-key}" \
+      PAPERCLIP_COMPANY_ID="${OVERRIDE_CO-stub-co}" \
+      PAPERCLIP_AGENT_ID="${OVERRIDE_AGENT-agent-me}" \
+      PAPERCLIP_RUN_ID="${OVERRIDE_RUN-run-me}" \
+      GH_API_URL="$BASE" \
+      PAPERCLIP_GITHUB_BROKER_TOKEN="" PAPERCLIP_GITHUB_BROKER_URL="" GH_TOKEN="" \
+      "$TOOL" "$issue" "$@" 2>&1 )"
+  else
+    OUT="$( cd "$cwd" && \
+      PAPERCLIP_API_URL="$BASE" \
+      PAPERCLIP_API_KEY="${OVERRIDE_KEY-stub-key}" \
+      PAPERCLIP_COMPANY_ID="${OVERRIDE_CO-stub-co}" \
+      PAPERCLIP_AGENT_ID="${OVERRIDE_AGENT-agent-me}" \
+      PAPERCLIP_RUN_ID="${OVERRIDE_RUN-run-me}" \
+      GH_API_URL="$BASE" \
+      GH_TOKEN="${OVERRIDE_GH_TOKEN-stub-gh-token}" \
+      "$TOOL" "$issue" "$@" 2>&1 )"
+  fi
+  RC=$?
+  return 0
+}
+
+# ===========================================================================
+hdr "1. The baseline. A clean issue must come back CLEAR."
+# Without this, every assertion below is satisfied by a tool hardwired to say
+# "sibling" — which detects the duplicate and stops all work forever.
+CLEAN="$TMP/clean"; mkclone "$CLEAN"
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "a clean issue with all three detectors running exits 0" "rc=$RC out=$OUT"
+assert "$(grep -q "VERDICT: clear" <<< "$OUT" && echo 0 || echo 1)" \
+  "the clean verdict is reported as clear" "$OUT"
+
+# ===========================================================================
+hdr "2. Blindness is never a pass. Every detector that cannot run exits 3."
+# This block is the reason the tool exists. `ps` returning nothing was read as
+# "no sibling"; each case here is the same shape in a different disguise.
+
+OVERRIDE_KEY="" run_guard "$CLEAN" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a missing PAPERCLIP_API_KEY exits 3, not 0" "rc=$RC out=$OUT"
+
+OVERRIDE_RUN="" run_guard "$CLEAN" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a missing PAPERCLIP_RUN_ID exits 3, not 0" "rc=$RC out=$OUT"
+
+OVERRIDE_AGENT="" run_guard "$CLEAN" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a missing PAPERCLIP_AGENT_ID exits 3, not 0" "rc=$RC out=$OUT"
+
+# EXAMPLE-999: direct GET 404s and the stub list never names it, so with no
+# company id there is no fallback. (EXAMPLE-900 would resolve: the uuid fixtures
+# in 6c give it a direct issue record.)
+OVERRIDE_CO="" run_guard "$CLEAN" EXAMPLE-999 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "an unresolvable issue key exits 3, not 0" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" EXAMPLE-950 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a 500 from the run list exits 3, not 0" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" EXAMPLE-951 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "an unparseable run list exits 3, not 0" "rc=$RC out=$OUT"
+
+OVERRIDE_GH_TOKEN="" run_guard "$CLEAN" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "no GitHub credential at all exits 3, not 0" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/denied
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a 403 on the pull request list exits 3, not 0" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/bad
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "an unparseable pull request list exits 3, not 0" "rc=$RC out=$OUT"
+
+NOREMOTE="$TMP/noremote"; git init --quiet -b main "$NOREMOTE" && (cd "$NOREMOTE" && echo x > a && git add a && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -m x)
+run_guard "$NOREMOTE" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a clone with no origin exits 3, not 0" "rc=$RC out=$OUT"
+
+BADREMOTE="$TMP/badremote"; mkclone "$BADREMOTE"
+(cd "$BADREMOTE" && git remote set-url origin "$TMP/does-not-exist.git")
+run_guard "$BADREMOTE" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a fetch that fails exits 3, not 0" "rc=$RC out=$OUT"
+
+SIBLING_GUARD_NO_FETCH=1 run_guard "$CLEAN" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a deliberately skipped fetch exits 3, not 0" "rc=$RC out=$OUT"
+
+assert "$(grep -qi "COULD NOT RUN" <<< "$OUT" && echo 0 || echo 1)" \
+  "an unrunnable detector is named in the report" "$OUT"
+
+# ===========================================================================
+hdr "3. The control plane finds a sibling nobody else can see."
+# The leading signal: a second run of my own agent that has committed nothing,
+# pushed nothing, and opened nothing. On EXAMPLE-258 this was the state of the world
+# at the moment the losing run decided to start.
+
+run_guard "$CLEAN" EXAMPLE-901 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a live run of my own agent on my issue exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "run-sib" <<< "$OUT" && echo 0 || echo 1)" \
+  "the sibling run id is named in the report" "$OUT"
+
+run_guard "$CLEAN" EXAMPLE-905 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a live row with an unrecognised status counts as a sibling" "rc=$RC out=$OUT"
+
+# ===========================================================================
+hdr "4. And does not fire on rows that are not siblings."
+# A guard that fires on every issue is a guard that gets skipped.
+
+run_guard "$CLEAN" EXAMPLE-902 --repo=stub/none
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "another agent's live run on my issue is not a sibling verdict" "rc=$RC out=$OUT"
+assert "$(grep -q "run-foreign" <<< "$OUT" && echo 0 || echo 1)" \
+  "another agent's live run is still reported" "$OUT"
+
+run_guard "$CLEAN" EXAMPLE-903 --repo=stub/none
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "my agent's finished runs on this issue are not siblings" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" EXAMPLE-904 --repo=stub/none
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "a terminal status with a null finishedAt is not a sibling" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" EXAMPLE-901 --repo=stub/none
+assert "$(grep -q 'run run-me of MY OWN' <<< "$OUT" && echo 1 || echo 0)" \
+  "the caller never detects its own run as a sibling" "rc=$RC out=$OUT"
+
+# ===========================================================================
+hdr "5. Local refs — the only signal for finished-but-unpushed work."
+# EXAMPLE-339: the complete fix sat as a local commit on a sibling's branch while
+# the remote said nothing existed at all.
+
+AHEAD="$TMP/ahead"; mkclone "$AHEAD"
+(cd "$AHEAD" && git checkout --quiet -b example-900-sibling && echo two >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "sibling work" && git checkout --quiet main)
+run_guard "$AHEAD" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a local branch naming the issue and ahead of origin/main exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "example-900-sibling" <<< "$OUT" && echo 0 || echo 1)" \
+  "the local sibling branch is named in the report" "$OUT"
+
+# The same branch pointing at origin/main. A dead run's empty leftover, which is
+# exactly what this issue's own first failed run left behind. Reporting it as
+# sibling work would train the reader to ignore the tool.
+EMPTY="$TMP/emptybranch"; mkclone "$EMPTY"
+(cd "$EMPTY" && git branch --quiet example-900-leftover origin/main)
+run_guard "$EMPTY" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "a local branch carrying no commits is not sibling work" "rc=$RC out=$OUT"
+
+# Standing on your own branch must not detect yourself.
+SELF="$TMP/self"; mkclone "$SELF"
+(cd "$SELF" && git checkout --quiet -b example-901-work && echo mine >> file.txt && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "my work")
+run_guard "$SELF" EXAMPLE-901 --repo=stub/none
+assert "$(grep -qv "example-901-work is" <<< "$OUT" && grep -q "run-sib" <<< "$OUT" && echo 0 || echo 1)" \
+  "the branch the caller is standing on is not reported as a sibling branch" "$OUT"
+
+# ===========================================================================
+hdr "5a. Local-ref attribution ignores cross-card branch-name substrings."
+# Fixture keys EXAMPLE-900 (requested) and EXAMPLE-907 (foreign owner) are SYNTHETIC
+# stub-only keys, never real cards. The bug: the local-refs detector matches
+# every local branch whose lowercased name merely CONTAINS the requested key,
+# so another card's branch `example-907-...-example-900-...` (EXAMPLE-900 only a secondary
+# token) refuses as sibling work. Attribution must follow the PRIMARY card
+# key — the leading `<KEY>-...` prefix — while a branch primarily owned by
+# the requested key, a bare exact match, the same-head/same-commit paths and
+# blind detectors all keep failing closed. Remote branch-name references are
+# pinned in 5b below; the pushed branches there are deleted from the shared
+# origin before this section ends so later start-phase asserts stay hermetic.
+
+# (a) Cross-card substring: another card's branch carrying the requested key
+# only as a secondary token, with real commits ahead of origin/main.
+CROSS="$TMP/crosscard"; mkclone "$CROSS"
+(cd "$CROSS" && git checkout --quiet -b example-907-bump-pin-so-example-900-reruns-green && echo cross >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "other card work" && git checkout --quiet main)
+run_guard "$CROSS" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "a local branch owned by another card naming this key only secondarily stays clear" "rc=$RC out=$OUT"
+assert "$(grep -q "VERDICT: clear" <<< "$OUT" && echo 0 || echo 1)" \
+  "the cross-card substring verdict is reported as clear" "$OUT"
+
+# A longer key is not this card either: `example-9000-...` must not match
+# `example-900` as a prefix — the trailing boundary after the key is required.
+LONGERKEY="$TMP/longerkey"; mkclone "$LONGERKEY"
+(cd "$LONGERKEY" && git checkout --quiet -b example-9000-widget && echo long >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "longer key work" && git checkout --quiet main)
+run_guard "$LONGERKEY" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "a local branch owned by a longer key stays clear" "rc=$RC out=$OUT"
+assert "$(grep -q "VERDICT: clear" <<< "$OUT" && echo 0 || echo 1)" \
+  "the longer-key verdict is reported as clear" "$OUT"
+
+# (b) Prefix-owned branches still refuse: the requested key is the primary
+# prefix and the branch carries commits ahead of origin/main.
+OWNPREFIX="$TMP/ownprefix"; mkclone "$OWNPREFIX"
+(cd "$OWNPREFIX" && git checkout --quiet -b example-900-fix-widget-queue && echo own >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "own work" && git checkout --quiet main)
+run_guard "$OWNPREFIX" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a local branch with this card as its primary prefix and ahead exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "example-900-fix-widget-queue" <<< "$OUT" && echo 0 || echo 1)" \
+  "the prefix-owned local branch is named in the report" "$OUT"
+
+# A bare branch exactly equal to the key is owned work too, not a substring.
+BAREKEY="$TMP/barekey"; mkclone "$BAREKEY"
+(cd "$BAREKEY" && git checkout --quiet -b example-900 && echo bare >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "bare work" && git checkout --quiet main)
+run_guard "$BAREKEY" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a local branch exactly equal to this card key and ahead exits 1" "rc=$RC out=$OUT"
+
+# (c) Namespaced branches still refuse: the key starting a whole path segment
+# behind a namespace (`ops/<key>-...`), or as a segment of its own
+# (`<key>/...`), is primary ownership, not a secondary mention.
+NSPREFIX="$TMP/nsprefix"; mkclone "$NSPREFIX"
+(cd "$NSPREFIX" && git checkout --quiet -b ops/example-900-widget && echo ns >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "namespaced work" && git checkout --quiet main)
+run_guard "$NSPREFIX" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a local branch with this card as a namespaced segment prefix and ahead exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "ops/example-900-widget" <<< "$OUT" && echo 0 || echo 1)" \
+  "the namespaced local branch is named in the report" "$OUT"
+
+NSSEG="$TMP/nsseg"; mkclone "$NSSEG"
+(cd "$NSSEG" && git checkout --quiet -b example-900/widget && echo ns >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "segment work" && git checkout --quiet main)
+run_guard "$NSSEG" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a local branch with this card as its own path segment and ahead exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "example-900/widget" <<< "$OUT" && echo 0 || echo 1)" \
+  "the segment local branch is named in the report" "$OUT"
+
+# The `_` and `.` separators promised by the helper comment are owned too:
+# `<key>_x` and `<key>.1-x` must refuse, not silently clear if the trailing
+# separator class is tightened.
+UNDSEP="$TMP/undsep"; mkclone "$UNDSEP"
+(cd "$UNDSEP" && git checkout --quiet -b example-900_widget && echo ns >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "underscore work" && git checkout --quiet main)
+run_guard "$UNDSEP" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a local branch with this card followed by an underscore separator and ahead exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "example-900_widget" <<< "$OUT" && echo 0 || echo 1)" \
+  "the underscore-separated local branch is named in the report" "$OUT"
+
+DOTSEP="$TMP/dotsep"; mkclone "$DOTSEP"
+(cd "$DOTSEP" && git checkout --quiet -b example-900.1-widget && echo ns >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "dot work" && git checkout --quiet main)
+run_guard "$DOTSEP" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a local branch with this card followed by a dot separator and ahead exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "example-900.1-widget" <<< "$OUT" && echo 0 || echo 1)" \
+  "the dot-separated local branch is named in the report" "$OUT"
+
+# Uppercase branch names (the fleet's real `TOG-NNNN-...` form) are owned
+# too: the local detector lowercases before the primary-key rule.
+UPPERLOCAL="$TMP/upperlocal"; mkclone "$UPPERLOCAL"
+(cd "$UPPERLOCAL" && git checkout --quiet -b EXAMPLE-900-Widget && echo up >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "uppercase work" && git checkout --quiet main)
+run_guard "$UPPERLOCAL" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a local branch with this card in uppercase and ahead exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-900-Widget" <<< "$OUT" && echo 0 || echo 1)" \
+  "the uppercase local branch is named in the report" "$OUT"
+
+# ===========================================================================
+hdr "5b. Remote branch-name attribution ignores cross-card substrings."
+# Same primary-prefix rule through the remote detector, isolated: each fresh
+# clone below sees the pushed branch only as a remote-tracking ref.
+
+REMXC="$TMP/remxc-push"; mkclone "$REMXC"
+(cd "$REMXC" && git checkout --quiet -b example-907-bump-pin-so-example-900-reruns-remote-green && echo rx >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "other card pushed" \
+   && git push --quiet -u origin example-907-bump-pin-so-example-900-reruns-remote-green)
+REMXF="$TMP/remxc-fresh"; mkclone "$REMXF"
+run_guard "$REMXF" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "a pushed branch owned by another card naming this key only secondarily stays clear" "rc=$RC out=$OUT"
+
+REMOWN="$TMP/remown-push"; mkclone "$REMOWN"
+(cd "$REMOWN" && git checkout --quiet -b example-900-remote-widget-work && echo ro >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "own pushed" \
+   && git push --quiet -u origin example-900-remote-widget-work)
+REMOWNF="$TMP/remown-fresh"; mkclone "$REMOWNF"
+run_guard "$REMOWNF" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a pushed branch with this card as its primary prefix exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "example-900-remote-widget-work" <<< "$OUT" && echo 0 || echo 1)" \
+  "the prefix-owned pushed branch is named in the report" "$OUT"
+
+# Namespaced pushed branches still refuse through the remote detector too.
+REMNS="$TMP/remns-push"; mkclone "$REMNS"
+(cd "$REMNS" && git checkout --quiet -b ops/example-900-remote-widget && echo rn >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "namespaced pushed" \
+   && git push --quiet -u origin ops/example-900-remote-widget)
+REMNSF="$TMP/remns-fresh"; mkclone "$REMNSF"
+run_guard "$REMNSF" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a pushed branch with this card as a namespaced segment prefix exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "ops/example-900-remote-widget" <<< "$OUT" && echo 0 || echo 1)" \
+  "the namespaced pushed branch is named in the report" "$OUT"
+
+REMSEG="$TMP/remseg-push"; mkclone "$REMSEG"
+(cd "$REMSEG" && git checkout --quiet -b example-900/remote-widget && echo rs >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "segment pushed" \
+   && git push --quiet -u origin example-900/remote-widget)
+REMSEGF="$TMP/remseg-fresh"; mkclone "$REMSEGF"
+run_guard "$REMSEGF" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a pushed branch with this card as its own path segment exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "example-900/remote-widget" <<< "$OUT" && echo 0 || echo 1)" \
+  "the segment pushed branch is named in the report" "$OUT"
+
+# Uppercase pushed branches still refuse through the remote detector too:
+# it lowercases the short ref before the primary-key rule.
+REMUPPER="$TMP/remupper-push"; mkclone "$REMUPPER"
+(cd "$REMUPPER" && git checkout --quiet -b EXAMPLE-900-Remote-Upper && echo ru >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "uppercase pushed" \
+   && git push --quiet -u origin EXAMPLE-900-Remote-Upper)
+REMUPPERF="$TMP/remupper-fresh"; mkclone "$REMUPPERF"
+run_guard "$REMUPPERF" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a pushed branch with this card in uppercase exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-900-Remote-Upper" <<< "$OUT" && echo 0 || echo 1)" \
+  "the uppercase pushed branch is named in the report" "$OUT"
+
+# Hermetic cleanup: remove the pushed refs so later start-phase asserts that
+# fetch the shared origin never see them.
+(cd "$REMXC" && git push --quiet origin --delete example-907-bump-pin-so-example-900-reruns-remote-green >/dev/null 2>&1) || true
+(cd "$REMOWN" && git push --quiet origin --delete example-900-remote-widget-work >/dev/null 2>&1) || true
+(cd "$REMNS" && git push --quiet origin --delete ops/example-900-remote-widget >/dev/null 2>&1) || true
+(cd "$REMSEG" && git push --quiet origin --delete example-900/remote-widget >/dev/null 2>&1) || true
+(cd "$REMUPPER" && git push --quiet origin --delete EXAMPLE-900-Remote-Upper >/dev/null 2>&1) || true
+
+# ===========================================================================
+hdr "5c. Same-head and blind detectors still fail closed."
+# The substring fix must not soften paths that do not depend on branch names.
+
+SAMEWT="$TMP/samewt"; mkclone "$SAMEWT"
+(cd "$SAMEWT" && git checkout --quiet -b wt-primary && echo wt >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "wt head" \
+   && git worktree add --quiet -b wt-secondary "$TMP/wt-secondary-5c" HEAD)
+run_guard "$SAMEWT" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "another worktree on this HEAD under another branch still exits 1" "rc=$RC out=$OUT"
+
+SAMEPR="$TMP/samepr5c"; mkclone "$SAMEPR"
+(cd "$SAMEPR" && git checkout --quiet -b example-900-work && echo pushme >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "my push")
+run_guard "$SAMEPR" EXAMPLE-900 --repo=stub/foreign --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at prepush, a same-head PR claimed by another card still exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-907" <<< "$OUT" && echo 0 || echo 1)" \
+  "the same-head sibling card is still named in the report" "$OUT"
+
+NOORIGIN5C="$TMP/noorigin5c"; git init --quiet -b main "$NOORIGIN5C" && (cd "$NOORIGIN5C" && echo x > a && git add a && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -m x)
+run_guard "$NOORIGIN5C" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a clone with no origin still exits 3, not 0" "rc=$RC out=$OUT"
+
+SIBLING_GUARD_NO_FETCH=1 run_guard "$CLEAN" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a deliberately skipped fetch with no finding still exits 3, not 0" "rc=$RC out=$OUT"
+
+# ===========================================================================
+hdr "6. Remote — a pushed branch, and an open PR."
+
+PUSHED="$TMP/pushed"; mkclone "$PUSHED"
+(cd "$PUSHED" && git checkout --quiet -b example-901-pushed && echo p >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am push && git push --quiet -u origin example-901-pushed \
+   && git checkout --quiet main && git branch -D example-901-pushed >/dev/null 2>&1)
+FRESH="$TMP/fresh"; mkclone "$FRESH"
+run_guard "$FRESH" EXAMPLE-901 --repo=stub/none
+assert "$(grep -q "example-901-pushed" <<< "$OUT" && echo 0 || echo 1)" \
+  "a branch pushed to origin naming the issue is reported" "$OUT"
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a branch pushed to origin naming the issue exits 1" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/hit
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "an open PR whose title names the issue exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#77" <<< "$OUT" && echo 0 || echo 1)" \
+  "the duplicate PR number is named in the report" "$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/head
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "an open PR whose head branch names the issue exits 1" "rc=$RC out=$OUT"
+
+# The caller's own PR is not a duplicate of itself. This is the pre-push repeat:
+# by then you have usually already opened your own PR, and a guard that fires on
+# it makes the required second check useless.
+MYPR="$TMP/mypr"; mkclone "$MYPR"
+(cd "$MYPR" && git checkout --quiet -b example-900-work)
+run_guard "$MYPR" EXAMPLE-900 --repo=stub/mine
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "an open PR on the caller's own head branch is not a sibling" "rc=$RC out=$OUT"
+
+# ===========================================================================
+hdr "6a. Non-samehead body mentions are not duplicates (EXAMPLE-23152)."
+# PR #888 / EXAMPLE-22068: six sibling-suite PRs mention the ratchet card in
+# their bodies (Related/procedure reference) without claiming it. A bare
+# body substring must not refuse; only a Refs LINE naming this card does.
+# Title/branch substring matches keep refusing (duplicate protection).
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/bodymention
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "a non-samehead PR whose body merely mentions the key stays clear" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/bodymidrefs
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "a non-samehead mid-sentence Refs mention stays clear" "rc=$RC out=$OUT"
+
+# An own Refs claim on a foreign branch with a distinct head refuses as a
+# duplicate PR: two runs of one agent share the key (EXAMPLE-253/EXAMPLE-258), so the
+# Refs line alone cannot prove the PR is the caller own (review on PR #79).
+# Same-commit own already refuses; distinct-head own is no safer. See 6a1.
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/bodyrefs
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a non-samehead PR whose Refs line names this card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#896" <<< "$OUT" && echo 0 || echo 1)" \
+  "the Refs-claimed duplicate PR number is named in the report" "$OUT"
+
+# ===========================================================================
+hdr "6a1. Cross-branch Refs ownership on foreign branch names."
+# Execution branch `example-900-work` vs PR head `quality/meta-only-assets`
+# (body `Refs: EXAMPLE-900`): a relevant PR on a foreign branch whose Refs line
+# names our own card refuses as a duplicate PR on another branch, exit 1,
+# in both phases. The generic open-PR path matches on title and
+# head substrings with no ownership attribution; the SAMEHEAD Refs logic only
+# runs when head == current branch. Every fixture below sits on a DIFFERENT
+# branch name with a DISTINCT head commit (forty zeros), so same-head and
+# same-SHA rules cannot fire — the verdict can only come from generic Refs
+# attribution. Own Refs (alone, mixed or lowercase) refuses as a duplicate PR
+# on another branch — two runs share the key, so Refs alone cannot prove own;
+# foreign-only Refs on a relevant candidate refuses naming owner and PR;
+# unrelated foreign claims stay clear; unresolvable own keys go indeterminate.
+
+# Prepush own-duplicate cases run on a WORK-like fixture: a fresh branch plus one
+# commit, so HEAD is not yet on origin/main and the already-landed test does
+# not fire. CLEAN at prepush always exits 1 via already-landed; see 6b ("One
+# commit first, or the already-landed test fires") and the WORK fixture in 7.
+CROSSWORK="$TMP/crosswork"; mkclone "$CROSSWORK"
+(cd "$CROSSWORK" && git checkout --quiet -b example-901-work && echo w >> file.txt && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am w)
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/crossown
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a relevant PR on a foreign branch whose Refs line names only this card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#911" <<< "$OUT" && echo 0 || echo 1)" \
+  "the own-PR duplicate names the PR number" "$OUT"
+assert "$(grep -qi "your own PR" <<< "$OUT" && echo 0 || echo 1)" \
+  "the own-PR duplicate says it is your own PR" "$OUT"
+
+run_guard "$CROSSWORK" EXAMPLE-900 --repo=stub/crossown --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at prepush, a relevant PR on a foreign branch whose Refs line names only this card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#911" <<< "$OUT" && echo 0 || echo 1)" \
+  "the prepush own-PR duplicate names the PR number" "$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/crossmixed
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a relevant PR on a foreign branch whose Refs line names this card among others exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#912" <<< "$OUT" && echo 0 || echo 1)" \
+  "the mixed own-PR duplicate names the PR number" "$OUT"
+
+run_guard "$CROSSWORK" EXAMPLE-900 --repo=stub/crossmixed --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at prepush, a relevant PR on a foreign branch whose Refs line names this card among others exits 1" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/crossbranchown
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a branch-relevant PR on a foreign branch whose Refs line names only this card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#914" <<< "$OUT" && echo 0 || echo 1)" \
+  "the branch-relevant own-PR duplicate names the PR number" "$OUT"
+
+run_guard "$CROSSWORK" EXAMPLE-900 --repo=stub/crossbranchown --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at prepush, a branch-relevant PR on a foreign branch whose Refs line names only this card exits 1" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/crosslower
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a relevant PR whose Refs line names this card in lowercase exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#916" <<< "$OUT" && echo 0 || echo 1)" \
+  "the lowercase own-PR duplicate names the PR number" "$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/crossforeign
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a relevant PR on a foreign branch whose Refs line names only another card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-907" <<< "$OUT" && echo 0 || echo 1)" \
+  "the foreign claimant owning the cross-branch PR is named in the report" "$OUT"
+assert "$(grep -q "#913" <<< "$OUT" && echo 0 || echo 1)" \
+  "the cross-branch foreign PR number is named in the report" "$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/crossforeign --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at prepush, a relevant PR on a foreign branch whose Refs line names only another card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-907" <<< "$OUT" && echo 0 || echo 1)" \
+  "the prepush foreign claimant owning the cross-branch PR is named in the report" "$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/crossbranchforeign
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a branch-relevant PR on a foreign branch whose Refs line names only another card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-907" <<< "$OUT" && echo 0 || echo 1)" \
+  "the branch-relevant foreign claimant is named in the report" "$OUT"
+
+# Same cross-card branch WITH an open PR: head relevance uses the primary-key
+# segment rule, not a substring, so a branch that only mentions this key as a
+# secondary token of another card's branch stays clear even though its Refs
+# line names only the foreign card.
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/crosscardpr
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "an open PR on another card's branch naming this key only secondarily stays clear" "rc=$RC out=$OUT"
+
+# Namespaced / segment open-PR heads are relevant at this call site too: the
+# key starting a whole path segment (`ops/<key>-...`) or as its own segment
+# (`<key>/...`) is primary ownership, with or without an anchored Refs line.
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/nsprprefix
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "an open PR on a namespaced branch with this card as segment prefix exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#928" <<< "$OUT" && echo 0 || echo 1)" \
+  "the namespaced open-PR duplicate names the PR number" "$OUT"
+assert "$(grep -q "ops/example-900-widget" <<< "$OUT" && echo 0 || echo 1)" \
+  "the namespaced open-PR duplicate names the full head ref" "$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/nsprseg
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "an open PR on a branch with this card as its own path segment exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#929" <<< "$OUT" && echo 0 || echo 1)" \
+  "the segment open-PR duplicate names the PR number" "$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/nsprforeign
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "an open PR on a namespaced branch whose Refs line names only another card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-907" <<< "$OUT" && echo 0 || echo 1)" \
+  "the namespaced foreign claimant is named in the report" "$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/nsprown
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "an open PR on a namespaced branch whose Refs line names only this card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#931" <<< "$OUT" && echo 0 || echo 1)" \
+  "the namespaced own-PR duplicate names the PR number" "$OUT"
+
+# Uppercase open-PR heads are relevant at this call site too: the head ref
+# is lowercased before the primary-key rule, and the title/body carry no key.
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/upperpr
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "an open PR on a branch with this card in uppercase exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#932" <<< "$OUT" && echo 0 || echo 1)" \
+  "the uppercase open-PR duplicate names the PR number" "$OUT"
+assert "$(grep -q "EXAMPLE-900-widget" <<< "$OUT" && echo 0 || echo 1)" \
+  "the uppercase open-PR duplicate names the full head ref" "$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/crossexact
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a relevant PR whose Refs line names only a longer key exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-9000" <<< "$OUT" && echo 0 || echo 1)" \
+  "the longer foreign key is named without matching this card" "$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/crossmidrelevant
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a relevant PR with only a mid-sentence Refs mention and no anchored line exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "already covers this issue" <<< "$OUT" && echo 0 || echo 1)" \
+  "the no-Refs refusal uses the title message" "$OUT"
+assert "$(grep -q "Do the thing" <<< "$OUT" && echo 0 || echo 1)" \
+  "the no-Refs refusal names the PR title" "$OUT"
+assert "$(grep -q "00000000" <<< "$OUT" && echo 1 || echo 0)" \
+  "the no-Refs refusal never prints a head SHA as an open card" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/crossunrelated
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "an unrelated PR naming only another card stays clear" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" EXAMPLE-900 --repo=stub/crossnoclaimsunrelated
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "an unrelated PR with no anchored claim stays clear" "rc=$RC out=$OUT"
+
+# Invoked by uuid, the caller own key is resolved off GET /api/issues/<uuid>
+# only when a possibly-relevant generic candidate is in play: an anchored Refs
+# claim, or a card-key token in the title or head branch. A PR with no claim
+# and no key-like token is provably irrelevant, so the lookup is skipped and a
+# transient API error cannot turn an irrelevant start indeterminate.
+# Unresolvable or unreadable lookups with a candidate fail closed, never clear.
+run_guard "$CLEAN" 11111111-2222-3333-4444-555555555555 --repo=stub/crossown
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a relevant PR whose Refs line names this card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#911" <<< "$OUT" && echo 0 || echo 1)" \
+  "the uuid own-PR duplicate names the PR number" "$OUT"
+
+run_guard "$CLEAN" 11111111-2222-3333-4444-555555555555 --repo=stub/crossforeign
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a relevant PR whose Refs line names only another card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-907" <<< "$OUT" && echo 0 || echo 1)" \
+  "the uuid cross-branch lookup resolves our key and names the sibling card" "$OUT"
+
+run_guard "$CLEAN" 22222222-3333-4444-5555-666666666666 --repo=stub/crossforeign
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a 404ing lookup with a relevant PR exits 3, not 0" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" 33333333-4444-5555-6666-777777777777 --repo=stub/crossown
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "at start by uuid, an unparseable lookup with a relevant PR exits 3, not 0" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" 22222222-3333-4444-5555-666666666666 --repo=stub/crossunrelated
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a 404ing lookup with an unrelated PR carrying a claim exits 3, not 0" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" 22222222-3333-4444-5555-666666666666 --repo=stub/crossnoclaimsunrelated
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a 404ing lookup with no claim and no key-like token stays clear" "rc=$RC out=$OUT"
+
+# A relevant title or branch with no anchored Refs line is still a candidate:
+# the uuid pre-scan title/branch branch must fire (review on PR #79). A broken
+# pre-scan fails open here, so these pin the fail-closed paths.
+run_guard "$CLEAN" 11111111-2222-3333-4444-555555555555 --repo=stub/uuidreltitle
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a relevant title with no Refs line exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#922" <<< "$OUT" && echo 0 || echo 1)" \
+  "the uuid title-relevant PR number is named in the report" "$OUT"
+
+run_guard "$CLEAN" 22222222-3333-4444-5555-666666666666 --repo=stub/uuidreltitle
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a 404ing lookup with a relevant title and no Refs line exits 3, not 0" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" 11111111-2222-3333-4444-555555555555 --repo=stub/uuidrelbranch
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a relevant branch with no Refs line exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#923" <<< "$OUT" && echo 0 || echo 1)" \
+  "the uuid branch-relevant PR number is named in the report" "$OUT"
+
+run_guard "$CLEAN" 22222222-3333-4444-5555-666666666666 --repo=stub/uuidrelbranch
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a 404ing lookup with a relevant branch and no Refs line exits 3, not 0" "rc=$RC out=$OUT"
+
+# An own-PR refusal never masks a live sibling or a blind detector.
+run_guard "$CLEAN" EXAMPLE-901 --repo=stub/crossown901
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "an own-PR refusal does not mask a live sibling finding" "rc=$RC out=$OUT"
+assert "$(grep -q "run-sib" <<< "$OUT" && echo 0 || echo 1)" \
+  "the live sibling is still named alongside the own-PR refusal" "$OUT"
+assert "$(grep -q "#920" <<< "$OUT" && echo 0 || echo 1)" \
+  "the own-PR duplicate is still named alongside the live sibling" "$OUT"
+
+OVERRIDE_KEY="" run_guard "$CLEAN" EXAMPLE-900 --repo=stub/crossown
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "an own-PR refusal with a blind detector exits 1, finding outranks blindness" "rc=$RC out=$OUT"
+assert "$(grep -q "PAPERCLIP_API_KEY is unset" <<< "$OUT" && echo 0 || echo 1)" \
+  "the blind detector is still reported alongside the own-PR refusal" "$OUT"
+
+# ===========================================================================
+hdr "6b. Same-head ownership at prepush (two cards, one branch)."
+# Two cards, one branch, both pushed. The old PR scan skipped the
+# caller's own head branch, so a same-head PR claimed by a DIFFERENT card
+# read as clear. Attribution is the body `Refs:` line ONLY, so a mention
+# elsewhere in the body does not count; your own Refs, or no Refs at all,
+# stays clear.
+
+# Start phase keeps the old skip: nothing is being pushed yet.
+run_guard "$MYPR" EXAMPLE-900 --repo=stub/foreign
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "at start, a same-head PR claimed by another card is not yet a refusal" "rc=$RC out=$OUT"
+
+# The prepush half runs on MYPR itself: it stands on example-900-work, which the
+# stub splices into CURRENT, so each fixture PR sits on the caller's own head
+# — the same-head shape. One commit first, or the already-landed test fires
+# and every assertion below is satisfied by the wrong finding. (The stub
+# server is a separate process: its STUB_CURRENT_BRANCH is fixed at spawn, so
+# the fixture branch must be the spawn-time value, not a re-export.)
+(cd "$MYPR" && echo pushme >> file.txt && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "my push")
+run_guard "$MYPR" EXAMPLE-900 --repo=stub/foreign --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at prepush, a same-head PR claimed by another card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-907" <<< "$OUT" && echo 0 || echo 1)" \
+  "the sibling card owning the PR branch is named in the report" "$OUT"
+assert "$(grep -q "#881" <<< "$OUT" && echo 0 || echo 1)" \
+  "the same-head PR number is named in the report" "$OUT"
+assert "$(grep -q "owns this PR branch" <<< "$OUT" && echo 0 || echo 1)" \
+  "the refusal names the ownership, not the already-landed test" "$OUT"
+
+run_guard "$MYPR" EXAMPLE-900 --repo=stub/self --phase=prepush
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "at prepush, a same-head PR claiming this card is your own, exits 0" "rc=$RC out=$OUT"
+
+run_guard "$MYPR" EXAMPLE-900 --repo=stub/unclaimed --phase=prepush
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "at prepush, a same-head PR naming no card stays clear" "rc=$RC out=$OUT"
+
+# A Refs line that names our own key among others is still ours: multi-key
+# Refs lines are common, and a parenthetical digest token (SHA-256) is
+# key-shaped without being a card. Either one refusing our own push is the
+# false-positive class that gets the guard skipped.
+run_guard "$MYPR" EXAMPLE-900 --repo=stub/multiref --phase=prepush
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "at prepush, a same-head Refs line naming this card among others is your own, exits 0" "rc=$RC out=$OUT"
+
+run_guard "$MYPR" EXAMPLE-900 --repo=stub/shaparens --phase=prepush
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "at prepush, a same-head Refs line with a key-shaped parenthetical stays clear, exits 0" "rc=$RC out=$OUT"
+
+# ...but a Refs line naming only other cards still refuses, naming the first.
+run_guard "$MYPR" EXAMPLE-900 --repo=stub/multiforeign --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at prepush, a same-head Refs line naming only other cards exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-907" <<< "$OUT" && echo 0 || echo 1)" \
+  "the first foreign claimant is named in the report" "$OUT"
+
+# Attribution is a Refs line, not a Refs mention: a mid-sentence pointer at a
+# foreign card does not hand that card the branch.
+run_guard "$MYPR" EXAMPLE-900 --repo=stub/midline --phase=prepush
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "at prepush, a Refs mention that does not start a line is not attribution, exits 0" "rc=$RC out=$OUT"
+
+# ===========================================================================
+hdr "6c. Same-head ownership when invoked by uuid."
+# Invoked by uuid, the caller's own key is read off GET /api/issues/<uuid> —
+# and only when a same-head PR is actually in play. Each uuid below has a
+# clear run list, so the verdict isolates the ownership lookup. With no
+# same-head PR there is nothing to attribute, and even a 404ing lookup must
+# stay clear rather than indeterminate.
+
+run_guard "$MYPR" 11111111-2222-3333-4444-555555555555 --repo=stub/foreign --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at prepush by uuid, a same-head PR claimed by another card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-907" <<< "$OUT" && echo 0 || echo 1)" \
+  "the uuid lookup resolves our key and names the sibling card" "$OUT"
+
+run_guard "$MYPR" 11111111-2222-3333-4444-555555555555 --repo=stub/self --phase=prepush
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "at prepush by uuid, a same-head PR claiming this card is your own, exits 0" "rc=$RC out=$OUT"
+
+run_guard "$MYPR" 22222222-3333-4444-5555-666666666666 --repo=stub/none --phase=prepush
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "at prepush by uuid with no same-head PR, an unresolvable lookup stays clear, exits 0" "rc=$RC out=$OUT"
+
+run_guard "$MYPR" 22222222-3333-4444-5555-666666666666 --repo=stub/foreign --phase=prepush
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "at prepush by uuid, a 404ing lookup with a same-head PR exits 3, not 0" "rc=$RC out=$OUT"
+assert "$(grep -q "prepush ownership check" <<< "$OUT" && echo 0 || echo 1)" \
+  "the unattributable lookup is named in the report" "$OUT"
+
+run_guard "$MYPR" 33333333-4444-5555-6666-777777777777 --repo=stub/self --phase=prepush
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "at prepush by uuid, an unparseable lookup body exits 3, not 0" "rc=$RC out=$OUT"
+assert "$(grep -q "could not read our own card key" <<< "$OUT" && echo 0 || echo 1)" \
+  "the unreadable lookup body is named in the report" "$OUT"
+
+# ===========================================================================
+hdr "6d. Same commit, different branch name (PR #825 / EXAMPLE-19375)."
+# A second card fast-forwarded onto the owned head: branch names differ so
+# every branch-name match reads clear, but the commit is identical. The PR
+# fixtures below sit on example-907-sibling-branch while the caller stands on
+# ahead-work with one local commit; the caller head SHA is handed to the
+# stub through $TMP/sha.txt before each run. Attribution is the Refs line
+# ONLY: a foreign claimant refuses in BOTH phases; our own Refs refuses as a
+# duplicate PR, while no Refs stays clear, as does a distinct head — and a HEAD
+# with no local commits skips the comparison instead of firing on the base.
+
+SHAHEAD="$TMP/shahead"; mkclone "$SHAHEAD"
+(cd "$SHAHEAD" && git checkout --quiet -b ahead-work && echo shared >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "shared head" \
+   && git rev-parse HEAD > "$TMP/sha.txt")
+
+run_guard "$SHAHEAD" EXAMPLE-900 --repo=stub/shaforeign
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at start, a same-commit PR on another branch claimed by another card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-907" <<< "$OUT" && echo 0 || echo 1)" \
+  "the sibling card claiming the same-commit PR is named in the report" "$OUT"
+assert "$(grep -q "#891" <<< "$OUT" && echo 0 || echo 1)" \
+  "the same-commit PR number is named in the report" "$OUT"
+assert "$(grep -q "example-907-sibling-branch" <<< "$OUT" && echo 0 || echo 1)" \
+  "the same-commit PR branch is named in the report" "$OUT"
+
+run_guard "$SHAHEAD" EXAMPLE-900 --repo=stub/shaforeign --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at prepush, a same-commit PR on another branch claimed by another card exits 1" "rc=$RC out=$OUT"
+
+run_guard "$SHAHEAD" EXAMPLE-900 --repo=stub/shaown
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a same-commit PR whose body names this card refuses as a duplicate PR" "rc=$RC out=$OUT"
+
+run_guard "$SHAHEAD" EXAMPLE-900 --repo=stub/shaown --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at prepush, a same-commit PR whose body names this card refuses as a duplicate PR" "rc=$RC out=$OUT"
+
+run_guard "$SHAHEAD" EXAMPLE-900 --repo=stub/shanone
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "a same-commit PR naming no card stays clear" "rc=$RC out=$OUT"
+
+run_guard "$SHAHEAD" EXAMPLE-900 --repo=stub/shatitle
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a same-commit PR with the key in the title and no Refs line exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "already covers this issue" <<< "$OUT" && echo 0 || echo 1)" \
+  "the same-commit title match uses the title message" "$OUT"
+assert "$(grep -q "#898" <<< "$OUT" && echo 0 || echo 1)" \
+  "the same-commit title-match PR number is named" "$OUT"
+assert "$(grep -q "00000000" <<< "$OUT" && echo 1 || echo 0)" \
+  "the same-commit title match never prints a head SHA as an open card" "rc=$RC out=$OUT"
+
+run_guard "$SHAHEAD" EXAMPLE-900 --repo=stub/shabranch --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at prepush, a same-commit PR with the key in the branch and no Refs line exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#899" <<< "$OUT" && echo 0 || echo 1)" \
+  "the same-commit branch-match PR number is named" "$OUT"
+
+run_guard "$SHAHEAD" EXAMPLE-900 --repo=stub/shadistinct
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "a distinct-head PR claimed by another card stays clear" "rc=$RC out=$OUT"
+
+# Invoked by uuid, the start-phase lookup resolves our key the same way.
+run_guard "$SHAHEAD" 11111111-2222-3333-4444-555555555555 --repo=stub/shaforeign
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a same-commit PR claimed by another card exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-907" <<< "$OUT" && echo 0 || echo 1)" \
+  "the start-phase uuid lookup resolves our key and names the sibling card" "$OUT"
+
+run_guard "$SHAHEAD" 11111111-2222-3333-4444-555555555555 --repo=stub/shaown
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a same-commit PR whose body names this card refuses as a duplicate PR" "rc=$RC out=$OUT"
+assert "$(grep -q "#892" <<< "$OUT" && echo 0 || echo 1)" \
+  "the uuid duplicate-PR refusal names the PR number" "$OUT"
+
+run_guard "$SHAHEAD" 11111111-2222-3333-4444-555555555555 --repo=stub/shaown --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at prepush by uuid, a same-commit PR whose body names this card refuses as a duplicate PR" "rc=$RC out=$OUT"
+
+run_guard "$SHAHEAD" 22222222-3333-4444-5555-666666666666 --repo=stub/shaforeign
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a 404ing lookup with a same-commit PR exits 3, not 0" "rc=$RC out=$OUT"
+assert "$(grep -q "same-commit ownership check" <<< "$OUT" && echo 0 || echo 1)" \
+  "the unattributable same-commit lookup is named in the report" "$OUT"
+
+# An unclaimed same-commit row with a relevant title stays in the generic
+# path, so the uuid pre-scan must treat it as a candidate (review on PR #79).
+run_guard "$SHAHEAD" 11111111-2222-3333-4444-555555555555 --repo=stub/uuidrelsha
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at start by uuid, an unclaimed same-commit PR with a relevant title exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "#924" <<< "$OUT" && echo 0 || echo 1)" \
+  "the uuid same-commit title-match PR number is named" "$OUT"
+
+run_guard "$SHAHEAD" 22222222-3333-4444-5555-666666666666 --repo=stub/uuidrelsha
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a 404ing lookup with an unclaimed same-commit relevant PR exits 3, not 0" "rc=$RC out=$OUT"
+
+# Vacuous: a HEAD with no local commits shares the base with every empty
+# foreign PR. Refusing there would fire on every fresh start.
+VACUOUS="$TMP/vacuous"; mkclone "$VACUOUS"
+(cd "$VACUOUS" && git rev-parse HEAD > "$TMP/sha.txt")
+run_guard "$VACUOUS" EXAMPLE-900 --repo=stub/shaforeign
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "a HEAD with no local commits does not refuse a same-commit PR" "rc=$RC out=$OUT"
+assert "$(grep -q "no local commits" <<< "$OUT" && echo 0 || echo 1)" \
+  "the vacuous comparison is named instead of silently skipped" "$OUT"
+
+# A claimed same-commit row with a relevant title still refuses on a vacuous
+# HEAD: SAMESHA skips it, so the generic path owns the refusal as on base
+# (review on PR #79). Gating the generic skip on ahead-of-main restores it.
+run_guard "$VACUOUS" EXAMPLE-900 --repo=stub/shavacown
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a vacuous HEAD still refuses a title-relevant claimed same-commit PR naming this card" "rc=$RC out=$OUT"
+assert "$(grep -q "#925" <<< "$OUT" && echo 0 || echo 1)" \
+  "the vacuous own-claim PR number is named in the report" "$OUT"
+
+run_guard "$VACUOUS" EXAMPLE-900 --repo=stub/shavacforeign
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a vacuous HEAD still refuses a title-relevant claimed same-commit PR naming another card" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-907" <<< "$OUT" && echo 0 || echo 1)" \
+  "the vacuous foreign claimant is named in the report" "$OUT"
+
+# The uuid pre-scan must keep the same vacuous-HEAD candidate as key mode:
+# skipping it would skip the lookup and clear the PR (review on PR #79).
+run_guard "$VACUOUS" 11111111-2222-3333-4444-555555555555 --repo=stub/shavacown
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a vacuous HEAD still refuses a title-relevant own-claim same-commit PR" "rc=$RC out=$OUT"
+assert "$(grep -q "#925" <<< "$OUT" && echo 0 || echo 1)" \
+  "the uuid vacuous own-claim PR number is named in the report" "$OUT"
+
+run_guard "$VACUOUS" 22222222-3333-4444-5555-666666666666 --repo=stub/shavacown
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a vacuous HEAD with a 404ing lookup and a relevant own-claim same-commit PR exits 3, not 0" "rc=$RC out=$OUT"
+
+run_guard "$VACUOUS" 11111111-2222-3333-4444-555555555555 --repo=stub/shavacforeign
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a vacuous HEAD still refuses a title-relevant foreign-claim same-commit PR" "rc=$RC out=$OUT"
+assert "$(grep -q "EXAMPLE-907" <<< "$OUT" && echo 0 || echo 1)" \
+  "the uuid vacuous foreign claimant is named in the report" "$OUT"
+
+run_guard "$VACUOUS" 22222222-3333-4444-5555-666666666666 --repo=stub/shavacforeign
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "at start by uuid, a vacuous HEAD with a 404ing lookup and a relevant foreign-claim same-commit PR exits 3, not 0" "rc=$RC out=$OUT"
+
+# ===========================================================================
+hdr "6e. Same HEAD checked out in another worktree."
+# The local half of the EXAMPLE-19375 shape: two checkouts, one commit, different
+# branch names. A linked worktree on another branch at this HEAD refuses in
+# both phases; a detached checkout at this HEAD is reported, not refused.
+
+SHAWT="$TMP/shawt"; mkclone "$SHAWT"
+(cd "$SHAWT" && git checkout --quiet -b wt-work && echo wt >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "wt head" \
+   && git worktree add --quiet -b wt-other-branch "$TMP/wt-other" HEAD)
+run_guard "$SHAWT" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at start, another worktree on this HEAD under another branch exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "wt-other-branch" <<< "$OUT" && echo 0 || echo 1)" \
+  "the sibling worktree branch is named in the report" "$OUT"
+assert "$(grep -q "wt-other" <<< "$OUT" && echo 0 || echo 1)" \
+  "the sibling worktree path is named in the report" "$OUT"
+
+run_guard "$SHAWT" EXAMPLE-900 --repo=stub/none --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at prepush, another worktree on this HEAD under another branch exits 1" "rc=$RC out=$OUT"
+
+SHADET="$TMP/shadet"; mkclone "$SHADET"
+(cd "$SHADET" && git checkout --quiet -b det-work && echo det >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "det head" \
+   && git worktree add --quiet --detach "$TMP/wt-det" HEAD)
+run_guard "$SHADET" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "a detached worktree on this HEAD is reported, not refused" "rc=$RC out=$OUT"
+assert "$(grep -q "detached worktree" <<< "$OUT" && echo 0 || echo 1)" \
+  "the detached checkout is named in the report" "$OUT"
+
+# ===========================================================================
+hdr "7. The pre-push phase, and the already-landed test."
+# On EXAMPLE-258 a correct start-time check would still have come back clear: the
+# sibling landed DURING the loser's CI wait. The re-check before pushing is the
+# half that would actually have caught it.
+
+LANDED="$TMP/landed"; mkclone "$LANDED"
+run_guard "$LANDED" EXAMPLE-900 --repo=stub/none --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "at prepush, a HEAD already reachable from origin/main exits 1" "rc=$RC out=$OUT"
+assert "$(grep -qi "already an ancestor" <<< "$OUT" && echo 0 || echo 1)" \
+  "the already-landed finding says the work is already on origin/main" "$OUT"
+
+# The same repo at start phase. HEAD sits on origin/main at the beginning of
+# every piece of work, so running the ancestor test then would fire on
+# everything and the guard would be turned off within a day.
+run_guard "$LANDED" EXAMPLE-900 --repo=stub/none --phase=start
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "at start, a HEAD sitting on origin/main is not already-landed" "rc=$RC out=$OUT"
+
+WORK="$TMP/work"; mkclone "$WORK"
+(cd "$WORK" && git checkout --quiet -b example-901-work && echo w >> file.txt && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am w)
+run_guard "$WORK" EXAMPLE-900 --repo=stub/none --phase=prepush
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "at prepush, unlanded work on a fresh branch is clear" "rc=$RC out=$OUT"
+
+SIBLING_GUARD_NO_FETCH=1 run_guard "$WORK" EXAMPLE-900 --repo=stub/none --phase=prepush
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "at prepush, an ancestor test on an unfetched origin exits 3" "rc=$RC out=$OUT"
+
+# ===========================================================================
+hdr "8. A finding outranks blindness."
+# If a sibling is found AND a detector was blind, the answer is 1. Exit 3 would
+# read as "inconclusive, try again", and the caller would push anyway.
+
+OVERRIDE_GH_TOKEN="" run_guard "$AHEAD" EXAMPLE-901 --repo=stub/none
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "a sibling found while another detector is blind still exits 1" "rc=$RC out=$OUT"
+
+# ===========================================================================
+hdr "9. Invocation contract."
+
+run_guard "$CLEAN" EXAMPLE-900 --phase=sideways --repo=stub/none
+assert "$([[ "$RC" -eq 2 ]] && echo 0 || echo 1)" \
+  "an unknown phase is a usage error" "rc=$RC out=$OUT"
+
+OUT="$("$TOOL" 2>&1)"; RC=$?
+assert "$([[ "$RC" -eq 2 ]] && echo 0 || echo 1)" \
+  "no issue argument is a usage error" "rc=$RC out=$OUT"
+
+OUT="$("$TOOL" EXAMPLE-900 EXTRA 2>&1)"; RC=$?
+assert "$([[ "$RC" -eq 2 ]] && echo 0 || echo 1)" \
+  "two issue arguments are a usage error" "rc=$RC out=$OUT"
+
+OUT="$("$TOOL" 'EXAMPLE-900;rm -rf /' 2>&1)"; RC=$?
+assert "$([[ "$RC" -eq 2 ]] && echo 0 || echo 1)" \
+  "an issue argument that is not a bare key or uuid is refused" "rc=$RC out=$OUT"
+
+OUT="$("$TOOL" --help 2>&1)"; RC=$?
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "--help exits 0" "rc=$RC out=$OUT"
+assert "$(grep -q -- "--phase=start" <<< "$OUT" && echo 0 || echo 1)" \
+  "--help documents the start phase" "$OUT"
+assert "$(grep -q "SIBLING_GUARD_NO_FETCH" <<< "$OUT" && echo 0 || echo 1)" \
+  "--help documents the fetch-skip switch" "$OUT"
+
+run_guard "$CLEAN" EXAMPLE-901 --repo=stub/none --json
+assert "$(node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d);process.exit(j.verdict==="sibling"&&j.exitCode===1&&j.findings.length>0?0:1)})' <<< "$OUT" && echo 0 || echo 1)" \
+  "--json reports the verdict, the exit code and the findings" "$OUT"
+
+OVERRIDE_GH_TOKEN="" run_guard "$CLEAN" EXAMPLE-900 --repo=stub/none --json
+assert "$(node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d);process.exit(j.verdict==="indeterminate"&&j.couldNotRun.length>0?0:1)})' <<< "$OUT" && echo 0 || echo 1)" \
+  "--json names the detectors that could not run" "$OUT"
+
+# ===========================================================================
+hdr "10. The tool never consults the process table."
+# `ps` is empty in this container for every process including the caller's own,
+# and reading that emptiness as 'no sibling' is the whole of EXAMPLE-258. Anyone
+# reaching for it again is reaching for a signal that is known to carry zero
+# information here. grep, not behaviour, because the failure is that it would
+# LOOK like it worked.
+
+# Comments are stripped first: the tool's header EXPLAINS why ps is useless
+# here, and that explanation is the most valuable line in the file.
+CODE_ONLY="$TMP/tool-code.sh"; grep -vE '^[[:space:]]*#' "$TOOL" > "$CODE_ONLY"
+assert "$(grep -nE '(^|[^[:alnum:]_])(ps|pgrep)([[:space:]]|$)' "$CODE_ONLY" >/dev/null && echo 1 || echo 0)" \
+  "sibling_guard.sh does not invoke ps" "$(grep -nE '(^|[^[:alnum:]_])(ps|pgrep)([[:space:]]|$)' "$CODE_ONLY" || true)"
+
+assert "$(grep -q 'pgrep\|/proc/' "$CODE_ONLY" && echo 1 || echo 0)" \
+  "sibling_guard.sh does not read the process table another way" \
+  "$(grep -n 'pgrep\|/proc/' "$CODE_ONLY" || true)"
+
+# No credential may reach argv: /proc/*/cmdline is world readable on this box.
+assert "$(grep -nE 'curl[^|]*(\$GH_TOKEN|\$token|\$PAPERCLIP_API_KEY|\$key)' "$TOOL" >/dev/null && echo 1 || echo 0)" \
+  "no credential is passed to curl on the command line" \
+  "$(grep -nE 'curl[^|]*(\$GH_TOKEN|\$token|\$PAPERCLIP_API_KEY|\$key)' "$TOOL" || true)"
+
+# ===========================================================================
+hdr "11. An old key resolves through its own endpoint, not the 500-row list."
+# The company list returns the 500 newest issues, so an older key is found only
+# by GET /api/issues/<key>. A key that neither lookup finds stays blind.
+
+run_guard "$CLEAN" OPS-7 --repo=stub/none
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "an old key outside the company list resolves and is read, exits 0" "rc=$RC out=$OUT"
+assert "$(grep -q "read case-old run list" <<< "$OUT" && echo 0 || echo 1)" \
+  "the old key resolves to the issue it names" "$OUT"
+
+run_guard "$CLEAN" OPS-404 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a key that 404s by key and is absent from the list stays blind, exits 3" "rc=$RC out=$OUT"
+
+run_guard "$CLEAN" OPS-8 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a 200 that names a different issue does not resolve the key, exits 3" "rc=$RC out=$OUT"
+
+# ===========================================================================
+printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
+[[ "$FAIL" -eq 0 ]] || exit 1
+exit 0

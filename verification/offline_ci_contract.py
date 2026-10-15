@@ -49,10 +49,11 @@ def workflow_defaults_definition(text):
 
 def restored_errors(root, contract):
     errors = []
-    for dest, expected in contract["restored_files_sha256"].items():
-        path = root / dest
-        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-            errors.append(f"stale or missing restored input: {dest}")
+    for kind in ("restored", "consolidated"):
+        for dest, expected in contract.get(f"{kind}_files_sha256", {}).items():
+            path = root / dest
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                errors.append(f"stale or missing {kind} input: {dest}")
     return errors
 
 
@@ -220,16 +221,24 @@ def validate(text, contract):
         manifest = manifest_text.splitlines()
         allowlist = (ROOT / "vendor/toolkit-tracked-allowlist.txt").read_text().splitlines()
         restored = contract["restored_files_sha256"]
+        consolidated = contract["consolidated_files_sha256"]
         destinations = {line.split("|", 1)[0] for line in manifest if line}
         tracked = {line for line in allowlist if line and not line.startswith("#")}
-        if set(restored) != destinations - tracked or any(
-                not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
-                for digest in restored.values()):
-            errors.append("restored input hashes differ from reviewed manifest closure")
+        # Archive-restored and deliberately consolidated tracked inputs form
+        # disjoint, exhaustive sets. Both pin exact bytes; tracking a file may
+        # not silently remove it from the immutable input closure.
+        for kind, hashes, expected_paths in (
+                ("restored", restored, destinations - tracked),
+                ("consolidated", consolidated, destinations & tracked)):
+            if not isinstance(hashes, dict) or set(hashes) != expected_paths or any(
+                    not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                    for digest in hashes.values()):
+                errors.append(f"{kind} input hashes differ from reviewed manifest closure")
+        pinned_inputs = set(restored) | set(consolidated)
         for item in removed:
             inputs = item.get("input_paths")
             if (not isinstance(inputs, list) or not inputs
-                    or any(not isinstance(path, str) or path not in restored for path in inputs)):
+                    or any(not isinstance(path, str) or path not in pinned_inputs for path in inputs)):
                 errors.append(f"removed producer lacks immutable restored input closure: {item['name']}")
         exceptions = sorted(line for line in manifest if line.count("|") == 2)
         compatibility = contract.get("private_compatibility", {})

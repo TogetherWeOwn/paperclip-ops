@@ -1,0 +1,2 @@
+# Preserve the byte-exact expected-render fixture, including its terminal blank line.
+verification/fixtures/withdrawal-render/expected.md whitespace=-blank-at-eof

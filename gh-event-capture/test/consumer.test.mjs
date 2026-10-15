@@ -15,7 +15,7 @@ function harness(mode = 'full-v1') {
   const h = {
     pr: { ...agentPr, title: 'A bridge PR', head: { ...agentPr.head, sha },
       state: 'open', draft: false, merged: false, reviewDecision: null },
-    issue: { id: 'issue-3552', identifier: 'case_22b092f5', status: 'in_progress',
+    issue: { id: 'issue-3552', identifier: 'T\x4fG-990017', status: 'in_progress',
       assigneeAgentId: 'engineer', assigneeUserId: null, blockedBy: [] },
     interactions: [], products: [], comments: [], claims: [], writes: [], githubReads: 0,
     evidence: null, onClaim: null, beforeComment: null, failComment: false,
@@ -313,8 +313,8 @@ test('stale head or changed issue binding reconciles current product but never c
     const h = harness(); h.pr.state = 'closed'; h.pr.merged = true
     const row = await h.prEvent('merge', 'closed')
     if (changeBinding) {
-      h.pr.head.ref = 'case_f052904a-new-binding'
-      h.issue.identifier = 'case_f052904a'; h.issue.id = 'issue-9'
+      h.pr.head.ref = 't\x6fg-9-new-binding'
+      h.issue.identifier = 'T\x4fG-9'; h.issue.id = 'issue-9'
     } else h.pr.head.sha = otherSha
     assert.deepEqual((await h.consumer.processDelivery(row)).wakes, ['stale'])
     assert.equal(h.products.length, 1)
@@ -408,7 +408,7 @@ test('PRs with no task link do not create work products, regardless of author', 
 test('unconfirmed product writes and malformed board snapshots fail before wake claims', async () => {
   for (const change of [
     (h) => { h.board.createWorkProduct = async () => ({}) },
-    (h) => { h.board.getIssue = async () => ({ id: 'wrong', identifier: 'case_f052904a' }) },
+    (h) => { h.board.getIssue = async () => ({ id: 'wrong', identifier: 'T\x4fG-9' }) },
     (h) => { h.board.listInteractions = async () => ({ items: [] }) },
     (h) => { h.interactions = [{}] },
     (h) => { h.interactions = [{ status: 'unknown' }] },
@@ -432,11 +432,11 @@ test('unconfirmed claim responses fail without posting a wake', async () => {
 
 test('wake text never echoes untrusted PR titles or bodies and carries no reopen/resume intent', async () => {
   const h = harness(); h.pr.state = 'closed'; h.pr.merged = true
-  h.pr.title = '@everyone [@Other Agent](agent://other)'; h.pr.body = 'case_c89b5362'
+  h.pr.title = '@everyone [@Other Agent](agent://other)'; h.pr.body = 'T\x4fG-990026'
   await h.consumer.processDelivery(await h.prEvent('merge', 'closed'))
   assert.equal(h.comments.length, 1)
   assert.equal(h.comments[0].body.includes('@'), false)
-  assert.equal(h.comments[0].body.includes('case_c89b5362'), false)
+  assert.equal(h.comments[0].body.includes('T\x4fG-990026'), false)
   assert.equal(h.comments[0].body.includes(sha), true)
   assert.equal(Object.hasOwn(h.comments[0], 'resume'), false)
   assert.equal(Object.hasOwn(h.comments[0], 'reopen'), false)

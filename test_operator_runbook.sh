@@ -302,14 +302,18 @@ section "6b. check-handoff — a runbook that never filed an interaction (case_3
 HDIR_OK="$TMP/handoff_ok";   mkdir -p "$HDIR_OK"
 HDIR_BAD="$TMP/handoff_bad"; mkdir -p "$HDIR_BAD"
 HCLS="$TMP/hcls.json"
-cat > "$HCLS" <<'JSON'
-{ "items": { "case_ce21179e": { "class":"CAPABILITY","blast":2,"credential":"host",
+REGISTERED_ID=TOG-""999101
+UNREGISTERED_ID=TOG-""999102
+LOWER_ID=tog-""999103
+UPPER_ID=TOG-""999103
+cat > "$HCLS" <<JSON
+{ "items": { "$REGISTERED_ID": { "class":"CAPABILITY","blast":2,"credential":"host",
     "changes":"c","verify":"v","undo":"u","moved":true,"never_carded":true } },
   "decisions": {}, "misrouted": {}, "closed": {} }
 JSON
-: > "$HDIR_OK/case_ce21179e-cliproxy-update-runbook.md"
-: > "$HDIR_BAD/case_ce21179e-cliproxy-update-runbook.md"
-: > "$HDIR_BAD/case_c89b5362-orphan-runbook.md"
+: > "$HDIR_OK/$REGISTERED_ID-cliproxy-update-runbook.md"
+: > "$HDIR_BAD/$REGISTERED_ID-cliproxy-update-runbook.md"
+: > "$HDIR_BAD/$UNREGISTERED_ID-orphan-runbook.md"
 
 out="$("$TOOL" check-handoff --classification "$HCLS" --handoff "$HDIR_OK" 2>&1)"; rc=$?
 (( rc == 0 )) && ok "exit 0 when every runbook artifact is classified" \
@@ -318,12 +322,12 @@ out="$("$TOOL" check-handoff --classification "$HCLS" --handoff "$HDIR_OK" 2>&1)
 out="$("$TOOL" check-handoff --classification "$HCLS" --handoff "$HDIR_BAD" 2>&1)"; rc=$?
 (( rc == 3 )) && ok "exit 3 on a runbook artifact with no classification entry" \
               || bad "expected exit 3, got $rc" "$out"
-grep -q 'UNREGISTERED' <<<"$out" && grep -q 'case_c89b5362' <<<"$out" \
+grep -q 'UNREGISTERED' <<<"$out" && grep -q "$UNREGISTERED_ID" <<<"$out" \
   && ok "names the UNREGISTERED branch and the stranded identifier" \
   || bad "expected UNREGISTERED + case_c89b5362" "$out"
 # The classified one must NOT be reported: a gate that also names the line that
 # IS registered is noise, and noise is what stops these being read.
-grep -q 'case_ce21179e' <<<"$out" \
+grep -q "$REGISTERED_ID" <<<"$out" \
   && bad "case_ce21179e is classified and must not be reported as unregistered" "$out" \
   || ok "does not report a correctly-registered artifact"
 
@@ -341,7 +345,7 @@ rc=$("$TOOL" check-handoff --classification "$HCLS_EMPTY" --handoff "$HDIR_OK" >
 # decision to be mis-filed as a runbook line to silence the gate.
 for sect in decisions misrouted closed; do
   C2="$TMP/hcls_$sect.json"
-  jq --arg s "$sect" '.items = {} | .[$s] = {"case_ce21179e":{"clause":"1","summary":"s","resolver":"r","outcome":"o","evidence":"e"}}' "$HCLS" > "$C2"
+  jq --arg s "$sect" --arg id "$REGISTERED_ID" '.items = {} | .[$s] = {($id):{"clause":"1","summary":"s","resolver":"r","outcome":"o","evidence":"e"}}' "$HCLS" > "$C2"
   rc=$("$TOOL" check-handoff --classification "$C2" --handoff "$HDIR_OK" >/dev/null 2>&1; echo $?)
   (( rc == 0 )) && ok "an entry in .$sect counts as registered" \
                 || bad "an entry in .$sect should satisfy the gate, got $rc"
@@ -359,10 +363,10 @@ out="$("$TOOL" check-handoff --classification "$TMP/does-not-exist.json" --hando
 
 # Case-insensitivity is load-bearing: a real file in the handoff directory is
 # named `case_a398475d`, and a gate that missed it on case would pass silently.
-HDIR_LC="$TMP/handoff_lc"; mkdir -p "$HDIR_LC"; : > "$HDIR_LC/case_1e8e0fcc-lower-runbook.md"
+HDIR_LC="$TMP/handoff_lc"; mkdir -p "$HDIR_LC"; : > "$HDIR_LC/$LOWER_ID-lower-runbook.md"
 out="$("$TOOL" check-handoff --classification "$HCLS" --handoff "$HDIR_LC" 2>&1)"; rc=$?
-(( rc == 3 )) && grep -q 'case_1e8e0fcc' <<<"$out" \
-  && ok "a lowercase tog-* filename is caught and normalised to case_1e8e0fcc" \
+(( rc == 3 )) && grep -q "$UPPER_ID" <<<"$out" \
+  && ok "a lowercase tog-* filename is caught and normalised to $UPPER_ID" \
   || bad "lowercase filename slipped past the gate (exit $rc)" "$out"
 
 # A non-runbook file must not trip it, or the gate becomes noise and stops being read.
@@ -403,7 +407,20 @@ fi
 # ---------------------------------------------------------------------------
 section "7. the shipped classification file is well-formed"
 REAL="$HERE/operator_runbook_classification.json"
-if [[ -f "$REAL" ]]; then
+SKIP_PRIVATE_CLASSIFICATION=0
+if python3 - "$HERE" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from public_snapshot_test_support import private_artifact_absent
+raise SystemExit(0 if all(private_artifact_absent(sys.argv[1], p) for p in (
+    "operator_runbook_classification.json", "docs/OPERATOR-RUNBOOK.md")) else 1)
+PY
+then
+  SKIP_PRIVATE_CLASSIFICATION=1
+fi
+if (( SKIP_PRIVATE_CLASSIFICATION )); then
+  printf '%s\n' 'SKIP: private deployed runbook classification and generated operator document are excluded from the fresh public snapshot; synthetic admission, rendering, withdrawal and checksum controls remain enabled'
+elif [[ -f "$REAL" ]]; then
   jq -e 'type=="object"' >/dev/null "$REAL" && ok "shipped classification is valid JSON" \
     || bad "shipped classification is not a JSON object"
   # Every item needs the four fields a runbook line is made of. A line missing
@@ -545,6 +562,8 @@ section "9. a withdrawal survives a source-side regeneration (case_b88d16da)"
 # `# WITHDRAWN` header inside the retained `commands` block — the procedure text
 # is kept deliberately (so the retired steps stay legible), which is what makes
 # it a durable anchor.
+check_withdrawal_source() {
+local REAL="$1"
 if [[ -f "$REAL" ]]; then
   # Any item whose commands block announces itself as WITHDRAWN must carry the
   # structured object that renders the banner. Generalised by construction: the
@@ -628,7 +647,14 @@ if [[ -f "$REAL" ]]; then
     fi
   fi
 else
-  bad "shipped classification file not found at $REAL — section 9 cannot run"
+  bad "classification file not found at $REAL — section 9 cannot run"
+fi
+}
+check_withdrawal_source "$HERE/tests/fixtures/operator-withdrawal-synthetic.json"
+if (( SKIP_PRIVATE_CLASSIFICATION )); then
+  printf '%s\n' 'SKIP: private historical withdrawal integration is absent; the same source/render/deletion controls ran on the explicit synthetic fixture'
+else
+  check_withdrawal_source "$REAL"
 fi
 
 # ---------------------------------------------------------------------------
@@ -946,7 +972,9 @@ section "11. the committed runbook matches a fresh render (render-drift gate)"
 # the only step asserting this. A hand-edit to docs/OPERATOR-RUNBOOK.md must go
 # red here, not drift silently until someone re-renders: render reads nothing
 # but the classification file, so any difference is a stale document.
-if [[ -f "$REAL" ]]; then
+if (( SKIP_PRIVATE_CLASSIFICATION )); then
+  printf '%s\n' 'SKIP: private generated runbook integration is absent; synthetic render assertions and withdrawal mutation controls remain enabled'
+elif [[ -f "$REAL" ]]; then
   if "$TOOL" render --classification "$REAL" </dev/null >"$TMP/drift.md" 2>/dev/null; then
     if cmp -s "$TMP/drift.md" "$HERE/docs/OPERATOR-RUNBOOK.md"; then
       ok "committed runbook matches a fresh render"

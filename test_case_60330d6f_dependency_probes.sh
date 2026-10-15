@@ -373,7 +373,7 @@ p="$(last_push)"; c1="$(conns)"
   || bad "5a. prod db guard" "$out $p conns=$c0→$c1"
 
 fresh; c0="$(conns)"
-out="$(run_neon NEON_STAGING_DATABASE_URL="postgres://staging_user:$person-fd904927@example.invalid:5432/stagingdb" NEON_STAGING_ENDPOINT_ID=prod-primary)"
+out="$(run_neon NEON_STAGING_DATABASE_URL="postgres://staging_user:${PW}@prod-primary.example.invalid:5432/stagingdb" NEON_STAGING_ENDPOINT_ID=prod-primary)"
 c1="$(conns)"
 p="$(last_push)"
 { grep -q "success=false" <<<"$p"; } && [[ "$c1" == "$c0" ]] \
@@ -421,14 +421,14 @@ p="$(last_push)"
   && ok "5g. missing endpoint pin pushes DOWN, exit 1 (never silent green)" \
   || bad "5g. missing endpoint pin" "rc=$rc $p"
 
-fresh; out="$(run_neon NEON_STAGING_DATABASE_URL="postgres://staging_user:$person-e14ce7a8@example.invalid:5432/stagingdb" NEON_STAGING_ENDPOINT_ID=ep-staging123)"
+fresh; out="$(run_neon NEON_STAGING_DATABASE_URL="postgres://staging_user:${PW}@ep-staging123-pooler.example.invalid:5432/stagingdb" NEON_STAGING_ENDPOINT_ID=ep-staging123)"
 p="$(last_push)"
 { grep -q "success=false" <<<"$p" && grep -q "tcp" <<<"$p"; } \
   && [[ "$out" == "rc=1" ]] \
   && ok "5h. -pooler host passes the pin and reaches stage 1" \
   || bad "5h. pooler suffix acceptance" "$out $p"
 
-fresh; out="$(run_neon NEON_STAGING_DATABASE_URL="postgres://staging_user:$person-fffa6995@example.invalid:5432/stagingdb" NEON_STAGING_ENDPOINT_ID=ep-aaa111)"
+fresh; out="$(run_neon NEON_STAGING_DATABASE_URL="postgres://staging_user:${PW}@ep-bbb222.example.invalid:5432/stagingdb" NEON_STAGING_ENDPOINT_ID=ep-aaa111)"
 p="$(last_push)"
 { grep -q "success=false" <<<"$p" && grep -q "pinned" <<<"$p"; } \
   && [[ "$out" == "rc=1" ]] \

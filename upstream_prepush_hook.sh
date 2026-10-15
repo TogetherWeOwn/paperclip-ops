@@ -35,8 +35,8 @@ remote_label="$(printf '%s' "$remote_name" | sed -E 's#(://)[^/@]*@#\1#')"
 slug=""
 case "$remote_url" in
   https://github.com/*|http://github.com/*) slug="${remote_url#*github.com/}";;
-  person-dd677eb8@example.invalid:*)                         slug="${remote_url#person-dd677eb8@example.invalid:}";;
-  ssh://person-dd677eb8@example.invalid/*)                   slug="${remote_url#ssh://person-dd677eb8@example.invalid/}";;
+  git@github.com:*)                         slug="${remote_url#git@github.com:}";;
+  ssh://git@github.com/*)                   slug="${remote_url#ssh://git@github.com/}";;
   https://*@github.com/*)                   slug="${remote_url#*@github.com/}";;
 esac
 slug="${slug%.git}"; slug="${slug%/}"

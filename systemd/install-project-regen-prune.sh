@@ -53,7 +53,7 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 /usr/bin/tar --extract --file "$BUNDLE" --directory "$WORK_DIR" --no-same-owner --no-same-permissions
 [[ "$(<"$WORK_DIR/REVISION")" == "$SOURCE_REF" ]] || refuse "bundle revision does not match --source-ref"
 (cd "$WORK_DIR" && /usr/bin/sha256sum --check --strict SHA256SUMS)
-for source in ops/lib/atomic_state.py ops/case_b5184419/terminal_worktree_cache_reclaim.py ops/case_60e07cc2/project_worktree_regen_prune.py systemd/install-project-regen-prune.sh systemd/paperclip-project-regen-prune.service systemd/paperclip-project-regen-prune.timer systemd/project-regen-prune.env.example; do
+for source in ops/case_60e07cc2/project_worktree_regen_prune.py ops/case_b5184419/terminal_worktree_cache_reclaim.py ops/lib/atomic_state.py systemd/install-project-regen-prune.sh systemd/paperclip-project-regen-prune.service systemd/paperclip-project-regen-prune.timer systemd/project-regen-prune.env.example; do
   [[ -f "$WORK_DIR/$source" ]] || refuse "reviewed bundle is missing $source"
 done
 # Preflight the reviewed bytes before anything is installed.

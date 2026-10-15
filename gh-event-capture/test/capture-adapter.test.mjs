@@ -147,20 +147,20 @@ test('evidence lookup refuses truncated candidates instead of claiming absence',
 test('merge wake claim uses stored source scope and real route deduplication', async () => {
   const h = harness()
   await h.prEvent('merge', { ...pr, state: 'closed', merged: true }, { action: 'closed' })
-  const claim = { issue_ref: 'case_22b092f5', head_sha: sha, kind: 'pull_request_merged', delivery_id: 'merge', arbitrary: 'PRIVATE' }
+  const claim = { issue_ref: 'T\x4fG-990017', head_sha: sha, kind: 'pull_request_merged', delivery_id: 'merge', arbitrary: 'PRIVATE' }
   const result = await h.adapter.claim(claim)
-  assert.deepEqual(result, { ok: true, claimed: true, claim_key: `case_22b092f5|${sha}|pull_request_merged` })
+  assert.deepEqual(result, { ok: true, claimed: true, claim_key: `T\x4fG-990017|${sha}|pull_request_merged` })
   assert.equal((await h.adapter.claim(claim)).claimed, false)
   const writes = h.calls.filter((c) => c.init.method === 'POST')
   assert.equal(writes.length, 2)
   assert.equal(Object.hasOwn(JSON.parse(writes[0].init.body), 'arbitrary'), false)
-  await assert.rejects(h.adapter.claim({ ...claim, issue_ref: 'case_f052904a' }))
+  await assert.rejects(h.adapter.claim({ ...claim, issue_ref: 'T\x4fG-9' }))
 })
 
 test('suite claims require stored matching PR evidence and preserve genuine claim after a rejection', async () => {
   const h = harness()
   await h.prEvent('evidence'); await h.suiteEvent('suite')
-  const claim = { issue_ref: 'case_22b092f5', head_sha: sha, kind: 'check_suite_completed', delivery_id: 'suite' }
+  const claim = { issue_ref: 'T\x4fG-990017', head_sha: sha, kind: 'check_suite_completed', delivery_id: 'suite' }
   await assert.rejects(h.adapter.claim(claim), /ID/)
   assert.equal(h.calls.filter((c) => c.init.method === 'POST').length, 0)
   await h.prEvent('human-evidence', { ...pr, user: { login: 'human' } })
@@ -172,7 +172,7 @@ test('suite claims require stored matching PR evidence and preserve genuine clai
 test('out-of-scope wake sources and wrong event types cause no write', async () => {
   for (const source of [{ ...row('source'), repository: 'Other/repo' }, { ...row('source'), event: 'check_suite' }]) {
     const { adapter, calls } = stub([json(source)])
-    await assert.rejects(adapter.claim({ issue_ref: 'case_22b092f5', head_sha: sha, kind: 'pull_request_merged', delivery_id: 'source' }))
+    await assert.rejects(adapter.claim({ issue_ref: 'T\x4fG-990017', head_sha: sha, kind: 'pull_request_merged', delivery_id: 'source' }))
     assert.equal(calls.filter((c) => c.init.method === 'POST').length, 0)
   }
 })
@@ -191,9 +191,9 @@ test('valid other-repository deliveries are rejected solely by the configured sc
 
 test('claim response must explicitly confirm kind/head key and boolean outcome', async () => {
   for (const response of [{}, { ok: true, claimed: true, claim_key: 'wrong' },
-    { ok: true, claimed: 'true', claim_key: `case_22b092f5|${sha}|pull_request_merged` }]) {
+    { ok: true, claimed: 'true', claim_key: `T\x4fG-990017|${sha}|pull_request_merged` }]) {
     const { adapter, calls } = stub([json(row('source')), json(response)])
-    await assert.rejects(adapter.claim({ issue_ref: 'case_22b092f5', head_sha: sha, kind: 'pull_request_merged', delivery_id: 'source' }), /confirm/)
+    await assert.rejects(adapter.claim({ issue_ref: 'T\x4fG-990017', head_sha: sha, kind: 'pull_request_merged', delivery_id: 'source' }), /confirm/)
     assert.equal(calls.length, 2)
   }
 })
@@ -263,7 +263,7 @@ test('aborted claim response is not retried and replay sees the already-recorded
       return response
     },
   })
-  const claim = { issue_ref: 'case_22b092f5', head_sha: sha, kind: 'pull_request_merged', delivery_id: 'merge' }
+  const claim = { issue_ref: 'T\x4fG-990017', head_sha: sha, kind: 'pull_request_merged', delivery_id: 'merge' }
   await assert.rejects(adapter.claim(claim), /request failed/)
   assert.equal(writes, 1)
   assert.equal((await adapter.claim(claim)).claimed, false)
@@ -276,7 +276,7 @@ test('consumer plus capture transport reconciles a PR and deduplicates suite and
   const comments = []
   const consumer = createConsumer({ capture: h.adapter, allowedRepositories: [repo],
     github: { async getPullRequest() { return structuredClone(current) } }, board: {
-      async getIssue() { return { id: 'issue', identifier: 'case_22b092f5', status: 'in_progress',
+      async getIssue() { return { id: 'issue', identifier: 'T\x4fG-990017', status: 'in_progress',
         assigneeAgentId: 'engineer', assigneeUserId: null, blockedBy: [] } },
       async listInteractions() { return [] },
       async listWorkProducts() { return structuredClone(products) },

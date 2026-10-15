@@ -2509,14 +2509,14 @@ PYFIX
 
   # Management port 401 is AUTH_001 and nested — NOT {error:string}. Asserting it
   # here because this file previously recorded the management port as flat-only.
-  if grep -q 'AUTH_001.*correlation_id=611ab537' <<<"$(printf '%s' '{"error":{"code":"AUTH_001","message":"Authentication required","correlation_id":"00000000-0000-4000-8000-000000000028"}}' \
+  if grep -q 'AUTH_001.*correlation_id=00000000-0000-4000-8000-000000000028' <<<"$(printf '%s' '{"error":{"code":"AUTH_001","message":"Authentication required","correlation_id":"00000000-0000-4000-8000-000000000028"}}' \
        | api_error_text)"; then
     pass=$((pass+1)); printf '  PASS  %-46s %s\n' "management 401 nested envelope parsed" "ok"
   else fail=$((fail+1)); c_red "  FAIL  management nested 401 envelope not parsed"; fi
 
   nest_err="$(printf '%s' '{"error":{"code":"AUTH_002","message":"Authentication required","correlation_id":"00000000-0000-4000-8000-000000000029"}}' | api_error_text)"
   case "$nest_err" in
-    *AUTH_002*"Authentication required"*correlation_id=912b21c1*)
+    *AUTH_002*"Authentication required"*correlation_id=00000000-0000-4000-8000-000000000029*)
       pass=$((pass+1)); printf '  PASS  %-46s %s\n' "/v1 nested error + correlation_id kept" "ok" ;;
     *) fail=$((fail+1)); c_red "  FAIL  nested error envelope parsed as '$nest_err'" ;;
   esac

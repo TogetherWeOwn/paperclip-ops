@@ -36,9 +36,9 @@ WORK_DIR=$(mktemp -d)
 OUTPUT=$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$OUTPUT")
 trap 'rm -rf "$WORK_DIR"' EXIT
 files=(
-  ops/lib/atomic_state.py
-  ops/case_b5184419/terminal_worktree_cache_reclaim.py
   ops/case_60e07cc2/project_worktree_regen_prune.py
+  ops/case_b5184419/terminal_worktree_cache_reclaim.py
+  ops/lib/atomic_state.py
   systemd/install-project-regen-prune.sh
   systemd/paperclip-project-regen-prune.service
   systemd/paperclip-project-regen-prune.timer

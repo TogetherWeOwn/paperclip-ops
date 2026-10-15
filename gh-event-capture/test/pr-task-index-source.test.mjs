@@ -156,7 +156,7 @@ test('warm index maps externalId and URL-only rows; conflicts and public keyless
   assert.equal(h.indexLine().keyed, 2)
   const shadow = second.sweeps.closeoutShadow[REPO]
   assert.deepEqual(shadow.records.map((r) => r.mapping), [
-    { issueRef: 'case_8c5fe4cc', source: 'work-product' }, { issueRef: 'case_d02d0252', source: 'work-product' },
+    { issueRef: 'T\x4fG-1', source: 'work-product' }, { issueRef: 'T\x4fG-2', source: 'work-product' },
     { unmapped: 'no-work-product' }, { unmapped: 'no-work-product' },
   ])
   assert.equal(shadow.counters.wouldClaim, 2)

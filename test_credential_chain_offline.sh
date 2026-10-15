@@ -103,7 +103,9 @@ chmod 0644 "$CLEAN/pins"
 # which would drag live paths into every chain-walk output and trip the
 # hermeticity assertions. This suite is about the config/helper links, not
 # PATH, so every audit invocation runs under this PATH with the real git.
-TIGHT_PATH=/usr/local/bin:/usr/bin:/bin
+# GitHub-hosted /usr/local/bin can be writable; it is not a system trust root.
+# Use the distribution-owned tools, never a host-local installation directory.
+TIGHT_PATH=/usr/bin:/bin
 # audit_self -- run the audit as the invoking user under env -i: host
 # git-config overrides cannot leak in (they are dropped, not unset), and HOME
 # points at a sentinel that must not exist.
@@ -352,6 +354,19 @@ if grep -qF "$WORK/bin/helper" <<<"$(strip <<<"$OUT_CHAIN")"; then
   ok 'control -- the earlier isolated walk saw the same fixture'
 else
   bad 'isolated walk did not see the fixture either -- sandbox proof proves nothing' "$OUT_CHAIN"
+fi
+
+hdr "8. Writable host-local PATH entries cannot contaminate the fixture"
+mkdir -p "$CLEAN/writable-path"; chmod 0777 "$CLEAN/writable-path"
+OUT_PATH_CLEAN="$(PATH="$CLEAN/writable-path:$PATH" audit_clean 2>&1)"; RC_PATH_CLEAN=$?
+[[ $RC_PATH_CLEAN -eq 0 ]] && ok 'isolated clean walk ignores a writable outer PATH entry' \
+  || bad 'outer PATH contaminated the clean fixture' "$OUT_PATH_CLEAN"
+OUT_PATH_HOLE="$(env -i PATH="$CLEAN/writable-path:$TIGHT_PATH" "$AUDIT" --as-uid nobody --home "$CLEAN/home" --system "$CLEAN/sys" --pins "$CLEAN/pins" 2>&1)"; RC_PATH_HOLE=$?
+if [[ $RC_PATH_HOLE -eq 1 ]] && grep -qF "$CLEAN/writable-path" <<<"$OUT_PATH_HOLE" \
+   && grep -q 'PATH dir: nobody can add or replace executables' <<<"$OUT_PATH_HOLE"; then
+  ok 'control: production audit still rejects the same writable PATH when supplied'
+else
+  bad 'writable PATH control failed; isolation must not weaken the production audit' "$OUT_PATH_HOLE"
 fi
 
 hdr "Result"

@@ -1,0 +1,54 @@
+{
+  "_comment": "Public source routing template, not an installed channel inventory. Resolve DISCORD_WEBHOOK_URL only from separately authorized protected configuration. Treat alert text as untrusted; route only allow-listed title prefixes and truncate the body to 500 characters. Every route names its response role and runbook. No webhook URL, credential or channel ID is included.",
+  "webhook_env": "DISCORD_WEBHOOK_URL",
+  "body_max_chars": 500,
+  "default_route": {
+    "channel": "ops-alerts",
+    "mention": false,
+    "severity": "warning",
+    "owner": "devops",
+    "runbook": "docs/runbooks/garm-ci-oncall-alert-to-action.md"
+  },
+  "routes": [
+    {
+      "title_prefix": "Beszel: disk",
+      "channel": "ops-alerts",
+      "mention": true,
+      "severity": "critical",
+      "owner": "devops",
+      "runbook": "docs/runbooks/runner-disk-triage.md (via docs/runbooks/garm-ci-oncall-alert-to-action.md §3)"
+    },
+    {
+      "title_prefix": "Beszel: host down",
+      "channel": "ops-alerts",
+      "mention": true,
+      "severity": "critical",
+      "owner": "devops",
+      "runbook": "docs/runbooks/garm-ci-oncall-alert-to-action.md"
+    },
+    {
+      "title_prefix": "Beszel: cpu",
+      "channel": "ops-alerts",
+      "mention": false,
+      "severity": "warning",
+      "owner": "devops",
+      "runbook": "docs/runbooks/garm-ci-oncall-alert-to-action.md"
+    },
+    {
+      "title_prefix": "Beszel: memory",
+      "channel": "ops-alerts",
+      "mention": false,
+      "severity": "warning",
+      "owner": "devops",
+      "runbook": "docs/runbooks/garm-ci-oncall-alert-to-action.md"
+    },
+    {
+      "title_prefix": "Beszel: systemd",
+      "channel": "ops-alerts",
+      "mention": false,
+      "severity": "warning",
+      "owner": "devops",
+      "runbook": "docs/runbooks/garm-ci-oncall-alert-to-action.md"
+    }
+  ]
+}

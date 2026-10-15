@@ -1,0 +1,20 @@
+{
+  "fixture_note": "Synthetic renderer contract only. Not live classifications, operator instructions, or evidence of an owner decision. No fixture commands are executed.",
+  "items": {
+    "fixture-a": {"class": "CAPABILITY", "blast": 1, "credential": "none", "changes": "synthetic rendering only", "verify": "offline test", "undo": "discard fixture"},
+    "fixture-b": {"class": "CAPABILITY", "blast": 1, "credential": "none", "changes": "synthetic rendering only", "verify": "offline test", "undo": "discard fixture"},
+    "fixture-c": {"class": "CAPABILITY", "blast": 1, "credential": "none", "changes": "synthetic rendering only", "verify": "offline test", "undo": "discard fixture"},
+    "fixture-d": {"class": "CAPABILITY", "blast": 1, "credential": "none", "changes": "synthetic rendering only", "verify": "offline test", "undo": "discard fixture"},
+    "fixture-e": {"class": "CAPABILITY", "blast": 1, "credential": "none", "changes": "synthetic rendering only", "verify": "offline test", "undo": "discard fixture"},
+    "fixture-f": {"class": "CAPABILITY", "blast": 1, "credential": "none", "changes": "synthetic rendering only", "verify": "offline test", "undo": "discard fixture"},
+    "fixture-g": {"class": "CAPABILITY", "blast": 1, "credential": "none", "changes": "synthetic rendering only", "verify": "offline test", "undo": "discard fixture"},
+    "case_2e2581b7": {
+      "class": "CAPABILITY", "blast": 4, "credential": "none", "changes": "synthetic withdrawn rendering", "verify": "offline test", "undo": "discard fixture",
+      "commands": "# WITHDRAWN synthetic fixture; never execute\n# script=/nonexistent/synthetic-fixture\n# \"$script\"",
+      "withdrawn": {"date": "2026-09-05", "body": "Synthetic stop notice; no real authorization or historical decision is represented.", "commands_note": "WITHDRAWN — do not run these"}
+    }
+  },
+  "decisions": {},
+  "misrouted": {},
+  "closed": {}
+}

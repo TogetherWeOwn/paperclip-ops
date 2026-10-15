@@ -18,6 +18,14 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
+sys.path.insert(0, str(REPO))
+from public_snapshot_test_support import private_artifact_absent
+
+PRIVATE_REGISTRY_ABSENT = private_artifact_absent(
+    REPO, "ops/case_30b51a0f/host-timer-registry.json")
+PRIVATE_REGISTRY_REASON = (
+    "private installed host-timer inventory is excluded from the fresh public "
+    "snapshot; synthetic invariant, capture and refusal controls remain enabled")
 CHECK = HERE / "host_timer_registry_check.py"
 CAPTURE = HERE / "host_timer_capture.py"
 SECRET = "SYNTHETIC_DO_NOT_PRINT_7f3a"
@@ -43,6 +51,8 @@ def run_check(root, *extra, registry=None):
 
 class TreeCase(unittest.TestCase):
     def setUp(self):
+        if PRIVATE_REGISTRY_ABSENT:
+            self.skipTest(PRIVATE_REGISTRY_REASON)
         self.tmp = Path(tempfile.mkdtemp(prefix="case_b56e4585-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.root = self.tmp / "repo"
@@ -71,6 +81,10 @@ class TreeCase(unittest.TestCase):
 
 
 class RealTree(unittest.TestCase):
+    def setUp(self):
+        if PRIVATE_REGISTRY_ABSENT:
+            self.skipTest(PRIVATE_REGISTRY_REASON)
+
     def test_red_main_poll_is_registered_but_not_installed(self):
         doc = json.loads((REPO / "ops/case_30b51a0f/host-timer-registry.json").read_text())
         e = next(x for x in doc["entries"] if x["id"] == "case_1a1b67a4-red-main-poll")
@@ -274,6 +288,108 @@ class SyntheticMixin:
         return run_check(tmp, "--end-state", *extra, registry=reg)
 
 
+class SyntheticInvariants(SyntheticMixin, unittest.TestCase):
+    """Exercise all registry invariants without any installed-host inventory."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="synthetic-registry-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.reg = self.tmp / "registry.json"
+        self.timer = self.tmp / "systemd/example.timer"
+        self.service = self.tmp / "systemd/example.service"
+        self.workflow = self.tmp / ".github/workflows/example.yml"
+        self.plugin = self.tmp / "plugins/example/src/manifest.ts"
+        for path in (self.timer, self.workflow, self.plugin):
+            path.parent.mkdir(parents=True, exist_ok=True)
+        self.timer.write_text("[Timer]\nOnCalendar=hourly\nUnit=example.service\n")
+        self.service.write_text("[Service]\nType=oneshot\nTimeoutStartSec=30\nExecStart=/bin/true\n")
+        self.workflow.write_text('on:\n  schedule:\n    - cron: "5 4 * * *"\n')
+        self.plugin.write_text('jobs: [{ schedule: "*/5 * * * *" }]\n')
+        self.doc = {"schemaVersion": 1, "entries": [
+            self.synthetic(id="timer", source={"type": "repo", "timer": "systemd/example.timer"},
+                           schedule={"OnCalendar": "hourly"})["entries"][0],
+            self.synthetic(id="plugin", kind="plugin-job", purpose="plugin-observation",
+                           role="detector", writes=[], source={"type": "repo", "manifest": "plugins/example/src/manifest.ts"},
+                           schedule={"jobs": ["*/5 * * * *"]})["entries"][0],
+            self.synthetic(id="workflow", kind="gh-actions-schedule", purpose="workflow-observation",
+                           role="detector", writes=[], source={"type": "repo", "workflow": ".github/workflows/example.yml"},
+                           schedule={"cron": "5 4 * * *"})["entries"][0],
+        ]}
+        code, out = self.check()
+        self.assertEqual(code, 0, "synthetic baseline must pass before any mutation: " + out)
+
+    def check(self):
+        self.reg.write_text(json.dumps(self.doc))
+        return run_check(self.tmp, registry=self.reg)
+
+    def red(self, needle):
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn(needle, out)
+
+    def test_duplicate_primary_purpose_is_rejected(self):
+        self.doc["entries"].append(self.synthetic(id="second", writes=["other"])["entries"][0])
+        self.red("I1 purpose 'p'")
+
+    def test_duplicate_writer_is_rejected_but_native_writer_is_exempt(self):
+        second = self.synthetic(id="second", purpose="other")["entries"][0]
+        self.doc["entries"].append(second)
+        self.red("I2 target 't'")
+        second["kind"] = "native"
+        self.assertEqual(self.check()[0], 0)
+
+    def test_runtime_bound_and_waiver_are_load_bearing(self):
+        self.service.write_text("[Service]\nType=oneshot\nExecStart=/bin/true\n")
+        self.red("I3 timer")
+        self.doc["entries"][0]["waivers"] = [{
+            "check": "bounded-runtime", "reason": "synthetic waiver control", "fix": "add timeout"}]
+        self.assertEqual(self.check()[0], 0)
+        del self.doc["entries"][0]["waivers"][0]["fix"]
+        self.red("a waiver needs check, reason and fix")
+
+    def test_self_retrying_oneshot_is_rejected(self):
+        self.service.write_text(self.service.read_text() + "Restart=on-failure\n")
+        self.red("I3 timer")
+
+    def test_all_schedule_sources_are_checked(self):
+        for path, before, after, needle in (
+            (self.timer, "hourly", "daily", "I4 timer"),
+            (self.plugin, "*/5", "*/1", "I4 plugins/example/src/manifest.ts"),
+            (self.workflow, "5 4", "6 4", "I4 .github/workflows/example.yml"),
+        ):
+            with self.subTest(path=path.name):
+                original = path.read_text()
+                path.write_text(original.replace(before, after))
+                self.red(needle)
+                path.write_text(original)
+
+    def test_unregistered_sources_are_rejected(self):
+        for entry in list(self.doc["entries"]):
+            with self.subTest(kind=entry["kind"]):
+                self.doc["entries"].remove(entry)
+                self.red("I5 ")
+                self.doc["entries"].append(entry)
+
+    def test_invalid_transitions_are_rejected(self):
+        entry = self.doc["entries"][0]
+        entry["supersededBy"] = "absent"
+        self.red("does not exist")
+        entry["supersededBy"] = "plugin"
+        self.red("serves purpose")
+        self.red("supersededBy needs a retireGate")
+        del entry["supersededBy"]
+        entry["redundancyOf"] = "plugin"
+        self.red("redundancyOf needs a redundancyReason")
+
+    def test_detector_cannot_write(self):
+        self.doc["entries"][1]["writes"] = ["fs:synthetic"]
+        self.red("a detector must not write")
+
+    def test_unreadable_registry_never_passes(self):
+        self.reg.write_text("{not json")
+        self.assertEqual(run_check(self.tmp, registry=self.reg)[0], 2)
+
+
 class EndState(SyntheticMixin, unittest.TestCase):
     def test_finished_consolidation_passes(self):
         self.assertEqual(self.run_synth(self.synthetic())[0], 0)
@@ -445,7 +561,19 @@ class Capture(unittest.TestCase):
         self.assertIn("bus", doc["scopes"]["user"]["reason"])
         self.assertTrue(doc["scopes"]["system"]["available"])
 
+    def test_synthetic_capture_feeds_the_checker_end_to_end(self):
+        _, doc = self.capture(FAKE_FAIL_USER="1")
+        root = self.tmp / "synthetic-repo"
+        (root / ".github/workflows").mkdir(parents=True)
+        registry, capture = root / "registry.json", root / "capture.json"
+        registry.write_text(json.dumps(SyntheticMixin().synthetic()))
+        capture.write_text(json.dumps(doc))
+        code, out = run_check(root, "--live", str(capture), registry=registry)
+        self.assertEqual(code, 3, out)
+
     def test_capture_feeds_the_checker_end_to_end(self):
+        if PRIVATE_REGISTRY_ABSENT:
+            self.skipTest(PRIVATE_REGISTRY_REASON)
         _, doc = self.capture(FAKE_FAIL_USER="1")
         path = self.tmp / "cap.json"
         path.write_text(json.dumps(doc))

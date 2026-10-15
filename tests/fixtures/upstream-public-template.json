@@ -1,0 +1,76 @@
+{
+  "_fixture": "Offline source-contract fixture, not live maintainer memory or a historical review receipt. Public template/rule structure only; no feedback or operational evidence.",
+  "schema_version": 1,
+  "repo": "paperclipai/paperclip",
+  "updated": "2026-10-07",
+  "default_base": "master",
+  "template": {
+    "path": ".github/PULL_REQUEST_TEMPLATE.md",
+    "blob_sha": "fixtureblob",
+    "sections": ["Thinking Path", "Linked Issues or Issue Description", "What Changed", "Verification", "Risks", "Model Used", "Checklist"],
+    "checkboxes": [
+      "i have included a thinking path that traces from project context to this change",
+      "i have specified the model used",
+      "i have checked roadmap.md and confirmed this pr does not duplicate planned core work",
+      "i have searched github for duplicate or related prs and linked them above",
+      "i have either (a) linked existing issues with fixes: # / closes # / refs # or (b) described the issue in-pr following the relevant issue template",
+      "i have not referenced internal/instance-local paperclip issues or links",
+      "my branch name describes the change (e.g. docs/..., fix/...) and contains no internal paperclip ticket id or instance-derived details",
+      "i have run tests locally and they pass",
+      "i have added or updated tests where applicable",
+      "i have updated relevant documentation to reflect my changes",
+      "i have considered and documented any risks above",
+      "all paperclip ci gates are green",
+      "greptile is 5/5 with no open p2s, recommendations, or follow-ups",
+      "i will address all greptile and reviewer comments before requesting merge"
+    ],
+    "pending_ok_at_first_push": ["greptile", "ci gates are green"],
+    "section_rules": [
+      {"name": "Thinking Path", "min_bullets": 4, "min_chars": 120},
+      {"name": "Linked Issues or Issue Description", "min_bullets": 0, "min_chars": 5},
+      {"name": "What Changed", "min_bullets": 1},
+      {"name": "Verification", "min_bullets": 0, "require_code": true, "min_chars": 15},
+      {"name": "Risks", "min_bullets": 0, "min_chars": 15},
+      {"name": "Model Used", "min_bullets": 0, "min_chars": 10}
+    ]
+  },
+  "title": {"max_len": 100},
+  "signoff": {"dco": false, "cla": false, "cla_evidence": null, "detected_from": []},
+  "budget": {"max_changed_lines": 1500, "max_files": 40, "split_max_changed_lines": 400, "split_max_files": 12, "exclude_globs": [], "note": "Synthetic test bounds; not deployment policy."},
+  "tests": {"required": true, "test_globs": ["tests/**"], "exempt_globs": ["ROADMAP.md", "scripts/**"], "global_test_globs": []},
+  "claims": {"allow": []},
+  "batch": {"max_open_prs": 5},
+  "rules": [
+    {
+      "id": "R-001",
+      "source": "CONTRIBUTING.md > Link Issues or Describe Them In-PR (automated check)",
+      "scope": "section:Linked Issues or Issue Description",
+      "kind": "require_any",
+      "alternatives": [
+        {"pattern": "(?i)\\b(?:fixes|closes|resolves|refs?)\\s*:?\\s*#\\d+", "min_count": 1},
+        {"pattern": "(?m)^\\*\\*[^*\\n]+\\*\\*\\s*$", "min_count": 3}
+      ],
+      "message": "link a public issue (Fixes/Closes/Refs #N) or describe the problem under at least three bold issue-template labels"
+    },
+    {
+      "id": "R-002",
+      "source": ".github/PULL_REQUEST_TEMPLATE.md > Thinking Path",
+      "scope": "section:Thinking Path",
+      "kind": "require",
+      "flags": "i",
+      "pattern": "Paperclip is the open source app people use to manage AI agents for work",
+      "message": "the Thinking Path starts from what Paperclip is, as the template asks"
+    },
+    {
+      "id": "R-003",
+      "source": "CONTRIBUTING.md > Telemetry Changes",
+      "scope": "paths",
+      "kind": "require",
+      "pattern": "packages/shared/src/telemetry/README\\.md",
+      "severity": "warn",
+      "applies_when_paths": ["packages/shared/src/telemetry/*.ts"],
+      "message": "telemetry code changed: update the Telemetry Data Contract README in the same PR"
+    }
+  ],
+  "feedback": []
+}

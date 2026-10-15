@@ -1,0 +1,7 @@
+# Public source template: deliberately no operational exemptions.
+# Do not copy private agent names or historical policy exceptions into Git.
+# For an independently authorized installation, set EXEMPT_FILE to a protected
+# file containing the reviewed exact agent names and a reason for every entry.
+# See quota_brake.sh read_exempt() for the format and validation contract.
+# An empty exemption set is intentionally refused by plan/apply; this file
+# permits source packaging, not live quota-brake operation.

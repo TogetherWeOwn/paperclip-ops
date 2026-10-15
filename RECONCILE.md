@@ -331,13 +331,8 @@ After all exclusions, this import contains 537 toolkit-only files and the one to
 
 ## Content-only publication adaptations
 
-The canonical privacy gate is unchanged. Historical and commentary card references use
-neutral example namespaces. Every FUNCTIONAL card identifier — the eleven grandfathered
-handoff ids, the required channel runbook-pointer basename, the orphan-retire audit
-attribution, and the issue prefixes the channel tool strips — keeps its real internal
-prefix, built by shell concatenation (for example `TOG-""111`) so the public-safety scan
-sees no literal while the runtime value is the real identifier. Numeric boundaries, case
-distinctions, and cross-fixture relationships are therefore preserved where the tool parses them.
+The canonical privacy gate is unchanged. Imported card identifiers use neutral example
+namespaces while retaining numeric boundaries, case distinctions, and cross-fixture relationships.
 UUIDs and test assertions were not blanket-rewritten. Historical network prose is now explicitly
 illustrative with documentation addresses and `example.invalid` hostnames. The orphan rehearsal
 suite is omitted as documented above; the remaining imported suites retain their assertions.
@@ -357,12 +352,22 @@ match/miss, planted-violation, and no-pipefail controls and adds broader scanner
 This avoids a duplicate deliberately unsafe positive-control pipeline without adding an
 exemption. The canonical SIGPIPE gate and its exemptions are unchanged.
 
+The narrow review-fix batch restores required-mirror and grandfather-list matching by
+normalizing incoming runtime identifiers into the neutral public namespace. It does not
+reconstruct private identifiers or change the generic drop-prefix parser. Every matching
+required-mirror alias is checked against its specific committed blob, so a clean alias cannot
+hide a tampered one. Enumerated grandfather reasons and unknown-handoff failures remain.
+Paired regression fixtures use synthetic keys, never historical private identifiers.
+`org_orphan_retire.sh` now requires an explicit `--issue` or `AUDIT_ISSUE` for apply; its SQL
+activity row and JSON log use the same value, passed through the existing quoted SQL-variable
+transport. No live retirement is performed. The nine exact digest allowances are unchanged.
+
 ## Deferred nongating integration gaps
 
-Supplemental tests of affected imported files exposed three pre-existing gaps that this PR's
-CI does not execute. They are deliberately not repaired or newly wired into CI in this PR.
-One follow-up, **Resolve three nongating integration gaps after paperclip-ops consolidation**,
-tracks all three for a separate reviewed PR after this consolidation merges:
+Supplemental tests and review exposed gaps that this PR's CI does not execute. They are
+deliberately not repaired or newly wired into CI in this PR. One follow-up,
+**Resolve nongating integration and suite-coverage gaps after paperclip-ops consolidation**,
+tracks them for a separate reviewed PR after this consolidation merges:
 
 - `templates/org-github/tests/test_sdlc_foundation.sh`: twelve staged paths are absent from
   the retained destination map, and the missing CI wiring fails two wiring controls
@@ -374,41 +379,14 @@ tracks all three for a separate reviewed PR after this consolidation merges:
   `tool_grant_expectations.json` prevents this suite from running. The follow-up must use
   public synthetic fixtures where possible; assertions genuinely requiring private artifacts
   need an explicit skip-on-public reason, never deleted assertions or publication of the map.
-
-Anonymization additionally broke `test_channel_drift.sh` fixtures in the same prefix-strip
-manner (two failures: the STALE case misreported as UNVERSIONED, the exemption miss). Unlike
-the three gaps above, those fixtures are repaired in this PR (real strippable prefixes via
-concatenation) and the suite passes locally; it remains unwired in CI because the offline
-cutover contract lists `./test_channel_drift.sh` as a removed producer, so wiring it here
-would violate the contract's forbidden-input gate. No CI wiring is added in this PR.
-
-Forty-seven root suites are not referenced by filename or stem in
-`.github/workflows/ci.yml` as of this head and are therefore dark in public CI once the
-toolkit retires; the same follow-up owns their triage (wire, run via discovery, or
-explicitly retire): `test_app_tree_guard.sh`, `test_blocked_audit.sh`,
-`test_breaker_cotenancy_probe.sh`, `test_capture_network_name_evidence.sh`,
-`test_case_dcf07273_assignment_bundle.py`, `test_channel_drift.sh`,
-`test_ci_required_checks_ownership.py`, `test_credential_chain_pin_gate.sh`,
-`test_discord_job_health_monitor.sh`, `test_gh_override_scope_audit.sh`,
-`test_gh_scope_residue.sh`, `test_gh_scope_residue_monitor.sh`,
-`test_github_runner_bundle.py`, `test_host_ops_image_binding.py`,
-`test_host_ops_install_manifest.py`, `test_host_ops_install_preparation.py`,
-`test_host_ops_install_state.py`, `test_host_ops_install_transaction.py`,
-`test_host_ops_prepare_first_install.sh`, `test_host_ops_spool_carrier.py`,
-`test_host_ops_spool_mapping.py`, `test_host_ops_spool_provisioning.py`,
-`test_interaction_envelope_lint.sh`, `test_interaction_triage.sh`,
-`test_model_lane_probe.sh`, `test_native_ssh_citation_gate.sh`,
-`test_offline_ci_contract.py`, `test_omniroute_rehearsal_translator.mjs`,
-`test_op_approval_executor.sh`, `test_opencode_shared_budget_probe.sh`,
-`test_paperclip_run_path_guard.py`, `test_parked_backlog_guard.sh`,
-`test_plugin_manifest_gate.sh`, `test_post_rollup_comment.sh`,
-`test_queue_liveness.sh`, `test_review_dedup.py`,
-`test_review_dedup_placement.sh`, `test_runner_capacity_headroom.sh`,
-`test_sdlc_foundation_acceptance.py`, `test_sdlc_foundation_placement.sh`,
-`test_secret_exposure_audit.sh`, `test_sibling_guard.sh`,
-`test_stale_descriptor_sweep.sh`, `test_toolkit_sync.py`,
-`test_upstream_filing_readiness.sh`, `test_warn_first_inventory.py`,
-`test_watchdog_delivery.py`.
+- `test_channel_drift.sh`: before the new required-mirror regression assertions, the imported
+  suite reports 50 pass / 2 fail versus the toolkit pin's 52 pass / 0 fail. The generic drop
+  fixture/parser mismatch affects STALE detection and the reasoned-exemption assertion.
+  These two assertions remain failing and visible; the required-mirror fix is separate.
+- Unwired-suite coverage: review identified roughly 40 imported root suites not exercised by
+  canonical CI. The follow-up must inventory exact missing coverage, distinguish executable
+  public fixtures from private-artifact skips, and wire reviewed coverage without weakening
+  existing gates. This PR does not claim that green required CI executes every imported suite.
 
 The local keep-going replay also encountered environment failures, not proven source defects:
 seven PostgreSQL-backed privilege steps and the regeneration-strip suite lacked a complete
@@ -424,13 +402,14 @@ prohibited locally. Local diagnostics do not replace required CI or exact-head r
 The conflict list above records source selection, not a prohibition on the following reviewed
 integration edits. No toolkit version of these shared files was substituted:
 
+- `test_operator_runbook.sh`: adds paired synthetic grandfather-namespace and unknown-handoff regression assertions under the narrow review-fix exception; the retained existing assertions are unchanged.
 - `README.md`: extends the canonical source index with all 63 newly tracked root entry points required by the unchanged README index gate, including imported `test-` names. Existing exemptions and positive/negative gate assertions remain unchanged.
 - `vendor/toolkit-tracked-allowlist.txt`: explicitly registers the imported manifest paths. Two stale entries for actually-untracked aliases are removed so their archive bytes are checked.
 - `vendor/offline-ci-contract.json`: separates 251 deliberately tracked inputs from 35 archive-restored inputs, pinning both sets by SHA-256.
 - `vendor/toolkit-files.txt`, `.gitignore`, and `test_toolkit_sync.py`: restore the original archive's sibling-guard test subject under an explicit ignored fixture alias, separate from the now-tracked first-party root guard. Preserve the original archive checksum, subject digest, and behavior assertions rather than relabeling newer source as archived bytes.
 - `verification/offline_ci_contract.py`: checks both disjoint, exhaustive input sets and their exact bytes; removed-producer provenance must still have an immutable input closure.
 - `test_offline_ci_contract.py`: retains existing assertions and adds missing/wrong tracked-byte and omitted/reclassified/duplicated/invalid-hash controls.
-- `.gitleaks.toml`: replaces nine exact-digest allowances with one path- AND format-scoped allowlist for `vendor/offline-ci-contract.json` digest lines (`"<path>": "<64-hex>"`), so re-pinning on first-party edits needs no new allowlist and stale entries do not pile up. Default rules remain enabled; no broad path or hash exemption is added. The canonical privacy gate remains unchanged.
+- `.gitleaks.toml`: adds exactly nine rule-scoped, exact-path AND exact-full-line allowances for provenance digests independently recomputed from the pinned files. Default rules remain enabled; no broad path or hash exemption is added. The canonical privacy gate remains unchanged.
 
 ## Migration and verification boundaries
 

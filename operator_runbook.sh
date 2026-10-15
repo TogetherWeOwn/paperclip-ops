@@ -269,17 +269,17 @@ cmd_check() {
 # landed.
 GRANDFATHERED_HANDOFF=(
   # id       reason it is not a stranded capability ask
-  "TOG-""111"  # already a live runbook line; this file is a correction note to it
-  "TOG-""151"  # done. superseded by the EXAMPLE-178 apply bundle
-  "TOG-""156"  # cancelled on the board; the plugin was never installed from this card
-  "TOG-""178"  # done. deployment deliberately STOPPED on provider callability, recorded on the card
-  "TOG-""196"  # done. the live runbook moved into git (mcp/deploy/install-runbook.md); the handoff file is a signpost
-  "TOG-""308"  # done. the restore was performed and verified on the incident thread
-  "TOG-""419"  # done. canonical source is PR #65 in this repo, not the handoff copy
-  "TOG-""485"  # done. the switch was executed and its verify chain ran green
-  "TOG-""514"  # done. executed 2026-08-26; the file now preserves the procedure, it is not an ask
-  "TOG-""679"  # done. the 47-agent repoint was completed via the console
-  "TOG-""747"  # blocked on EXAMPLE-881, which carries the deploy; tracked there, not stranded
+  "EXAMPLE-111"  # already a live runbook line; this file is a correction note to it
+  "EXAMPLE-151"  # done. superseded by the EXAMPLE-178 apply bundle
+  "EXAMPLE-156"  # cancelled on the board; the plugin was never installed from this card
+  "EXAMPLE-178"  # done. deployment deliberately STOPPED on provider callability, recorded on the card
+  "EXAMPLE-196"  # done. the live runbook moved into git (mcp/deploy/install-runbook.md); the handoff file is a signpost
+  "EXAMPLE-308"  # done. the restore was performed and verified on the incident thread
+  "EXAMPLE-419"  # done. canonical source is PR #65 in this repo, not the handoff copy
+  "EXAMPLE-485"  # done. the switch was executed and its verify chain ran green
+  "EXAMPLE-514"  # done. executed 2026-08-26; the file now preserves the procedure, it is not an ask
+  "EXAMPLE-679"  # done. the 47-agent repoint was completed via the console
+  "EXAMPLE-747"  # blocked on EXAMPLE-881, which carries the deploy; tracked there, not stranded
 )
 
 cmd_check_handoff() {
@@ -303,9 +303,17 @@ cmd_check_handoff() {
   )"
 
   local grandfathered; grandfathered="$(printf '%s\n' "${GRANDFATHERED_HANDOFF[@]}" | sort -u)"
-  local unregistered
-  unregistered="$(comm -23 <(printf '%s\n' "$present") <(printf '%s\n' "$classified") \
-                  | comm -23 - <(printf '%s\n' "$grandfathered"))"
+  local unregistered="" id public_id
+  # Normalize candidates into the public list's namespace; do not reconstruct
+  # private identifiers from that list. Classification and diagnostics retain
+  # the original runtime keys. Only enumerated exceptions may pass.
+  while IFS= read -r id; do
+    [[ -n "$id" ]] || continue
+    public_id="${id/#TOG-/EXAMPLE-}"
+    if ! grep -Fxq -- "$public_id" <<<"$grandfathered"; then
+      unregistered+="$id"$'\n'
+    fi
+  done < <(comm -23 <(printf '%s\n' "$present") <(printf '%s\n' "$classified"))
 
   local n_present n_gf
   n_present="$(printf '%s\n' "$present" | grep -c . || true)"

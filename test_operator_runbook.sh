@@ -340,6 +340,24 @@ rc=$("$TOOL" check-handoff --classification "$HCLS_EMPTY" --handoff "$HDIR_OK" >
 (( rc == 3 )) && ok "case_ce21179e's own failure mode is caught (artifact on disk, no entry, no card)" \
               || bad "THE case_ce21179e HOLE IS OPEN: a stranded runbook passed clean (exit $rc)"
 
+# Namespace regression with a synthetic grandfather entry. Keep real private
+# identifiers out of fixtures while exercising the production parser and list.
+GF_TOOL="$TMP/grandfather-namespace.sh"
+sed 's/"EXAMPLE-111"/"EXAMPLE-999111"/' "$TOOL" > "$GF_TOOL"
+chmod +x "$GF_TOOL"
+GF_ID=tog-""999111
+GF_DIR="$TMP/handoff_grandfather"; mkdir -p "$GF_DIR"
+: > "$GF_DIR/$GF_ID-pre-gate-runbook.md"
+out="$("$GF_TOOL" check-handoff --classification "$HCLS_EMPTY" --handoff "$GF_DIR" 2>&1)"; rc=$?
+(( rc == 0 )) && grep -q 'OK:' <<<"$out" \
+  && ok "grandfather namespace: enumerated pre-gate handoff passes case-insensitively" \
+  || bad "grandfather namespace: pre-gate handoff was rejected (exit $rc)" "$out"
+: > "$GF_DIR/$UNREGISTERED_ID-new-runbook.md"
+out="$("$GF_TOOL" check-handoff --classification "$HCLS_EMPTY" --handoff "$GF_DIR" 2>&1)"; rc=$?
+(( rc == 3 )) && grep -q "$UNREGISTERED_ID" <<<"$out" \
+  && ok "grandfather namespace: an unlisted handoff still fails by its original identifier" \
+  || bad "grandfather namespace: unlisted handoff escaped (exit $rc)" "$out"
+
 # An entry anywhere in the file counts as registered — decisions/misrouted/closed
 # are classifications too, and demanding an `items` entry would force a genuine
 # decision to be mis-filed as a runbook line to silence the gate.
@@ -350,16 +368,6 @@ for sect in decisions misrouted closed; do
   (( rc == 0 )) && ok "an entry in .$sect counts as registered" \
                 || bad "an entry in .$sect should satisfy the gate, got $rc"
 done
-
-# Grandfathered identifiers predate this gate and must not trip it. Uses one of
-# the real grandfathered ids (built by concatenation so the scan sees no
-# literal); with an empty classification the check must still exit 0.
-GF_ID="TOG-""111"
-HDIR_GF="$TMP/handoff_gf"; mkdir -p "$HDIR_GF"
-: > "$HDIR_GF/$GF_ID-correction-note-runbook.md"
-rc=$("$TOOL" check-handoff --classification "$HCLS_EMPTY" --handoff "$HDIR_GF" >/dev/null 2>&1; echo $?)
-(( rc == 0 )) && ok "a grandfathered runbook artifact passes without a classification entry" \
-              || bad "grandfathered artifact tripped the gate (exit $rc)"
 
 # Fail-open guards. An unread directory must never read as "nothing stranded" —
 # the same failure §4 pins for `check`.

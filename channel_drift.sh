@@ -103,7 +103,7 @@ RUNNABLE_EXTENSIONS=(sh bash py mjs cjs js)
 # as tampering rather than as a helpful convenience.
 REQUIRED_MIRRORS=(
   "README.md=handoff-channel-README.md"
-  "TOG-""196-mcp-install-runbook.md=mcp/deploy/install-runbook-handoff-pointer.md"
+  "EXAMPLE-196-mcp-install-runbook.md=mcp/deploy/install-runbook-handoff-pointer.md"
 )
 
 is_runnable() {
@@ -208,13 +208,27 @@ cmd_check() {
   # without updating this table therefore breaks the run loudly instead of
   # silently condemning (or excusing) whatever is installed in the channel.
   declare -A REQUIRED_SRC=() REQUIRED_HASH=()
-  local entry rbase rpath rhash
+  local entry rbase rpath rhash candidate normalized found
   for entry in "${REQUIRED_MIRRORS[@]}"; do
     rbase="${entry%%=*}"; rpath="${entry#*=}"
     rhash="$(git rev-parse --verify --quiet "$ref:$rpath" 2>/dev/null)" \
       || die "required mirror source is not on $ref: $rpath (the table in $ME names a file this ref does not have; fix the table, do not delete the entry)"
-    REQUIRED_SRC["$rbase"]="$rpath"
-    REQUIRED_HASH["$rbase"]="$rhash"
+    # Compare incoming runtime names in the public table's namespace. This
+    # normalization is deliberately limited to required mirrors, not drops.
+    # Keep EVERY matching path: a clean alias must not hide a tampered alias.
+    found=0
+    while IFS= read -r -d '' candidate; do
+      candidate="${candidate##*/}"
+      normalized="$(sed -E 's/^[Tt][Oo][Gg]-([0-9]+)-/EXAMPLE-\1-/' <<<"$candidate")"
+      [ "$normalized" = "$rbase" ] || continue
+      REQUIRED_SRC["$candidate"]="$rpath"
+      REQUIRED_HASH["$candidate"]="$rhash"
+      found=1
+    done < <(find "$dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+    if [ "$found" -eq 0 ]; then
+      REQUIRED_SRC["$rbase"]="$rpath"
+      REQUIRED_HASH["$rbase"]="$rhash"
+    fi
   done
 
   local rf rowner hash

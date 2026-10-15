@@ -64,7 +64,8 @@
 #
 # USAGE
 #   COMPANY_ID=<uuid> ./org_orphan_retire.sh plan [--kind grants|memberships|bindings|all]
-#   COMPANY_ID=<uuid> ./org_orphan_retire.sh apply --requested-by <AGENT_UUID> [--kind ...]
+#   COMPANY_ID=<uuid> ./org_orphan_retire.sh apply --requested-by <AGENT_UUID> --issue <KEY-NUMBER> [--kind ...]
+#   AUDIT_ISSUE may supply the issue key; --issue takes precedence. No default.
 #
 # Kill switch: `.provisioner-disabled` next to this script, or
 # PROVISIONER_DISABLED=1, refuses every mutating operation — the same switch
@@ -75,10 +76,6 @@ set -uo pipefail
 COMPANY_ID="${COMPANY_ID:?Set COMPANY_ID}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GRANT_LOG="${GRANT_LOG:-$HERE/provisioner-grant-log.jsonl}"
-
-# Authorizing card recorded in audit attribution. Concatenated so the
-# public-safety scan sees no literal internal identifier.
-ISSUE="TOG-""994"
 
 # shellcheck source=lib/pcsql.sh
 . "$HERE/lib/pcsql.sh" || { echo "ERROR: missing $HERE/lib/pcsql.sh" >&2; exit 1; }
@@ -91,7 +88,7 @@ for bin in jq "$(pcsql_required_bin)"; do
   command -v "$bin" >/dev/null 2>&1 || die "missing $bin"
 done
 
-MODE=""; KIND="all"; REQUESTED_BY=""
+MODE=""; KIND="all"; REQUESTED_BY=""; AUDIT_ISSUE="${AUDIT_ISSUE:-}"
 case "${1:-}" in
   plan|apply) MODE="$1"; shift ;;
   *) sed -n '/^# USAGE/,/^# Kill switch/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
@@ -100,6 +97,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --kind) KIND="$2"; shift 2 ;;
     --requested-by) REQUESTED_BY="$2"; shift 2 ;;
+    --issue) [[ $# -ge 2 ]] || die "--issue needs a value"; AUDIT_ISSUE="$2"; shift 2 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -114,6 +112,8 @@ if [[ "$MODE" == "apply" ]]; then
   # first time a call site forgets to pass one.
   [[ -n "$REQUESTED_BY" ]] || die "apply needs --requested-by <AGENT_UUID>: an unattributed retirement is unrecoverable (EXAMPLE-870)."
   [[ "$REQUESTED_BY" =~ ^[0-9a-fA-F-]{36}$ ]] || die "--requested-by must be an agent UUID"
+  [[ -n "$AUDIT_ISSUE" ]] || die "apply needs --issue <KEY-NUMBER> or AUDIT_ISSUE for audit attribution"
+  [[ "$AUDIT_ISSUE" =~ ^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$ ]] || die "--issue must be an issue key (KEY-NUMBER)"
 fi
 
 # A missing backend must never read as "nothing to retire".
@@ -237,7 +237,7 @@ cat <<'UNDO'
   the role template. Take a dump first if you want a cheap undo:
 
     pg_dump -t principal_permission_grants -t company_secret_bindings \
-            -t company_memberships > pre-orphan-retire.sql
+            -t company_memberships > pre-orphan-retirement.sql
 
   The attribution row in activity_log is NOT removed by any undo, and should
   not be — it records that the retirement happened.
@@ -245,7 +245,7 @@ UNDO
 
 if [[ "$MODE" == "plan" ]]; then
   hdr "PLAN ONLY — nothing was written"
-  say "re-run with: apply --requested-by <AGENT_UUID> [--kind $KIND]"
+  say "re-run with: apply --requested-by <AGENT_UUID> --issue <KEY-NUMBER> [--kind $KIND]"
   exit 0
 fi
 
@@ -271,7 +271,7 @@ SELECT count(*) FROM agents
 WHERE id::text = :'a' AND company_id = :'cid'::uuid AND status <> 'terminated';")"; assert_sql_ok
 [[ "$requester_ok" == "1" ]] || die "--requested-by is not a live agent in this company."
 
-result="$(PGV_COMPANY_ID="$COMPANY_ID" PGV_A="$REQUESTED_BY" \
+result="$(PGV_COMPANY_ID="$COMPANY_ID" PGV_A="$REQUESTED_BY" PGV_TEXT="$AUDIT_ISSUE" \
   pcsql_run -Atq -v ON_ERROR_STOP=1 -F'|' <<SQL
 BEGIN;
 
@@ -309,7 +309,7 @@ INSERT INTO activity_log
 SELECT :'cid'::uuid, 'agent', :'a', 'agent.permissions_updated', 'company', :'cid', :'a'::uuid,
        jsonb_build_object(
          'source', 'org_orphan_retire.sh',
-         'issue', '$ISSUE',
+         'issue', :'text',
          'kind', '$KIND',
          'grantRowsDeleted', counted.g,
          'secretBindingsDeleted', counted.b,
@@ -331,9 +331,8 @@ say "secret bindings deleted:   ${DEL_B:-0}"
 say "memberships archived:      ${UPD_M:-0}"
 
 printf '%s\n' "$(jq -cn \
-  --arg c "$COMPANY_ID" --arg by "$REQUESTED_BY" --arg k "$KIND" \
+  --arg c "$COMPANY_ID" --arg by "$REQUESTED_BY" --arg k "$KIND" --arg issue "$AUDIT_ISSUE" \
   --arg g "${DEL_G:-0}" --arg b "${DEL_B:-0}" --arg m "${UPD_M:-0}" \
-  --arg issue "$ISSUE" \
   '{event:"orphan.retired",issue:$issue,companyId:$c,requestedBy:$by,kind:$k,
     grantRowsDeleted:($g|tonumber),secretBindingsDeleted:($b|tonumber),
     membershipsArchived:($m|tonumber)}')" >> "$GRANT_LOG"

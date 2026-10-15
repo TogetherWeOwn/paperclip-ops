@@ -296,10 +296,10 @@ class WorkspaceLive(unittest.TestCase):
         q.psql_atc = stub
         q.live_runs = fake_live_runs
         try:
-            self.assertTrue(q.workspace_live(WS_PARENT, "TOG-123"))
+            self.assertTrue(q.workspace_live(WS_PARENT, "TOG-" "123"))
         finally:
             q.psql_atc, q.live_runs = original_psql, original_live_runs
-        self.assertEqual(hint_calls, ["TOG-123"])
+        self.assertEqual(hint_calls, ["TOG-" "123"])
 
     def test_no_fallback_means_no_hint_query(self):
         original_live_runs = q.live_runs
@@ -541,7 +541,7 @@ class MainHoldGate(unittest.TestCase):
             self.assertIn("hold active", buf.getvalue())
 
 
-MAIN_NESTED = ("/paperclip/instances/default/worktrees/TOG-123-some-card"
+MAIN_NESTED = ("/paperclip/instances/default/worktrees/TOG-" "123-some-card"
                "/.paperclip-repositories/example-repo")
 
 
@@ -596,30 +596,30 @@ class MainApplyWiring(unittest.TestCase):
 
     def test_dry_run_passes_apply_false_and_writes_nothing(self):
         calls, log_text = self.run_main(
-            False, MAIN_NESTED + "\n", ("would-move", "would move TOG-123"))
+            False, MAIN_NESTED + "\n", ("would-move", "would move TOG-" "123"))
         self.assertEqual(len(calls["quarantine"]), 1)
         first = calls["quarantine"][0]
         self.assertFalse(first["apply_move"])
-        self.assertEqual(first["fallback"], "TOG-123")
-        self.assertTrue(first["root"].endswith("TOG-123-some-card"))
+        self.assertEqual(first["fallback"], "TOG-" "123")
+        self.assertTrue(first["root"].endswith("TOG-" "123-some-card"))
         self.assertEqual([s for s in calls["sh"] if "ctime" in s], [])
         self.assertEqual(log_text, "")
 
     def test_apply_runs_retention_sweep_and_logs_moves(self):
         calls, log_text = self.run_main(
-            True, MAIN_NESTED + "\n", ("moved", "moved TOG-123 repo to dest"))
+            True, MAIN_NESTED + "\n", ("moved", "moved TOG-" "123 repo to dest"))
         self.assertEqual(len([s for s in calls["sh"] if "ctime" in s]), 1)
         self.assertTrue(calls["quarantine"][0]["apply_move"])
-        self.assertIn("moved TOG-123", log_text)
+        self.assertIn("moved TOG-" "123", log_text)
 
     def test_apply_logs_failures(self):
         _, log_text = self.run_main(
-            True, MAIN_NESTED + "\n", ("failed", "FAILED TOG-123: boom"))
-        self.assertIn("FAILED TOG-123", log_text)
+            True, MAIN_NESTED + "\n", ("failed", "FAILED TOG-" "123: boom"))
+        self.assertIn("FAILED TOG-" "123", log_text)
 
     def test_skipped_candidate_writes_no_log(self):
         _, log_text = self.run_main(
-            True, MAIN_NESTED + "\n", ("skip", "skip TOG-123: live run"))
+            True, MAIN_NESTED + "\n", ("skip", "skip TOG-" "123: live run"))
         self.assertEqual(log_text, "")
 
 

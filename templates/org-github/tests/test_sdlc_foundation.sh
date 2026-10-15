@@ -198,18 +198,18 @@ else bad "template pr-lint producer missing or lacks merge_group"; fi
 if grep -Eq '^[[:space:]]+uses:' "$PR_LINT"; then
   bad "pr-lint template must stay self-contained (an org uses: would need a pin)"
 else ok "pr-lint template is self-contained (no uses:)"; fi
-if grep -A10 '^  tier-0:' "$TEMPL" | grep -q 'if: false' \
-  && ! grep -A10 '^  tier-0:' "$TEMPL" | grep -Eq '^[[:space:]]+uses:'; then
+if grep -A10 '^  tier-0:' "$TEMPL" | grep 'if: false' >/dev/null \
+  && ! grep -A10 '^  tier-0:' "$TEMPL" | grep -E '^[[:space:]]+uses:' >/dev/null; then
   ok "tier-0 ships as a plain disabled job (no uses: to resolve at load)"
 else bad "tier-0 carries a uses: or is not disabled (startup failure, no ci-ok)"; fi
 if [[ "$(grep -c 'uses:[[:space:]]*TogetherWeOwn/' "$TEMPL")" == 1 ]] \
   && grep -q "template repo's OWN" "$FOUND/BOOTSTRAP-new-repo.md"; then
   ok "template repo holds one fillable pin and BOOTSTRAP keeps it valid (reports ci-ok)"
 else bad "template ci.yml is not single-pin, or BOOTSTRAP drops the own-pin rule"; fi
-if grep -A8 '^  lint:' "$TEMPL" | grep -q 'needs.changes.outputs'; then
+if grep -A8 '^  lint:' "$TEMPL" | grep 'needs.changes.outputs' >/dev/null; then
   ok "docs-only PRs skip lint via the changes outputs"
 else bad "lint not gated on changes outputs (docs-only claim false)"; fi
-if grep -A8 '^  lint:' "$TEMPL" | grep -q "github.event_name != 'pull_request'"; then
+if grep -A8 '^  lint:' "$TEMPL" | grep "github.event_name != 'pull_request'" >/dev/null; then
   ok "lint always runs on non-PR events (main never skips on an empty self-diff)"
 else bad "lint skips on push to main (changes diffs HEAD against itself)"; fi
 

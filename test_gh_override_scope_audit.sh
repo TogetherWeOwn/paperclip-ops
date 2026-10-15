@@ -86,38 +86,38 @@ write_projects "$TMP/proj.json" "$EXAMPLE_PID" "Example" "$EXAMPLE_PERMS" "$EXAM
 write_issue "$TMP/iss.json" "TASK-6385" "$EXAMPLE_PID" "$STALE_PERMS" "EMPTY"
 run_audit "$TMP/iss.json" "$TMP/proj.json"
 [[ $RC -eq 1 ]] && ok "stale override exits 1" || bad "stale override exits 1 (got $RC)" "$OUT"
-echo "$OUT" | grep -q "NARROWED-WORKFLOWS" && echo "$OUT" | grep -q "TASK-6385" \
+grep -q <<< "$OUT" "NARROWED-WORKFLOWS" && grep -q <<< "$OUT" "TASK-6385" \
   && ok "verdict names NARROWED-WORKFLOWS on TASK-6385" \
   || bad "verdict names NARROWED-WORKFLOWS on TASK-6385" "$OUT"
-echo "$OUT" | grep -q "workflows" \
+grep -q <<< "$OUT" "workflows" \
   && ok "detail names the dropped workflows permission" \
   || bad "detail names the dropped workflows permission" "$OUT"
 
 hdr "fail-open: narrower without workflows loss is still NARROWED"
 write_issue "$TMP/iss2.json" "TASK-X" "$EXAMPLE_PID" "contents=write,pull_requests=write,issues=write,metadata=read,checks=read,statuses=read,workflows=write" "EMPTY"
 run_audit "$TMP/iss2.json" "$TMP/proj.json"
-[[ $RC -eq 1 ]] && echo "$OUT" | grep -q "NARROWED" \
+[[ $RC -eq 1 ]] && grep -q <<< "$OUT" "NARROWED" \
   && ok "actions=read drop is NARROWED, exit 1" \
   || bad "actions=read drop is NARROWED, exit 1 (got $RC)" "$OUT"
 
 hdr "fail-open: a level drop (write->read) is NARROWED"
 write_issue "$TMP/iss3.json" "TASK-Y" "$EXAMPLE_PID" "contents=read,pull_requests=write,issues=write,metadata=read,checks=read,statuses=read,workflows=write,actions=read" "EMPTY"
 run_audit "$TMP/iss3.json" "$TMP/proj.json"
-[[ $RC -eq 1 ]] && echo "$OUT" | grep -q "NARROWED" \
+[[ $RC -eq 1 ]] && grep -q <<< "$OUT" "NARROWED" \
   && ok "contents write->read is NARROWED, exit 1" \
   || bad "contents write->read is NARROWED, exit 1 (got $RC)" "$OUT"
 
 hdr "fail-open: widened override (broker would 403) is WIDENED"
 write_issue "$TMP/iss4.json" "TASK-Z" "$EXAMPLE_PID" "$EXAMPLE_PERMS,administration=write" "EMPTY"
 run_audit "$TMP/iss4.json" "$TMP/proj.json"
-[[ $RC -eq 1 ]] && echo "$OUT" | grep -q "WIDENED" \
+[[ $RC -eq 1 ]] && grep -q <<< "$OUT" "WIDENED" \
   && ok "administration=write excess is WIDENED, exit 1" \
   || bad "administration=write excess is WIDENED, exit 1 (got $RC)" "$OUT"
 
 hdr "fail-open: unparseable override is INVALID"
 write_issue "$TMP/iss5.json" "TASK-BAD" "$EXAMPLE_PID" "contents-write" "EMPTY"
 run_audit "$TMP/iss5.json" "$TMP/proj.json"
-[[ $RC -eq 1 ]] && echo "$OUT" | grep -q "INVALID" \
+[[ $RC -eq 1 ]] && grep -q <<< "$OUT" "INVALID" \
   && ok "malformed spec is INVALID, exit 1" \
   || bad "malformed spec is INVALID, exit 1 (got $RC)" "$OUT"
 
@@ -125,14 +125,14 @@ hdr "fail-open: repo override outside the pin is REPO-WIDENED"
 write_projects "$TMP/proj6.json" "$EXAMPLE_PID" "Example" "$EXAMPLE_PERMS" "$EXAMPLE_REPOS"
 write_issue "$TMP/iss6.json" "TASK-R" "$EXAMPLE_PID" "EMPTY" "example-repo,other-repo"
 run_audit "$TMP/iss6.json" "$TMP/proj6.json"
-[[ $RC -eq 1 ]] && echo "$OUT" | grep -q "REPO-WIDENED" \
+[[ $RC -eq 1 ]] && grep -q <<< "$OUT" "REPO-WIDENED" \
   && ok "foreign repo is REPO-WIDENED, exit 1" \
   || bad "foreign repo is REPO-WIDENED, exit 1 (got $RC)" "$OUT"
 
 hdr "cry-wolf: matching override (shuffled key order) is OK"
 write_issue "$TMP/iss7.json" "TASK-OK" "$EXAMPLE_PID" "workflows=write,metadata=read,issues=write,contents=write,actions=read,statuses=read,checks=read,pull_requests=write" "EMPTY"
 run_audit "$TMP/iss7.json" "$TMP/proj.json"
-[[ $RC -eq 0 ]] && echo "$OUT" | grep -q "OK" \
+[[ $RC -eq 0 ]] && grep -q <<< "$OUT" "OK" \
   && ok "shuffled matching override is OK, exit 0" \
   || bad "shuffled matching override is OK, exit 0 (got $RC)" "$OUT"
 
@@ -147,7 +147,7 @@ hdr "cry-wolf: repo narrowing is info, not a finding"
 write_projects "$TMP/proj9.json" "00000000-0000-4000-8000-0000000000a2" "Ops Tooling" "contents=write,workflows=write" "paperclip-ops-tooling,paperclip"
 write_issue "$TMP/iss9.json" "TASK-SLICE" "00000000-0000-4000-8000-0000000000a2" "contents=write,workflows=write" "paperclip-ops-tooling"
 run_audit "$TMP/iss9.json" "$TMP/proj9.json"
-[[ $RC -eq 0 ]] && echo "$OUT" | grep -q "OK" \
+[[ $RC -eq 0 ]] && grep -q <<< "$OUT" "OK" \
   && ok "single-repo slice is OK, exit 0" \
   || bad "single-repo slice is OK, exit 0 (got $RC)" "$OUT"
 
@@ -165,7 +165,7 @@ NOPIN_PID="00000000-0000-0000-0000-000000000000"
 jq -n --arg id "$NOPIN_PID" '[{id:$id,name:"Nopin",env:{}}]' > "$TMP/proj-nopin.json"
 write_issue "$TMP/iss-nopin.json" "TASK-NOPIN" "$NOPIN_PID" "contents=write" "EMPTY"
 run_audit "$TMP/iss-nopin.json" "$TMP/proj-nopin.json"
-[[ $RC -eq 3 ]] && echo "$OUT" | grep -q "UNKNOWN-CEILING" \
+[[ $RC -eq 3 ]] && grep -q <<< "$OUT" "UNKNOWN-CEILING" \
   && ok "perms override vs unpinned project is UNKNOWN-CEILING, exit 3" \
   || bad "perms override vs unpinned project is UNKNOWN-CEILING, exit 3 (got $RC)" "$OUT"
 
@@ -175,14 +175,14 @@ hdr "cry-wolf: repos-only override vs project with no repos pin is info, not REP
 jq -n --arg id "$NOPIN_PID" --arg p "contents=write" '[{id:$id,name:"Nopin",env:{GH_APP_PERMISSIONS:{type:"plain",value:$p}}}]' > "$TMP/proj-norepos.json"
 write_issue "$TMP/iss-norepos.json" "TASK-NOREPOS" "$NOPIN_PID" "EMPTY" "some-repo"
 run_audit "$TMP/iss-norepos.json" "$TMP/proj-norepos.json"
-[[ $RC -eq 0 ]] && echo "$OUT" | grep -q "unpinned project" \
+[[ $RC -eq 0 ]] && grep -q <<< "$OUT" "unpinned project" \
   && ok "repos override vs unpinned project is info, exit 0" \
   || bad "repos override vs unpinned project is info, exit 0 (got $RC)" "$OUT"
 
 hdr "indeterminate: unknown ceiling is exit 3, never a pass"
 jq -n '[{identifier:"TASK-NOPROJ",id:"11111111-2222-3333-4444-555555555555",projectId:null,status:"in_progress",assigneeAdapterOverrides:{adapterConfig:{env:{GH_APP_PERMISSIONS:{type:"plain",value:"contents=write"}}}}}]' > "$TMP/iss11.json"
 run_audit "$TMP/iss11.json" "$TMP/proj.json"
-[[ $RC -eq 3 ]] && echo "$OUT" | grep -q "UNKNOWN-CEILING" \
+[[ $RC -eq 3 ]] && grep -q <<< "$OUT" "UNKNOWN-CEILING" \
   && ok "project-less override is UNKNOWN-CEILING, exit 3" \
   || bad "project-less override is UNKNOWN-CEILING, exit 3 (got $RC)" "$OUT"
 

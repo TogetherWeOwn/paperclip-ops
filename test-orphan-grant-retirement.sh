@@ -178,7 +178,7 @@ txn="$(awk '/^BEGIN;/{f=1} f{print} /^COMMIT;/{exit}' "$WORK/sql")"
 # The tool gates each statement on a literal flag comparison rather than by
 # omitting it, so 'confined' means the other two are switched OFF, not absent.
 if grep -qE "DELETE FROM company_secret_bindings" <<<"$txn" \
-   && grep -A2 'DELETE FROM principal_permission_grants' <<<"$txn" | grep -q "'0' = '1'"; then
+   && grep -A2 'DELETE FROM principal_permission_grants' <<<"$txn" | grep "'0' = '1'" >/dev/null; then
   ok "--kind bindings enables the binding delete and disables the grant delete"
 else
   bad "--kind bindings did not confine the sweep"

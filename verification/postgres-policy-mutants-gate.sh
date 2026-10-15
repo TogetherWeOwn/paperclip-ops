@@ -47,7 +47,7 @@ NODE
   if run_suite "$d" "$suite" >"$d/out" 2>&1; then
     echo "$label: mutant left $suite green" >&2; rm -rf "$d"; return 1
   fi
-  if ! grep -F 'FAIL' "$d/out" | grep -qF "$want"; then
+  if ! grep -F 'FAIL' "$d/out" | grep -F "$want" >/dev/null; then
     echo "$label: red, but not on named assertion '$want'" >&2; cat "$d/out"; rm -rf "$d"; return 1
   fi
   echo "ok: $label -> $want"; rm -rf "$d"

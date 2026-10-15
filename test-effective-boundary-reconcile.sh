@@ -87,7 +87,7 @@ stands="$(grep -c 'all layer-1 over-grants stand' <<<"$BLOCK")"
 grep -q 'TOOL-GATEWAY UNDER-GRANT' <<<"$BLOCK" \
   && ok "the under-grant finding still exists" \
   || bad "the under-grant finding is gone"
-if grep "UNDER-GRANT" <<<"$BLOCK" | grep -q 'ACCEPTED-RISK'; then
+if grep "UNDER-GRANT" <<<"$BLOCK" | grep 'ACCEPTED-RISK' >/dev/null; then
   bad "an under-grant can read as ACCEPTED-RISK — a missing grant is never accepted risk"
 else
   ok "no under-grant line mentions ACCEPTED-RISK"

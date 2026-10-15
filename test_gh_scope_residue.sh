@@ -399,7 +399,7 @@ hdr "Mints nothing"
 # tripwire. Comments are stripped first: the header names both minting tools
 # in prose, to say that it does not call them.
 grep -vE '^[[:space:]]*#' "$TOOL" \
-  | grep -qE 'gh_token\.sh|gh-app-token\.js|access_tokens' \
+  | grep -E 'gh_token\.sh|gh-app-token\.js|access_tokens' >/dev/null \
   && bad "the script references a minting path" \
   || ok "no minting path referenced anywhere in the script"
 

@@ -340,11 +340,51 @@ Empty shell test-state resets are spelled with `printf -v` to avoid a secret-sca
 without changing their values. Comment-only trailing whitespace is normalized; a path-specific
 `.gitattributes` rule preserves the byte-exact expected-render fixture's terminal blank line.
 
+The keep-going CI replay also exposed imported SIGPIPE-prone verdict pipelines. Here-strings
+or fully draining `grep` consumers replace those pipelines in
+`templates/org-github/tests/test_sdlc_foundation.sh`, `test-effective-boundary-reconcile.sh`,
+`test-orphan-grant-retirement.sh`, `test_gh_override_scope_audit.sh`,
+`test_gh_scope_residue.sh`, and `verification/postgres-policy-mutants-gate.sh`, preserving
+patterns, exit-status checks, and assertions. The legacy
+`verification/sigpipe-verdict-false-miss-gate.sh` entry point delegates to the retained canonical
+`verification/case_c25c4d3f-sigpipe-verdict-gate.sh`: the latter retains the original mechanism,
+match/miss, planted-violation, and no-pipefail controls and adds broader scanner controls.
+This avoids a duplicate deliberately unsafe positive-control pipeline without adding an
+exemption. The canonical SIGPIPE gate and its exemptions are unchanged.
+
+## Deferred nongating integration gaps
+
+Supplemental tests of affected imported files exposed three pre-existing gaps that this PR's
+CI does not execute. They are deliberately not repaired or newly wired into CI in this PR.
+One follow-up, **Resolve three nongating integration gaps after paperclip-ops consolidation**,
+tracks all three for a separate reviewed PR after this consolidation merges:
+
+- `templates/org-github/tests/test_sdlc_foundation.sh`: twelve staged paths are absent from
+  the retained destination map, and the missing CI wiring fails two wiring controls
+  (52 assertions pass, 14 fail).
+- `test_gh_scope_residue.sh`: anonymized branch fixtures do not match the retained tool's
+  branch-prefix parser, failing positive detection and repository attribution
+  (35 assertions pass, 2 fail). Preserve those assertions when repairing synthetic fixtures.
+- `test-effective-boundary-reconcile.sh`: the intentionally absent private
+  `tool_grant_expectations.json` prevents this suite from running. The follow-up must use
+  public synthetic fixtures where possible; assertions genuinely requiring private artifacts
+  need an explicit skip-on-public reason, never deleted assertions or publication of the map.
+
+The local keep-going replay also encountered environment failures, not proven source defects:
+seven PostgreSQL-backed privilege steps and the regeneration-strip suite lacked a complete
+local PostgreSQL tool cache; the host-operations installer suite lacked `visudo`; and the
+carrier-isolation suite could not create user namespaces inside the restricted container.
+These remain explicit non-local verification exclusions, not local passes. No gate or host
+isolation setting is weakened to hide them. GitHub CI must arbitrate these checks, as well as
+GitHub-only actions/event context and the full upstream mutation suite, which is explicitly
+prohibited locally. Local diagnostics do not replace required CI or exact-head review.
+
 ## Integration deltas to retained canonical files
 
 The conflict list above records source selection, not a prohibition on the following reviewed
 integration edits. No toolkit version of these shared files was substituted:
 
+- `README.md`: extends the canonical source index with all 63 newly tracked root entry points required by the unchanged README index gate, including imported `test-` names. Existing exemptions and positive/negative gate assertions remain unchanged.
 - `vendor/toolkit-tracked-allowlist.txt`: explicitly registers the imported manifest paths. Two stale entries for actually-untracked aliases are removed so their archive bytes are checked.
 - `vendor/offline-ci-contract.json`: separates 251 deliberately tracked inputs from 35 archive-restored inputs, pinning both sets by SHA-256.
 - `vendor/toolkit-files.txt`, `.gitignore`, and `test_toolkit_sync.py`: restore the original archive's sibling-guard test subject under an explicit ignored fixture alias, separate from the now-tracked first-party root guard. Preserve the original archive checksum, subject digest, and behavior assertions rather than relabeling newer source as archived bytes.
@@ -355,8 +395,12 @@ integration edits. No toolkit version of these shared files was substituted:
 ## Migration and verification boundaries
 
 The project default and repository-placement mappings select paperclip-ops for new work.
-Existing toolkit-bound issues finish their current PRs in the toolkit. Later merged toolkit
-changes require a refreshed reconciliation before merge or a subsequent reviewed sync PR.
+Existing toolkit-bound issues finish their current PRs in the toolkit. This consolidation is
+frozen at toolkit baseline `2d2b8123a60e7477a01a477e4f0daa27caab74d6`; later toolkit merges,
+including toolkit PR #80, are deliberately not folded into this PR. After this consolidation
+merges, reviewed follow-up sync PRs must cover that baseline through the then-current toolkit
+main. Repeat those syncs while grandfathered work drains, and perform a final sync after all
+retirement gates hold, before changing visibility or archiving.
 Retirement requires this consolidation to merge, zero open toolkit PRs, zero active
 toolkit-bound issues (including realized workspaces), and the **execution-image packet ported
 or explicitly retired**. Once all gates hold, make the toolkit repository **private first,

@@ -305,7 +305,8 @@
     "invariant views suite:1",
     "project regen prune manifest atomic suite:1",
     "sweep-auto node7b1ff338 pressure-gate suite:1",
-    "host regenerable cache reclaim hostile suite:1"
+    "host regenerable cache reclaim hostile suite:1",
+    "migration safety gates suites:1"
   ],
   "retained": [
     {
@@ -1707,6 +1708,11 @@
       "name": "host regenerable cache reclaim hostile suite",
       "definition_sha256": "78073dbf9a3d03094eaa143eba9f93f8a6a85da68d79e4e48d92b48b27ef4001",
       "id": "host regenerable cache reclaim hostile suite:1"
+    },
+    {
+      "name": "migration safety gates suites",
+      "definition_sha256": "fce3b348e7f6f7519516081f58fc644adfccc9ce70ed91bf543880a3a88d5369",
+      "id": "migration safety gates suites:1"
     }
   ],
   "removed": [

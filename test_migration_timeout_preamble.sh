@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# ===========================================================================
+# Offline suite for migration_timeout_preamble.sh (shared migration gates).
+#
+# Fully offline: fixture files in a throwaway temp dir, no database, no
+# network, no credentials. Proves print/check/inject plus the refusal paths.
+# ===========================================================================
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GATE="$HERE/migration_timeout_preamble.sh"
+PASS=0; FAIL=0
+ok() { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
+
+WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+
+# 1. print emits both SET statements with defaults.
+out="$("$GATE" print)"
+grep -q "SET lock_timeout = '10s';" <<< "$out" && grep -q "SET statement_timeout = '120s';" <<< "$out" \
+  && ok "print emits default lock/statement timeouts" \
+  || bad "print emits default lock/statement timeouts"
+
+# 2. print honors overrides and refuses garbage.
+out="$("$GATE" print --lock-timeout 5s --statement-timeout 30s)"
+grep -q "SET lock_timeout = '5s';" <<< "$out" && grep -q "SET statement_timeout = '30s';" <<< "$out" \
+  && ok "print honors timeout overrides" \
+  || bad "print honors timeout overrides"
+"$GATE" print --lock-timeout forever >/dev/null 2>&1 \
+  && bad "print refuses a bad timeout" || ok "print refuses a bad timeout"
+
+# 3. check passes a file with the preamble, fails one without — naming it.
+printf "SET lock_timeout = '10s';\nSET statement_timeout = '120s';\nSELECT 1;\n" > "$WORK/good.sql"
+printf "SELECT 1;\n" > "$WORK/bare.sql"
+"$GATE" check "$WORK/good.sql" >/dev/null 2>&1 \
+  && ok "check passes a file carrying the preamble" \
+  || bad "check passes a file carrying the preamble"
+bare_out="$("$GATE" check "$WORK/bare.sql" 2>&1 || true)"
+if "$GATE" check "$WORK/bare.sql" >/dev/null 2>&1; then
+  bad "check fails a file without the preamble"
+elif grep -q "bare.sql" <<< "$bare_out"; then
+  ok "check fails a file without the preamble, naming it"
+else
+  bad "check fails a file without the preamble, naming it"
+fi
+"$GATE" check "$WORK/missing.sql" >/dev/null 2>&1 \
+  && bad "check refuses an unreadable file" || ok "check refuses an unreadable file"
+
+# 4. inject prepends once and is idempotent.
+"$GATE" inject "$WORK/bare.sql" > "$WORK/wrapped.sql"
+head -n 1 "$WORK/wrapped.sql" | grep -q "SET lock_timeout" \
+  && grep -q "SELECT 1;" "$WORK/wrapped.sql" \
+  && ok "inject prepends the preamble ahead of the body" \
+  || bad "inject prepends the preamble ahead of the body"
+"$GATE" inject "$WORK/wrapped.sql" > "$WORK/twice.sql"
+[[ "$(grep -c "SET lock_timeout" "$WORK/twice.sql")" -eq 1 ]] \
+  && ok "inject is idempotent (no doubled preamble)" \
+  || bad "inject is idempotent (no doubled preamble)"
+
+printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+[[ "$FAIL" -eq 0 ]]

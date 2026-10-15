@@ -1,0 +1,124 @@
+# Reusable schema-drift gate (shared migration safety gates).
+#
+# Callers reference a pinned SHA:
+#   uses: TogetherWeOwn/paperclip-ops/.github/workflows/reusable-migration-drift.yml@<sha>
+#
+# Two uses, one gate:
+#   1. Preflight (pull_request / pre-deploy): the caller fetches its
+#      production ledger(s) with its EXISTING read-only principal into
+#      `ledger-file`, then this gate requires zero pending and zero unknown
+#      migrations plus rehearsal evidence fresher than `max-age-hours`.
+#      Rollback and live-SHA redeploy paths waive this gate inside their own
+#      scripts so recovery never waits on it.
+#   2. Nightly sweep (schedule): the same gate runs on a timer with
+#      `page-on-failure: true`, which auto-files an issue and posts to
+#      Discord ONLY when the gate fails — quiet nights stay quiet.
+#
+# This workflow never touches the network or a database itself: digests come
+# from the caller's checkout, the ledger from the caller's `ledger-file`,
+# evidence from the caller's `evidence-file`. It fails closed when any input
+# file is missing.
+name: migration-drift (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      migrations-dir:
+        description: Repo-relative directory holding NNNN_slug.sql files.
+        required: false
+        default: packages/db/src/migrations
+        type: string
+      ledger-file:
+        description: >-
+          Path to the production ledger export (one sha256 per line),
+          fetched by the caller with its read-only principal.
+        required: true
+        type: string
+      evidence-file:
+        description: Rehearsal evidence document (or empty to skip freshness).
+        required: false
+        default: ""
+        type: string
+      max-age-hours:
+        description: Required rehearsal evidence freshness in hours.
+        required: false
+        default: 24
+        type: number
+      script-ref:
+        description: Pinned SHA of this repo to fetch the gate scripts from.
+        required: false
+        default: main
+        type: string
+      page-on-failure:
+        description: Auto-file an issue and post to Discord when the gate fails.
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      discord-webhook:
+        description: Discord webhook URL for nightly pages. Never printed.
+        required: false
+
+jobs:
+  drift:
+    name: schema drift gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write # auto-filed page cards only (page-on-failure)
+    steps:
+      # Pinned: actions/checkout v4. Repin with the SHA, never a moving tag.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Fetch canonical gate scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: TogetherWeOwn/paperclip-ops
+          ref: ${{ inputs.script-ref }}
+          path: .paperclip-migration-gates
+          persist-credentials: false
+
+      - name: Build candidate digests and run the drift gate
+        id: gate
+        env:
+          EVIDENCE_ARG: ${{ inputs.evidence-file != '' && inputs.evidence-file || '' }}
+        run: |
+          set -euo pipefail
+          test -r "${{ inputs.ledger-file }}" \
+            || { echo "drift gate needs a readable ledger-file (fetch it with the read-only principal first)"; exit 2; }
+          if [ -n "$EVIDENCE_ARG" ]; then
+            test -r "$EVIDENCE_ARG" \
+              || { echo "drift gate: evidence-file is set but unreadable: $EVIDENCE_ARG"; exit 2; }
+          fi
+          (cd "${{ inputs.migrations-dir }}" && sha256sum ./*.sql) > /tmp/candidate-hashes.txt
+          EXTRA=()
+          if [ -n "$EVIDENCE_ARG" ]; then
+            EXTRA=(--evidence "$EVIDENCE_ARG" --max-age-hours "${{ inputs.max-age-hours }}")
+          fi
+          python3 .paperclip-migration-gates/migration_drift_gate.py \
+            --sql-hashes /tmp/candidate-hashes.txt \
+            --ledger "${{ inputs.ledger-file }}" "${EXTRA[@]}"
+
+      - name: Page on drift (auto-filed card)
+        if: failure() && inputs.page-on-failure && steps.gate.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh issue create \
+            --title "schema drift: production ledger vs ${{ github.ref_name }} ($(date -u +%Y-%m-%d))" \
+            --label "drift,automated-page" \
+            --body "The nightly schema-drift gate failed on ${{ github.ref_name }} at ${{ github.sha }}. See the failing run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Runbook: docs/migration-standard.md."
+
+      - name: Page on drift (Discord)
+        if: failure() && inputs.page-on-failure && steps.gate.outcome == 'failure'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.discord-webhook }}
+        run: |
+          set -euo pipefail
+          test -n "${DISCORD_WEBHOOK_URL:-}" || { echo "page-on-failure with no discord-webhook secret: card filed, Discord skipped"; exit 0; }
+          python3 -c 'import json,os,urllib.request; url=os.environ["DISCORD_WEBHOOK_URL"]; body=json.dumps({"content":"schema drift page: nightly gate failed, card auto-filed. Run: %s/%s/actions/runs/%s"} % (os.environ["GITHUB_SERVER_URL"],os.environ["GITHUB_REPOSITORY"],os.environ["GITHUB_RUN_ID"])).encode(); urllib.request.urlopen(urllib.request.Request(url,data=body,headers={"Content-Type":"application/json"}),timeout=30)'

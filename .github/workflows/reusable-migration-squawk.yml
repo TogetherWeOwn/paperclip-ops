@@ -1,0 +1,80 @@
+# Reusable migration squawk gate (shared migration safety gates).
+#
+# Callers reference a pinned SHA:
+#   uses: TogetherWeOwn/paperclip-ops/.github/workflows/reusable-migration-squawk.yml@<sha>
+#
+# What it does: checks out the caller, fetches the canonical gate scripts
+# from this repo at its own pinned SHA, then runs the file-standard checks
+# on every migration and squawk itself when available. No database, no
+# credentials, no network beyond the checkouts and the optional install.
+name: migration-squawk (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      migrations-dir:
+        description: Repo-relative directory holding NNNN_slug.sql files.
+        required: false
+        default: packages/db/src/migrations
+        type: string
+      strict:
+        description: Refuse when the squawk binary cannot run.
+        required: false
+        default: true
+        type: boolean
+      squawk-version:
+        description: >-
+          Optional squawk release to install from crates.io
+          (e.g. "2.9.0"). Empty means no install: the file-standard checks
+          always run and squawk runs only when preinstalled.
+        required: false
+        default: ""
+        type: string
+      script-ref:
+        description: Pinned SHA of this repo to fetch the gate scripts from.
+        required: false
+        default: main
+        type: string
+
+jobs:
+  squawk:
+    name: migration squawk
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      # Pinned: actions/checkout v4. Repin with the SHA, never a moving tag.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Fetch canonical gate scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: TogetherWeOwn/paperclip-ops
+          ref: ${{ inputs.script-ref }}
+          path: .paperclip-migration-gates
+          persist-credentials: false
+
+      - name: Install squawk (optional, pinned version only)
+        if: inputs.squawk-version != ''
+        env:
+          SQUAWK_VERSION: ${{ inputs.squawk-version }}
+        run: |
+          set -euo pipefail
+          cargo install squawk --locked --version "$SQUAWK_VERSION"
+          squawk --version
+
+      - name: Prove the timeout preamble injector parses
+        run: bash -n .paperclip-migration-gates/migration_timeout_preamble.sh
+
+      - name: Lint migrations (file standard + squawk)
+        env:
+          STRICT: ${{ inputs.strict && '--strict' || '' }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          bash .paperclip-migration-gates/migration_squawk.sh \
+            --migrations-dir "${{ inputs.migrations-dir }}" $STRICT

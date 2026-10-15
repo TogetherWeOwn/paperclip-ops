@@ -1,0 +1,104 @@
+# Reusable prod-clone rehearsal (shared migration safety gates).
+#
+# Callers reference a pinned SHA:
+#   uses: TogetherWeOwn/paperclip-ops/.github/workflows/reusable-migration-rehearsal.yml@<sha>
+#
+# What it does: plans the pending chain offline on every call (enumerate +
+# digest, no cloud), then runs the full rehearsal — branch off prod, apply
+# the chain exactly as production would, report, delete — ONLY when the
+# caller supplies its existing provider credentials. Without credentials
+# the job plans but never claims a rehearsal happened. Evidence uploads as
+# an artifact for the production preflight gate (freshness < 24h).
+#
+# The caller owns its principals: pass the provider token and any
+# caller-owned apply/restore commands through `env`. This workflow never
+# invents credentials and prints none (provider output is redacted).
+name: migration-rehearsal (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      provider:
+        description: "Rehearsal provider: planetscale or pitr."
+        required: false
+        default: planetscale
+        type: string
+      migrations-dir:
+        description: Repo-relative directory holding NNNN_slug.sql files.
+        required: false
+        default: packages/db/src/migrations
+        type: string
+      script-ref:
+        description: Pinned SHA of this repo to fetch the gate scripts from.
+        required: false
+        default: main
+        type: string
+      evidence-retention-days:
+        description: Artifact retention for the evidence document.
+        required: false
+        default: 7
+        type: number
+
+jobs:
+  rehearse:
+    name: prod-clone rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: write # evidence artifact upload
+    steps:
+      # Pinned: actions/checkout v4. Repin with the SHA, never a moving tag.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Fetch canonical gate scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: TogetherWeOwn/paperclip-ops
+          ref: ${{ inputs.script-ref }}
+          path: .paperclip-migration-gates
+          persist-credentials: false
+
+      - name: Plan the pending chain (offline, always runs)
+        run: |
+          set -euo pipefail
+          bash .paperclip-migration-gates/migration_rehearsal.sh plan \
+            --migrations-dir "${{ inputs.migrations-dir }}" \
+            --provider "${{ inputs.provider }}" \
+            --out rehearsal-plan.json
+          cat rehearsal-plan.json
+
+      # Full rehearsal only when the caller wired its provider credentials.
+      # The caller maps its EXISTING secrets here; no new principals.
+      - name: Run the rehearsal on a throwaway prod clone
+        env:
+          REHEARSAL_PSCALE_ORG: ${{ secrets.REHEARSAL_PSCALE_ORG }}
+          REHEARSAL_PSCALE_DB: ${{ secrets.REHEARSAL_PSCALE_DB }}
+          REHEARSAL_PSCALE_TOKEN: ${{ secrets.REHEARSAL_PSCALE_TOKEN }}
+          REHEARSAL_PITR_ENDPOINT: ${{ secrets.REHEARSAL_PITR_ENDPOINT }}
+          REHEARSAL_RESTORE_CMD: ${{ vars.REHEARSAL_RESTORE_CMD }}
+          REHEARSAL_APPLY_CMD: ${{ vars.REHEARSAL_APPLY_CMD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${REHEARSAL_PSCALE_TOKEN:-}${REHEARSAL_PITR_ENDPOINT:-}" ] \
+            && ! command -v pscale >/dev/null 2>&1; then
+            echo "No provider credentials on this run: plan only, no rehearsal claimed."
+            exit 0
+          fi
+          bash .paperclip-migration-gates/migration_rehearsal.sh run \
+            --migrations-dir "${{ inputs.migrations-dir }}" \
+            --provider "${{ inputs.provider }}" \
+            --out rehearsal-evidence.json
+
+      # Pinned: actions/upload-artifact v7.0.1. Repin with the SHA on updates.
+      - name: Upload rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rehearsal-evidence
+          path: rehearsal-*.json
+          retention-days: ${{ inputs.evidence-retention-days }}
+          if-no-files-found: error

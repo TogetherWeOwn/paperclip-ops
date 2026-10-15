@@ -89,6 +89,10 @@ parser, not a standing operator command. Test entry points begin with `test_`.
 | `hook_spawn_guard.sh` |
 | `host_db_backup.sh` |
 | `kofra_preview_parity.py` |
+| `migration_drift_gate.py` |
+| `migration_rehearsal.sh` |
+| `migration_squawk.sh` |
+| `migration_timeout_preamble.sh` |
 | `muse_countdown.py` |
 | `native_ssh_citation_gate.py` |
 | `notify_paperclip_issue.sh` |

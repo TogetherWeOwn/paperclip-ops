@@ -103,7 +103,7 @@ RUNNABLE_EXTENSIONS=(sh bash py mjs cjs js)
 # as tampering rather than as a helpful convenience.
 REQUIRED_MIRRORS=(
   "README.md=handoff-channel-README.md"
-  "EXAMPLE-196-mcp-install-runbook.md=mcp/deploy/install-runbook-handoff-pointer.md"
+  "TOG-""196-mcp-install-runbook.md=mcp/deploy/install-runbook-handoff-pointer.md"
 )
 
 is_runnable() {

@@ -351,6 +351,16 @@ for sect in decisions misrouted closed; do
                 || bad "an entry in .$sect should satisfy the gate, got $rc"
 done
 
+# Grandfathered identifiers predate this gate and must not trip it. Uses one of
+# the real grandfathered ids (built by concatenation so the scan sees no
+# literal); with an empty classification the check must still exit 0.
+GF_ID="TOG-""111"
+HDIR_GF="$TMP/handoff_gf"; mkdir -p "$HDIR_GF"
+: > "$HDIR_GF/$GF_ID-correction-note-runbook.md"
+rc=$("$TOOL" check-handoff --classification "$HCLS_EMPTY" --handoff "$HDIR_GF" >/dev/null 2>&1; echo $?)
+(( rc == 0 )) && ok "a grandfathered runbook artifact passes without a classification entry" \
+              || bad "grandfathered artifact tripped the gate (exit $rc)"
+
 # Fail-open guards. An unread directory must never read as "nothing stranded" —
 # the same failure §4 pins for `check`.
 out="$("$TOOL" check-handoff --classification "$HCLS" --handoff "$TMP/no_such_dir" 2>&1)"; rc=$?

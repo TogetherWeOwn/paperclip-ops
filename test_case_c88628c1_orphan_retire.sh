@@ -69,7 +69,7 @@ SHIM
 # Run the tool. Echoes its exit status; the SQL it emitted lands in $WORK/sql.
 run() {
   : > "$WORK/sql"
-  ( cd "$WORK" && SHIM_LOG="$WORK/sql" COMPANY_ID="$CID" GRANT_LOG="$WORK/grant-log.jsonl" \
+  ( cd "$WORK" && AUDIT_ISSUE=TEST-42 SHIM_LOG="$WORK/sql" COMPANY_ID="$CID" GRANT_LOG="$WORK/grant-log.jsonl" \
       bash ./org_orphan_retire.sh "$@" ) >"$WORK/out" 2>"$WORK/err"
   echo $?
 }

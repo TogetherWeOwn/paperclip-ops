@@ -402,6 +402,7 @@ prohibited locally. Local diagnostics do not replace required CI or exact-head r
 The conflict list above records source selection, not a prohibition on the following reviewed
 integration edits. No toolkit version of these shared files was substituted:
 
+- `test_case_c88628c1_orphan_retire.sh`: supplies a synthetic audit issue in the retained canonical CI fixture, so positive write controls reach their intended branch; every existing refusal and transaction assertion is preserved.
 - `test_operator_runbook.sh`: adds paired synthetic grandfather-namespace and unknown-handoff regression assertions under the narrow review-fix exception; the retained existing assertions are unchanged.
 - `README.md`: extends the canonical source index with all 63 newly tracked root entry points required by the unchanged README index gate, including imported `test-` names. Existing exemptions and positive/negative gate assertions remain unchanged.
 - `vendor/toolkit-tracked-allowlist.txt`: explicitly registers the imported manifest paths. Two stale entries for actually-untracked aliases are removed so their archive bytes are checked.

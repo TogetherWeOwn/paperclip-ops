@@ -22,9 +22,14 @@ Safety properties (fail closed):
   Any database error blocks the move.
 - The move coordinates with the SSH restore writer lock: the same atomic
   directory lock the restore writer holds is acquired before the final
-  custody recheck and held through the move. Lock contention blocks the
-  move. An existing writer lock is never removed. Stale-owner takeover by
-  process-signal probing across namespaces is never attempted.
+  custody recheck and held through the move. The lock owner is a holder
+  process that stays alive for the whole critical section, so the restore
+  writer's dead-pid stale check never sees this lock as stale; the lock key
+  hashes the realpath-resolved workspace root, like the writer. Lock
+  contention blocks the move. Release removes the lock only when the
+  ownership token this run wrote is still present, so a lock the writer
+  has since taken is never removed. Stale-owner takeover by process-signal
+  probing across namespaces is never attempted.
 - Quarantined contents are preserved for the retention window; this tool
   never repairs a nested .git and never writes into a live workspace.
 """
@@ -34,6 +39,8 @@ import hashlib
 import json
 import os
 import re
+import secrets
+import select
 import subprocess
 import sys
 import time
@@ -53,9 +60,14 @@ HOLD_FILENAME = 'nongit-quarantine.HOLD.json'
 HOLD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), HOLD_FILENAME)
 INSTANCE_ROOT = '/paperclip/instances/default'
 LOCK_SUBDIR = 'locks/directory-merge'
-LIVE_RUN_STATUSES = ('queued', 'running', 'scheduled_retry')
+LOCK_TOKEN_FILENAME = 'quarantine-owner.token'
+LOCK_READY_MARKER = 'LOCK-READY'
+# Upper bound on one critical section. If this tool dies mid-move the holder
+# still exits on its own, after which the writer's stale check can reclaim.
+LOCK_HOLDER_SECONDS = 600
 
 Decision = collections.namedtuple('Decision', ['proceed', 'reason'])
+LockHandle = collections.namedtuple('LockHandle', ['lock_path', 'token', 'process'])
 
 
 # ---------------------------------------------------------------------------
@@ -139,16 +151,40 @@ def workspace_root_for_nested(nested_dir):
     return root
 
 
-def lock_path_for_workspace(workspace_root, instance_root=INSTANCE_ROOT):
+def lock_path_for_workspace(workspace_root, instance_root=None):
     """(lock_path, hex_digest) for a canonical workspace root.
 
-    Matches the restore writer: sha256 of the canonical container path,
-    under <instanceRoot>/locks/directory-merge/<digest>.lock. Callers pass
-    the realpath-resolved root; this function hashes exactly what it gets.
+    Matches the restore writer: sha256 of the realpath-resolved container
+    path, under <instanceRoot>/locks/directory-merge/<digest>.lock. Callers
+    resolve the root with resolve_workspace_realpath first; this function
+    hashes exactly what it gets.
     """
+    if instance_root is None:
+        instance_root = INSTANCE_ROOT
     digest = hashlib.sha256(workspace_root.encode('utf-8')).hexdigest()
     lock = os.path.join(str(instance_root), LOCK_SUBDIR, digest + '.lock')
     return (lock, digest)
+
+
+def build_lock_holder_script():
+    """Shell script for the lock holder: $1 lock dir, $2 ownership token.
+
+    Atomic mkdir wins the lock, then owner.json records this shell's pid
+    and the token file records the ownership token. The shell then prints
+    the ready marker and execs sleep, keeping the same pid alive for the
+    whole critical section — so the writer's process.kill(pid, 0) stale
+    check never treats this lock as stale. Exits 11 when the lock is held.
+    """
+    return (
+        'lock="$1"; token="$2"; '
+        'mkdir -p "$(dirname "$lock")" || exit 12; '
+        'mkdir "$lock" 2>/dev/null || exit 11; '
+        'printf \'{"pid":%s,"createdAt":"%s"}\' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+        '> "$lock/owner.json" && printf %s "$token" > "$lock/' + LOCK_TOKEN_FILENAME + '" '
+        '|| { rm -rf "$lock"; exit 13; }; '
+        'echo ' + LOCK_READY_MARKER + '; '
+        'exec sleep ' + str(LOCK_HOLDER_SECONDS)
+    )
 
 
 def _sql_escape_literal(value):
@@ -163,89 +199,55 @@ def workspace_lookup_sql(workspace_root):
             f"where cwd = '{esc}' or provider_ref = '{esc}'")
 
 
+def _in_list(values):
+    return ", ".join("'%s'" % _sql_escape_literal(v) for v in (values or []))
+
+
 def live_runs_sql(workspace_ids, issue_ids):
     """Live runs sharing workspaces or linked issues, including retries.
 
     Covers context issue and task keys, the execution-workspace key, native
     issue keys, queued/running/scheduled_retry states and future scheduled
-    retries. Callers treat any query error as live.
+    retries. An empty id list drops its predicates entirely (``false``):
+    a sentinel ``in ('')`` would match every live run whose coalesced key
+    is empty and over-block orphaned workspaces. Callers treat any query
+    error as live.
     """
-    ws = ", ".join("'%s'" % _sql_escape_literal(v) for v in (workspace_ids or []))
-    iss = ", ".join("'%s'" % _sql_escape_literal(v) for v in (issue_ids or []))
-    ws_list = ws if ws else "''"
-    iss_list = iss if iss else "''"
+    predicates = []
+    if issue_ids:
+        iss_list = _in_list(issue_ids)
+        predicates += [
+            f"coalesce(r.context_snapshot->>'issueId','') in ({iss_list})",
+            f"coalesce(r.context_snapshot->>'taskId','') in ({iss_list})",
+            f"coalesce(r.context_snapshot->>'nativeIssueId','') in ({iss_list})",
+            f"coalesce(r.native_issue_id::text,'') in ({iss_list})",
+        ]
+    if workspace_ids:
+        ws_list = _in_list(workspace_ids)
+        predicates.append(
+            f"coalesce(r.context_snapshot->>'executionWorkspaceId','') in ({ws_list})")
+    identity = " or ".join(predicates) if predicates else "false"
     return (
         "select count(*) from heartbeat_runs r where ("
-        f"r.status in ('queued','running','scheduled_retry') or "
-        f"(r.scheduled_retry_at is not null and r.scheduled_retry_at > now())) "
-        f"and (coalesce(r.context_snapshot->>'issueId','') in ({iss_list}) "
-        f"or coalesce(r.context_snapshot->>'taskId','') in ({iss_list}) "
-        f"or coalesce(r.context_snapshot->>'executionWorkspaceId','') in ({ws_list}) "
-        f"or coalesce(r.context_snapshot->>'nativeIssueId','') in ({iss_list}) "
-        f"or coalesce(r.native_issue_id::text,'') in ({iss_list}))"
+        "r.status in ('queued','running','scheduled_retry') or "
+        "(r.scheduled_retry_at is not null and r.scheduled_retry_at > now())) "
+        f"and ({identity})"
     )
 
 
 def lease_check_sql(workspace_ids):
     """Unexpired runtime leases on the workspaces. Missing table => error."""
-    ws = ", ".join("'%s'" % _sql_escape_literal(v) for v in (workspace_ids or []))
-    ws_list = ws if ws else "''"
+    if not workspace_ids:
+        return ("select count(*) from execution_workspace_runtime_leases "
+                "where false")
     return ("select count(*) from execution_workspace_runtime_leases "
-            f"where workspace_id::text in ({ws_list}) and expires_at > now()")
+            f"where workspace_id::text in ({_in_list(workspace_ids)}) "
+            "and expires_at > now()")
 
 
 def identity_is_ambiguous(workspace_rows):
     """True when workspace identity is missing or empty (fail closed)."""
     return not workspace_rows
-
-
-def any_linked_live(linked):
-    """True when any linked issue has live work. Empty mapping is not live."""
-    if not linked:
-        return False
-    return any(bool(v) for v in linked.values())
-
-
-_LINK_KEYS = ('issueId', 'taskId', 'nativeIssueId', 'native_issue_id',
-              'executionWorkspaceId', 'execution_workspace_id')
-
-
-def row_matches_linked(row, linked_ids):
-    """True when a run row references any linked issue or workspace id."""
-    if not row or not linked_ids:
-        return False
-    try:
-        ids = set(linked_ids)
-    except TypeError:
-        return True
-    for key in _LINK_KEYS:
-        try:
-            value = row.get(key)
-        except AttributeError:
-            return True
-        if value is not None and value in ids:
-            return True
-    return False
-
-
-def run_status_is_live(status, scheduled_retry_at):
-    """True for queued/running/scheduled_retry or a future scheduled retry.
-
-    A present but unparseable retry timestamp is live (fail closed).
-    """
-    if status in LIVE_RUN_STATUSES:
-        return True
-    if scheduled_retry_at is None or scheduled_retry_at == '':
-        return False
-    if not isinstance(scheduled_retry_at, str):
-        return True
-    epoch = _parse_expiry_epoch(scheduled_retry_at)
-    if epoch is None:
-        return True
-    try:
-        return epoch > time.time()
-    except Exception:
-        return True
 
 
 def decide(live_before_lock, lock_acquired, live_under_lock):
@@ -367,40 +369,122 @@ def workspace_live(workspace_root, fallback_ident=None):
     return False
 
 
-def acquire_restore_lock(workspace_root):
-    """Acquire the restore writer lock. Never steals an existing lock.
+def resolve_workspace_realpath(workspace_root, runner=None):
+    """Realpath-resolved workspace root inside the container, or None.
 
-    Returns (acquired, lock_path). Acquisition is one atomic mkdir inside
-    the container; an existing directory means another writer holds it.
-    No stale-owner takeover is attempted: a host-side PID probe cannot
-    validate a container-namespace owner PID.
+    The restore writer keys its lock on fs.realpath(targetDir), so the
+    lock key must hash the resolved path, not the raw FIND path. Any
+    failure returns None and the caller blocks the move (fail closed).
     """
-    lock, _ = lock_path_for_workspace(workspace_root)
-    esc_lock = lock.replace("'", "'\"'\"'")
-    script = (
-        "lock='" + esc_lock + "'; "
-        "mkdir -p \"$(dirname \"$lock\")\" && "
-        "if mkdir \"$lock\" 2>/dev/null; then "
-        "printf '{\"pid\":%s,\"createdAt\":\"%s\"}' \"$$\" \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" > \"$lock/owner.json\"; "
-        "exit 0; else exit 11; fi"
-    )
+    if runner is None:
+        runner = sh
     try:
-        out = sh(['docker', 'exec', '-u', 'node', 'paperclip', 'sh', '-c', script],
-                 timeout=60)
+        out = runner(['docker', 'exec', '-u', 'node', 'paperclip', 'sh', '-c',
+                      'realpath -- "$1" 2>/dev/null || readlink -f -- "$1"',
+                      '_', workspace_root], timeout=60)
     except Exception:
-        return (False, lock)
-    return (out.returncode == 0, lock)
+        return None
+    if out.returncode != 0:
+        return None
+    lines = [line.strip() for line in (out.stdout or '').splitlines() if line.strip()]
+    if not lines or not lines[-1].startswith('/'):
+        return None
+    return lines[-1]
 
 
-def release_restore_lock(lock_path, acquired):
-    """Release a lock this run acquired. Never removes another writer."""
-    if not acquired or not lock_path:
+def _read_ready_line(proc, timeout=60):
+    """First stdout line from the holder, bounded. '' when none arrives."""
+    stream = getattr(proc, 'stdout', None)
+    if stream is None:
+        return ''
+    try:
+        fd = stream.fileno()
+    except Exception:
+        fd = None
+    if fd is not None:
+        try:
+            ready, _, _ = select.select([fd], [], [], timeout)
+        except Exception:
+            ready = [fd]
+        if not ready:
+            return ''
+    try:
+        return stream.readline() or ''
+    except Exception:
+        return ''
+
+
+def _stop_process(proc):
+    if proc is None:
         return
     try:
-        sh(['docker', 'exec', '-u', 'node', 'paperclip', 'sh', '-c',
-            'rm -rf "$1"', '_', lock_path], timeout=60)
+        proc.terminate()
     except Exception:
         pass
+    try:
+        proc.wait(timeout=10)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    for stream in (getattr(proc, 'stdout', None), getattr(proc, 'stderr', None)):
+        try:
+            if stream is not None:
+                stream.close()
+        except Exception:
+            pass
+
+
+def acquire_restore_lock(canonical_root, popen=None):
+    """Acquire the restore writer lock. Never steals an existing lock.
+
+    Returns a LockHandle whose holder process stays alive (same pid as
+    recorded in owner.json) until release_restore_lock stops it, or None
+    when another writer holds the lock or acquisition fails. No
+    stale-owner takeover is attempted: a host-side PID probe cannot
+    validate a container-namespace owner PID.
+    """
+    if popen is None:
+        popen = subprocess.Popen
+    lock, _ = lock_path_for_workspace(canonical_root)
+    token = secrets.token_hex(16)
+    try:
+        proc = popen(['docker', 'exec', '-u', 'node', 'paperclip', 'sh', '-c',
+                      build_lock_holder_script(), '_', lock, token],
+                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except Exception:
+        return None
+    if _read_ready_line(proc).strip() != LOCK_READY_MARKER:
+        _stop_process(proc)
+        return None
+    return LockHandle(lock_path=lock, token=token, process=proc)
+
+
+def release_restore_lock(handle, runner=None):
+    """Release a lock this run acquired. Never removes another writer.
+
+    The lock directory is removed only while the ownership token this run
+    wrote is still present; if the writer has reclaimed the path, its lock
+    is left alone. The holder is stopped last, so its pid stays live (and
+    the lock non-stale) throughout the token check and removal.
+    """
+    if handle is None:
+        return
+    if runner is None:
+        runner = sh
+    lock_path = handle.lock_path
+    try:
+        out = runner(['docker', 'exec', '-u', 'node', 'paperclip', 'sh', '-c',
+                       'cat "$1" 2>/dev/null', '_',
+                       lock_path + '/' + LOCK_TOKEN_FILENAME], timeout=60)
+        if out.returncode == 0 and (out.stdout or '').strip() == handle.token:
+            runner(['docker', 'exec', '-u', 'node', 'paperclip', 'sh', '-c',
+                    'rm -rf "$1"', '_', lock_path], timeout=60)
+    except Exception:
+        pass
+    finally:
+        _stop_process(handle.process)
 
 
 def nested_still_quarantinable(nested_dir):
@@ -412,6 +496,73 @@ def nested_still_quarantinable(nested_dir):
     except Exception:
         return False
     return out.returncode == 0
+
+
+def do_move(nested_dir, dest):
+    """(ok, error_text) moving nested_dir to dest inside the container."""
+    try:
+        r = sh(['docker', 'exec', '-u', 'node', 'paperclip', 'sh', '-c',
+                'mkdir -p "$1" && mv "$2" "$3"', '_', Q, nested_dir, dest])
+    except Exception as exc:
+        return (False, str(exc)[:200])
+    if r.returncode == 0:
+        return (True, '')
+    return (False, (r.stderr or '').strip()[:200])
+
+
+def quarantine_one(nested_dir, root, fallback, dest, apply_move,
+                   live_check=None, resolve=None, acquire=None,
+                   release=None, still=None, move=None):
+    """One candidate end to end. Returns (outcome, detail).
+
+    Order is the safety contract: custody precheck, then realpath, then
+    acquire the restore lock, then custody recheck while holding it, then
+    move, then release. Dependencies are injectable so the offline suite
+    can pin this order and every skip branch without a container.
+    """
+    if live_check is None:
+        live_check = workspace_live
+    if resolve is None:
+        resolve = resolve_workspace_realpath
+    if acquire is None:
+        acquire = acquire_restore_lock
+    if release is None:
+        release = release_restore_lock
+    if still is None:
+        still = nested_still_quarantinable
+    if move is None:
+        move = do_move
+    label = fallback or root
+    try:
+        live_before = live_check(root, fallback)
+    except Exception:
+        return ('skip', f'skip {label}: custody check failed (fail closed)')
+    if live_before:
+        return ('skip', f'skip {label}: live run')
+    if not apply_move:
+        return ('would-move', f'would move {label}: {nested_dir}')
+    canonical = resolve(root)
+    if canonical is None:
+        return ('skip', f'skip {label}: canonical workspace path unresolved (fail closed)')
+    handle = acquire(canonical)
+    if handle is None:
+        return ('skip', f'skip {label}: restore writer lock held')
+    try:
+        try:
+            final_live = live_check(root, fallback)
+        except Exception:
+            final_live = True
+        verdict = decide(live_before, True, final_live)
+        if not verdict.proceed:
+            return ('skip', f'skip {label}: {verdict.reason}')
+        if not still(nested_dir):
+            return ('skip', f'skip {label}: path changed under lock')
+        ok, err = move(nested_dir, dest)
+        if ok:
+            return ('moved', f'moved {label} non-git nested repo to {dest}')
+        return ('failed', f'FAILED {label}: {err}')
+    finally:
+        release(handle)
 
 
 def main():
@@ -439,42 +590,12 @@ def main():
         if root is None:
             print(f'skip ambiguous workspace identity: {d}')
             continue
-        try:
-            live_before = workspace_live(root, fallback)
-        except Exception:
-            print(f'skip {fallback or root}: custody check failed (fail closed)')
-            continue
-        if live_before:
-            print(f'skip {fallback or root}: live run')
-            continue
         dest = f'{Q}/{fallback + "-" if fallback else ""}{d.rsplit("/", 1)[1]}-{stamp}'
-        if not APPLY:
-            print(f'would move {fallback or root}: {d}')
-            continue
-        acquired, lock = acquire_restore_lock(root)
-        final_live = True
-        try:
-            if not acquired:
-                print(f'skip {fallback or root}: restore writer lock held')
-                continue
-            try:
-                final_live = workspace_live(root, fallback)
-            except Exception:
-                final_live = True
-            verdict = decide(live_before, acquired, final_live)
-            if not verdict.proceed:
-                print(f'skip {fallback or root}: {verdict.reason}')
-                continue
-            if not nested_still_quarantinable(d):
-                print(f'skip {fallback or root}: path changed under lock')
-                continue
-            r = sh(['docker', 'exec', '-u', 'node', 'paperclip', 'sh', '-c', 'mkdir -p "$1" && mv "$2" "$3"', '_', Q, d, dest])
-            msg = f'moved {fallback or root} non-git nested repo to {dest}' if r.returncode == 0 else f'FAILED {fallback or root}: {r.stderr.strip()[:200]}'
-            print(msg)
+        outcome, msg = quarantine_one(d, root, fallback, dest, APPLY)
+        print(msg)
+        if outcome in ('moved', 'failed'):
             with open(LOG, 'a') as f:
                 f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} nongit-quarantine: {msg}\n")
-        finally:
-            release_restore_lock(lock, acquired)
 
 
 if __name__ == '__main__':

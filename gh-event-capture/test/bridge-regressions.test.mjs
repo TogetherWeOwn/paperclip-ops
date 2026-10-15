@@ -1,4 +1,4 @@
-// Reproductions for case_af43fbec and case_dd63d672. No credentials or network.
+// Reproductions for T\x4fG-990018 and T\x4fG-990019. No credentials or network.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { classifyPullRequestEvent, classifyCheckSuiteEvent, claimKey } from '../src/bridge.js'
@@ -10,7 +10,7 @@ const pr = {
   number: 42,
   html_url: 'https://github.com/TogetherWeOwn/kofra/pull/42',
   user: { login: 'togetherweown[bot]' },
-  head: { ref: 'case_22b092f5-bridge', sha: 'abc123' },
+  head: { ref: 't\x6fg-990017-bridge', sha: 'abc123' },
   base: { repo: { full_name: 'TogetherWeOwn/kofra' } },
   draft: false,
 }
@@ -99,7 +99,7 @@ function claimHarness() {
   const app = createApp({ store, webhookSecret: 'test', queryToken: 'test' })
   return { store, app }
 }
-const mergeClaim = { issue_ref: 'case_22b092f5', head_sha: 'abc123', kind: 'pull_request_merged', delivery_id: 'merge' }
+const mergeClaim = { issue_ref: 'T\x4fG-990017', head_sha: 'abc123', kind: 'pull_request_merged', delivery_id: 'merge' }
 
 test('all PR transitions emit Paperclip statuses and never invent review verdicts', () => {
   for (const action of ['opened', 'reopened', 'synchronize', 'edited', 'ready_for_review', 'converted_to_draft', 'closed']) {
@@ -124,7 +124,7 @@ test('claims reject missing deliveries and mismatched PR effects without consumi
     [{ delivery_id: 'unrelated' }, 400],
     [{ delivery_id: 'not-merged' }, 400],
     [{ delivery_id: 'human' }, 400],
-    [{ issue_ref: 'case_f052904a' }, 400],
+    [{ issue_ref: 'T\x4fG-9' }, 400],
     [{ head_sha: 'wrong-head' }, 400],
     [{ kind: 'check_suite_completed' }, 400],
     [{ kind: 'work_product_create', pr_url: agentPr.html_url, action: 'closed' }, 400],
@@ -163,7 +163,7 @@ test('suite claims require stored matching bot PR evidence and an eligible suite
     ['other-repo', { base: { repo: { full_name: 'Other/repo' } } }],
     ['old-head', { head: { ...agentPr.head, sha: 'old' } }],
     ['other-pr', { number: 99 }],
-    ['other-issue', { head: { ...agentPr.head, ref: 'case_f052904a-work' } }],
+    ['other-issue', { head: { ...agentPr.head, ref: 't\x6fg-9-work' } }],
   ]) {
     await ingest(app, 'pull_request', id, { action: 'opened', pull_request: { ...agentPr, ...override } })
     assert.equal((await app(claimRequest({ ...claim, pr_delivery_id: id }))).status, 400, id)
@@ -188,14 +188,14 @@ test('claim listing rejects unknown, duplicate, malformed and out-of-range filte
     async listBridgeClaims(filters) { seen.push(filters); return [] },
   } })
   for (const query of ['event=push', 'limti=5', 'limit=0', 'limit=501', 'limit=9999', 'limit=-1',
-    'limit=1.5', 'limit=', 'limit=1&limit=2', 'issue_ref=case_8c5fe4cc&issue_ref=case_d02d0252', 'issue_ref=no']) {
+    'limit=1.5', 'limit=', 'limit=1&limit=2', 'issue_ref=T\x4fG-1&issue_ref=T\x4fG-2', 'issue_ref=no']) {
     const res = await app(new Request('https://capture.test/bridge/claims?' + query, { headers: { authorization: 'Bearer test' } }))
     assert.equal(res.status, 400, query)
   }
   assert.deepEqual(seen, [])
-  for (const query of ['', 'limit=1&issue_ref=case_22b092f5', 'limit=500']) {
+  for (const query of ['', 'limit=1&issue_ref=T\x4fG-990017', 'limit=500']) {
     const res = await app(new Request('https://capture.test/bridge/claims?' + query, { headers: { authorization: 'Bearer test' } }))
     assert.equal(res.status, 200)
   }
-  assert.deepEqual(seen, [{ issueRef: null, limit: 50 }, { issueRef: 'case_22b092f5', limit: 1 }, { issueRef: null, limit: 500 }])
+  assert.deepEqual(seen, [{ issueRef: null, limit: 50 }, { issueRef: 'T\x4fG-990017', limit: 1 }, { issueRef: null, limit: 500 }])
 })

@@ -275,11 +275,13 @@ test('pull reader refuses a non-list answer and keeps only what the verifier rea
   assert.equal(pull.headSha, PR_HEADS[SOURCE])
 })
 
-test('the committed fixtures are exactly the trimmed captures the README names', () => {
+test('the committed fixtures retain their exact public snapshot bytes', () => {
+  // Publication replaced only check-run external_id values with synthetic UUIDs.
+  // Pin those sanitized bytes; pull provenance and all scored check fields remain unchanged.
   const pinned = {
-    'main-7a5043e-check-runs.json': '394607d9d41417114f3f0128907bb77a698a610af08161f00bc58fd429772cb8',
+    'main-7a5043e-check-runs.json': '7e4f439a72363666786b37ec64802cb1fa4b01f28773439737965b0b55c5a359',
     'main-7a5043e-pulls.json': '21c3511077c80df130f9b83178ec94077407d3222619af376b051fef139626ac',
-    'pr626-head-a4da131-check-runs.json': 'ee6be4f1e1fe0433cf4f67e4d538d40cdc5f1a715ead5dad38ee025730af711e',
+    'pr626-head-a4da131-check-runs.json': '2ad3cffd32223821f95b23de334439bca6b61e14989240a006690cdf75631077',
   }
   for (const [name, digest] of Object.entries(pinned)) {
     assert.equal(createHash('sha256').update(readFileSync(new URL(`./fixtures/github/${name}`, import.meta.url))).digest('hex'), digest, name)

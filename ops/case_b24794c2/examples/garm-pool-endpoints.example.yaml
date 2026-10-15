@@ -4,7 +4,7 @@
 # Push side: one gatus_push per key per cron tick (see README.md wiring).
 # A missed 10m heartbeat fails closed (UNKNOWN, never healthy).
 
-  # Per-pool liveness for aa101234 (pool 00000000-0000-4000-8000-000000000064): enabled, presence-checked
+  # Per-pool liveness for aa101234 (pool aa101234-1111-4222-8333-444444444444): enabled, presence-checked
   # min_idle_runners/max_runners/instances via garm_pool_health.sh (strict:
   # any absent field is UNHEALTHY), over-max, warm-capacity and prov-fail
   # rules per README.md. Heartbeat 10m — a missed push pages.
@@ -19,7 +19,7 @@
       - type: custom
         description: "GARM pool aa101234 unhealthy (see per-pool push log)"
 
-  # Per-pool liveness for bb202345 (pool 00000000-0000-4000-8000-000000000065): enabled, presence-checked
+  # Per-pool liveness for bb202345 (pool bb202345-1111-4222-8333-444444444444): enabled, presence-checked
   # min_idle_runners/max_runners/instances via garm_pool_health.sh (strict:
   # any absent field is UNHEALTHY), over-max, warm-capacity and prov-fail
   # rules per README.md. Heartbeat 10m — a missed push pages.

@@ -105,7 +105,7 @@ class OwnerMatchTest(unittest.TestCase):
 
     def test_branch_match_is_case_sensitive_like_the_candidate_search(self):
         named = card("case_59f71c03", workspace=WEB_WORKSPACE)
-        self.assertNoOwner(pr(WEB, 48, branch="case_59f71c03-x"), [named])
+        self.assertNoOwner(pr(WEB, 48, branch="CASE_59F71C03-x"), [named])
 
     def test_non_string_provenance_is_ignored_not_fatal(self):
         odd_product = card("case_998c1411", [{"type": "pull_request", "provider": "github", "status": "active",

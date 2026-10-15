@@ -18,7 +18,8 @@ SPEC = importlib.util.spec_from_file_location("spool_carrier", SCRIPT)
 carrier = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = carrier
 SPEC.loader.exec_module(carrier)
-COMPANY_A = "00000000-0000-4000-8000-000000000004"
+# Alphabetic hex keeps the uppercase-rejection negative control meaningful.
+COMPANY_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 COMPANY_B = "00000000-0000-4000-8000-000000000021"
 
 

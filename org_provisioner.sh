@@ -543,7 +543,7 @@ SQL
 # to pass it — which is precisely how the original 25 were written.
 apply_exact_grants() {
   local agent_id="$1" grants_json="$2" requested_by="${3:-}" operator
-  [[ -n "$requested_by" ]] || die "apply_exact_grants: refusing to write grants with no requesting agent (case_f909ca1f: an unattributed grant is unrecoverable)."
+  [[ -n "$requested_by" ]] || die "apply_exact_grants: refusing to write grants with no requesting agent (an unattributed grant is unrecoverable)."
   if [[ -n "${ORG_SNAPSHOT:-}" ]]; then
     die "ORG_SNAPSHOT is read-only; refusing grant write for agent $agent_id under snapshot ${ORG_SNAPSHOT:-}."
   fi

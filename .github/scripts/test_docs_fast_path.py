@@ -112,8 +112,9 @@ class TestDocsFastPathWorkflow(unittest.TestCase):
         # ci_policy.py exempts only marked workflows from its paths-filter warning.
         self.assertRegex(self.text, r"ci-policy:\s*non-required\b")
 
-    def test_job_stays_on_ephemeral_pool(self):
-        self.assertIn("runs-on: [self-hosted, two-ephemeral]", self.text)
+    def test_public_job_uses_github_hosted_runner(self):
+        self.assertIn("runs-on: ubuntu-latest", self.text)
+        self.assertNotRegex(self.text, r"(?m)^\s*runs-on:.*self-hosted")
 
 
 if __name__ == "__main__":

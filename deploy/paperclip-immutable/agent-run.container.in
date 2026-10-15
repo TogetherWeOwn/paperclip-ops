@@ -1,0 +1,35 @@
+# Per-run carrier template. The root-owned launcher substitutes every @...@ value.
+# Never let an agent or a persisted runtimeConfig select these values.
+[Unit]
+Description=Paperclip agent run @RUN_ID@
+
+[Container]
+Image=@AGENT_IMAGE_DIGEST@
+ContainerName=paperclip-run-@RUN_ID@
+Network=none
+# Keep exactly one whole-root read-only key. A later ReadOnly=/app entry overrides this fail-open.
+ReadOnly=true
+ReadOnlyTmpfs=false
+User=@RUN_UID@:@RUN_GID@
+Volume=@RUN_ROOT@:/run/paperclip-run:rw,Z
+Volume=@WORKSPACE@:/workspace:rw,Z
+Tmpfs=/tmp:rw,nosuid,nodev,noexec,size=2g,mode=0700,uid=@RUN_UID@,gid=@RUN_GID@
+Environment=HOME=/run/paperclip-run/home
+Environment=TMPDIR=/tmp
+Environment=XDG_CACHE_HOME=/run/paperclip-run/cache
+Environment=XDG_CONFIG_HOME=/run/paperclip-run/config
+Environment=XDG_DATA_HOME=/run/paperclip-run/data
+Environment=npm_config_cache=/run/paperclip-run/cache/npm
+Environment=npm_config_prefix=/run/paperclip-run/dependencies/npm-prefix
+Environment=PNPM_HOME=/run/paperclip-run/dependencies/pnpm-home
+Environment=PNPM_STORE_DIR=/run/paperclip-run/store/pnpm
+Environment=COREPACK_HOME=/run/paperclip-run/cache/corepack
+NoNewPrivileges=true
+DropCapability=all
+
+[Service]
+KillMode=control-group
+TimeoutStopSec=30
+Restart=no
+
+# Intentionally no [Install]: every instance is transient and run-owned.

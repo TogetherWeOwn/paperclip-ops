@@ -20,7 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "deploy/paperclip-immutable/agent-run.container.in"
 # A changed carrier must be inspected before this preparation contract is updated.
 # This is a source drift guard, NOT a signed-ref/host-render approval.
-TEMPLATE_SHA256 = "355e3eb5e6fe20ce1fdd70c685da4bf4d3aa8c4e2b37c26c502a7da37efec9ef"
+# Public template differs only in its first comment (private task ID removed).
+TEMPLATE_SHA256 = "69fa6007f5f62a6dc9e1b3582fbf1b2f578a41e06b6b9e7a68d7f29fdab8dd8f"
 MAX_TEMPLATE_BYTES = 64 * 1024
 COMPANY_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 SPOOL = "/var/spool/paperclip-host-ops/companies"

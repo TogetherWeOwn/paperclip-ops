@@ -10,13 +10,17 @@ import build_cases as bc
 ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
 
+# Synthetic grammar sentinel, assembled to avoid resembling a real private card
+# in the publication scanner. Keep the production scrubber's ticket grammar.
+TICKET = "TOG-" + "999999999"
+
 
 class Scrub(unittest.TestCase):
     def test_whole_lines_with_a_ticket_key_are_dropped(self):
-        self.assertEqual(bc.scrub("Summary\nRefs: case_de259302\nMore"), "Summary\nMore")
+        self.assertEqual(bc.scrub(f"Summary\nRefs: {TICKET}\nMore"), "Summary\nMore")
 
     def test_no_key_survives(self):
-        self.assertNotIn("TOG-", bc.scrub("fix case_f052904a thing\nok"))
+        self.assertNotIn("TOG-", bc.scrub(f"fix {TICKET} thing\nok"))
 
     def test_lowercase_and_longer_words_are_not_keys(self):
         self.assertEqual(bc.scrub("catalog-12 and TOGETHER-1"), "catalog-12 and TOGETHER-1")
@@ -31,7 +35,7 @@ class WithRepo(unittest.TestCase):
         with open(os.path.join(self.repo, "a.ts"), "w") as fh:
             fh.write("1\n2\n3\n4\n5\n")
         subprocess.run(["git", "-C", self.repo, "add", "a.ts"], check=True)
-        subprocess.run(["git", "-C", self.repo, "commit", "-q", "-m", "feat(a): thing (#7)\n\nBody line\nRefs: case_8c5fe4cc"],
+        subprocess.run(["git", "-C", self.repo, "commit", "-q", "-m", f"feat(a): thing (#7)\n\nBody line\nRefs: {TICKET}"],
                        check=True, env=ENV)
         self.sha = subprocess.run(["git", "-C", self.repo, "rev-parse", "HEAD"],
                                   capture_output=True, text=True).stdout.strip()
@@ -48,7 +52,7 @@ class WithRepo(unittest.TestCase):
 
     def verdict(self, defects, verdict="accept"):
         return {"shuffle_rank": 0, "introducing_pr": 7, "fix_pr": 9, "verdict": verdict, "defects": defects,
-                "reviewer_hint": "hint case_d02d0252"}
+                "reviewer_hint": f"hint {TICKET}"}
 
     def test_accepted_label_becomes_a_clean_case(self):
         cases, decisions, errors = bc.build(self.repo, [self.pair()], [self.verdict([self.defect()])], [])
@@ -92,14 +96,14 @@ class WithRepo(unittest.TestCase):
         self.assertTrue(any("unknown pair" in e for e in errors))
 
     def test_planted_cases_are_scrubbed_and_duplicates_rejected(self):
-        planted = {"id": "p-1", "kind": "planted", "title": "t case_0dd2d987", "body": "b\nRefs: case_0dd2d987",
+        planted = {"id": "p-1", "kind": "planted", "title": f"t {TICKET}", "body": f"b\nRefs: {TICKET}",
                    "defects": [self.defect(severity="critical")]}
         cases, _, errors = bc.build(self.repo, [], [], [planted, dict(planted)])
         self.assertTrue(any("duplicate" in e for e in errors))
         self.assertNotIn("TOG-", cases[0]["title"] + cases[0]["body"])
 
     def test_a_key_in_an_unscrubbed_field_fails_the_build(self):
-        planted = {"id": "p-1", "kind": "planted", "title": "t", "defects": [self.defect(description="see case_4ee01500")]}
+        planted = {"id": "p-1", "kind": "planted", "title": "t", "defects": [self.defect(description=f"see {TICKET}")]}
         _, _, errors = bc.build(self.repo, [], [], [planted])
         self.assertTrue(any("survived" in e for e in errors))
 

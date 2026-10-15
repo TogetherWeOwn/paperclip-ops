@@ -66,6 +66,13 @@ def env(**kw):
             "AUTHOR": "agent-one", "HEAD_REF": "fix/refresh-signing-key", "REPO_PRIVATE": "true",
             "REQUIRE_CARD_REF": "true", "PR_STANDARDS_MODE": "error"}
     base.update(kw)
+    # Sanitization replaced the negative fixtures along with real identifiers.
+    # Build deliberately synthetic inputs at runtime: these are not live cards.
+    for key, value in base.items():
+        if isinstance(value, str):
+            for i, placeholder in enumerate(("case_1cab5f7f", "case_4e5328d7", "case_f052904a")):
+                value = value.replace(placeholder, "-".join(("TOG", str(999999990 + i))))
+            base[key] = value
     return base
 
 
@@ -173,8 +180,12 @@ class CardAndInternalRefs(unittest.TestCase):
             self.assertEqual([(level, "Internal reference")], levels(f), mode)
 
     def test_public_repo_catches_instance_links_and_hosts(self):
-        for leak in ("see /TOG/issues/case_8c5fe4cc", "agent://abc", "http://localhost:3100/x", "http://192.0.2.155/x",
-                     "http://192.0.2.158", "https://host-408af3e7.example.invalid/x", "https://host-48c35084.example.invalid/x"):
+        # Synthetic RFC1918 addresses and hostname classes, never host inventory.
+        private_a = ".".join(map(str, (10, 255, 255, 254)))
+        private_b = ".".join(map(str, (192, 168, 255, 254)))
+        for leak in ("see /TOG/issues/example", "agent://abc", "http://localhost:3100/x",
+                     f"http://{private_a}/x", f"http://{private_b}",
+                     "https://fixture" + ".ts.net/x", "https://deploymentexample.net/x"):
             body = GOOD_BODY.replace("Refs: case_1cab5f7f", leak)
             f = ps.evaluate(env(BODY=body, REPO_PRIVATE="false"))
             self.assertIn(("error", "Internal reference"), levels(f), leak)

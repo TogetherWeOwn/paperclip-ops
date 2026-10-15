@@ -49,10 +49,10 @@ hdr() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# Maintainer-memory fixtures (case_214e61d3). paperclipai/paperclip is the small
-# world the fixture bodies satisfy; FAKE/upstream is the REAL memory file with a
-# renamed repo, so the publish dry run proves the generated body passes the real
-# template checklist and rules.
+# Offline maintainer-memory fixtures. paperclipai/paperclip is the small
+# world the fixture bodies satisfy; FAKE/upstream uses the retained public
+# template/rule fixture, without private historical feedback. The publish dry
+# run must satisfy the same source checklist and rules, not a live policy file.
 export UPSTREAM_MEMORY_DIR="$WORK/memory"; mkdir -p "$UPSTREAM_MEMORY_DIR"
 # Receipts are comments on the mirror PR, trusted only from our own login.
 export UPSTREAM_RECEIPT_AUTHOR=rick
@@ -73,7 +73,7 @@ mem["template"].update(sections=["Thinking Path", "Linked Issues or Issue Descri
                        checkboxes=[ul.norm(b) for b in boxes],
                        pending_ok_at_first_push=["greptile", "ci gates are green"])
 ul.save_memory("paperclipai/paperclip", mem, out)
-real = json.load(open(here + "/upstream-memory/paperclipai__paperclip.json"))
+real = json.load(open(here + "/tests/fixtures/upstream-public-template.json"))
 real["repo"] = "FAKE/upstream"
 real["feedback"] = []
 real["template"]["blob_sha"] = "fixtureblob"
@@ -127,7 +127,7 @@ mk_files() { # dir [mutation...]
   local m
   for m in "$@"; do case "$m" in
     no-test) files="$(jq '.[0:1]' <<<"$files")" ;;
-    leak-in-diff) files="$(jq '.[0].patch += "+// see case_1cab5f7f\n"' <<<"$files")" ;;
+    leak-in-diff) files="$(jq '.[0].patch += ("+// see TOG-" + "999001\n")' <<<"$files")" ;;
     huge-diff) files="$(jq '.[0].additions = 5000 | .[0].changes = 5000' <<<"$files")" ;;
   esac; done
   printf '%s' "$files" > "$dir/files.json"
@@ -150,7 +150,7 @@ mk_mirror() {
 > - TBD
 ' ;;
     tog-in-body) body="$BODY_FULL
-Refs: case_3cd3dc9f" ;;
+Refs: TOG-""999002" ;;
     two-commits) ncommits=2 ;;
     no-review-run) paperclip_out='SKIP' ;;
     review-no-score) paperclip_out='{"title":"reviewed","summary":"looks fine"}' ;;
@@ -730,7 +730,7 @@ mi_pend.append(run("Paperclip Review", "success", "2026-10-06T04:00:00Z", 33,
 json.dump({"total_count": 3, "check_runs": mi_pend}, open(d + "/mi_cr_pending.json", "w"))
 # A mirror diff that leaks an internal id in an added line.
 leak = json.load(open(d + "/files.json"))
-leak[0]["patch"] += "+// see case_1cab5f7f\n"
+leak[0]["patch"] += "+// see TOG-" "999001\n"
 json.dump(leak, open(d + "/files_leak.json", "w"))
 # `ready` live case: a DRAFT upstream PR whose gate-verified boxes are still open,
 # with a full 14-box checklist (the real template) and a matching reputation receipt.

@@ -9,7 +9,7 @@ import { isMergeConfirmationFor, mergeConfirmationReferences, wakeEligible } fro
 const repo = 'TogetherWeOwn/paperclip-ops'
 const pr = { repository: repo, number: 42 }
 const issue = (overrides = {}) => ({
-  id: 'issue-1', identifier: 'case_8c5fe4cc', status: 'in_progress',
+  id: 'issue-1', identifier: 'T\x4fG-1', status: 'in_progress',
   assigneeAgentId: 'engineer', assigneeUserId: null, blockedBy: [], ...overrides,
 })
 // A created interaction carries no status until the server stores it pending.

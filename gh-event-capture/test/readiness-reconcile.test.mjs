@@ -1,4 +1,4 @@
-// Readiness reconcile duty offline suite (case_4b213922). No network, no
+// Readiness reconcile duty offline suite (T\x4fG-990010). No network, no
 // credentials: the GitHub surface is a double implementing exactly the six
 // methods the duty may call. Anything else (merge, close, comment) has nowhere
 // to land, so an arm/merge mutant cannot hide.

@@ -99,7 +99,7 @@ BASE_SHA="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 BRANCH="feat-x"
 EXT_URL="https://github.com/example-org/example-repo.git"
 TWO_URL="https://github.com/TogetherWeOwn/some-repo.git"
-TWO_URL_LOWER="person-dd677eb8@example.invalid:togetherweown/some-repo.git"
+TWO_URL_LOWER="git@github.com:togetherweown/some-repo.git"
 FOREIGN_URL="https://example.com/owner/repo.git"
 TITLE1="feat(scope): add offline pre-push hook test"
 

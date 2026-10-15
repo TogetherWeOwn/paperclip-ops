@@ -174,7 +174,10 @@ class RealRepo(unittest.TestCase):
             gate.Path(HERE) / gate.ALLOWLIST_REL)
         self.assertIsNone(err)
         for e in entries:
-            self.assertRegex(e["card"], r"^TOG-\d+$")
+            # case_<hex> is the public owning-card form; the TOG-<n> form is
+            # retained for private-tooling parity. Both route through the
+            # gate's card check, so this assertion must accept both.
+            self.assertRegex(e["card"], r"^(?:TOG-\d+|case_[0-9a-f]{8})$")
 
     def test_real_repo_declares_endpoints(self):
         _, _, doc = run_tool(HERE)
@@ -273,6 +276,41 @@ class RedGreen(TmpTree):
 # 3. Run-time-built keys, parsing, discovery
 # ---------------------------------------------------------------------------
 class Naming(TmpTree):
+    def use_alpha_producer(self, filename, source):
+        os.remove(os.path.join(self.root, "ops/case_658bf6b9/push-alpha.sh"))
+        write(self.root, "ops/case_658bf6b9/" + filename, source)
+        self.sub("ops/case_658bf6b9/OPERATOR.md", "push-alpha.sh", filename)
+
+    def test_python_pusher_is_discovered_without_executing_it(self):
+        self.use_alpha_producer("push-alpha.py",
+                                'PUSH_KEY = "platform_alpha"\nraise RuntimeError("must not execute")\n')
+        self.assertEqual(self.codes(), (0, set()))
+        os.remove(os.path.join(self.root, "ops/case_658bf6b9/push-alpha.py"))
+        self.assertEqual(self.codes(), (1, {("missing-script", "platform_alpha"),
+                                            ("missing-cron", "platform_alpha")}))
+
+    def test_python_comments_and_docstrings_are_not_wiring(self):
+        self.use_alpha_producer("push-alpha.py",
+                                '\"\"\"platform_alpha\"\"\"\n# platform_alpha\n'
+                                'def describe():\n    \"\"\"platform_alpha\"\"\"\n    pass\n')
+        self.assertEqual(self.codes(), (1, {("missing-script", "platform_alpha"),
+                                            ("missing-cron", "platform_alpha")}))
+
+    def test_invalid_python_cannot_supply_wiring_evidence(self):
+        self.use_alpha_producer("push-alpha.py", 'PUSH_KEY = "platform_alpha"\nif !broken\n')
+        self.assertEqual(self.codes(), (1, {("missing-script", "platform_alpha"),
+                                            ("missing-cron", "platform_alpha")}))
+
+    def test_probe_shell_producer_needs_code_and_matching_schedule(self):
+        self.use_alpha_producer("probe-alpha.sh", SCRIPT_ALPHA)
+        self.assertEqual(self.codes(), (0, set()))
+        self.sub("ops/case_658bf6b9/OPERATOR.md", "probe-alpha.sh", "other.sh")
+        self.assertEqual(self.codes(), (1, {("missing-cron", "platform_alpha")}))
+        self.sub("ops/case_658bf6b9/probe-alpha.sh",
+                 "gatus_push platform_alpha true", "# gatus_push platform_alpha true")
+        self.assertEqual(self.codes(), (1, {("missing-script", "platform_alpha"),
+                                            ("missing-cron", "platform_alpha")}))
+
     def test_runtime_built_key_is_matched_by_its_literal_prefix(self):
         # green tree already relies on this for two_beta-one / two_beta-two
         self.assertEqual(self.codes(), (0, set()))
@@ -339,19 +377,33 @@ class Allowlist(TmpTree):
 
     def test_owned_exemption_turns_a_known_gap_green(self):
         self.gap()
-        self.allowlist([{"key": "platform_alpha", "exempt": ["script", "cron"], "card": "case_8c5fe4cc"}])
+        self.allowlist([{"key": "platform_alpha", "exempt": ["script", "cron"], "card": "TOG-" "999999501"}])
         rc, found, doc = run_tool(self.root)
         self.assertEqual((rc, found), (0, set()))
         self.assertTrue(any(l.startswith("ALLOWED platform_alpha") for l in doc["report"]))
 
+    def test_public_owned_exemption_turns_a_known_gap_green(self):
+        self.gap()
+        self.allowlist([{"key": "platform_alpha", "exempt": ["script", "cron"],
+                         "card": "case_abcdef12"}])
+        rc, found, doc = run_tool(self.root)
+        self.assertEqual((rc, found), (0, set()))
+        self.assertTrue(any("owner case_abcdef12" in line for line in doc["report"]))
+
+    def test_public_owned_exemption_does_not_hide_unnamed_checks(self):
+        self.gap()
+        self.allowlist([{"key": "platform_alpha", "exempt": ["script"],
+                         "card": "case_abcdef12"}])
+        self.assertEqual(self.codes(), (1, {("missing-cron", "platform_alpha")}))
+
     def test_exemption_covers_only_the_checks_it_names(self):
         self.gap()
-        self.allowlist([{"key": "platform_alpha", "exempt": ["script"], "card": "case_8c5fe4cc"}])
+        self.allowlist([{"key": "platform_alpha", "exempt": ["script"], "card": "TOG-" "999999501"}])
         rc, found = self.codes()
         self.assertEqual((rc, found), (1, {("missing-cron", "platform_alpha")}))
 
     def test_stale_exemption_fails_once_the_check_is_compliant(self):
-        self.allowlist([{"key": "platform_alpha", "exempt": ["script", "cron"], "card": "case_8c5fe4cc"}])
+        self.allowlist([{"key": "platform_alpha", "exempt": ["script", "cron"], "card": "TOG-" "999999501"}])
         rc, found = self.codes()
         self.assertEqual(rc, 1)
         self.assertEqual(found, {("allowlist-stale", "platform_alpha")})
@@ -359,18 +411,20 @@ class Allowlist(TmpTree):
     def test_partially_stale_exemption_fails(self):
         self.gap()
         # cron exemption is fine (still failing); registry exemption is stale
-        self.allowlist([{"key": "platform_alpha", "exempt": ["script", "cron", "registry"], "card": "case_8c5fe4cc"}])
+        self.allowlist([{"key": "platform_alpha", "exempt": ["script", "cron", "registry"], "card": "TOG-" "999999501"}])
         rc, found = self.codes()
         self.assertEqual((rc, found), (1, {("allowlist-stale", "platform_alpha")}))
 
     def test_orphan_entry_for_an_undeclared_endpoint_fails(self):
-        self.allowlist([{"key": "platform_ghost", "exempt": ["cron"], "card": "case_8c5fe4cc"}])
+        self.allowlist([{"key": "platform_ghost", "exempt": ["cron"], "card": "TOG-" "999999501"}])
         rc, found = self.codes()
         self.assertEqual((rc, found), (1, {("allowlist-orphan", "platform_ghost")}))
 
     def test_entry_without_an_owning_card_fails(self):
         self.gap()
-        for bad in (None, "", "someone", "TOG-", "case_de259302", 15316):
+        for bad in (None, "", "someone", "TOG-", "case_xyz", 15316,
+                    "case_abcdef1", "case_abcdef123", "case_ABCDEF12",
+                    "case_abcdeg12", "case_abcdef12\n", "prefix_case_abcdef12"):
             entry = {"key": "platform_alpha", "exempt": ["script", "cron"]}
             if bad is not None:
                 entry["card"] = bad
@@ -381,7 +435,7 @@ class Allowlist(TmpTree):
 
     def test_entry_with_unknown_or_empty_exempt_fails(self):
         for bad in ([], ["scripts"], "script", None):
-            entry = {"key": "platform_alpha", "card": "case_8c5fe4cc"}
+            entry = {"key": "platform_alpha", "card": "TOG-" "999999501"}
             if bad is not None:
                 entry["exempt"] = bad
             self.allowlist([entry])
@@ -391,7 +445,7 @@ class Allowlist(TmpTree):
 
     def test_duplicate_entries_fail(self):
         self.gap()
-        e = {"key": "platform_alpha", "exempt": ["script", "cron"], "card": "case_8c5fe4cc"}
+        e = {"key": "platform_alpha", "exempt": ["script", "cron"], "card": "TOG-" "999999501"}
         self.allowlist([e, e])
         rc, found = self.codes()
         self.assertEqual(rc, 1)
@@ -400,7 +454,7 @@ class Allowlist(TmpTree):
     def test_exempting_one_endpoint_does_not_exempt_a_sibling(self):
         write(self.root, "ops/case_8d310190/gatus-endpoints.yaml",
               "external-endpoints:\n  - name: gamma\n    group: new\n  - name: delta\n    group: new\n")
-        self.allowlist([{"key": "new_gamma", "exempt": ["script", "cron", "registry"], "card": "case_8c5fe4cc"}])
+        self.allowlist([{"key": "new_gamma", "exempt": ["script", "cron", "registry"], "card": "TOG-" "999999501"}])
         rc, found = self.codes()
         self.assertEqual(rc, 1)
         self.assertEqual({k for _, k in found}, {"new_delta"})
@@ -456,7 +510,7 @@ class RealConfigMutants(unittest.TestCase):
         allowlist_rel = "ops/case_658bf6b9/module_wiring_allowlist.json"
         doc = json.loads(read(os.path.join(self.root, allowlist_rel)))
         doc["entries"].append({"key": "platform_discord-bot",
-                               "exempt": ["script", "cron"], "card": "case_a9fb7f52"})
+                               "exempt": ["script", "cron"], "card": "TOG-" "999999502"})
         write(self.root, allowlist_rel, json.dumps(doc))
         rc, found, _ = run_tool(self.root)
         self.assertEqual((rc, found), (0, set()))
@@ -534,7 +588,8 @@ class PushKeyRule(unittest.TestCase):
         # Gatus v5.37.0 config/key/key.go: sanitize trims space, lowercases,
         # then maps each of / _ . , space # + & to '-'; the key joins the two
         # halves with one underscore.
-        self.assertEqual(gate.endpoint_key("Beszel", "node7525e5a1"), "beszel_node7b1ff338")
+        self.assertEqual(gate.endpoint_key("Beszel", " NODE7B1FF338 "), "beszel_node7b1ff338")
+        self.assertEqual(gate.endpoint_key("Beszel", "node7525e5a1"), "beszel_node7525e5a1")
         self.assertEqual(gate.endpoint_key(" g ", "a.b_c d#e+f&g,h/i"),
                          "g_a-b-c-d-e-f-g-h-i")
 

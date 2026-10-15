@@ -196,9 +196,22 @@ extract_step() { # $1=workflow file $2=step name -> body with indent stripped
   ' "$1"
 }
 CI_STEP="$(extract_step "$HERE/.github/workflows/ci.yml" "runner disk-pressure preflight")"
-LIVE_STEP="$(extract_step "$HERE/.github/workflows/runner-disk-pressure.yml" "Check runner host disk pressure")"
+SKIP_PRIVATE_LIVE=0
+if python3 - "$HERE" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from public_snapshot_test_support import private_artifact_absent
+raise SystemExit(0 if private_artifact_absent(
+    sys.argv[1], ".github/workflows/runner-disk-pressure.yml") else 1)
+PY
+then
+  SKIP_PRIVATE_LIVE=1
+  printf '%s\n' 'SKIP: private live-host disk-pressure workflow is excluded from the fresh public snapshot; real public CI preflight and its mutation controls remain enabled'
+else
+  LIVE_STEP="$(extract_step "$HERE/.github/workflows/runner-disk-pressure.yml" "Check runner host disk pressure")"
+  [[ -n "$LIVE_STEP" ]] && ok "live body extracted from workflow" || bad "live body empty"
+fi
 [[ -n "$CI_STEP" ]] && ok "preflight body extracted from ci.yml" || bad "preflight body empty"
-[[ -n "$LIVE_STEP" ]] && ok "live body extracted from workflow" || bad "live body empty"
 # bracketed <body> -> 0 iff a `set +e` line precedes the rc=$? capture and a
 # `set -e` line follows it. Comment lines (starting with #) never count.
 bracketed() {
@@ -210,7 +223,9 @@ bracketed() {
   ' <<<"$1"
 }
 bracketed "$CI_STEP" && ok "preflight brackets the capture in set +e/set -e" || bad "preflight capture unbracketed"
-bracketed "$LIVE_STEP" && ok "live step brackets the capture in set +e/set -e" || bad "live capture unbracketed"
+if (( ! SKIP_PRIVATE_LIVE )); then
+  bracketed "$LIVE_STEP" && ok "live step brackets the capture in set +e/set -e" || bad "live capture unbracketed"
+fi
 # A 99% df forces the REAL detector to rc=1 through the REAL step bodies.
 cat > "$WORK/bin/df99" <<'STUB'
 #!/usr/bin/env bash
@@ -243,11 +258,13 @@ sed 's/coolify-vps-\*/garm-*/' "$WORK/ci_step.sh" > "$WORK/ci_step_nofleet.sh"
 MUT_OUT="$(cd "$HERE" && DF_BIN="$WORK/bin/df99" RUNNER_NAME="garm-ephemeral-1" bash -e "$WORK/ci_step_nofleet.sh" 2>&1)"; MUT_RC=$?
 (( MUT_RC == 1 )) && ok "mutant (fleet gate voided) fails on ephemeral — gate is not vacuous" \
   || bad "fleet-gate mutant control failed (rc=$MUT_RC, out=$MUT_OUT)"
-printf '%s\n' "$LIVE_STEP" > "$WORK/live_step.sh"
-STEP_OUT="$(cd "$HERE" && DF_BIN="$WORK/bin/df99" bash -e "$WORK/live_step.sh" 2>&1)"; STEP_RC=$?
-(( STEP_RC == 1 )) && ok "live body exits 1 on pressure under bash -e" || bad "live step died silent or wrong rc=$STEP_RC ($STEP_OUT)"
-grep -q "reclaim per docs/runbooks/runner-disk-pressure.md" <<<"$STEP_OUT" \
-  && ok "live annotation names the runbook" || bad "live annotation missing runbook pointer ($STEP_OUT)"
+if (( ! SKIP_PRIVATE_LIVE )); then
+  printf '%s\n' "$LIVE_STEP" > "$WORK/live_step.sh"
+  STEP_OUT="$(cd "$HERE" && DF_BIN="$WORK/bin/df99" bash -e "$WORK/live_step.sh" 2>&1)"; STEP_RC=$?
+  (( STEP_RC == 1 )) && ok "live body exits 1 on pressure under bash -e" || bad "live step died silent or wrong rc=$STEP_RC ($STEP_OUT)"
+  grep -q "reclaim per docs/runbooks/runner-disk-pressure.md" <<<"$STEP_OUT" \
+    && ok "live annotation names the runbook" || bad "live annotation missing runbook pointer ($STEP_OUT)"
+fi
 # The guard is not vacuous: strip the bracketing and the body must die silent.
 grep -v '^set [+-]e$' "$WORK/ci_step.sh" > "$WORK/ci_step_mutant.sh"
 MUT_OUT="$(cd "$HERE" && DF_BIN="$WORK/bin/df99" bash -e "$WORK/ci_step_mutant.sh" 2>&1)"; MUT_RC=$?

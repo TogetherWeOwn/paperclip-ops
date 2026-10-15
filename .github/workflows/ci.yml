@@ -552,7 +552,8 @@ jobs:
       PGPASSWORD: postgres
       PGDATABASE: org_fixture
       PAPERCLIP_SQL_BACKEND: psql
-      COMPANY_ID: 00000000-0000-4000-8000-000000000001
+      # Public, synthetic company from the pinned orgdb fixture (not a tenant).
+      COMPANY_ID: 00000000-0000-4000-8000-000000000480
       PAPERCLIP_API_URL: http://recording-stub.invalid
       PAPERCLIP_CLI: ${{ github.workspace }}/test/fixtures/orgdb/paperclipai
       # This fixture owns authorization, not Claude transport. The dedicated
@@ -826,7 +827,7 @@ jobs:
           # node7b1ff338 isolated VM fleet and (owner 2026-10-04) the ephemeral GARM
           # pools that replace both. Accept all three runner-name prefixes;
           # narrowing to any one fleet fails the gate below.
-          [[ "${RUNNER_NAME:-}" == coolify-vps-* || "${RUNNER_NAME:-}" == ci-node7b1ff338-iso-* || "${RUNNER_NAME:-}" == garm-* || "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || { echo "::error::refused runner '${RUNNER_NAME:-unset}': not a private isolated runner"; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || { echo "::error::public CI requires a GitHub-hosted runner"; exit 1; }
           [[ "${RUNNER_OS:-}" == Linux ]]
           [[ "${RUNNER_ARCH:-}" == X64 ]]
           printf 'private runner: name=%s os=%s arch=%s\n' "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
@@ -981,6 +982,11 @@ jobs:
       # the always-run aggregator, the full-run triggers, and the absence of
       # workflow-level paths filters -- with a positive control for each.
       #
+      # Contract tests execute the immutable public sibling guard. Restore its
+      # pinned bytes first, even when a non-core area selected this job.
+      - name: Restore toolkit-vendored files
+        run: bash scripts/sync-toolkit.sh
+
       - name: change-gating contract holds
         run: ./test_ci_gating.sh
 
@@ -1034,10 +1040,6 @@ jobs:
 
       - name: Syntax check every script
         run: ./scripts/verify-fast.sh --parse-only
-
-      - name: Restore toolkit-vendored files
-        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: bash scripts/sync-toolkit.sh
 
       # case_6d842160. acceptance_transport.sh reply classification: the stub
       # transport covers success, transport failure and a malformed reply, and
@@ -1538,7 +1540,7 @@ jobs:
       # that has become compliant fails. One step: the gate over this repo plus
       # the red/green mutants. Offline, stdlib only.
       - name: gatus module wiring gate
-        run: python3 -m unittest -v test_module_wiring.py
+        run: python3 -m unittest -v test_module_wiring.py test_pr2_acceptance.py
 
       # case_e6def006. Balancer-silence notification binding Gatus module:
       # dedicated platform_balancer-silence key, fail-closed stale/missing,
@@ -3130,7 +3132,7 @@ jobs:
       # suite went red" would have scored that as a pass.
       - name: The case_9e76f76d monitor's recorded command still runs from a clean tree
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: ./verification/case_9e76f76d-recorded-command.sh
+        run: RECORDED_MONITOR_COMMAND=verification/case_9e76f76d-recorded-command.txt ./verification/case_9e76f76d-recorded-command.sh
 
       # case_18155f0d. A THIRD drift question, and the one a hash cannot answer.
       # tool_drift.sh asks whether two copies differ; this asks whether the
@@ -3290,9 +3292,11 @@ jobs:
       # reddens on a future README edit, and is cheap. Per case_dfb5e6fb this repo
       # has a history of gates that exist and are never run — ci.yml registers
       # by explicit path, so an unregistered suite is the same as no suite.
+      # The source checker stays fail-closed. Its harness always runs synthetic
+      # report controls; only the absent private disclosure packet may skip.
       - name: upstream bundle filing-strip gate
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.upstream == 'true'
-        run: ./verification/upstream-bundle-filing-strip-gate.sh
+        run: python3 verification/test_filing_strip.py
 
       - name: filing-strip gate is not vacuous (mutation-gated)
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.upstream == 'true'
@@ -3558,7 +3562,11 @@ jobs:
       - name: host timer registry (offline, mutation-controlled)
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: |
-          python3 ops/case_30b51a0f/host_timer_registry_check.py
+          if python3 -c 'from public_snapshot_test_support import private_artifact_absent; raise SystemExit(0 if private_artifact_absent(".", "ops/case_30b51a0f/host-timer-registry.json") else 1)'; then
+            printf '%s\n' 'SKIP: private installed timer inventory is absent from the marked public snapshot; all synthetic registry and capture controls run below'
+          else
+            python3 ops/case_30b51a0f/host_timer_registry_check.py
+          fi
           cd ops/case_30b51a0f && python3 -m unittest -v test_host_timer_consolidation
 
       # case_0bf02bac. The home-PC guard reconciles CI_nodecf677d86_RUNNER with
@@ -4378,7 +4386,7 @@ jobs:
             local mut; mut="$(mktemp -d)"
             cp quota_rotation_watch.py pacing_verdict.py test_quota_rotation_watch.sh "$mut/"
             mkdir -p "$mut/tests"
-            cp tests/dead-feed-2026-08-26.jsonl "$mut/tests/"
+            python3 public_snapshot_test_support.py . "$mut" tests/dead-feed-2026-08-26.jsonl || { rm -rf "$mut"; return 1; }
 
             if ! (cd "$mut" && ./test_quota_rotation_watch.sh >/dev/null 2>&1); then
               echo "::error::$label: the UNMUTATED copy already fails — this gate proves nothing"
@@ -4445,7 +4453,7 @@ jobs:
             local mut; mut="$(mktemp -d)"
             cp quota_brake.sh pacing_verdict.py test_quota_brake.sh quota_brake_exempt.txt "$mut/"
             mkdir -p "$mut/tests"
-            cp tests/dead-feed-2026-08-26.jsonl "$mut/tests/"
+            python3 public_snapshot_test_support.py . "$mut" tests/dead-feed-2026-08-26.jsonl || { rm -rf "$mut"; return 1; }
 
             # Baseline first. Without it "the mutated suite failed" is
             # unattributable, which is how two gates in this repo sat vacuous
@@ -4584,12 +4592,12 @@ jobs:
             local mut; mut="$(mktemp -d)"
             cp pacing_verdict.py test_pacing_verdict.py "$mut/"
             mkdir -p "$mut/tests"
-            cp tests/dead-feed-2026-08-26.jsonl "$mut/tests/"
+            python3 public_snapshot_test_support.py . "$mut" tests/dead-feed-2026-08-26.jsonl || { rm -rf "$mut"; return 1; }
 
-            # Baseline in the SAME staging directory. §1 of the suite asserts
-            # the fixture is present rather than skipping, so a staging error
-            # is caught here as a red baseline instead of quietly deleting
-            # five checks from every run below.
+            # Baseline in the SAME staging directory. The helper carries the
+            # exact reviewed public-only absence boundary; nonpublic missing
+            # input fails staging. Synthetic staleness controls always run,
+            # and every mutant still needs its named assertion failure.
             if ! (cd "$mut" && python3 -m unittest test_pacing_verdict.py >/dev/null 2>&1); then
               echo "::error::$label: the UNMUTATED copy already fails — this gate proves nothing"
               (cd "$mut" && python3 -m unittest test_pacing_verdict.py 2>&1 | tail -25); rm -rf "$mut"; return 1
@@ -4712,14 +4720,13 @@ jobs:
       # case_34675099. Staged Tier-0 port drift gate: the staged copy under
       # templates/org-github/tier-0/ is a port of the recorded source pin,
       # not a fork. check-staged-drift.sh diffs it offline against
-      # tier-0/SOURCE (the suites checkout fetches full history, so the pin
-      # is available) and fails naming the drifted file plus the re-port
-      # command. Without this step the gate runs only in the full local
-      # verify-fast tier while CI runs --parse-only, so a hand-edited staged
-      # copy would merge green.
+      # tier-0/SOURCE and fails naming the drifted file plus the re-port
+      # command. The test harness always exercises synthetic drift/refusal
+      # controls; only the excluded private-history integration may skip in
+      # a marked fresh public snapshot. The production checker stays closed.
       - name: staged Tier-0 port drift gate
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: ./templates/org-github/check-staged-drift.sh
+        run: python3 test_staged_drift.py
 
       # == area: runbook (was runbook-gates; runs only when runbook or full changed) ==
       - name: DLQ redrive CLI standalone suite
@@ -5896,6 +5903,9 @@ jobs:
       # needs:, no if:), so they still gate every PR through ci-ok.
       # C6: plugins/model-selection/ lives in paperclip-operator-toolkit.
       - name: Fail if the moved plugin path is touched
+        # This split guard applies only to the old private source repository.
+        # The canonical public repository must be able to own toolkit code.
+        if: github.event.repository.private
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" != "pull_request" ]]; then
@@ -5924,6 +5934,7 @@ jobs:
       # C4: paths in public-owned-paths.txt live in the toolkit
       # (vendor/toolkit-files.txt); deletions are exempt.
       - name: Fail if the freeze list drifted from its generator
+        if: github.event.repository.private
         run: |
           set -euo pipefail
           # public-owned-paths.txt is generated, never hand-edited (see its
@@ -5953,6 +5964,7 @@ jobs:
           fi
           echo "freeze list matches its generator"
       - name: Fail if a toolkit-owned path is touched
+        if: github.event.repository.private
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" != "pull_request" ]]; then
@@ -6068,7 +6080,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "${RUNNER_NAME:-}" == coolify-vps-* || "${RUNNER_NAME:-}" == ci-node7b1ff338-iso-* || "${RUNNER_NAME:-}" == garm-* || "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || { echo "::error::refused runner '${RUNNER_NAME:-unset}': not a private isolated runner"; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || { echo "::error::public CI requires a GitHub-hosted runner"; exit 1; }
           [[ "${RUNNER_OS:-}" == Linux ]]
           [[ "${RUNNER_ARCH:-}" == X64 ]]
           printf 'private runner: name=%s os=%s arch=%s\n' "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"

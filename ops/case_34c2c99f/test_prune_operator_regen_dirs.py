@@ -724,7 +724,7 @@ class RegenTest(unittest.TestCase):
         self.assertFalse(tool.inside("/a/bc", "/a/b"))
 
     def test_only_canonical_uuid_folders_are_listed(self):
-        for name in (RID, "00000000-0000-4000-8000-000000000122", "not-a-run", RID + "x",
+        for name in (RID, "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", "not-a-run", RID + "x",
                      "11111111-1111-4111-8111-11111111111"):
             os.makedirs(os.path.join(self.root, name))
         self.assertEqual(tool.run_dir_names(self.root), [RID])
@@ -1041,10 +1041,22 @@ class RegenTest(unittest.TestCase):
         self.assertFalse(os.path.isfile(
             os.path.join(self.tmp, "manifests", "regen-strip-archive-records.tsv")))
 
+    def assert_no_doubled_ops(self, path):
+        parts = os.path.normpath(path).split(os.sep)
+        self.assertNotIn(("ops", "ops"), list(zip(parts, parts[1:])))
+
     def test_default_archive_lib_path_has_no_doubled_ops(self):
         self.assertTrue(self.default_archive_lib.endswith(
             os.path.join("ops", "offsite", "archive_lib.sh")))
-        self.assertNotIn("ops" + os.sep + "ops", self.default_archive_lib)
+        self.assert_no_doubled_ops(self.default_archive_lib)
+
+    def test_doubled_ops_guard_matches_components_not_repository_suffix(self):
+        # Hosted checkout names end in -ops; that is not an ops directory.
+        self.assert_no_doubled_ops(os.path.join(
+            os.sep, "tmp", "paperclip-ops", "paperclip-ops", "ops", "offsite", "archive_lib.sh"))
+        with self.assertRaises(AssertionError):
+            self.assert_no_doubled_ops(os.path.join(
+                os.sep, "tmp", "paperclip-ops", "ops", "ops", "offsite", "archive_lib.sh"))
 
     def test_seeded_archive_record_skips_reupload(self):
         _, ws = self.make_run()

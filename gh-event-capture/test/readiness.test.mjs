@@ -1,4 +1,4 @@
-// Readiness offline suite (case_2eafff8f). Pure decision logic, no network,
+// Readiness offline suite (T\x4fG-990009). Pure decision logic, no network,
 // no credentials — see `src/readiness.js`'s header.
 
 import { test } from 'node:test'

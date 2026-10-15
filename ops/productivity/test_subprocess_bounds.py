@@ -263,7 +263,7 @@ class IdleWaiterBounds(unittest.TestCase):
     def test_park_patch_timeout_logs_failed_not_parked(self):
         self.patch_state()
         waiter = ['w' + '0' * 35, 'case_ccba9d4c', 'in_progress', 'stuck thing',
-                  '', 'still waiting on case_3d790dcb to land', '']
+                  '', 'still waiting on TOG-' '999999301 to land', '']
         doer = ['d' + '0' * 35, 'todo', 'agent-9', 'real work', '0']
 
         def fake_psql(sql):
@@ -287,7 +287,7 @@ class IdleWaiterBounds(unittest.TestCase):
     def test_dry_run_issues_no_writes(self):
         self.patch_state()
         waiter = ['w' + '0' * 35, 'case_ccba9d4c', 'in_progress', 'stuck thing',
-                  '', 'still waiting on case_3d790dcb to land', '']
+                  '', 'still waiting on TOG-' '999999301 to land', '']
         doer = ['d' + '0' * 35, 'todo', 'agent-9', 'real work', '0']
 
         def fake_psql(sql):

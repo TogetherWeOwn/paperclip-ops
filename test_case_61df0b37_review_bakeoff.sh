@@ -18,6 +18,18 @@ T=$(mktemp -d "${TMPDIR:-/tmp}/case_61df0b37.XXXXXX"); trap 'rm -rf "$T"' EXIT
 # --- 1. harness unit tests ----------------------------------------------------------------
 check "harness unit tests pass" python3 -m unittest discover -s "$E" -p 'test_*.py'
 
+# Only the historical private evaluation bundle is absent from a fresh public
+# snapshot: curated reviewer labels and raw model-response results. A sanitized
+# report may remain, but cannot be re-scored without those private inputs.
+# The harness unit/mutation tests above always run. A partial raw-data bundle or
+# missing artifacts in any nonpublic checkout still fails the assertions below.
+if [[ -f .github/scripts/public_safety.py ]] &&
+   grep -qFx '## Fresh-history publication candidate' README.md &&
+   [[ ! -e "$E/dataset" && ! -e "$E/results" ]]; then
+  printf '%s\n' 'SKIP: historical private bake-off dataset and raw responses are excluded from the fresh public snapshot; the retained report cannot be re-scored here; harness tests remain enabled.'
+  exit "$FAIL"
+fi
+
 # --- 2. dataset shape ---------------------------------------------------------------------
 python3 - "$E" <<'PY' && ok "dataset: 19 cases, 11 real + 8 planted, each with a defect list" || bad "dataset shape"
 import json, sys
@@ -65,6 +77,6 @@ check "a table with one edited recall cell is rejected" \
 
 # --- 4. no credential-shaped string in committed raw results ------------------------------
 check "no token-shaped string in results/ or dataset/" \
-  bash -c "! grep -rEq 'ghp_[A-Za-z0-9]{20}|github_pat_[A-Za-z0-9_]{20}|sk-[A-Za-z0-9]{20,}|BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY|Bearer [A-Za-z0-9._-]{20,}' $E/results $E/dataset"
+  bash -c "grep -rEq 'ghp_[A-Za-z0-9]{20}|github_pat_[A-Za-z0-9_]{20}|sk-[A-Za-z0-9]{20,}|BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY|Bearer [A-Za-z0-9._-]{20,}' $E/results $E/dataset; test \$? -eq 1"
 
 exit $FAIL

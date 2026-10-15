@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "mode": "products-only-v1",
+  "captureOrigin": "https://REPLACE_CAPTURE_HOST",
+  "boardOrigin": "https://REPLACE_BOARD_HOST",
+  "companyId": "REPLACE_COMPANY_UUID",
+  "allowedRepositories": ["REPLACE_OWNER/REPLACE_REPOSITORY"],
+  "stateDirectory": "/REPLACE_HOME/.local/state/gh-product-bridge",
+  "captureTokenFile": "/REPLACE_HOME/secure-drop/gh-product-bridge/capture.key",
+  "boardTokenFile": "/REPLACE_HOME/secure-drop/gh-product-bridge/board.key",
+  "limits": {
+    "durationMs": 45000,
+    "maxRequests": 300,
+    "maxDeliveries": 100,
+    "pageSize": 100,
+    "maxPages": 100,
+    "maxReceipts": 100000,
+    "maxReceiptBytes": 16777216,
+    "maxSweepItems": 50,
+    "maxSweepAttempts": 5,
+    "reviewIntervalMs": 600000
+  }
+}

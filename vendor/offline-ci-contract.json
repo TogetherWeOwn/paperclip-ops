@@ -2088,15 +2088,11 @@
     "entries": [
       "plugins/gh-token-broker/dist/disclosure.js|plugins/gh-token-broker/dist/disclosure.js|v0.2.2",
       "plugins/gh-token-broker/dist/ownership.js|plugins/gh-token-broker/dist/ownership.js|v0.2.2",
-      "plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|v0.2.2",
-      "verification/case_9e76f76d-recorded-command.sh|verification/case_9e76f76d-recorded-command.sh|v0.2.2",
-      "verification/case_9e76f76d-recorded-command.txt|verification/case_9e76f76d-recorded-command.txt|v0.2.2",
-      "verification/case_46e26fa6-mutation-gate.sh|verification/case_46e26fa6-mutation-gate.sh|v0.2.2",
-      "verification/case_f909ca1f-mutation-gate.sh|verification/case_f909ca1f-mutation-gate.sh|v0.2.2"
+      "plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|v0.2.2"
     ]
   },
   "suites_job_sha256": "2f0de7be5319a1e00f4a2d207a942fc43e9dc8f050a1620aa378bc724c9e7531",
-  "manifest_sha256": "1dc989ed2fd142eafa28256a2a0e636f32cc1a9c88d1a0e1fce864640ff425fd",
+  "manifest_sha256": "b019e154407287f75cea4267ed3788469ee5e901b9af312ed340ab57800464b5",
   "restored_files_sha256": {
     "acceptance_org_lib.sh": "8db92e9d11f5a21776dbc1f71296b752291e6758ddc2a5ad67a129a86a5ed00a",
     "acceptance_rehearsal.sh": "a54e0b0bc79bb1a52edee3ea865b852e855c7f706370846cd512cc69c1c3080c",
@@ -2369,12 +2365,8 @@
     "verification/case_5516df1c-monitor-mutation-gate.sh": "3465f0dccb82d2a2cb627955fd764d560ac15e8c9be525878039913c9dfa200b",
     "verification/case_5516df1c-mutation-gate.sh": "1b255f396d794b663915d5eea6768e7179aed5d48b593d5eb96f1ed1afce00a1",
     "verification/case_f17dd2a7-find-hash-collision.mjs": "7e375bb8855bfe68b52c0d38476c21c821b71c085e586658295d20eecf66494b",
-    "verification/case_9e76f76d-recorded-command.sh": "76247283046db49bd2b4e7d5eadb55de9dab7df952d3bdc5e0b8f60d19f43a96",
-    "verification/case_9e76f76d-recorded-command.txt": "f798863d7b4f07263c6e269ada7b9f6d0b0729da2ca77a9eec310d8e1fdba626",
     "verification/case_28030601-mutation-gate.sh": "a9fb85724e6b8bed3b4cd79fb311660747199d3a5ff291d3a2a70e26a944efec",
-    "verification/case_46e26fa6-mutation-gate.sh": "ffca51399510081341c55d4867eb68a1227f3675f729f71d0aa31faa8789535d",
     "verification/case_ce726d7b-mutation-gate.sh": "bc0a7581e3c721f06761aca7f42794f3b5779bd68f4ec0f27d84965d17e8df2a",
-    "verification/case_f909ca1f-mutation-gate.sh": "66f64b36e41affc0fe9791875bd7725450d9e60ab3ac063bcd2fc8e8f4a2bfe1",
     "verification/case_c22b6545-mutation-gate.sh": "12720839464be617fb0a3343da3a97baf49fbb4d6e95b7c2d299dc952e862d4d",
     "verification/upstream-bundle-filing-gate.sh": "a3fc430692b445eea53fa78a1d302a8148cf00f61fcd5f74d39dd166a72d99c1"
   },

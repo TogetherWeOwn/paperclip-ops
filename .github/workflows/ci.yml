@@ -12,7 +12,7 @@ name: CI
 #   The 228 retained producers include private/diverged/unproved behavior;
 #   a restored path is not, by itself, proof that its private consumer moved.
 #   See vendor/offline-ci-contract.json and docs/offline-ci-cutover.md for the
-#   executable producer partition, aliases and seven explicit v0.2.2 private
+#   executable producer partition, aliases and three explicit v0.2.2 private
 #   compatibility exceptions. Jobs, routes, timeouts and required gates stay.
 #
 #   REPO SPLIT (C6 cutover): plugins/model-selection/ moved in full to the

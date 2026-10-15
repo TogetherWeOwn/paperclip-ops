@@ -36,11 +36,25 @@ jobs:
           # branches (e.g. vendor/offline-ci-contract.json churn elsewhere)
           # against this commit's allowlist and reds every PR for another
           # branch's fixtures. The dir scan above already covers the tree.
-          BASE="origin/main"
-          RANGE="$BASE..HEAD"
-          if ! git rev-parse --verify "$BASE" >/dev/null 2>&1 || \
-             ! git merge-base --is-ancestor "$BASE" HEAD 2>/dev/null || \
-             [ "$(git rev-list "$RANGE" --count 2>/dev/null || echo 0)" = "0" ]; then
-            RANGE="-1 HEAD"
+          #
+          # Fail closed: there is no narrowed fallback. A merge-base range
+          # stays correct when main advances after the pull-request merge ref
+          # is created (origin/main..HEAD would then fail its ancestor check,
+          # and scanning just the synthetic merge commit with -p -U0 prints
+          # no patch, passing vacuously). Pushes scan before..HEAD so a
+          # multi-commit push scans every pushed commit, not just the tip.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BEFORE="${{ github.event.before }}"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              echo "push without a base SHA; failing closed" >&2
+              exit 1
+            fi
+            RANGE="$BEFORE..HEAD"
+          else
+            BASE_SHA="$(git merge-base origin/main HEAD)" || {
+              echo "no merge-base with origin/main; failing closed" >&2
+              exit 1
+            }
+            RANGE="$BASE_SHA..HEAD"
           fi
           docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts="$RANGE" --config /repo/.gitleaks.toml --redact=100 --no-banner

@@ -312,6 +312,13 @@ class FreezeListDrift(unittest.TestCase):
         safety = (ROOT / ".github/workflows/public-safety.yml").read_text()
         self.assertIn("gitleaks", safety)
         self.assertIn("public_safety.py", safety)
+        # The history scan fails closed: merge-base range on PRs,
+        # before..HEAD on pushes, no narrowed fallback (see the scratch-repo
+        # pin in .github/scripts/test_public_ci.py).
+        self.assertNotIn('--log-opts="--all"', safety)
+        self.assertNotIn('RANGE="-1 HEAD"', safety)
+        self.assertIn("git merge-base origin/main HEAD", safety)
+        self.assertIn("github.event.before", safety)
 
     def test_freeze_list_entries_are_manifest_destinations(self):
         """Committed and regenerated lists name only manifest dests."""

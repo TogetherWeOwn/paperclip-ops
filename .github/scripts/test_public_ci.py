@@ -227,6 +227,76 @@ class PublicCI(unittest.TestCase):
         safety = (ROOT / ".github/workflows/public-safety.yml").read_text()
         self.assertIn("gitleaks", safety)
         self.assertIn("public_safety.py", safety)
+        # The history scan fails closed: no --all sweep of unrelated
+        # branches, no narrowed single-commit fallback (on a pull-request
+        # merge commit -p -U0 prints no patch, passing vacuously).
+        self.assertNotIn('--log-opts="--all"', safety)
+        self.assertNotIn('RANGE="-1 HEAD"', safety)
+        self.assertIn("git merge-base origin/main HEAD", safety)
+        self.assertIn("github.event.before", safety)
+
+    def test_history_range_survives_advanced_main(self):
+        # Pins the range logic against a scratch repo shaped like the review
+        # probe: a PR that adds a credential-shaped file in one commit and
+        # removes it in the next, with main advanced afterwards. The old
+        # origin/main ancestor check then fails (fallback territory) while
+        # the merge-base range still contains both PR commits and the old
+        # single-commit scan of the synthetic merge commit sees nothing.
+        try:
+            subprocess.run(["git", "--version"], capture_output=True,
+                           check=True)
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest("git not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ,
+                       GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                       GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+            def git(*args):
+                subprocess.run(["git", *args], cwd=tmp, env=env,
+                               capture_output=True, text=True, check=True)
+            git("init", "-q")
+            git("checkout", "-q", "-B", "main")
+            Path(tmp, "base.txt").write_text("base\n")
+            git("add", "base.txt")
+            git("commit", "-qm", "base")
+            git("checkout", "-qb", "pr")
+            Path(tmp, "secret.txt").write_text("token = hunter2-hunter2\n")
+            git("add", "secret.txt")
+            git("commit", "-qm", "add credential-shaped file")
+            git("rm", "-q", "secret.txt")
+            git("commit", "-qm", "remove credential-shaped file")
+            git("checkout", "-q", "main")
+            Path(tmp, "other.txt").write_text("advance\n")
+            git("add", "other.txt")
+            git("commit", "-qm", "advance main")
+            # Synthetic pull-request merge ref on a side branch, then main
+            # advances again so origin/main is no longer an ancestor of the
+            # merge commit.
+            git("checkout", "-qb", "tmp-merge")
+            git("merge", "--no-ff", "--no-edit", "-q", "pr", "-m", "merge pr")
+            git("branch", "-f", "merge-ref", "HEAD")
+            git("checkout", "-q", "main")
+            Path(tmp, "later.txt").write_text("later\n")
+            git("add", "later.txt")
+            git("commit", "-qm", "main moves after merge-ref creation")
+            def out(*args):
+                r = subprocess.run(["git", *args], cwd=tmp, env=env,
+                                   capture_output=True, text=True,
+                                   check=True)
+                return r.stdout
+            ancestor = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", "main", "merge-ref"],
+                cwd=tmp, env=env, capture_output=True)
+            self.assertNotEqual(
+                ancestor.returncode, 0,
+                "scratch repo must reproduce the stale-base trigger")
+            base = out("merge-base", "main", "merge-ref").strip()
+            ranged = out("log", "-p", "-U0", base + "..merge-ref")
+            self.assertIn("secret.txt", ranged,
+                          "merge-base range lost the PR history")
+            single = out("log", "-p", "-U0", "-1", "merge-ref")
+            self.assertNotIn("secret.txt", single,
+                             "single-commit scan unexpectedly saw a patch")
 
     def test_metadata_protocol_constant_does_not_exempt_private_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:

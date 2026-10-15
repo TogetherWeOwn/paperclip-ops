@@ -192,11 +192,22 @@ class CardAndInternalRefs(unittest.TestCase):
         self.assertTrue(any("ticket id" in h for h in ps.internal_hits("see " + legacy + " here", "TOG|PAP|PAPA")))
 
     def test_public_case_path_stays_clean(self):
-        # Naming a tracked case_ file is not a live card reference: the match
-        # is preceded by `/` and followed by `-`, so it stays clean. Keeps
-        # pr_standards.py consistent with public_safety.py.
-        hits = ps.internal_hits("see verification/case_c89b5362-drift-pin-mutation-gate.sh here", "TOG|PAP|PAPA")
-        self.assertEqual([], hits, "tracked case_ path flagged: %r" % (hits,))
+        # Naming a tracked case_ file is not a live card reference. Each
+        # lookaround clause is pinned on its own: the leading `/` guard
+        # covers directory-style mentions and the trailing `-` guard covers
+        # bare file names, so a later edit dropping either clause fails here.
+        # Keeps pr_standards.py consistent with public_safety.py.
+        samples = (
+            # Both guards at once (pre-existing sample).
+            "see verification/case_c89b5362-drift-pin-mutation-gate.sh here",
+            # Directory form: `/` before and `/` after (only leading guard).
+            "see ops/case_1ccef1dc/collect.py here",
+            # Bare file name: `-` after, no `/` before (only trailing guard).
+            "see case_c89b5362-drift-pin-mutation-gate.sh here",
+        )
+        for sample in samples:
+            hits = ps.internal_hits(sample, "TOG|PAP|PAPA")
+            self.assertEqual([], hits, "%r flagged: %r" % (sample, hits))
 
     def test_public_documentation_placeholders_stay_clean(self):
         # RFC 5737 documentation addresses and example.invalid hosts are

@@ -68,11 +68,18 @@ def env(**kw):
     base.update(kw)
     # Sanitization replaced the negative fixtures along with real identifiers.
     # Build deliberately synthetic inputs at runtime: these are not live cards.
-    for key, value in base.items():
-        if isinstance(value, str):
-            for i, placeholder in enumerate(("case_1cab5f7f", "case_4e5328d7", "case_f052904a")):
-                value = value.replace(placeholder, "-".join(("TOG", str(999999990 + i))))
-            base[key] = value
+    # Legacy synthesis is scoped to public-repo evaluations, where the
+    # placeholders act as forbidden internal references: a legacy tracker id
+    # must still be flagged there. Private evaluations keep the sanitized
+    # case_ placeholders, because the private card gate now requires a case_
+    # reference (GOOD_BODY's Refs line is the valid positive fixture) and a
+    # legacy id alone must not satisfy it.
+    if str(base.get("REPO_PRIVATE", "true")).strip().lower() == "false":
+        for key, value in base.items():
+            if isinstance(value, str):
+                for i, placeholder in enumerate(("case_1cab5f7f", "case_4e5328d7", "case_f052904a")):
+                    value = value.replace(placeholder, "-".join(("TOG", str(999999990 + i))))
+                base[key] = value
     return base
 
 
@@ -164,6 +171,21 @@ class CardAndInternalRefs(unittest.TestCase):
         body = GOOD_BODY.replace("Refs: case_1cab5f7f", "Fixes #12")
         self.assertIn(("error", "Card reference"), levels(ps.evaluate(env(BODY=body))))
         self.assertIn(("warning", "Card reference"), levels(ps.evaluate(env(BODY=body, REQUIRE_CARD_REF="false"))))
+
+    def test_private_gate_rejects_a_legacy_id_alone(self):
+        # The private gate follows the case_ convention: a legacy tracker id
+        # (synthesized at runtime, not a live card) does not satisfy it, while
+        # GOOD_BODY's sanitized case_ reference does (test_good_body_passes).
+        legacy = "-".join(("TOG", "999999991"))
+        body = GOOD_BODY.replace("Refs: case_1cab5f7f", "Refs: " + legacy)
+        self.assertIn(("error", "Card reference"), levels(ps.evaluate(env(BODY=body))))
+
+    def test_public_detection_flags_case_refs_and_legacy_ids(self):
+        # env() rewrites placeholders to legacy ids for public evaluations, so
+        # the case_ path is pinned directly here: both shapes are internal.
+        legacy = "-".join(("TOG", "999999991"))
+        self.assertTrue(any("card ref" in h for h in ps.internal_hits("see case_1cab5f7f here", "TOG|PAP|PAPA")))
+        self.assertTrue(any("ticket id" in h for h in ps.internal_hits("see " + legacy + " here", "TOG|PAP|PAPA")))
 
     def test_public_repo_forbids_internal_refs_in_title_body_and_branch(self):
         pub = dict(REPO_PRIVATE="false")

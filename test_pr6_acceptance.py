@@ -21,12 +21,23 @@ The first class below guards the PR's own fix (private card-ref gate and
 internal detection now follow the ``case_`` convention); it is green on the
 pre-fix head and must stay green. The remaining red classes fail on the
 pre-fix head by design and go green once the landing change fixes the
-underlying gates. Run with ``python3 -m unittest test_pr6_acceptance``
+underlying gates.
+
+After the hosted public-CI restoration landed on main and was merged into
+this branch, three contracts were reconciled with the merged implementation
+(the public-CI suite in ``.github/scripts/test_public_ci.py`` pins the same
+shapes): the repo-split freeze guards apply only to a private source
+repository while the secret and privacy scans stay unconditional; the four
+gate destinations are retained in the manifest, remapped to public toolkit
+source paths restored under the default pin; and the disk-pressure
+preflight is advisory on ephemeral runners, not a runner-pool refusal. The
+lint-suite guard additionally required the lint test helper to scope its
+synthetic legacy ids to public evaluations, preserving the valid private
+``case_`` fixture. Run with ``python3 -m unittest test_pr6_acceptance``
 (also wired into ``scripts/verify-fast.sh``). Stdlib only, hermetic, well
 under a second apart from the repository's own lint suite it shells out to.
 """
 
-import difflib
 import os
 import re
 import subprocess
@@ -40,15 +51,22 @@ SCRIPTS = ROOT / ".github" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import pr_standards as ps  # noqa: E402
 
-# First-party verification gates that live in this repo. The manifest must
-# not route them through any toolkit release: the release never shipped
-# them, so the restore step exits 1 on the first such row.
-FIRST_PARTY_GATES = [
-    "verification/case_9e76f76d-recorded-command.sh",
-    "verification/case_9e76f76d-recorded-command.txt",
-    "verification/case_46e26fa6-mutation-gate.sh",
-    "verification/case_f909ca1f-mutation-gate.sh",
-]
+# Verification gates whose destinations in this repo carry case_ names.
+# The merged public CI retains them in the manifest, remapped to the public
+# source paths the toolkit actually ships; a row that instead routed a
+# destination to its own case_ path in a toolkit release would fail restore,
+# because no release ever shipped the gates under those names.
+REMAPPED_GATE_SOURCES = {
+    "verification/case_9e76f76d-recorded-command.sh":
+        "verification/recorded-monitor-command-gate.sh",
+    "verification/case_9e76f76d-recorded-command.txt":
+        "verification/recorded-monitor-command.txt",
+    "verification/case_46e26fa6-mutation-gate.sh":
+        "verification/plugin-deploy-drift-detector-mutation-gate.sh",
+    "verification/case_f909ca1f-mutation-gate.sh":
+        "verification/grant-attribution-resolver-mutation-gate.sh",
+}
+FIRST_PARTY_GATES = list(REMAPPED_GATE_SOURCES)
 
 WORKFLOWS = [
     ".github/workflows/pr-lint.yml",
@@ -142,6 +160,32 @@ def manifest_rows():
     return rows
 
 
+def pinned_tags():
+    """Release labels with an immutable row in the pins file."""
+    tags = set()
+    for line in (ROOT / "vendor" / "toolkit-pins.txt").read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        tags.add(line.split()[0])
+    return tags
+
+
+def default_toolkit_tag():
+    """The sync script's default label (rows without an explicit tag)."""
+    text = (ROOT / "scripts" / "sync-toolkit.sh").read_text()
+    match = re.search(r"TOOLKIT_TAG:-([^}]+)}", text)
+    assert match, "default toolkit tag not found in sync-toolkit.sh"
+    return match.group(1)
+
+
+def ci_step(name, workflow=".github/workflows/ci.yml"):
+    """Body of one named step in a workflow, failing closed if absent."""
+    text = (ROOT / workflow).read_text()
+    marker = "      - name: " + name + "\n"
+    assert marker in text, "workflow step missing: %s" % (name,)
+    return text.split(marker, 1)[1].split("      - ", 1)[0]
+
+
 class PrStandardsAlignment(unittest.TestCase):
     """The PR's own fix: card-ref detection follows the case_ convention."""
 
@@ -216,46 +260,113 @@ class PrStandardsAlignment(unittest.TestCase):
 
 
 class FreezeListDrift(unittest.TestCase):
-    """secret-scan red: the committed freeze list matches its generator."""
+    """secret-scan red, as merged: freeze guards are private-only.
 
-    def test_freeze_list_matches_generator(self):
-        """Regenerated owned-paths equal public-owned-paths.txt."""
-        want = regen_owned()
-        got = committed_owned()
+    The former private source repository regenerated the freeze list on
+    every run and refused drift. The merged public CI deliberately scopes
+    the repo-split guards to private repositories (the public repository
+    must be able to own these paths), while the actual secret and privacy
+    scans stay unconditional. Applying the former drift recipe to the
+    public tree would therefore fail a guard CI no longer runs here.
+    """
+
+    def test_freeze_guards_apply_only_to_private_repositories(self):
+        """Each repo-split guard step is gated on repository privacy."""
+        for name in (
+            "Fail if the moved plugin path is touched",
+            "Fail if the freeze list drifted from its generator",
+            "Fail if a toolkit-owned path is touched",
+        ):
+            step = ci_step(name)
+            self.assertIn(
+                "        if: github.event.repository.private\n", step,
+                "freeze guard not private-only: %s" % (name,),
+            )
+        # The generator recipe itself stays in the private guard, so the
+        # private contract still regenerates and compares byte for byte.
+        drift = ci_step("Fail if the freeze list drifted from its generator")
+        self.assertIn("vendor/toolkit-files.txt", drift)
+        self.assertIn("public-owned-paths.txt", drift)
+        self.assertIn("cmp -s", drift)
+
+    def test_secret_and_privacy_scans_stay_unconditional(self):
+        """Scoping the freeze guards must not scope the security scans."""
+        scan = ci_step("Scan tracked files for committed secrets")
+        self.assertIn("./verification/secret-scan.sh", scan)
+        self.assertNotRegex(
+            scan, r"(?m)^\s*if:", "secret scan gained a condition"
+        )
+        safety = (ROOT / ".github/workflows/public-safety.yml").read_text()
+        self.assertIn("gitleaks", safety)
+        self.assertIn("public_safety.py", safety)
+
+    def test_freeze_list_entries_are_manifest_destinations(self):
+        """Committed and regenerated lists name only manifest dests."""
+        dests = {
+            dest
+            for dest, _, _ in manifest_rows()
+            if not dest.startswith("plugins/model-selection/")
+        }
+        committed = committed_owned()
         self.assertEqual(
-            got, want,
-            "freeze list drifted; re-run the command in the file header:\n"
-            + "".join(difflib.unified_diff(
-                got, want, fromfile="committed", tofile="regen", lineterm=""
-            ))[:2000],
+            sorted(set(committed) - dests), [],
+            "freeze list names non-manifest paths: %r"
+            % (sorted(set(committed) - dests),),
+        )
+        regen = regen_owned()
+        self.assertEqual(
+            sorted(set(regen) - dests), [],
+            "generator names non-manifest paths: %r"
+            % (sorted(set(regen) - dests),),
         )
 
 
 class ToolkitRestore(unittest.TestCase):
     """change-detection red: every manifest row restores from its pin."""
 
-    def test_first_party_gates_tracked(self):
-        """The four gates exist in the tree (sync skips tracked paths)."""
+    def test_gate_files_present_after_restore(self):
+        """The four gates exist in a prepared tree.
+
+        Tracked gates are always present; vendored ones arrive via
+        ``scripts/sync-toolkit.sh``, which verify-fast and CI run before
+        this suite. On a fresh unrestored checkout this fails by design:
+        restore first instead of treating the gap as a code defect.
+        """
         missing = [p for p in FIRST_PARTY_GATES if not (ROOT / p).is_file()]
         self.assertEqual(missing, [], "first-party gates missing: %r" % (missing,))
 
-    def test_no_manifest_row_for_first_party_gates(self):
-        """No manifest row may route a first-party gate anywhere."""
-        rows = [dest for dest, _, _ in manifest_rows()]
-        bad = [p for p in FIRST_PARTY_GATES if p in rows]
-        self.assertEqual(
-            bad, [],
-            "manifest rows restore exits 1 on (release never shipped them): %r"
-            % (bad,),
+    def test_gate_rows_remap_to_public_sources_under_a_pin(self):
+        """Each retained gate restores from its public toolkit source.
+
+        The merged public CI kept these destinations in the manifest and
+        remapped them to source paths the toolkit ships, instead of the
+        pre-merge proposal to drop the rows. A row self-routing a case_
+        destination (source equal to dest, or an explicit old release pin)
+        is the shape restore used to exit 1 on, so it must not return.
+        """
+        rows = {dest: (src, tag) for dest, src, tag in manifest_rows()}
+        pinned = pinned_tags()
+        default = default_toolkit_tag()
+        self.assertIn(
+            default, pinned, "default toolkit tag has no pin: %s" % default
         )
+        for dest, want_src in REMAPPED_GATE_SOURCES.items():
+            self.assertIn(dest, rows, "gate row dropped from manifest: %s" % dest)
+            src, tag = rows[dest]
+            self.assertEqual(
+                src, want_src,
+                "%s restores from %r, want public source %r" % (dest, src, want_src),
+            )
+            self.assertNotEqual(src, dest, "gate row self-routes: %s" % dest)
+            effective = tag if tag else default
+            self.assertIn(
+                effective, pinned,
+                "%s restores under unpinned tag %s" % (dest, effective),
+            )
 
     def test_manifest_pins_resolve(self):
         """Every explicit release tag has a row in the pins file."""
-        pinned = set()
-        for line in (ROOT / "vendor" / "toolkit-pins.txt").read_text().splitlines():
-            if not line or line.startswith("#"):
-                continue
-            pinned.add(line.split()[0])
+        pinned = pinned_tags()
         tags = {tag for _, _, tag in manifest_rows() if tag}
         self.assertEqual(
             sorted(tags - pinned), [],
@@ -308,6 +419,66 @@ class RunnerProofConsistency(unittest.TestCase):
                 labels.append(val.strip().strip("'\""))
         return labels
 
+    @staticmethod
+    def hard_runner_refusal(step):
+        """True when a step fails runners outside a private fleet.
+
+        A runner-pool refusal keys its failure on runner identity alone, so
+        every hosted pickup dies in it. A disk-pressure style safety check
+        is not a refusal: runners outside the persistent fleets leave
+        through an advisory ``exit 0`` before the failing branch, and that
+        branch is conditioned on the measured pressure, not identity.
+        Steps that explicitly handle the hosted pool are likewise exempt.
+        """
+        if "RUNNER_NAME" not in step or "exit 1" not in step:
+            return False
+        if "github-hosted" in step:
+            return False
+        non_fleet = re.search(r"RUNNER_NAME[^\n]*!=", step)
+        if (
+            non_fleet
+            and "exit 0" in step
+            and non_fleet.start() < step.index("exit 0") < step.index("exit 1")
+        ):
+            return False
+        return True
+
+    def test_detector_rejects_a_garm_only_refusal(self):
+        """A synthetic identity-only refusal is still flagged."""
+        step = (
+            "ame: Prove a GARM runner selected this job\n"
+            "        run: |\n"
+            '          if [[ "${RUNNER_NAME:-}" != garm-* ]]; then\n'
+            '            echo "::error::requires a self-hosted runner"\n'
+            "            exit 1\n"
+            "          fi\n"
+        )
+        self.assertTrue(self.hard_runner_refusal(step))
+
+    def test_detector_permits_an_advisory_safety_check(self):
+        """A synthetic disk-pressure shape is not a pool refusal."""
+        step = (
+            "ame: runner disk-pressure preflight\n"
+            "        run: |\n"
+            '          out="$(./runner_disk_pressure.sh)"; rc=$?\n'
+            '          if [[ "${RUNNER_NAME:-}" != coolify-vps-* ]]; then\n'
+            '            echo "advisory only; not failing."\n'
+            "            exit 0\n"
+            "          fi\n"
+            "          if [[ $rc -eq 1 ]]; then\n"
+            '            echo "::error title=Runner disk pressure::$out"\n'
+            "            exit 1\n"
+            "          fi\n"
+        )
+        self.assertFalse(self.hard_runner_refusal(step))
+
+    def test_disk_pressure_preflight_is_advisory_on_hosted(self):
+        """The real preflight lets hosted runners through with exit 0."""
+        step = ci_step("runner disk-pressure preflight")
+        self.assertIn("advisory only on", step)
+        self.assertIn("exit 0", step)
+        self.assertFalse(self.hard_runner_refusal(step))
+
     def test_hosted_jobs_have_no_hard_runner_refusal(self):
         """No hosted-scheduled step may hard-refuse hosted runners."""
         offenders = []
@@ -321,11 +492,7 @@ class RunnerProofConsistency(unittest.TestCase):
                     continue
                 steps = re.split(r"(?m)^      - \w", chunk)[1:]
                 for step in steps:
-                    if (
-                        "RUNNER_NAME" in step
-                        and "exit 1" in step
-                        and "github-hosted" not in step
-                    ):
+                    if self.hard_runner_refusal(step):
                         first = next(
                             (
                                 line.strip()

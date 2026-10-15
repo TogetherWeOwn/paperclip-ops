@@ -84,6 +84,14 @@ class ValidationMirrorTest(unittest.TestCase):
             with self.assertRaises(prov.Refusal):
                 prov.validate_company_spools([bad], SPOOL)
 
+    def test_rejects_uppercase_otherwise_valid_uuid(self):
+        canonical = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        self.assertEqual(prov.validate_company_spools(entries(canonical), SPOOL),
+                         entries(canonical))
+        self.assertNotEqual(canonical, canonical.upper())
+        with self.assertRaises(prov.Refusal):
+            prov.validate_company_spools(entries(canonical.upper()), SPOOL)
+
     def test_rejects_non_canonical_id(self):
         for bad in ("COMPANY-A", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                     "11111111-1111-1111-1111-111111111111",

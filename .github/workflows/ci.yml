@@ -1540,7 +1540,7 @@ jobs:
       # that has become compliant fails. One step: the gate over this repo plus
       # the red/green mutants. Offline, stdlib only.
       - name: gatus module wiring gate
-        run: python3 -m unittest -v test_module_wiring.py
+        run: python3 -m unittest -v test_module_wiring.py test_pr2_acceptance.py
 
       # case_e6def006. Balancer-silence notification binding Gatus module:
       # dedicated platform_balancer-silence key, fail-closed stale/missing,

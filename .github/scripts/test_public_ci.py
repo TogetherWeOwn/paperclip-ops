@@ -91,6 +91,69 @@ class PublicCI(unittest.TestCase):
                     with self.assertRaises(AssertionError):
                         self.assert_public_hosted_routes(directory)
 
+    def test_drift_gate_runs_public_semantics_without_private_provenance(self):
+        import hashlib
+
+        for mode in ("public", "no-marker", "no-scanner", "malformed-pin",
+                     "present-blob", "present-wrong-digest"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "verification").mkdir()
+                for name in ("case_c89b5362-drift-pin-mutation-gate.sh",
+                             "case_5dfa9150-handoff-copy-drift.sh"):
+                    (root / "verification" / name).write_bytes(
+                        (ROOT / "verification" / name).read_bytes())
+                (root / "README.md").write_text(
+                    "not-public\n" if mode == "no-marker" else
+                    "## Fresh-history publication candidate\n")
+                if mode != "no-scanner":
+                    (root / ".github/scripts").mkdir(parents=True)
+                    (root / ".github/scripts/public_safety.py").touch()
+                subprocess.run(["git", "init", "-q", str(root)], check=True,
+                               capture_output=True)
+                checker = root / "verification/case_5dfa9150-handoff-copy-drift.sh"
+                source = checker.read_text()
+                if mode.startswith("present-"):
+                    payload = b"# independent synthetic reviewed bytes\n"
+                    blob = subprocess.run(
+                        ["git", "-C", str(root), "hash-object", "-w", "--stdin"],
+                        input=payload, check=True, capture_output=True).stdout.decode().strip()
+                    digest = hashlib.sha256(payload).hexdigest()
+                    if mode == "present-wrong-digest":
+                        digest = "0" * 64
+                    source = re.sub(r'^PINNED_BLOB="[0-9a-f]{40}"$',
+                                    'PINNED_BLOB="' + blob + '"', source, flags=re.M)
+                    source = re.sub(r'^PINNED_SHA256="[0-9a-f]{64}"$',
+                                    'PINNED_SHA256="' + digest + '"', source, flags=re.M)
+                elif mode == "malformed-pin":
+                    source = re.sub(r'^PINNED_BLOB=.*$', 'PINNED_BLOB="invalid"',
+                                    source, flags=re.M)
+                checker.write_text(source)
+                result = subprocess.run(
+                    ["bash", str(root / "verification/case_c89b5362-drift-pin-mutation-gate.sh")],
+                    capture_output=True, text=True, timeout=60)
+                output = result.stdout + result.stderr
+                self.assertEqual(checker.read_text(), source, "production pin was modified")
+                if mode in ("public", "present-blob"):
+                    self.assertEqual(result.returncode, 0, output)
+                    self.assertIn("GATE GREEN: 8 scenarios behaved and 5 mutants were killed.", output)
+                    self.assertEqual("SKIP:" in output, mode == "public", output)
+                else:
+                    self.assertNotEqual(result.returncode, 0, output)
+                    self.assertNotIn("SKIP:", output)
+                    if mode != "present-wrong-digest":
+                        self.assertEqual(result.returncode, 2, output)
+
+    def test_endpoint_acceptance_suite_is_executed_by_ci(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+        job = workflow["jobs"]["suites"]
+        step = next(s for s in job["steps"] if s.get("name") == "gatus module wiring gate")
+        self.assertEqual(step["run"],
+                         "python3 -m unittest -v test_module_wiring.py test_pr2_acceptance.py")
+        self.assertNotIn("if", step)
+        self.assertFalse(step.get("continue-on-error", False))
+        self.assertFalse(job.get("continue-on-error", False))
+
     def test_required_producers_handle_merge_groups(self):
         for name in ("ci.yml", "pr-lint.yml", "public-safety.yml"):
             text = (ROOT / ".github/workflows" / name).read_text()

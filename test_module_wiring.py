@@ -382,6 +382,20 @@ class Allowlist(TmpTree):
         self.assertEqual((rc, found), (0, set()))
         self.assertTrue(any(l.startswith("ALLOWED platform_alpha") for l in doc["report"]))
 
+    def test_public_owned_exemption_turns_a_known_gap_green(self):
+        self.gap()
+        self.allowlist([{"key": "platform_alpha", "exempt": ["script", "cron"],
+                         "card": "case_abcdef12"}])
+        rc, found, doc = run_tool(self.root)
+        self.assertEqual((rc, found), (0, set()))
+        self.assertTrue(any("owner case_abcdef12" in line for line in doc["report"]))
+
+    def test_public_owned_exemption_does_not_hide_unnamed_checks(self):
+        self.gap()
+        self.allowlist([{"key": "platform_alpha", "exempt": ["script"],
+                         "card": "case_abcdef12"}])
+        self.assertEqual(self.codes(), (1, {("missing-cron", "platform_alpha")}))
+
     def test_exemption_covers_only_the_checks_it_names(self):
         self.gap()
         self.allowlist([{"key": "platform_alpha", "exempt": ["script"], "card": "TOG-" "999999501"}])
@@ -408,7 +422,9 @@ class Allowlist(TmpTree):
 
     def test_entry_without_an_owning_card_fails(self):
         self.gap()
-        for bad in (None, "", "someone", "TOG-", "case_xyz", 15316):
+        for bad in (None, "", "someone", "TOG-", "case_xyz", 15316,
+                    "case_abcdef1", "case_abcdef123", "case_ABCDEF12",
+                    "case_abcdeg12", "case_abcdef12\n", "prefix_case_abcdef12"):
             entry = {"key": "platform_alpha", "exempt": ["script", "cron"]}
             if bad is not None:
                 entry["card"] = bad

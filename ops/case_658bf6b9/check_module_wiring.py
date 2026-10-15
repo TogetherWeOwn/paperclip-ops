@@ -303,8 +303,8 @@ def evaluate(root, registry=None, allowlist=None):
         if not (isinstance(exempt, list) and exempt and all(c in CHECKS for c in exempt)):
             findings.append(("allowlist-bad-exempt", key, f"`exempt` must be a non-empty subset of {list(CHECKS)}"))
             continue
-        if not (isinstance(card, str) and re.fullmatch(r"TOG-\d+", card)):
-            findings.append(("allowlist-no-card", key, "every exemption must name its owning card (TOG-<n>)"))
+        if not (isinstance(card, str) and re.fullmatch(r"(?:TOG-\d+|case_[0-9a-f]{8})", card)):
+            findings.append(("allowlist-no-card", key, "every exemption must name its owning card (case_<8 lowercase hex> or TOG-<n>)"))
             continue
         if key not in declared:
             findings.append(("allowlist-orphan", key, f"{card}: endpoint is no longer declared; delete the entry"))

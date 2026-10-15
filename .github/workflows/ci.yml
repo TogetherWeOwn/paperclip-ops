@@ -1539,13 +1539,17 @@ jobs:
       # sit in module_wiring_allowlist.json with an owning card; an exemption
       # that has become compliant fails. One step: the gate over this repo plus
       # the red/green mutants. Offline, stdlib only.
-      # PR #6 acceptance (case for test_pr6_acceptance): runs here so the
-      # freeze-list, toolkit-restore, runner-proof and ci-ok graph contracts
-      # it pins execute in CI (verify-fast.sh --parse-only never reaches its
-      # full-tier registration). Runs after the toolkit restore above, which
-      # this suite needs for its gate files.
       - name: gatus module wiring gate
-        run: python3 -m unittest -v test_module_wiring.py test_pr2_acceptance.py test_pr6_acceptance.py
+        run: python3 -m unittest -v test_module_wiring.py test_pr2_acceptance.py
+
+      # PR #6 acceptance: the freeze-list, toolkit-restore, runner-proof and
+      # ci-ok graph contracts test_pr6_acceptance pins must execute in CI.
+      # verify-fast.sh --parse-only (the CI fast tier) never reaches its
+      # full-tier registration, so it gets its own step like the pr2 suite
+      # above. Runs after the toolkit restore above, which this suite needs
+      # for its gate files. Offline, stdlib only.
+      - name: pr6 acceptance suite
+        run: python3 -m unittest -v test_pr6_acceptance.py
 
       # case_e6def006. Balancer-silence notification binding Gatus module:
       # dedicated platform_balancer-silence key, fail-closed stale/missing,

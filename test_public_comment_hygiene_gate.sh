@@ -66,7 +66,10 @@ check() {
   else bad "$label" "expected exit $expected, got $rc :: $out"; fi
 }
 
-LEAK="Review abc1234: CHANGES. Fixes belong to the owner of case_fa4fcb64; re-check here after repair."
+# Synthetic negative controls retain the real prefix grammar, not tenant IDs.
+PRIMARY_PREFIX="TO""G"
+SECONDARY_PREFIX="PA""P"
+LEAK="Review abc1234: CHANGES. Fixes belong to the owner of ${PRIMARY_PREFIX}-9999999; re-check here after repair."
 CLEAN="Review abc1234: CHANGES. Fixes belong to the PR author; re-check here after repair."
 
 # --- 1. positive control: the evidenced failure shape must fire on public ---
@@ -82,14 +85,14 @@ check 0 "public scrubbed body passes" "$CLEAN" --visibility public
 check 0 "public empty body passes" "" --visibility public
 
 # --- 5. PAP- prefix fires (pr-lint prefix set, not just TOG-) ---
-check 1 "public body with PAP-ID fires" "See case_34ed41ba for context." --visibility public
+check 1 "public body with PAP-ID fires" "See ${SECONDARY_PREFIX}-9999998 for context." --visibility public
 
 # --- 6. word boundaries: TOGETHERWEOWN and PAPER are not IDs ---
 check 0 "public body with TOGETHERWEOWN passes" "From togetherweown[bot] via paper trail." --visibility public
 
 # --- 7. branch names are checked too when public ---
 BRF="$WORK/branch.txt"; printf '%s' "$CLEAN" > "$BRF"
-if run_gate --visibility public --body-file "$BRF" --branch "fix/case_99462e9c-scrub" >/dev/null 2>&1; then
+if run_gate --visibility public --body-file "$BRF" --branch "fix/${PRIMARY_PREFIX}-9999997-scrub" >/dev/null 2>&1; then
   bad "public TOG branch fires" "expected exit 1, got 0"
 else
   [[ $? == 1 ]] && ok "public TOG branch fires (exit 1)" || bad "public TOG branch fires" "expected exit 1, got $?"
@@ -97,7 +100,7 @@ fi
 if run_gate --visibility public --body-file "$BRF" --branch "fix/scrub-bot-comments" >/dev/null 2>&1; then
   ok "public clean branch passes (exit 0)"
 else bad "public clean branch passes" "expected exit 0, got $?"; fi
-if run_gate --visibility private --body-file "$BRF" --branch "fix/case_99462e9c-scrub" >/dev/null 2>&1; then
+if run_gate --visibility private --body-file "$BRF" --branch "fix/${PRIMARY_PREFIX}-9999997-scrub" >/dev/null 2>&1; then
   ok "private TOG branch passes (exit 0)"
 else bad "private TOG branch passes" "expected exit 0, got $?"; fi
 

@@ -552,7 +552,8 @@ jobs:
       PGPASSWORD: postgres
       PGDATABASE: org_fixture
       PAPERCLIP_SQL_BACKEND: psql
-      COMPANY_ID: 00000000-0000-4000-8000-000000000001
+      # Public, synthetic company from the pinned orgdb fixture (not a tenant).
+      COMPANY_ID: 00000000-0000-4000-8000-000000000480
       PAPERCLIP_API_URL: http://recording-stub.invalid
       PAPERCLIP_CLI: ${{ github.workspace }}/test/fixtures/orgdb/paperclipai
       # This fixture owns authorization, not Claude transport. The dedicated

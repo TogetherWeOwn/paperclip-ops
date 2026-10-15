@@ -44,6 +44,81 @@ Its legacy compatibility manifest is not a release-readiness certificate: verify
 restored paths and their contents after sanitization before using it for a build.
 Never add a private artifact to make an old fixture pass.
 
+## What is here
+
+Tracked root operator utilities are indexed below. This is a source index, not an
+execution or deployment checklist; inspect each utility's usage and prerequisites
+before running it. `cliproxy_seam_extract.py` is an exempt one-shot forensic
+parser, not a standing operator command. Test entry points begin with `test_`.
+
+| Tool |
+| --- |
+| `acceptance_transport.sh` |
+| `agent_error_proposer.py` |
+| `approval_timeout_probe.sh` |
+| `balancer_silence_guard.py` |
+| `bridge_row_inventory.py` |
+| `capture_host_evidence.sh` |
+| `capture_host_render.sh` |
+| `case_8abb7523-measure.mjs` |
+| `ci_dark_steps.sh` |
+| `ci_failure_drain.sh` |
+| `ci_node93f4bccf_guard.py` |
+| `ci_required_checks_audit.py` |
+| `ci_required_checks_ownership.py` |
+| `claude_countdown.py` |
+| `codex_countdown.py` |
+| `coolify_capacity_headroom.sh` |
+| `credential_chain_audit.sh` |
+| `credential_chain_lockdown.sh` |
+| `db_backup_stall.sh` |
+| `db_backup_stall_monitor.sh` |
+| `db_idle_transaction_stall.js` |
+| `deploy_window_manifest.py` |
+| `deploy_window_open.sh` |
+| `dlq_redrive.sh` |
+| `docker_hygiene.sh` |
+| `dropchannel_scan.sh` |
+| `garm_image_lint.py` |
+| `garm_image_lint.sh` |
+| `garm_provider_latency_baseline.py` |
+| `garm_ready_time_baseline.py` |
+| `gh_access.sh` |
+| `gh_token.sh` |
+| `hook_spawn_guard.sh` |
+| `host_db_backup.sh` |
+| `kofra_preview_parity.py` |
+| `muse_countdown.py` |
+| `native_ssh_citation_gate.py` |
+| `notify_paperclip_issue.sh` |
+| `omniroute_combo_cli.sh` |
+| `org_provisioner.sh` |
+| `org_request_queue.sh` |
+| `pacer_admission_audit.py` |
+| `pacer_apply.py` |
+| `pacer_concurrency.py` |
+| `pr_closeout_ledger.py` |
+| `pr_closeout_snapshot_repair.py` |
+| `process_lost_probe.py` |
+| `public_comment_hygiene_gate.sh` |
+| `quota_rotation_watch.py` |
+| `recovery_writer.py` |
+| `red_main_poll.sh` |
+| `review_route.sh` |
+| `review_routing_weekly.py` |
+| `runner_disk_pressure.sh` |
+| `runner_disk_triage.sh` |
+| `schema_drift.sh` |
+| `two_bot_staging_precheck.py` |
+| `upstream_draft_pin_audit.sh` |
+| `upstream_gate.sh` |
+| `upstream_lint.py` |
+| `upstream_prepush_hook.sh` |
+| `upstream_reputation.py` |
+| `upstream_watch.sh` |
+| `warn_first_inventory.py` |
+| `websearch_lane_probe.py` |
+
 ## Contributing
 
 Use a feature branch and a reviewed pull request. Report actual tests and their

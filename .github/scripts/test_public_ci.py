@@ -2,7 +2,11 @@
 """Public CI regression checks; no network, host inventory or credentials."""
 from pathlib import Path
 import re
+import tempfile
 import unittest
+from unittest import mock
+
+import public_safety
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -42,6 +46,39 @@ class PublicCI(unittest.TestCase):
         safety = (ROOT / ".github/workflows/public-safety.yml").read_text()
         self.assertIn("gitleaks", safety)
         self.assertIn("public_safety.py", safety)
+
+    def test_metadata_protocol_constant_does_not_exempt_private_inventory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "fixture.json"
+            with mock.patch.object(public_safety, "ROOT", root):
+                path.write_text('{"deny_target": "169.254.169.254"}')
+                self.assertEqual(public_safety.inspect(path), [])
+                for octets in ((10, 255, 255, 254), (192, 168, 255, 254),
+                               (169, 254, 169, 253)):
+                    path.write_text(".".join(map(str, octets)))
+                    self.assertIn("non-example private network address", public_safety.inspect(path))
+
+    def test_public_artifact_env_exception_is_exact_path_and_bytes(self):
+        pin = (
+            "# Pinned upstream artifact. Update version, URL, and SHA-256 together.\n"
+            "RUNNER_VERSION=2.337.0\n"
+            "RUNNER_ARCHIVE=actions-runner-linux-x64-2.337.0.tar.gz\n"
+            "RUNNER_URL=https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz\n"
+            "RUNNER_SHA256=70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "github-runner/actions-runner.env"
+            path.parent.mkdir()
+            with mock.patch.object(public_safety, "ROOT", root):
+                path.write_text(pin)
+                self.assertEqual(public_safety.inspect(path), [])
+                path.write_text(pin + "UNREVIEWED_VARIABLE=fixture\n")
+                self.assertIn("private artifact or live environment file", public_safety.inspect(path))
+                other = root / "other.env"
+                other.write_text(pin)
+                self.assertIn("private artifact or live environment file", public_safety.inspect(other))
 
     def test_renamed_archive_sources_use_public_paths(self):
         manifest = (ROOT / "vendor/toolkit-files.txt").read_text().splitlines()

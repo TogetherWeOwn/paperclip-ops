@@ -3,6 +3,7 @@
 This is a backstop, not a proof that arbitrary personal data is absent.
 Never print matched values: report only paths and categories.
 """
+import hashlib
 import ipaddress
 import pathlib
 import re
@@ -21,13 +22,21 @@ def inspect(path):
     if path.is_symlink():
         return ["symlink requires publication review"]
     reasons = []
-    if path.suffix in ARTIFACTS or path.name.endswith(".env"):
+    raw = path.read_bytes()
+    # This exact file contains only the public Actions runner release URL,
+    # version, archive name and digest. Any changed byte requires new review;
+    # neither other .env paths nor arbitrary added variables are exempt.
+    public_artifact_pin = (
+        relative.as_posix() == "github-runner/actions-runner.env"
+        and hashlib.sha256(raw).hexdigest()
+        == "c2c84eb7eb28ce90ce6372c1e8102f4c9d0bfac9244b9b9ccc20d4edae282de2"
+    )
+    if path.suffix in ARTIFACTS or (path.name.endswith(".env") and not public_artifact_pin):
         reasons.append("private artifact or live environment file")
     if re.search(r"(?:backup|restore).*\.json$", path.name, re.I):
         reasons.append("backup/restore dump")
     if INTERNAL_CARD.search(str(relative)):
         reasons.append("internal task identifier in path")
-    raw = path.read_bytes()
     if b"\0" in raw:
         reasons.append("unreviewed binary payload")
         return reasons
@@ -44,7 +53,11 @@ def inspect(path):
             address = ipaddress.ip_address(match.group())
         except ValueError:
             continue
-        if address.is_loopback or address.is_unspecified or any(address in net for net in EXAMPLES):
+        # The well-known cloud metadata address is a protocol constant, not
+        # tenant inventory. Security fixtures must retain its real deny target.
+        if (address.is_loopback or address.is_unspecified
+                or str(address) == "169.254.169.254"
+                or any(address in net for net in EXAMPLES)):
             continue
         if address.is_private or address.is_link_local:
             reasons.append("non-example private network address")

@@ -27,6 +27,9 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, ROOT)
+from public_snapshot_test_support import private_artifact_absent
 
 from terminal_worktree_cache_reclaim import (  # noqa: E402
     CARGO_TARGET_NAMES,
@@ -1537,6 +1540,8 @@ class RegistryGateTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
 
     def test_shipped_registry_entry_is_an_apply_writer(self):
+        if private_artifact_absent(ROOT, "ops/case_30b51a0f/host-timer-registry.json"):
+            self.skipTest("private installed host-timer registry is excluded from the fresh public snapshot; synthetic registry admission and refusal tests remain enabled")
         # Pins the shipped registry. Dropping back to dry-run is the rollback,
         # and it is a reviewed edit of THIS assertion in the same change.
         with open(REGISTRY_DEFAULT, encoding="utf-8") as handle:

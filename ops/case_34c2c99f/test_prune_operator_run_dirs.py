@@ -422,14 +422,14 @@ class NestedRepoGateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             repo = os.path.join(root, "repo")
             make_repo(repo)
-            with open(os.path.join(repo, "host-f0f72aea.example.invalid"), "w") as handle:
+            with open(os.path.join(repo, "fixture" ".local"), "w") as handle:
                 handle.write("placeholder\n")
             self.assertEqual(git_verdict(repo), (False, "ignored-unlisted"))
 
     def test_ignored_local_file_in_nested_worktree_kept(self):
         with tempfile.TemporaryDirectory() as root:
             repo, nested = self._folder_with_worktree(root)
-            with open(os.path.join(nested, "host-f0f72aea.example.invalid"), "w") as handle:
+            with open(os.path.join(nested, "fixture" ".local"), "w") as handle:
                 handle.write("placeholder\n")
             self.assertEqual(git_verdict(repo),
                              (False, "nested-ignored-unlisted"))
@@ -1203,9 +1203,11 @@ class CustodyHoldTest(unittest.TestCase):
 
     # Mutants: hold UUIDs accept uppercase, or are silently lowercased.
     def test_uppercase_hold_fails_closed_before_removal_or_trim(self):
+        # Numeric-only synthetic UUIDs have no case: use letters for this control.
+        run_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
         for suffix in ("", " # recovery copy"):
             with self.subTest(suffix=suffix), tempfile.TemporaryDirectory() as root:
-                path = os.path.join(root, RUN_B)
+                path = os.path.join(root, run_id)
                 make_repo(path)
                 mods = os.path.join(path, "node_modules")
                 os.makedirs(mods)
@@ -1213,8 +1215,8 @@ class CustodyHoldTest(unittest.TestCase):
                 with open(marker, "w") as handle:
                     handle.write("custody fixture")
                 backdate(path)
-                patch_empty_holds(self, RUN_B.upper() + suffix + "\n")
-                api = FakeApi(by_id={RUN_B: dict(run_row("failed", 30), id=RUN_B)})
+                patch_empty_holds(self, run_id.upper() + suffix + "\n")
+                api = FakeApi(by_id={run_id: dict(run_row("failed", 30), id=run_id)})
                 with self.assertRaises(PruneError):
                     tool.read_keep()
                 for flags in ([], ["--apply"]):

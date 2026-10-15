@@ -724,7 +724,7 @@ class RegenTest(unittest.TestCase):
         self.assertFalse(tool.inside("/a/bc", "/a/b"))
 
     def test_only_canonical_uuid_folders_are_listed(self):
-        for name in (RID, "00000000-0000-4000-8000-000000000122", "not-a-run", RID + "x",
+        for name in (RID, "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", "not-a-run", RID + "x",
                      "11111111-1111-4111-8111-11111111111"):
             os.makedirs(os.path.join(self.root, name))
         self.assertEqual(tool.run_dir_names(self.root), [RID])

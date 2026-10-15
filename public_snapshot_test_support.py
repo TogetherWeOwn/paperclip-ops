@@ -5,6 +5,7 @@ import os
 
 PRIVATE_ARTIFACTS = frozenset({
     "ops/case_c542accd/job_baselines.json",
+    "ops/case_30b51a0f/host-timer-registry.json",
     "plugins/model-selection/config/reviewed-roster.json",
     "tests/auth-denial-incident-2026-09-22.json",
     "tests/dead-feed-2026-08-26.jsonl",

@@ -4,6 +4,14 @@ minVersion = "8.25.0"
 useDefault = true
 
 [[allowlists]]
+targetRules = ["generic-api-key", "discord-api-token"]
+description = "SHA-256 file-integrity digests in the offline CI contract; keyed digests, not credentials. Path- and format-scoped so re-pinning on first-party edits needs no new allowlist."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "[^"]+":\ "[0-9a-f]{64}",?$''']
+
+[[allowlists]]
 targetRules = ["generic-api-key"]
 description = "Synthetic email body sentinel in in-memory KV redaction test; not an external credential."
 condition = "AND"

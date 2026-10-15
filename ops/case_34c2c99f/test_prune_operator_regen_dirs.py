@@ -61,7 +61,13 @@ def backdate(path, seconds=7200):
     old = time.time() - seconds
     for dirpath, dirnames, filenames in os.walk(path):
         for name in dirnames + filenames:
-            os.utime(os.path.join(dirpath, name), (old, old), follow_symlinks=False)
+            # A file can vanish between os.walk listing it and utime
+            # (e.g. git background maintenance under a loaded CI runner);
+            # a missing entry has no timestamp to set, so skip it.
+            try:
+                os.utime(os.path.join(dirpath, name), (old, old), follow_symlinks=False)
+            except FileNotFoundError:
+                continue
     os.utime(path, (old, old))
 
 

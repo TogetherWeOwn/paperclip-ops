@@ -259,11 +259,25 @@ class WorkspaceLive(unittest.TestCase):
         finally:
             q.psql_atc = original
 
-    def test_lease_query_error_fails_closed(self):
-        # Any other lease error (for example the old wrong-column query)
-        # blocks the move instead of reading as clear.
-        self.assertTrue(self.run_live(
-            StubPsql(fail_on="execution_workspace_runtime_leases")))
+    def test_lease_column_error_fails_closed(self):
+        # Only absence of the lease relation is tolerated. A missing column
+        # must block the move rather than silently disabling lease custody.
+        def stub(sql):
+            if "from execution_workspaces" in sql:
+                return (True, "ws-1|/root||issue-sib|open\n")
+            if "from issues" in sql:
+                return (True, "issue-sib\n")
+            if "from heartbeat_runs" in sql:
+                return (True, "0\n")
+            if "execution_workspace_runtime_leases" in sql:
+                return (False, 'ERROR:  column "workspace_id" does not exist')
+            return (False, "")
+        original = q.psql_atc
+        q.psql_atc = stub
+        try:
+            self.assertTrue(q.workspace_live(WS_PARENT, None))
+        finally:
+            q.psql_atc = original
 
     def test_psql_failure_text_carries_stderr(self):
         # psql writes errors to stderr; a stdout-only return makes the

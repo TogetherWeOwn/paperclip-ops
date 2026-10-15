@@ -278,8 +278,8 @@ def psql_atc(sql):
     """(ok, text) for one read-only query. Any error is not ok.
 
     On failure the text carries stderr as well as stdout: psql writes
-    errors (including 'does not exist') to stderr, and the lease-table
-    tolerance in workspace_live matches on that text.
+    errors to stderr, and workspace_live uses it to identify an absent
+    lease relation without tolerating other schema errors.
     """
     try:
         out = sh(['docker', 'exec', '-i', 'paperclip-db', 'psql', '-U', 'paperclip',
@@ -366,7 +366,8 @@ def workspace_live(workspace_root, fallback_ident=None):
         # state as live only when the table is expected. An empty result
         # (no leases) is clear. Parse failure blocks.
         text = (out4 or '').strip().lower()
-        if 'does not exist' in text or 'undefined_table' in text:
+        if ('relation "execution_workspace_runtime_leases" does not exist'
+                in text):
             pass
         else:
             return True

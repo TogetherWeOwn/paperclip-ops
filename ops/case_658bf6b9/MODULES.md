@@ -38,7 +38,8 @@ Suite: `test_case_1372613a_invariants.sh`.
 
 ## Fleet run stall
 
-`paperclip/fleet-run-stall`: `ops/case_b79f6544/gatus-endpoints.yaml`,
+`paperclip/fleet-run-stall` / `paperclip_fleet-run-stall`:
+`ops/case_b79f6544/gatus-endpoints.yaml`,
 `ops/case_b79f6544/push-fleet-run-stall.sh`,
 `test_case_da79e241_fleet_run_stall.py`.
 
@@ -77,6 +78,7 @@ Suite: `test_case_60330d6f_cliproxy_lanes.sh`.
 
 `platform/discord-bot` / `platform_discord-bot`: `gatus-config.yaml`,
 `push-discord-bot.sh`, `_gatus_push.sh`, `test_case_60330d6f_discord_bot.sh`.
+Synthetic inputs: `fixtures/discord-bot`.
 
 ## Merge queue
 
@@ -93,7 +95,7 @@ Suite: `test_case_60330d6f_cliproxy_lanes.sh`.
 
 ## Runner disk
 
-`platform/runner-disk`: `../case_a814f742/gatus-endpoints.yaml`,
+`platform/runner-disk` / `platform_runner-disk`: `../case_a814f742/gatus-endpoints.yaml`,
 `../case_a814f742/push-runner-disk.sh`,
 `../case_a814f742/evaluate-runner-disk.sh`, `_gatus_push.sh`,
 `test_case_c7afa8e6_runner_disk.sh`.

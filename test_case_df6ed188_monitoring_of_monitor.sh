@@ -324,8 +324,8 @@ if (( rc == 1 )) && grep -q "posted=never" <<<"$out"; then
   ok "7c. unreachable sink exits 1 posted=never"
 else bad "7c. sink-down path" "rc=$rc out=$out"; fi
 # production-like targets are REFUSED before any byte is sent.
-for bad_env in 'ROUNDTRIP_URL=http://host-41e183d4.example.invalid/hook ROUNDTRIP_VERIFY_URL=http://127.0.0.1:1/v' \
-               'ROUNDTRIP_URL=http://127.0.0.1:1/sink ROUNDTRIP_VERIFY_URL=http://host-bc65fd97.example.invalid/v'; do
+for bad_env in 'ROUNDTRIP_URL=http://prod-sink.example.invalid/hook ROUNDTRIP_VERIFY_URL=http://127.0.0.1:1/v' \
+               'ROUNDTRIP_URL=http://127.0.0.1:1/sink ROUNDTRIP_VERIFY_URL=http://prod-verify.example.invalid/v'; do
   : > "$PUSH_FILE"
   # shellcheck disable=SC2086
   env -i PATH="$WORK/bin:/usr/bin:/bin" $bad_env bash "$ROUNDTRIP" --id rt 2>/dev/null; rc=$?

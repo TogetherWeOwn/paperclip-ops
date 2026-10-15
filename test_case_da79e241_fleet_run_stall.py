@@ -448,7 +448,7 @@ class StaticTest(unittest.TestCase):
 # --------------------------------------------------------------------------
 DB_PASSWORD = "Pw-FAKE-0123-not-a-secret"
 GATUS_TOKEN = "tok-FAKE-4567-not-a-secret"
-DB_URL = "postgres://ro_user:%person-a4d5354c@example.invalid:5432/paperclip" % DB_PASSWORD
+DB_URL = "postgres://ro_user:%s@host-609b79ea.example.invalid.invalid:5432/paperclip" % DB_PASSWORD
 
 PSQL_STUB = r"""#!/usr/bin/env bash
 printf '%s\n' "$@" > "$STUB_DIR/psql.argv"

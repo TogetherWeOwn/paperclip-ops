@@ -122,6 +122,18 @@ class CustodySql(unittest.TestCase):
     def test_lease_sql_empty_workspace_is_false(self):
         self.assertIn("where false", q.lease_check_sql([]))
 
+    def test_lease_sql_filters_on_execution_workspace_id(self):
+        # Regression (Paperclip Review): execution_workspace_runtime_leases
+        # links workspaces via execution_workspace_id (migration 0220); there
+        # is no workspace_id column, so filtering on it errored every run and
+        # the guard reported every workspace as live and never moved.
+        sql = q.lease_check_sql(["ws-1"])
+        self.assertIn("execution_workspace_id::text", sql)
+        self.assertIn("expires_at > now()", sql)
+        self.assertIn("'ws-1'", sql)
+        self.assertNotIn("workspace_id",
+                         sql.replace("execution_workspace_id", ""))
+
     def test_workspace_lookup_sql_escapes_quotes(self):
         sql = q.workspace_lookup_sql("/w/o'clock")
         self.assertIn("/w/o''clock", sql)
@@ -197,6 +209,112 @@ class WorkspaceLive(unittest.TestCase):
         self.assertNotIn("in ('')", run_sql)
         self.assertNotIn("context_snapshot->>'issueId'", run_sql)
         self.assertIn("'ws-9'", run_sql)
+
+    def test_run_sql_carries_sibling_and_source_issue_ids(self):
+        # The workspace row's source_issue_id plus the issues-table rows must
+        # reach the run query. Passing [] for the linked ids, skipping the
+        # issues-by-workspace query, or dropping the source_issue_id parse
+        # all leave the old suite green while blinding the guard to siblings.
+        stub = StubPsql(ws_rows="ws-1|/root|/root|issue-src|open\n",
+                        issue_rows="issue-from-issues\n",
+                        run_count="0\n", lease_count="0\n")
+        self.assertFalse(self.run_live(stub))
+        by_workspace = [s for s in stub.queries if "from issues" in s]
+        self.assertTrue(by_workspace,
+                        "issues-by-workspace query must run")
+        run_sql = [s for s in stub.queries if "from heartbeat_runs" in s][0]
+        self.assertIn("issue-src", run_sql)
+        self.assertIn("issue-from-issues", run_sql)
+
+    def test_source_issue_id_only_link_blocks_when_live(self):
+        # The source_issue_id is the only link here: the run query must
+        # contain it, and a live count on it must block.
+        stub = StubPsql(ws_rows="ws-1|/root|/root|issue-src|open\n",
+                        issue_rows="", run_count="1\n",
+                        lease_count="0\n")
+        self.assertTrue(self.run_live(stub))
+        run_sql = [s for s in stub.queries if "from heartbeat_runs" in s][0]
+        self.assertIn("issue-src", run_sql)
+
+    def test_missing_lease_table_is_not_live(self):
+        # A missing lease table (migration not yet applied) reads as no
+        # leases, not as live custody. psql reports this on stderr, which
+        # psql_atc must surface for the tolerance to match.
+        def stub(sql):
+            if "from execution_workspaces" in sql:
+                return (True, "ws-1|/root||issue-sib|open\n")
+            if "from issues" in sql:
+                return (True, "issue-sib\n")
+            if "from heartbeat_runs" in sql:
+                return (True, "0\n")
+            if "execution_workspace_runtime_leases" in sql:
+                return (False, "ERROR:  relation "
+                        "\"execution_workspace_runtime_leases\" does not "
+                        "exist")
+            return (False, "")
+        original = q.psql_atc
+        q.psql_atc = stub
+        try:
+            self.assertFalse(q.workspace_live(WS_PARENT, None))
+        finally:
+            q.psql_atc = original
+
+    def test_lease_query_error_fails_closed(self):
+        # Any other lease error (for example the old wrong-column query)
+        # blocks the move instead of reading as clear.
+        self.assertTrue(self.run_live(
+            StubPsql(fail_on="execution_workspace_runtime_leases")))
+
+    def test_psql_failure_text_carries_stderr(self):
+        # psql writes errors to stderr; a stdout-only return makes the
+        # missing-table tolerance dead code.
+        class _Err:
+            returncode = 1
+            stdout = ""
+            stderr = ("ERROR:  relation "
+                      "\"execution_workspace_runtime_leases\" does not exist")
+        original = q.sh
+        q.sh = lambda *a, **k: _Err()
+        try:
+            ok, text = q.psql_atc("select 1")
+        finally:
+            q.sh = original
+        self.assertFalse(ok)
+        self.assertIn("does not exist", text)
+
+    def test_fallback_identifier_hint_blocks_when_live(self):
+        # workspace_live's fallback_ident is an additional live hint via
+        # live_runs; dropping the hint must fail here.
+        stub = StubPsql(run_count="0\n", lease_count="0\n")
+        original_psql, original_live_runs = q.psql_atc, q.live_runs
+        hint_calls = []
+
+        def fake_live_runs(ident):
+            hint_calls.append(ident)
+            return True
+
+        q.psql_atc = stub
+        q.live_runs = fake_live_runs
+        try:
+            self.assertTrue(q.workspace_live(WS_PARENT, "TOG-123"))
+        finally:
+            q.psql_atc, q.live_runs = original_psql, original_live_runs
+        self.assertEqual(hint_calls, ["TOG-123"])
+
+    def test_no_fallback_means_no_hint_query(self):
+        original_live_runs = q.live_runs
+        calls = []
+
+        def fake_live_runs(ident):
+            calls.append(ident)
+            return True
+
+        q.live_runs = fake_live_runs
+        try:
+            self.assertFalse(self.run_live(StubPsql()))
+        finally:
+            q.live_runs = original_live_runs
+        self.assertEqual(calls, [])
 
 
 def _local(cmd):
@@ -421,6 +539,88 @@ class MainHoldGate(unittest.TestCase):
                 q.HOLD_PATH, q.sh = original_path, original_sh
             self.assertEqual(calls, [])
             self.assertIn("hold active", buf.getvalue())
+
+
+MAIN_NESTED = ("/paperclip/instances/default/worktrees/TOG-123-some-card"
+               "/.paperclip-repositories/example-repo")
+
+
+class MainApplyWiring(unittest.TestCase):
+    """main()'s dry-run default, retention sweep gate and log writes.
+
+    Only the hold gate was driven through main(): forcing APPLY True,
+    sweeping without --apply, or dropping the log write all stayed green.
+    """
+
+    class _Out:
+        def __init__(self, stdout=""):
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def run_main(self, apply, find_stdout, quarantine_result):
+        calls = {"sh": [], "quarantine": []}
+
+        def fake_sh(args, **kw):
+            script = args[-1] if isinstance(args, (list, tuple)) else ""
+            calls["sh"].append(script)
+            if "ctime" in script:
+                return self._Out("")
+            return self._Out(find_stdout)
+
+        def fake_quarantine(nested_dir, root, fallback, dest, apply_move):
+            calls["quarantine"].append(
+                {"nested": nested_dir, "root": root, "fallback": fallback,
+                 "dest": dest, "apply_move": apply_move})
+            return quarantine_result
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log = os.path.join(tmp, "actions.log")
+            original = (q.HOLD_PATH, q.sh, q.quarantine_one, q.APPLY, q.LOG)
+            # Missing hold file means inactive; no container, no log yet.
+            q.HOLD_PATH, q.sh, q.quarantine_one, q.APPLY, q.LOG = (
+                os.path.join(tmp, "no-hold.json"), fake_sh,
+                fake_quarantine, apply, log)
+            try:
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    q.main()
+            finally:
+                (q.HOLD_PATH, q.sh, q.quarantine_one, q.APPLY,
+                 q.LOG) = original
+            log_text = ""
+            if os.path.exists(log):
+                with open(log) as handle:
+                    log_text = handle.read()
+            return calls, log_text
+
+    def test_dry_run_passes_apply_false_and_writes_nothing(self):
+        calls, log_text = self.run_main(
+            False, MAIN_NESTED + "\n", ("would-move", "would move TOG-123"))
+        self.assertEqual(len(calls["quarantine"]), 1)
+        first = calls["quarantine"][0]
+        self.assertFalse(first["apply_move"])
+        self.assertEqual(first["fallback"], "TOG-123")
+        self.assertTrue(first["root"].endswith("TOG-123-some-card"))
+        self.assertEqual([s for s in calls["sh"] if "ctime" in s], [])
+        self.assertEqual(log_text, "")
+
+    def test_apply_runs_retention_sweep_and_logs_moves(self):
+        calls, log_text = self.run_main(
+            True, MAIN_NESTED + "\n", ("moved", "moved TOG-123 repo to dest"))
+        self.assertEqual(len([s for s in calls["sh"] if "ctime" in s]), 1)
+        self.assertTrue(calls["quarantine"][0]["apply_move"])
+        self.assertIn("moved TOG-123", log_text)
+
+    def test_apply_logs_failures(self):
+        _, log_text = self.run_main(
+            True, MAIN_NESTED + "\n", ("failed", "FAILED TOG-123: boom"))
+        self.assertIn("FAILED TOG-123", log_text)
+
+    def test_skipped_candidate_writes_no_log(self):
+        _, log_text = self.run_main(
+            True, MAIN_NESTED + "\n", ("skip", "skip TOG-123: live run"))
+        self.assertEqual(log_text, "")
 
 
 if __name__ == "__main__":

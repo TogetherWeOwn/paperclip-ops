@@ -236,12 +236,17 @@ def live_runs_sql(workspace_ids, issue_ids):
 
 
 def lease_check_sql(workspace_ids):
-    """Unexpired runtime leases on the workspaces. Missing table => error."""
+    """Unexpired runtime leases on the workspaces. Missing table => error.
+
+    The lease table links workspaces via execution_workspace_id (migration
+    0220); there is no workspace_id column, so filtering on it errors every
+    run and the guard below would treat every workspace as live.
+    """
     if not workspace_ids:
         return ("select count(*) from execution_workspace_runtime_leases "
                 "where false")
     return ("select count(*) from execution_workspace_runtime_leases "
-            f"where workspace_id::text in ({_in_list(workspace_ids)}) "
+            f"where execution_workspace_id::text in ({_in_list(workspace_ids)}) "
             "and expires_at > now()")
 
 
@@ -270,14 +275,19 @@ def sh(args, **kw):
 
 
 def psql_atc(sql):
-    """(ok, stdout) for one read-only query. Any error is not ok."""
+    """(ok, text) for one read-only query. Any error is not ok.
+
+    On failure the text carries stderr as well as stdout: psql writes
+    errors (including 'does not exist') to stderr, and the lease-table
+    tolerance in workspace_live matches on that text.
+    """
     try:
         out = sh(['docker', 'exec', '-i', 'paperclip-db', 'psql', '-U', 'paperclip',
                   '-d', 'paperclip', '-Atc', sql], timeout=60)
     except Exception:
         return (False, '')
     if out.returncode != 0:
-        return (False, out.stdout or '')
+        return (False, ((out.stdout or '') + '\n' + (out.stderr or '')).strip())
     return (True, out.stdout or '')
 
 

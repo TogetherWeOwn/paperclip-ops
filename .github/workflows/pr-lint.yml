@@ -21,6 +21,8 @@ on:
     types: [opened, edited, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -42,33 +44,38 @@ env:
 jobs:
   pr-lint:
     name: pr-lint
-    # case_1c9ba624 first cohort off Coolify: was [self-hosted, two-selfhosted]
-    # (static Coolify-co-resident Docker pool). Now GARM ephemeral; no Docker,
-    # no service, sparse checkout + python only. Required check name unchanged.
+    # Public repository: standard GitHub-hosted runner, no private credentials.
+    # Keep the existing required check name.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Prove a GARM runner selected this job
+      - name: Require a GitHub-hosted runner
         shell: bash
         run: |
           set -euo pipefail
-          case "${RUNNER_NAME:-}" in
-            garm-*) ;;
-            *) echo "::error::picked up by ${RUNNER_NAME:-unknown}, not a GARM runner"; exit 1 ;;
-          esac
-          printf 'GARM runner: name=%s os=%s arch=%s\n' "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
+          [[ "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || {
+            echo "::error::public CI requires a GitHub-hosted runner"; exit 1;
+          }
+          printf 'GitHub-hosted runner: os=%s arch=%s\n' "$RUNNER_OS" "$RUNNER_ARCH"
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-          sparse-checkout: .github
-          sparse-checkout-cone-mode: true
+
+      - name: Restore pinned toolkit test dependencies
+        run: bash scripts/sync-toolkit.sh
+
+      - name: Install pinned workflow parser
+        run: python3 -m pip install --disable-pip-version-check --no-deps --target "${RUNNER_TEMP}/public-ci-python" 'PyYAML==6.0.2'
 
       - name: Unit-test the lint
+        env:
+          PYTHONPATH: ${{ runner.temp }}/public-ci-python
         run: |
           python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
           python3 -m unittest discover -s .github/scripts -p 'test_ci_policy.py'
           python3 -m unittest discover -s .github/scripts -p 'test_action_pins.py'
+          python3 -m unittest discover -s .github/scripts -p 'test_public_ci.py'
           python3 -m unittest discover -s .github/scripts -p 'test_docs_*.py'
           python3 -m unittest discover -s .github/scripts -p 'test_review_trigger*.py'
 

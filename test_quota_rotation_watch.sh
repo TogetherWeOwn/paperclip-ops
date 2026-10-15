@@ -181,16 +181,32 @@ run "$WORK/junk.jsonl"
 assert "all-unparseable exits 2"          2 "FATAL"
 
 echo "== 9. live mode refuses the frozen dead feed =="
-DEAD="$HERE/tests/dead-feed-2026-08-26.jsonl"
-OUT="$(python3 "$TOOL" --jsonl "$DEAD" --now 2026-09-04T16:00:00Z 2>&1)"; CODE=$?
-assert "the real dead feed is UNKNOWN, not a defect" 6 "OVERALL: UNKNOWN"
-if grep -q "NO_ROTATION\|DEFECT" <<<"$OUT"; then
-  bad "the dead feed emits no confident rotation verdict" "$OUT"
+check_dead_feed() {
+  local DEAD="$1"
+  OUT="$(python3 "$TOOL" --jsonl "$DEAD" --now 2026-09-04T16:00:00Z 2>&1)"; CODE=$?
+  assert "the dead feed is UNKNOWN, not a defect" 6 "OVERALL: UNKNOWN"
+  if grep -q "NO_ROTATION\|DEFECT" <<<"$OUT"; then
+    bad "the dead feed emits no confident rotation verdict" "$OUT"
+  else
+    ok "the dead feed emits no confident rotation verdict"
+  fi
+  OUT="$(python3 "$TOOL" --jsonl "$DEAD" --now 2026-09-04T16:00:00Z --json 2>&1)"; CODE=$?
+  assert "JSON names the UNKNOWN state" 6 '"overall": "UNKNOWN"'
+}
+# The file-path guard always receives a real, synthetically stale feed.
+check_dead_feed "$WORK/defect.jsonl"
+if python3 - "$HERE" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from public_snapshot_test_support import private_artifact_absent
+raise SystemExit(0 if private_artifact_absent(
+    sys.argv[1], "tests/dead-feed-2026-08-26.jsonl") else 1)
+PY
+then
+  printf '%s\n' 'SKIP: historical private account feed is excluded from the fresh public snapshot; synthetic stale-feed rotation assertions remain enabled'
 else
-  ok "the dead feed emits no confident rotation verdict"
+  check_dead_feed "$HERE/tests/dead-feed-2026-08-26.jsonl"
 fi
-OUT="$(python3 "$TOOL" --jsonl "$DEAD" --now 2026-09-04T16:00:00Z --json 2>&1)"; CODE=$?
-assert "JSON names the UNKNOWN state" 6 '"overall": "UNKNOWN"'
 
 # A malformed newest row must not be dropped in favour of an older verdict.
 F="$WORK/malformed-newest.jsonl"; : >"$F"

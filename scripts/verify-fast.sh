@@ -151,6 +151,9 @@ env -u BASH_ENV ./test_approval_timeout_probe.sh || fail "approval-timeout probe
 ./test_credential_chain_offline.sh || fail "credential-chain offline fixture suite failed"
 ./test_gh_access_dispatch.sh || fail "gh-access dispatch suite failed"
 ./test_org_snapshot.sh || fail "org-snapshot offline suite failed"
+# PR #2 landing acceptance: pins the CI wiring-gate/push-key contracts
+# (case_f3500d44/case_6d874ecd) red-to-green. Offline, stdlib only.
+python3 -m unittest test_pr2_acceptance || fail "pr2 acceptance suite failed"
 python3 -m unittest test_alert_queue || fail "alert-queue suite failed"
 python3 -m unittest test_watchdog_snapshot_builder || fail "watchdog snapshot-builder suite failed"
 python3 -m unittest test_case_da79e241_fleet_run_stall || fail "fleet-run-stall suite failed"
@@ -185,7 +188,7 @@ if ! node -e "require.resolve('typescript/bin/tsc')" >/dev/null 2>&1; then
   npm install --no-save --ignore-scripts typescript@5.9.3 || fail "typescript install failed"
 fi
 node --test test_omniroute_rehearsal_translator.mjs || fail "translator fixture failed"
-./templates/org-github/check-staged-drift.sh || fail "staged Tier-0 drift gate failed"
+python3 test_staged_drift.py || fail "staged Tier-0 drift gate failed"
 
 if [[ "$rc" -ne 0 ]]; then
   echo "verify-fast: FAILED"

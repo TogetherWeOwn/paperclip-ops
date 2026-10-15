@@ -27,9 +27,9 @@ INSTALLER = ROOT / "systemd" / "install-project-regen-prune.sh"
 TOOL = ROOT / "ops" / "case_60e07cc2" / "project_worktree_regen_prune.py"
 
 PAYLOAD = [
-    "ops/lib/atomic_state.py",
-    "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
     "ops/case_60e07cc2/project_worktree_regen_prune.py",
+    "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
+    "ops/lib/atomic_state.py",
     "systemd/install-project-regen-prune.sh",
     "systemd/paperclip-project-regen-prune.service",
     "systemd/paperclip-project-regen-prune.timer",

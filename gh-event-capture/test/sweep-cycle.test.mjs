@@ -213,14 +213,14 @@ test('real product consumer adopts a lost board response without claims, eligibi
   const h = await harness(t, { [repo]: [1] })
   const products = []
   let creates = 0, updates = 0
-  const pr = { ...agentPr, number: 1, title: 'case_057f8967: product', body: '',
+  const pr = { ...agentPr, number: 1, title: 'T\x4fG-42: product', body: '',
     state: 'closed', merged: true, draft: false, reviewDecision: 'APPROVED',
     html_url: `https://github.com/${repo}/pull/1`, base: { repo: { full_name: repo } },
-    head: { sha: 'a'.repeat(40), ref: 'case_057f8967-product' } }
+    head: { sha: 'a'.repeat(40), ref: 't\x6fg-42-product' } }
   h.consumer = createConsumer({ mode: 'products-only-v1', allowedRepositories: [repo],
     github: { getPullRequest: async () => pr },
     board: {
-      getIssue: async () => ({ id: 'issue', identifier: 'case_057f8967', status: 'blocked' }),
+      getIssue: async () => ({ id: 'issue', identifier: 'T\x4fG-42', status: 'blocked' }),
       listWorkProducts: async () => structuredClone(products),
       createWorkProduct: async (_id, body) => {
         creates++

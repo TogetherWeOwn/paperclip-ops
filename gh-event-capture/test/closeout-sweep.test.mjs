@@ -60,11 +60,11 @@ test('shadow covers unmapped, null-decision, would-claim and already-claimed', a
     noException: 1, exceptions: 2, byClass: { conflict: 1, stalled: 1 }, wouldClaim: 1, alreadyClaimed: 1, errors: 0 })
   const byNumber = new Map(records.map((r) => [r.number, r]))
   assert.deepEqual(byNumber.get(1), { repository: repo, number: 1, headSha: head('a'), decision: 'conflict',
-    mapping: { issueRef: 'case_38d056f3', source: 'work-product' }, claim: 'wouldClaim' })
+    mapping: { issueRef: 'T\x4fG-10', source: 'work-product' }, claim: 'wouldClaim' })
   assert.equal(byNumber.get(2).claim, 'alreadyClaimed')
   assert.equal(byNumber.get(2).decision, 'stalled')
   assert.deepEqual(byNumber.get(3), { repository: repo, number: 3, headSha: head('c'), decision: null,
-    mapping: { issueRef: 'case_de259302', source: 'work-product' }, claim: 'none' })
+    mapping: { issueRef: 'T\x4fG-12', source: 'work-product' }, claim: 'none' })
   assert.deepEqual(byNumber.get(4).mapping, { unmapped: 'no-ref' })
   assert.equal(byNumber.get(4).claim, 'none')
   // The run is read-only: no claim was added, none removed.
@@ -103,7 +103,7 @@ test('policy is injected: the same snapshot flips with the grace period', async 
   const missing = snapshot(9, head('e'), { reviewDecision: 'APPROVED', headPushedMs: 0, nowMs: 2000,
     checks: [done('check'), done('gitleaks')] })
   const github = { async getCloseoutSnapshot() { return missing } }
-  const rows = [{ issue: { id: 'issue-9', identifier: 'case_6febe3f5', status: 'in_progress' },
+  const rows = [{ issue: { id: 'issue-9', identifier: 'T\x4fG-19', status: 'in_progress' },
     products: [{ type: 'pull_request', provider: 'github', externalId: `${repo}#9` }] }]
   const base = { github, index: buildPrTaskIndex(rows), claims: freshClaimState(claimNs),
     references: [{ repository: repo, number: 9 }], nowMs: 2000 }

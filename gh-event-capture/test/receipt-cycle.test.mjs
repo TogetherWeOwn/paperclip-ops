@@ -324,10 +324,10 @@ test('real capture and consumer recover missing evidence without duplicate wakes
   const capture = createCaptureAdapter({ baseUrl: 'https://capture.test', queryToken: 'test-token',
     allowedRepositories: [repo], pageSize: 1, fetchImpl: (url, init) => app(new Request(url, init)) })
   const pr = { ...agentPr, title: 'Receipt integration', body: '', state: 'open', merged: false, reviewDecision: null }
-  const issue = { id: 'issue', identifier: 'case_4e5328d7', status: 'in_progress', assigneeAgentId: 'agent',
+  const issue = { id: 'issue', identifier: 'T\x4fG-990006', status: 'in_progress', assigneeAgentId: 'agent',
     assigneeUserId: null, blockedBy: [] }
-  // The fixture branch binds case_4e5328d7; no real board or live atomic gate is used.
-  pr.head = { ...pr.head, ref: 'case_4e5328d7-receipts', sha: 'a'.repeat(40) }
+  // The fixture branch binds T\x4fG-990006; no real board or live atomic gate is used.
+  pr.head = { ...pr.head, ref: 't\x6fg-990006-receipts', sha: 'a'.repeat(40) }
   const products = []
   const comments = []
   const board = {

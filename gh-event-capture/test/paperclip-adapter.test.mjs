@@ -13,10 +13,10 @@ const runId = '00000000-0000-4000-8000-000000000018'
 const repo = 'TogetherWeOwn/paperclip-ops'
 const sha = 'a'.repeat(40)
 const token = 'TEST-PRIVATE-BOARD-KEY'
-const issue = { id: issueId, companyId, identifier: 'case_22b092f5', status: 'done' }
+const issue = { id: issueId, companyId, identifier: 'T\x4fG-990017', status: 'done' }
 const body = { type: 'pull_request', provider: 'github', title: 'Bridge PR',
   url: `https://github.com/${repo}/pull/42`, externalId: `${repo}#42`, status: 'active', reviewState: 'none',
-  metadata: { repo, number: 42, headSha: sha, headRef: 'case_22b092f5-bridge' } }
+  metadata: { repo, number: 42, headSha: sha, headRef: 't\x6fg-990017-bridge' } }
 const product = { ...body, id: productId, companyId, issueId }
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body),
   { status, headers: { 'content-type': 'application/json', ...headers } })
@@ -45,9 +45,9 @@ test('open issues list requests explicit identity pages, validates the whole set
 test('open issues list refuses envelopes, saturation, duplicate or malformed rows without partial registration', async () => {
   const open = { ...issue, status: 'todo' }
   for (const rows of [{ items: [open], total: 1 }, [open, open], [open, { ...open, id: otherId }],
-    [open, { ...open, id: otherId, identifier: 'case_1ef046c6', companyId: otherId }],
+    [open, { ...open, id: otherId, identifier: 'T\x4fG-8', companyId: otherId }],
     [{ ...open, status: 'done' }], [{ ...open, status: 'unknown' }], [{ ...open, id: 'bad' }],
-    [{ ...open, identifier: 'case_05330ec4' }], [{ ...open, companyId: undefined }], Array(5001).fill(open), null]) {
+    [{ ...open, identifier: 'T\x4fG-0' }], [{ ...open, companyId: undefined }], Array(5001).fill(open), null]) {
     const h = harness([json(rows)])
     await assert.rejects(h.adapter.listOpenIssues())
     await assert.rejects(h.adapter.listWorkProducts(issueId), /resolved/)
@@ -98,12 +98,12 @@ test('open issue pagination refuses cap overflow and nonadvancing cursors withou
 test('exact product routes, fields and audit header; no bare comment capability', async () => {
   const h = harness([json(issue), json([]), json(product, 201), json({ ...product, status: 'merged' })])
   assert.deepEqual(Object.keys(h.adapter).sort(), ['commentIfEligible', 'createWorkProduct', 'getIssue', 'listInteractions', 'listOpenIssues', 'listWorkProducts', 'updateWorkProduct'])
-  assert.deepEqual(await h.adapter.getIssue('case_22b092f5'), { id: issueId, identifier: issue.identifier, companyId })
+  assert.deepEqual(await h.adapter.getIssue('T\x4fG-990017'), { id: issueId, identifier: issue.identifier, companyId })
   assert.deepEqual(await h.adapter.listWorkProducts(issueId), [])
   await h.adapter.createWorkProduct(issueId, { ...body, assigneeAgentId: otherId, reopen: true, createdByRunId: otherId })
   await h.adapter.updateWorkProduct(productId, { ...body, status: 'merged' })
   assert.deepEqual(h.calls.map((c) => [c.init.method, new URL(c.url).pathname]), [
-    ['GET', '/api/issues/case_22b092f5'], ['GET', `/api/issues/${issueId}/work-products`],
+    ['GET', '/api/issues/T\x4fG-990017'], ['GET', `/api/issues/${issueId}/work-products`],
     ['POST', `/api/issues/${issueId}/work-products`], ['PATCH', `/api/work-products/${productId}`],
   ])
   assert.deepEqual(JSON.parse(h.calls[2].init.body), body)
@@ -118,10 +118,10 @@ test('exact product routes, fields and audit header; no bare comment capability'
 })
 
 test('cross-company/mismatched/malformed issue responses are rejected before writes', async () => {
-  for (const bad of [{ ...issue, companyId: otherId }, { ...issue, identifier: 'case_4ee01500' },
+  for (const bad of [{ ...issue, companyId: otherId }, { ...issue, identifier: 'T\x4fG-7' },
     { ...issue, id: 'not-uuid' }, { ...issue, identifier: null }, null]) {
     const h = harness([json(bad)])
-    await assert.rejects(h.adapter.getIssue('case_22b092f5'), /identity/)
+    await assert.rejects(h.adapter.getIssue('T\x4fG-990017'), /identity/)
     await assert.rejects(h.adapter.createWorkProduct(issueId, body), /resolved/)
     assert.equal(h.calls.length, 1)
   }
@@ -238,7 +238,7 @@ function fakeBoard(options = {}) {
   h.fetch = async (url, init) => {
     const path = new URL(url).pathname
     h.calls.push([init.method, path])
-    if (init.method === 'GET' && ['/api/issues/case_22b092f5', `/api/issues/${issueId}`].includes(path)) return json(issue)
+    if (init.method === 'GET' && ['/api/issues/T\x4fG-990017', `/api/issues/${issueId}`].includes(path)) return json(issue)
     if (init.method === 'GET' && path === `/api/issues/${issueId}/work-products`) return json(h.products)
     if (init.method === 'POST' && path === `/api/issues/${issueId}/work-products`) {
       const p = { ...JSON.parse(init.body), id: productId, companyId, issueId }
@@ -253,7 +253,7 @@ function fakeBoard(options = {}) {
     assert.fail('unexpected route: '+path)
   }
   h.pr = { number: 42, html_url: body.url, user: { login: 'togetherweown[bot]' },
-    head: { ref: 'case_22b092f5-bridge', sha }, base: { repo: { full_name: repo } },
+    head: { ref: 't\x6fg-990017-bridge', sha }, base: { repo: { full_name: repo } },
     title: 'Bridge PR', state: 'open', draft: false, merged: false, reviewDecision: null }
   h.adapter = createPaperclipAdapter({ baseUrl: 'https://board.test', token, companyId,
     allowedRepositories: [repo], fetchImpl: h.fetch })
@@ -299,7 +299,7 @@ test('real loopback socket handles product writes with non-waking routes only', 
   t.after(() => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve) }))
   const adapter = createPaperclipAdapter({ baseUrl: `http://127.0.0.1:${server.address().port}`, token,
     companyId, allowedRepositories: [repo] })
-  await adapter.getIssue('case_22b092f5')
+  await adapter.getIssue('T\x4fG-990017')
   await adapter.listWorkProducts(issueId)
   assert.equal((await adapter.createWorkProduct(issueId, body)).id, productId)
   assert.equal((await adapter.updateWorkProduct(productId, { ...body, reviewState: 'approved' })).reviewState, 'approved')
@@ -316,7 +316,7 @@ test('configuration failures redact secrets and refuse unsafe origins', () => {
 })
 
 const commentToken = 'TEST-AGENT-COMMENT-KEY'
-const eligibleIssue = { id: issueId, companyId, identifier: 'case_22b092f5', status: 'in_progress',
+const eligibleIssue = { id: issueId, companyId, identifier: 'T\x4fG-990017', status: 'in_progress',
   assigneeAgentId: 'engineer', assigneeUserId: null, blockedBy: [] }
 const wakePr = { repository: repo, number: 42 }
 const wakeBody = { body: `GitHub bridge: [PR #42](https://github.com/${repo}/pull/42) merged at head \`${sha}\`.` }
@@ -332,7 +332,7 @@ function gatedHarness({ issueRow = eligibleIssue, interactions = [], comment = {
   return h
 }
 async function resolveScope(h) {
-  await h.adapter.getIssue('case_22b092f5')
+  await h.adapter.getIssue('T\x4fG-990017')
 }
 
 test('gated comment posts under agent-actor auth only when its own reads show eligible', async () => {

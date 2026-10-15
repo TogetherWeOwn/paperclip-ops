@@ -205,7 +205,7 @@ for (const [name, mutate] of Object.entries({
 test('JSON rejects duplicate, malformed, invalid UTF16 projection and out-of-range integers', async () => {
   for (const text of ['{"a":1,"a":2}', '{"a":1,"\\u0061":2}', '[1,]', '01', '{"x":true}garbage', '1.0', '1e0']) assert.throws(() => parseDocument(text))
   for (const id of [0, 9007199254740992, '01', '1e3', '1.0', '1suffix', '9'.repeat(20)]) assert.throws(() => runId(id))
-  for (const version of ['-0', '+1', '01', '10114896513660470']) assert.throws(() => versionString(version, true))
+  for (const version of ['-0', '+1', '01', (2n ** 63n).toString()]) assert.throws(() => versionString(version, true))
   const f = contractFixture(); f.manifest.source_migrations[0].description = '\ud800'
   await assert.rejects(projectionHash(f.manifest))
 })

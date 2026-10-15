@@ -57,6 +57,46 @@ test "$(git -C "$staging" rev-parse HEAD)" = "$expected_head"
 """
 
 
+class PublicHistoricalProvenanceScope(unittest.TestCase):
+    """An absent private blob is skippable only in the declared public snapshot."""
+
+    def run_historical_gate(self, public_scanner=False, public_readme=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git(root, "init", "-q")
+            verification = root / "verification"
+            verification.mkdir()
+            gate = verification / "case_c89b5362-drift-pin-mutation-gate.sh"
+            shutil.copy2(HERE / "verification" / gate.name, gate)
+            # The public gate now runs its semantic controls, so stage the real
+            # checker rather than a pin-only no-op that cannot detect drift.
+            shutil.copy2(HERE / "verification/case_5dfa9150-handoff-copy-drift.sh",
+                         verification / "case_5dfa9150-handoff-copy-drift.sh")
+            (root / "README.md").write_text(
+                "## Fresh-history publication candidate\n" if public_readme else "Private source\n"
+            )
+            if public_scanner:
+                scripts = root / ".github/scripts"
+                scripts.mkdir(parents=True)
+                (scripts / "public_safety.py").write_text("# public snapshot marker\n")
+            return subprocess.run(["bash", str(gate)], capture_output=True, text=True, timeout=10)
+
+    def test_public_snapshot_reports_explicit_private_artifact_skip(self):
+        result = self.run_historical_gate(True, True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("SKIP: historical private handoff provenance only", result.stdout)
+        self.assertIn("GATE GREEN: 8 scenarios behaved and 5 mutants were killed.",
+                      result.stdout)
+
+    def test_missing_provenance_elsewhere_still_refuses(self):
+        for scanner, readme in ((False, False), (True, False), (False, True)):
+            with self.subTest(scanner=scanner, readme=readme):
+                result = self.run_historical_gate(scanner, readme)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertNotIn("SKIP:", result.stdout)
+                self.assertIn("pinned blob", result.stderr)
+
+
 class GateFixture(unittest.TestCase):
     """A staging dir with a real git tree and real pinned operator scripts."""
 

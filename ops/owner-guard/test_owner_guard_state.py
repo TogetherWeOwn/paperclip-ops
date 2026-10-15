@@ -18,7 +18,7 @@ import owner_guard as og  # noqa: E402
 TODAY = dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%d')
 STAMP = '2026-10-04T21:44:57+00:00'
 EMPTY = json.dumps({'commented': {}, 'digest_day': ''})
-ROUTED = 'case_65397829|Owner click new PR|do the thing\n'
+ROUTED = 'TOG-' '999999401|Owner click new PR|do the thing\n'
 
 
 class Base(unittest.TestCase):
@@ -67,7 +67,7 @@ class FailClosed(Base):
 
     def test_malformed_or_invalid_state_posts_nothing(self):
         for raw in ('{"commented": {', '{"commented": {}}', '{"commented": {"x": "y"}, "digest_day": ""}',
-                    '{"commented": {"case_8c5fe4cc": 5}, "digest_day": ""}', '{"commented": {}, "digest_day": "10/09/2026"}'):
+                    '{"commented": {"TOG-' '999999401": 5}, "digest_day": ""}', '{"commented": {}, "digest_day": "10/09/2026"}'):
             with self.subTest(raw=raw):
                 self.state.write_text(raw)
                 with self.assertRaises(og.atomic_state.StateError):
@@ -86,14 +86,14 @@ class Posting(Base):
 
         self.comment.side_effect = post
         og.main()
-        self.assertEqual(seen[0][0], 'case_65397829')
-        self.assertIn('case_65397829', seen[0][1])
+        self.assertEqual(seen[0][0], 'TOG-' '999999401')
+        self.assertIn('TOG-' '999999401', seen[0][1])
 
     def test_posted_card_is_not_posted_again(self):
         self.state.write_text(EMPTY)
         og.main()
         og.main()
-        self.assertEqual(self.posts, ['case_65397829', og.DIGEST_CARD])
+        self.assertEqual(self.posts, ['TOG-' '999999401', og.DIGEST_CARD])
 
     def test_failed_save_before_the_post_posts_nothing(self):
         self.state.write_text(EMPTY)
@@ -112,23 +112,23 @@ class Posting(Base):
         self.assertEqual(self.disk()['commented'], {})
         self.post_result = True
         og.main()
-        self.assertIn('case_65397829', self.disk()['commented'])
-        self.assertEqual(self.posts.count('case_65397829'), 2)
+        self.assertIn('TOG-' '999999401', self.disk()['commented'])
+        self.assertEqual(self.posts.count('TOG-' '999999401'), 2)
 
     def test_post_that_raises_stays_suppressed(self):
         self.state.write_text(EMPTY)
         self.post_raises = RuntimeError('network down')
         with self.assertRaises(RuntimeError):
             og.main()
-        self.assertIn('case_65397829', self.disk()['commented'])
+        self.assertIn('TOG-' '999999401', self.disk()['commented'])
         self.post_raises = None
         og.main()
-        self.assertEqual(self.posts.count('case_65397829'), 1)
+        self.assertEqual(self.posts.count('TOG-' '999999401'), 1)
 
 
 class Digest(Base):
     def state_with_card(self):
-        self.state.write_text(json.dumps({'commented': {'case_65397829': STAMP}, 'digest_day': ''}))
+        self.state.write_text(json.dumps({'commented': {'TOG-' '999999401': STAMP}, 'digest_day': ''}))
 
     def test_digest_posts_once_per_day(self):
         self.state_with_card()
@@ -151,7 +151,7 @@ class Recovery(Base):
     def doc(self, **overrides):
         doc = {'provenance': {'source': 'board comments on every card', 'retrieved_at': '2026-10-09T03:40:00Z',
                               'complete': True},
-               'commented': {'case_ff18cbc2': {'comment_id': 'c1', 'created_at': '2026-10-04T21:44:57Z'}},
+               'commented': {'TOG-' '999999402': {'comment_id': 'c1', 'created_at': '2026-10-04T21:44:57Z'}},
                'digest': {'day': '2026-10-04', 'comment_id': 'd1'}}
         doc.update(overrides)
         return doc
@@ -163,12 +163,12 @@ class Recovery(Base):
 
     def test_empty_state_recovers_from_verified_history_and_keeps_prior_cards_suppressed(self):
         self.state.write_bytes(b'')
-        self.rows = ROUTED + 'case_ff18cbc2|Owner click new PR|older card\n'
+        self.rows = ROUTED + 'TOG-' '999999402|Owner click new PR|older card\n'
         og.recover_state(self.write_doc(self.doc()))
-        self.assertEqual(self.disk(), {'commented': {'case_ff18cbc2': '2026-10-04T21:44:57Z'}, 'digest_day': '2026-10-04'})
+        self.assertEqual(self.disk(), {'commented': {'TOG-' '999999402': '2026-10-04T21:44:57Z'}, 'digest_day': '2026-10-04'})
         og.main()
-        self.assertNotIn('case_ff18cbc2', self.posts)
-        self.assertEqual(self.posts.count('case_65397829'), 1)
+        self.assertNotIn('TOG-' '999999402', self.posts)
+        self.assertEqual(self.posts.count('TOG-' '999999401'), 1)
         self.assertTrue(any('.replaced-' in p.name for p in self.dir.iterdir()))
 
     def test_null_digest_records_no_digest_day(self):
@@ -179,7 +179,7 @@ class Recovery(Base):
     def test_refuses_incomplete_or_unverified_history(self):
         self.state.write_bytes(b'')
         bad = [self.doc(provenance={'source': 's', 'retrieved_at': 't', 'complete': False}),
-               self.doc(commented={'case_ff18cbc2': {'created_at': 't'}}),
+               self.doc(commented={'TOG-' '999999402': {'created_at': 't'}}),
                self.doc(digest={'day': 'not-a-day', 'comment_id': 'd1'})]
         for doc in bad:
             with self.subTest(doc=doc), self.assertRaises(ValueError):

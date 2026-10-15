@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
-// Readiness write wrapper suite (case_843de563). Mirrors gh-wrapper.test.mjs: no
+// Readiness write wrapper suite (T\x4fG-990011). Mirrors gh-wrapper.test.mjs: no
 // live App PEM ever reaches a test, and every minted value is a throwaway stub.
 // The permission assertions are the point: the mint must carry exactly the
 // five readiness grants (pull_requests:write, contents:write, checks:read,
@@ -205,7 +205,7 @@ test('public signing key is refused without minting', async (t) => {
   assert.equal(hits.length, 0, 'no mint attempt with a public key')
 })
 
-test('a foreign App ID is refused without minting (CISO case_3ef78cf1 note)', async (t) => {
+test('a foreign App ID is refused without minting (CISO T\x4fG-990012 note)', async (t) => {
   const { hits, port } = await stubGithub(t)
   const h = await harness(t, { appId: '1234567' })
   const result = await h.run(['pr', 'view', '1'], { GH_API_URL: `http://127.0.0.1:${port}` })

@@ -1,0 +1,45 @@
+{
+  "schema": "garm-runner-image-receipt.v1",
+  "alias": "garm-runner-20261006",
+  "built_at": "2026-10-06T15:30:00Z",
+  "builder_revision": "9999999999999999999999999999999999999999",
+  "role": "generic-private",
+  "base": {
+    "image": "ubuntu:24.04",
+    "digest": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+  },
+  "inputs_sha256": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+  "profile_sha256": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3",
+  "pins_sha256": "e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4",
+  "tool_versions": {
+    "runner": "2.337.0",
+    "node": "24.12.0",
+    "php": "8.5.11",
+    "composer": "2.9.3",
+    "psql": "16.15",
+    "docker": "27.5.1",
+    "docker_compose": "2.32.4",
+    "mysqldump": "8.0.42",
+    "gh": "2.45.0",
+    "go": "1.26.6",
+    "govulncheck": "1.8.0"
+  },
+  "docker": {
+    "local_daemon_only": true,
+    "tcp_relay": false,
+    "docker_host_set": false
+  },
+  "guarantees": {
+    "no_secrets": true,
+    "no_registration": true,
+    "jit_config_preserved": true,
+    "ephemeral_preserved": true
+  },
+  "output": {
+    "fingerprint": "f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5"
+  },
+  "evidence_class": "synthetic",
+  "admission_authorized": false,
+  "host_verified": false,
+  "installed": false
+}

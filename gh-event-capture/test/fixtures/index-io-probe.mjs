@@ -12,9 +12,9 @@ const namespace = 'b'.repeat(64)
 const issueId = '00000000-0000-4000-8000-000000000014'
 const companyId = '00000000-0000-4000-8000-000000000015'
 const repository = 'Example/repo'
-const issue = { id: issueId, companyId, identifier: 'case_8c5fe4cc', status: 'in_progress' }
+const issue = { id: issueId, companyId, identifier: 'T\x4fG-1', status: 'in_progress' }
 const cacheBytes = Buffer.from(JSON.stringify({ version: 1, namespace, builtAt: 0, entries: [{ issueId,
-  identifier: 'case_8c5fe4cc', status: 'in_progress', readAt: 0, keys: [`${repository}#1`] }], retryAfter: {} }))
+  identifier: 'T\x4fG-1', status: 'in_progress', readAt: 0, keys: [`${repository}#1`] }], retryAfter: {} }))
 let now = 0
 let locked = false
 let fsSettled = false

@@ -68,18 +68,14 @@ def env(**kw):
     base.update(kw)
     # Sanitization replaced the negative fixtures along with real identifiers.
     # Build deliberately synthetic inputs at runtime: these are not live cards.
-    # Legacy synthesis is scoped to public-repo evaluations, where the
-    # placeholders act as forbidden internal references: a legacy tracker id
-    # must still be flagged there. Private evaluations keep the sanitized
-    # case_ placeholders, because the private card gate now requires a case_
-    # reference (GOOD_BODY's Refs line is the valid positive fixture) and a
-    # legacy id alone must not satisfy it.
-    if str(base.get("REPO_PRIVATE", "true")).strip().lower() == "false":
-        for key, value in base.items():
-            if isinstance(value, str):
-                for i, placeholder in enumerate(("case_1cab5f7f", "case_4e5328d7", "case_f052904a")):
-                    value = value.replace(placeholder, "-".join(("TOG", str(999999990 + i))))
-                base[key] = value
+    # Synthesize tracker ids for every evaluation: the private gate accepts
+    # either a tracker id or a case_ ref, and public evaluations must still
+    # flag the tracker shape as an internal reference.
+    for key, value in base.items():
+        if isinstance(value, str):
+            for i, placeholder in enumerate(("case_1cab5f7f", "case_4e5328d7", "case_f052904a")):
+                value = value.replace(placeholder, "-".join(("TOG", str(999999990 + i))))
+            base[key] = value
     return base
 
 
@@ -172,20 +168,44 @@ class CardAndInternalRefs(unittest.TestCase):
         self.assertIn(("error", "Card reference"), levels(ps.evaluate(env(BODY=body))))
         self.assertIn(("warning", "Card reference"), levels(ps.evaluate(env(BODY=body, REQUIRE_CARD_REF="false"))))
 
-    def test_private_gate_rejects_a_legacy_id_alone(self):
-        # The private gate follows the case_ convention: a legacy tracker id
-        # (synthesized at runtime, not a live card) does not satisfy it, while
-        # GOOD_BODY's sanitized case_ reference does (test_good_body_passes).
+    def test_private_gate_accepts_tracker_or_case_ref(self):
+        # The private gate accepts either shape: the tracker id real private
+        # PRs cite (synthesized at runtime, not a live card) or the case_
+        # pseudonym this public snapshot uses. Missing both still fails.
         legacy = "-".join(("TOG", "999999991"))
-        body = GOOD_BODY.replace("Refs: case_1cab5f7f", "Refs: " + legacy)
-        self.assertIn(("error", "Card reference"), levels(ps.evaluate(env(BODY=body))))
+        # NOTE: env() rewrites the three placeholder case_ ids to tracker ids,
+        # so the case_ positive uses a non-placeholder hex ref that survives.
+        bodies = (
+            GOOD_BODY.replace("Refs: case_1cab5f7f", "Refs: " + legacy),
+            GOOD_BODY.replace("case_1cab5f7f", "case_a1b2c3d4"),
+        )
+        for body in bodies:
+            refs = [t for _, t in levels(ps.evaluate(env(BODY=body))) if t == "Card reference"]
+            self.assertEqual([], refs, body[:80])
+        missing = GOOD_BODY.replace("Refs: case_1cab5f7f", "Fixes #12")
+        self.assertIn(("error", "Card reference"), levels(ps.evaluate(env(BODY=missing))))
 
     def test_public_detection_flags_case_refs_and_legacy_ids(self):
-        # env() rewrites placeholders to legacy ids for public evaluations, so
-        # the case_ path is pinned directly here: both shapes are internal.
+        # Both shapes are internal on public repos when they stand alone.
         legacy = "-".join(("TOG", "999999991"))
         self.assertTrue(any("card ref" in h for h in ps.internal_hits("see case_1cab5f7f here", "TOG|PAP|PAPA")))
         self.assertTrue(any("ticket id" in h for h in ps.internal_hits("see " + legacy + " here", "TOG|PAP|PAPA")))
+
+    def test_public_case_path_stays_clean(self):
+        # Naming a tracked case_ file is not a live card reference: the match
+        # is preceded by `/` and followed by `-`, so it stays clean. Keeps
+        # pr_standards.py consistent with public_safety.py.
+        hits = ps.internal_hits("see verification/case_c89b5362-drift-pin-mutation-gate.sh here", "TOG|PAP|PAPA")
+        self.assertEqual([], hits, "tracked case_ path flagged: %r" % (hits,))
+
+    def test_public_documentation_placeholders_stay_clean(self):
+        # RFC 5737 documentation addresses and example.invalid hosts are
+        # safe-by-definition placeholders (public_safety.py EXAMPLES exempts
+        # the same ranges): they must not be flagged as internal references.
+        for sample in ("server 203.0.113.5 up", "server 192.0.2.7 up",
+                       "server 198.51.100.9 up", "host api.example.invalid down"):
+            hits = ps.internal_hits(sample, "TOG|PAP|PAPA")
+            self.assertEqual([], hits, "%r flagged: %r" % (sample, hits))
 
     def test_public_repo_forbids_internal_refs_in_title_body_and_branch(self):
         pub = dict(REPO_PRIVATE="false")

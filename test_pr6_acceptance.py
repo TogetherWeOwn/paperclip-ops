@@ -17,11 +17,12 @@ run 38682854483):
   (``needed job secret-scan ended failure``, ``needed job changes ended
   failure``); no independent aggregator defect was observed.
 
-The first class below guards the PR's own fix (private card-ref gate and
-internal detection now follow the ``case_`` convention); it is green on the
-pre-fix head and must stay green. The remaining red classes fail on the
-pre-fix head by design and go green once the landing change fixes the
-underlying gates.
+The first class below guards the PR's own fix (private card-ref gate accepts
+a tracker card ref or a ``case_`` ref; public detection flags standalone
+``case_`` refs and tracker ids but stays clean on tracked ``case_`` paths
+and documentation placeholders); it is green on the pre-fix head and must
+stay green. The remaining red classes fail on the pre-fix head by design and
+go green once the landing change fixes the underlying gates.
 
 After the hosted public-CI restoration landed on main and was merged into
 this branch, three contracts were reconciled with the merged implementation
@@ -31,9 +32,9 @@ repository while the secret and privacy scans stay unconditional; the four
 gate destinations are retained in the manifest, remapped to public toolkit
 source paths restored under the default pin; and the disk-pressure
 preflight is advisory on ephemeral runners, not a runner-pool refusal. The
-lint-suite guard additionally required the lint test helper to scope its
-synthetic legacy ids to public evaluations, preserving the valid private
-``case_`` fixture. Run with ``python3 -m unittest test_pr6_acceptance``
+lint-suite guard keeps the lint test helper synthesizing tracker ids for
+every evaluation while the private gate accepts either shape, so both the
+tracker and ``case_`` positives stay green. Run with ``python3 -m unittest test_pr6_acceptance``
 (also wired into ``scripts/verify-fast.sh``). Stdlib only, hermetic, well
 under a second apart from the repository's own lint suite it shells out to.
 """
@@ -187,10 +188,10 @@ def ci_step(name, workflow=".github/workflows/ci.yml"):
 
 
 class PrStandardsAlignment(unittest.TestCase):
-    """The PR's own fix: card-ref detection follows the case_ convention."""
+    """The PR's own fix: private gate accepts tracker or case_, public flags standalone refs."""
 
-    def test_private_card_gate_uses_case_refs(self):
-        """A legacy tracker id alone must not satisfy the private gate."""
+    def test_private_card_gate_accepts_tracker_or_case_ref(self):
+        """A tracker id or a case_ ref satisfies the private gate; missing both fails."""
         env = {
             "EVENT": "pull_request",
             "TITLE": "fix(scope): do a thing",
@@ -202,7 +203,7 @@ class PrStandardsAlignment(unittest.TestCase):
         legacy = "Refs: %s-%d" % ("TO" + "G", 123)
         for body, want in (
             ("just some words", True),
-            (legacy, True),
+            (legacy, False),
             ("Refs: case_1cab5f7f", False),
         ):
             env["BODY"] = body
@@ -214,24 +215,36 @@ class PrStandardsAlignment(unittest.TestCase):
                 got, want, "body %r: Card reference finding=%s" % (body, got)
             )
 
-    def test_internal_hits_flags_case_refs_and_new_patterns(self):
-        """case_ refs, documentation IPs and example hosts are internal."""
+    def test_internal_hits_flags_standalone_refs(self):
+        """Standalone case_ refs and tracker ids are internal."""
         hits = ps.internal_hits("see case_1cab5f7f here", "TOG|PAP|PAPA")
         self.assertTrue(
             any("case_1cab5f7f" in h for h in hits),
             "card ref not flagged: %r" % (hits,),
         )
-        for sample, label in (
-            ("server 192.0.2.7 up", "documentation IP"),
-            ("server 198.51.100.9 up", "documentation IP"),
-            ("server 203.0.113.4 up", "documentation IP"),
-            ("host foo.example.invalid down", "example.invalid"),
+        legacy = "%s-%d" % ("TO" + "G", 999999991)
+        hits = ps.internal_hits("see " + legacy + " here", "TOG|PAP|PAPA")
+        self.assertTrue(
+            any("ticket id" in h for h in hits),
+            "tracker id not flagged: %r" % (hits,),
+        )
+
+    def test_internal_hits_paths_and_placeholders_stay_clean(self):
+        """Tracked case_ paths and documentation placeholders are not internal.
+
+        Keeps pr_standards.py consistent with public_safety.py, which exempts
+        the RFC 5737 ranges and only flags tracker-shaped ids: a public PR
+        must be able to name the files it changes and use example addresses.
+        """
+        for sample in (
+            "see verification/case_c89b5362-drift-pin-mutation-gate.sh here",
+            "server 192.0.2.7 up",
+            "server 198.51.100.9 up",
+            "server 203.0.113.4 up",
+            "host foo.example.invalid down",
         ):
-            self.assertTrue(
-                any(label in h
-                    for h in ps.internal_hits(sample, "TOG|PAP|PAPA")),
-                "%r: %s not flagged" % (sample, label),
-            )
+            hits = ps.internal_hits(sample, "TOG|PAP|PAPA")
+            self.assertEqual(hits, [], "%r flagged: %r" % (sample, hits))
 
     def test_internal_hits_look_alikes_stay_clean(self):
         """Version strings and out-of-range addresses are not internal."""

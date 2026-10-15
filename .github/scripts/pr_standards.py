@@ -81,11 +81,8 @@ FIXED_INTERNAL = [
     (re.compile(r"\b(?:localhost|127\.0\.0\.1)\b"), "a localhost URL"),
     (re.compile(r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b"),
      "a private-network address"),
-    (re.compile(r"\b(?:192\.0\.2\.\d{1,3}|198\.51\.100\.\d{1,3}|203\.0\.113\.\d{1,3})\b"),
-     "a documentation IP address"),
     (re.compile(r"\b[\w-]+(?:\.[\w-]+)*\.ts\.net\b"), "a tailnet hostname"),
     (re.compile(r"\bdeploymentexample\.net\b"), "the internal Paperclip host"),
-    (re.compile(r"\b(?:[\w-]+\.)*example\.invalid\b"), "an example.invalid host"),
 ]
 
 
@@ -154,7 +151,11 @@ def internal_hits(text, prefixes):
     m = re.search(rf"\b(?:{prefixes})-\d+\b", text)
     if m:
         hits.append(f"ticket id {m.group(0)}")
-    m = re.search(r"\bcase_[0-9a-f]{8}\b", text)
+    # Skip path-embedded refs (e.g. verification/case_c89b5362-drift-pin-*.sh):
+    # a match preceded by `/` or followed by `-` names a tracked file, not a
+    # live card. Keeps this gate consistent with public_safety.py, which only
+    # flags tracker-shaped ids and exempts example networks/hosts.
+    m = re.search(r"(?<!/)\bcase_[0-9a-f]{8}\b(?!-)", text)
     if m:
         hits.append(f"card ref {m.group(0)}")
     for pat, label in FIXED_INTERNAL:
@@ -283,9 +284,16 @@ def check_pull_request(env):
             out.extend(check_machine_boxes(body, mode))
 
     if private:
-        if not generated and not re.search(r"\bcase_[0-9a-f]{8}\b", body):
+        # Accept either shape: the tracker card id (built from prefixes so no
+        # literal id is needed) or the case_ pseudonym this public snapshot
+        # uses. Real private PRs cite tracker ids; this repo's own PRs cite
+        # case_ refs. Requiring only case_ would red every adopter PR.
+        tracker_hit = re.search(rf"\b(?:{prefixes})-\d+\b", body)
+        case_hit = re.search(r"\bcase_[0-9a-f]{8}\b", body)
+        if not generated and not (tracker_hit or case_hit):
             level = "error" if env.get("REQUIRE_CARD_REF", "true").strip().lower() == "true" else "warning"
-            out.append(Finding(level, "Card reference", "Add 'Refs: case_1cab5f7f' to the PR body."))
+            out.append(Finding(level, "Card reference", "Add a card reference to the PR body "
+                               "('Refs: case_1cab5f7f' in this public snapshot)."))
     else:
         for where, text in (("title", title), ("body", body), ("branch name", head_ref)):
             hits = internal_hits(text, prefixes)

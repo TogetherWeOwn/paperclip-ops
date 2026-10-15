@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Acceptance checks for landing paperclip-ops PR #3 (TOG-24961, paired Land: TOG-24957).
+"""Acceptance checks for landing paperclip-ops PR #3.
 
 PR: https://github.com/TogetherWeOwn/paperclip-ops/pull/3
     perf(stop-guard): bound Stop latency with read budget and card cache.
@@ -26,7 +26,7 @@ no network, no credentials, no database. ~10 s, dominated by one ~900 ms
 timeout measurement (test 5).
 
 Test files only: this file asserts about production files, it never edits them.
-The Land card (TOG-24957) must not touch this file; the fix belongs in
+The Land card must not touch this file; the fix belongs in
 production code and workflow files. Wiring into scripts/verify-fast.sh is left
 to the Land card (out of scope here on purpose: test files only).
 """
@@ -320,7 +320,7 @@ const env = {{ PAPERCLIP_TASK_ID: "T", PAPERCLIP_AGENT_ID: "A", PAPERCLIP_RUN_ID
   DISPOSITION_STOP_GUARD_CACHE_DIR: join(dir, "cache"),
   DISPOSITION_STOP_GUARD_LOG: join(dir, "d.jsonl"),
   DISPOSITION_STOP_GUARD_MODE: "enforce" }};
-const card = {{ id: "T", identifier: "TOG-1", status: "in_progress",
+const card = {{ id: "T", identifier: "OPS-1", status: "in_progress",
   assigneeAgentId: "A", executionRunId: "R", conversationAgentId: null,
   originKind: null, externalChannelBinding: null,
   monitorNextCheckAt: null, executionState: null, blockedBy: [],

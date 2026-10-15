@@ -36,11 +36,22 @@ jobs:
           # branches against this commit's allowlist and reds every PR for
           # another branch's finding. The dir scan above already covers the
           # checked-out tree.
+          #
+          # Lower bound is the merge-base with origin/main so re-runs and
+          # merge commits (where origin/main is not an ancestor of HEAD)
+          # still scan every PR commit. Fall back to --all when the base is
+          # missing or unrelated -- never to a single tip commit, which would
+          # miss a secret added and removed within the PR. The only single-
+          # commit case is a fast-forward tip (MB == HEAD, e.g. a push to
+          # main itself), where the tip carries a real patch.
           BASE="origin/main"
-          RANGE="$BASE..HEAD"
-          if ! git rev-parse --verify "$BASE" >/dev/null 2>&1 || \
-             ! git merge-base --is-ancestor "$BASE" HEAD 2>/dev/null || \
-             [ "$(git rev-list "$RANGE" --count 2>/dev/null || echo 0)" = "0" ]; then
+          if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
+            RANGE="--all"
+          elif ! MB=$(git merge-base "$BASE" HEAD 2>/dev/null); then
+            RANGE="--all"
+          elif [ "$MB" = "$(git rev-parse HEAD)" ]; then
             RANGE="-1 HEAD"
+          else
+            RANGE="$MB..HEAD"
           fi
           docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts="$RANGE" --config /repo/.gitleaks.toml --redact=100 --no-banner

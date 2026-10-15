@@ -22,11 +22,25 @@ live identity.
 Refuse the promotion with a clear reason when:
 
 - there are no deployments or no versions;
-- more than one version shares live traffic (never silently pick one);
-- the live version has no known build, or the build has no commit.
+- any version entry is not an object with a `version_id` (never silently
+  pick the identified half of a split);
+- any traffic percentage is not a number, or known percentages do not
+  total 100;
+- more than one version shares live traffic (never silently pick one).
+  A version at 0% is staged, not serving, so a 100/0 smoke-test layout
+  still promotes the 100% version;
+- the live version has no known build, the build has no commit, or build
+  metadata is not an object.
+
+The CLI exits 2 with `refused: <reason>` on every refusal above, so shell
+callers can treat rc 2 as the refusal signal.
 
 The decision and the recorded rollback command both use the derived commit.
-A stale tag must never feed either path.
+A stale tag must never feed either path. This helper is a standalone
+offline port: it is not wired into `scripts/dispatch_deploy.sh`, and the
+rollback argv it emits (`scripts/dispatch_deploy.sh rollback --commit
+<live-commit> --smoke-cmd <cmd>`) replays there with the caller's smoke
+command.
 
 ## Offline verification
 

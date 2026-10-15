@@ -14,8 +14,19 @@ Cloudflare contract (public docs, offline fixtures here):
 
 Fail-closed rules:
   - no deployments, or a first deployment with no versions -> refuse.
-  - more than one live version sharing traffic -> refuse (no silent pick).
-  - live version with no known build, or a build with no commit -> refuse.
+  - any version entry that is not an object with a version_id -> refuse
+    (never silently drop an unidentified split).
+  - any non-numeric traffic percentage, or percentages that do not total
+    100 when all are known -> refuse.
+  - more than one version sharing live traffic -> refuse (no silent pick).
+    Versions at 0% are staged, not serving, and do not block promotion.
+  - live version with no known build, a build with no commit, or non-object
+    build metadata -> refuse.
+
+Standalone port: this helper is not wired into scripts/dispatch_deploy.sh.
+It emits the same rollback argv that script expects (caller supplies the
+--smoke-cmd used for deploy) so the recorded rollback target can be replayed
+there, but no code path here performs a deploy.
 
 Offline: stdlib only, no network, no credentials, no subprocess. Callers pass
 already-fetched JSON payloads (dicts) so unit tests and the CLI stay hermetic.
@@ -64,10 +75,42 @@ def _builds_by_version(builds_payload: dict) -> dict:
     if isinstance(builds, list):
         normalized: dict = {}
         for entry in builds:
-            if isinstance(entry, dict) and entry.get("version_id"):
-                normalized[entry["version_id"]] = entry
+            vid = entry.get("version_id") if isinstance(entry, dict) else None
+            if isinstance(entry, dict) and isinstance(vid, str) and vid:
+                normalized[vid] = entry
         return normalized
     raise LiveIdentityError("builds payload has no usable result.builds mapping")
+
+
+def _validate_versions(versions: list) -> list[tuple[str, float | None]]:
+    """Validate every version entry; refuse closed on malformed input.
+
+    Returns [(version_id, percentage)] where percentage is None (unknown
+    share, treated as serving) or a number. Missing percentage defaults
+    to 100 to preserve single-version fixtures without traffic data.
+    """
+    validated: list[tuple[str, float | None]] = []
+    for idx, entry in enumerate(versions):
+        if not isinstance(entry, dict):
+            raise LiveIdentityError(
+                f"live deployment entry #{idx} is not an object: refusing to guess live version"
+            )
+        version_id = entry.get("version_id")
+        if not isinstance(version_id, str) or not version_id:
+            raise LiveIdentityError(
+                f"live deployment entry #{idx} has no version_id: refusing to guess live version"
+            )
+        pct = entry.get("percentage", 100)
+        if pct is None:
+            validated.append((version_id, None))
+        elif isinstance(pct, bool) or not isinstance(pct, (int, float)):
+            raise LiveIdentityError(
+                f"live version {version_id} has non-numeric percentage {pct!r}: "
+                "refusing to guess live version"
+            )
+        else:
+            validated.append((version_id, pct))
+    return validated
 
 
 def _commit_of(build: dict, version_id: str) -> tuple[str, str]:
@@ -75,14 +118,22 @@ def _commit_of(build: dict, version_id: str) -> tuple[str, str]:
     if not isinstance(build, dict):
         raise LiveIdentityError(f"live version {version_id} has no known build: refusing to promote")
     build_uuid = build.get("build_uuid", "") or build.get("id", "") or ""
+    if not isinstance(build_uuid, str):
+        raise LiveIdentityError(
+            f"live version {version_id} has non-string build id: refusing to promote"
+        )
     metadata = build.get("build_trigger_metadata", {}) or {}
+    if not isinstance(metadata, dict):
+        raise LiveIdentityError(
+            f"live version {version_id} has non-object build metadata: refusing to promote"
+        )
     commit = (
         metadata.get("commit_hash", "")
         or build.get("commit_hash", "")
         or build.get("commit", "")
         or ""
     )
-    if not commit:
+    if not isinstance(commit, str) or not commit:
         raise LiveIdentityError(
             f"live version {version_id} maps to a build with no commit hash: refusing to promote"
         )
@@ -96,18 +147,25 @@ def derive_live_prod_identity(deployments_payload: dict, builds_payload: dict) -
     Raises LiveIdentityError on any ambiguity or unknown mapping.
     """
     versions = _active_versions(deployments_payload)
-    live = [v for v in versions if isinstance(v, dict) and v.get("version_id")]
-    if not live:
+    validated = _validate_versions(versions)
+    if not validated:
         raise LiveIdentityError("live deployment has no version id: refusing to guess live version")
-    ids = [v["version_id"] for v in live]
-    percentages = [v.get("percentage", 100) for v in live]
-    serving = [v for v, pct in zip(live, percentages) if (pct is None or pct > 0)]
-    distinct = sorted(set(ids))
-    if len(distinct) != 1 or len(serving) != 1:
+    serving = [(vid, pct) for vid, pct in validated if pct is None or pct > 0]
+    if not serving:
+        raise LiveIdentityError("live deployment has no serving version: refusing to guess live version")
+    if all(pct is not None for _, pct in validated):
+        total = sum(pct for _, pct in validated)  # type: ignore[misc]
+        if total != 100:
+            raise LiveIdentityError(
+                f"traffic percentages total {total}, expected 100: refusing to guess live version"
+            )
+    distinct_serving = sorted(set(vid for vid, _ in serving))
+    if len(distinct_serving) != 1 or len(serving) != 1:
         raise LiveIdentityError(
-            f"mixed-version deployment serving {sorted(set(ids))}: refusing to pick one as live"
+            f"mixed-version deployment serving {sorted(set(vid for vid, _ in validated))}: "
+            "refusing to pick one as live"
         )
-    version_id = distinct[0]
+    version_id = distinct_serving[0]
     builds = _builds_by_version(builds_payload)
     if version_id not in builds:
         raise LiveIdentityError(
@@ -126,11 +184,25 @@ def decide_promotion(live_commit: str, candidate_commit: str) -> str:
     return "promote"
 
 
-def rollback_command(live_commit: str) -> list[str]:
-    """Record the rollback target from the live identity (never a tag)."""
+def rollback_command(live_commit: str, smoke_cmd: str) -> list[str]:
+    """Record the rollback target from the live identity (never a tag).
+
+    Mirrors ``scripts/dispatch_deploy.sh rollback``, which requires
+    ``--smoke-cmd``: the caller passes the same smoke command used for
+    deploy so the recorded argv replays verbatim.
+    """
     if not live_commit:
         raise LiveIdentityError("live commit is required for a rollback command")
-    return ["deploy", "--commit", live_commit]
+    if not smoke_cmd:
+        raise LiveIdentityError("smoke command is required for a rollback command")
+    return [
+        "scripts/dispatch_deploy.sh",
+        "rollback",
+        "--commit",
+        live_commit,
+        "--smoke-cmd",
+        smoke_cmd,
+    ]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -149,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     except LiveIdentityError as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
         print(f"refused: unreadable input ({exc})", file=sys.stderr)
         return 2
 
@@ -157,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.candidate:
         try:
             print(decide_promotion(identity["commit"], args.candidate))
-        except LiveIdentityError as exc:
+        except (LiveIdentityError, TypeError, AttributeError) as exc:
             print(f"refused: {exc}", file=sys.stderr)
             return 2
     return 0

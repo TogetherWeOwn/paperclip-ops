@@ -68,9 +68,9 @@ elif name == "gh":
             runs = []
         elif fx == "burst":
             # Ignore --created deliberately: the client cutoff still excludes
-            # 60 young runs. Run 8 appears in both statuses; run 9 only in active.
-            ids = (7, 8) if status == "queued" else (8, 9)
-            runs = [{"databaseId": n, "createdAt": f"2020-01-0{n-6}T00:00:00Z"}
+            # 60 young runs. One queued run is accompanied by 15 active runs.
+            ids = (7,) if status == "queued" else tuple(range(8, 23))
+            runs = [{"databaseId": n, "createdAt": old if n == 7 else "2020-02-01T00:00:00Z"}
                     for n in ids]
             runs += [{"databaseId": 100+n, "createdAt": "2999-01-01T00:00:00Z"}
                      for n in range(60)]
@@ -79,7 +79,7 @@ elif name == "gh":
             runs[0]["createdAt"] = "2019-01-01T00:00:00Z"
         elif fx == "truncated":
             runs = runs * 2 if status == "queued" else []
-        elif fx not in ("single", "xrepo", "jobs-error", "jobs-json", "bad-date"):
+        elif fx not in ("single", "xrepo", "jobs-error", "jobs-json", "bad-date", "below-threshold"):
             sys.exit(97)
         print(json.dumps(runs))
     elif len(args) == 2 and args[0] == "api":
@@ -91,6 +91,8 @@ elif name == "gh":
             print("not json")
         else:
             stamp = "2019-01-01T00:00:00Z" if fx == "xrepo" and "/o/b/" in args[1] else old
+            if fx == "below-threshold":
+                stamp = "2025-12-31T23:30:00Z"
             if fx == "bad-date":
                 stamp = "not-a-date"
             print(json.dumps({"jobs": [{"name": "check", "status": "queued", "created_at": stamp}]}))
@@ -186,14 +188,14 @@ printf '%s\n' "$rc" "${CQA_RUNS_INSPECTED-unset}" "${CQA_OLDEST-unset}" \
     def test_02_single_run_depth_and_breach_text(self):
         self.assertEqual(self.helper("single"), ["0", "1", OLD, "o/a", "0", ""])
         # The fixture clock fixes the entire message, not just a loose suffix.
-        self.push("single", error="oldest runner-waiting job 3156480m old in o/a (threshold 60m; 1 breach-eligible run(s))")
+        self.push("single", error="oldest runner-waiting job 3156480m old in o/a (threshold 60m; 1 old queued run(s))")
 
-    def test_03_burst_union_dedup_counts_beyond_early_stop(self):
-        self.assertEqual(self.helper("burst"), ["0", "3", OLD, "o/a", "0", ""])
+    def test_03_burst_counts_queued_runs_not_active_runs(self):
+        self.assertEqual(self.helper("burst"), ["0", "1", OLD, "o/a", "0", ""])
         calls = [json.loads(line) for line in Path(self.env["GH_CALL_LOG"]).read_text().splitlines()]
         self.assertEqual([args for args in calls if args[0] == "api"],
                          [["api", "repos/o/a/actions/runs/7/jobs?per_page=100"]])
-        self.push("burst", error="oldest runner-waiting job 3156480m old in o/a (threshold 60m; 3 breach-eligible run(s))")
+        self.push("burst", error="oldest runner-waiting job 3156480m old in o/a (threshold 60m; 1 old queued run(s))")
 
     def test_04_accumulates_across_repositories(self):
         self.assertEqual(self.helper("xrepo", calls="ci_oldest_waiting_job 60 o/a o/b"),
@@ -242,6 +244,12 @@ printf '%s\n' "$rc" "${CQA_RUNS_INSPECTED-unset}" "${CQA_OLDEST-unset}" \
 
     def test_09_errexit_off_caller_survives(self):
         self.check_caller("off")
+
+    def test_10_healthy_push_failures_are_not_swallowed(self):
+        self.push("empty")
+        self.push("empty", rc=2, missing_env=True)
+        self.push("below-threshold")
+        self.push("below-threshold", rc=2, missing_env=True)
 
 
 unittest.main(verbosity=2)

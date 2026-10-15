@@ -39,10 +39,9 @@
 #   CQA_OLDEST           created_at of the oldest runner-waiting job, "" none
 #   CQA_OLDEST_REPO      repo holding it
 #   CQA_JOBS_UNREADABLE  runs whose jobs API could not be read
-#   CQA_RUNS_INSPECTED   breach-eligible runs listed across repos (queued plus
-#                        in_progress older than the floor; lets the alert
-#                        report queue depth alongside age so a single wedged
-#                        job and a fleet saturation no longer page identically)
+#   CQA_RUNS_INSPECTED   old queued runs listed across repos (in_progress runs
+#                        are excluded so active work cannot inflate the queue
+#                        depth reported by the alert)
 #   CQA_ERROR            failure text when the call returns 1
 # Returns 0 when the lists were read (CQA_OLDEST may still be empty);
 # returns 1 with CQA_ERROR set when a run list failed, was truncated or was
@@ -61,7 +60,7 @@ ci_oldest_waiting_job() {
   local gh_bin="${GH_BIN:-gh}"
   local ignore_job="${QUEUE_AGE_IGNORE_JOB:-Failure log drain}"
   local run_limit="${QUEUE_AGE_RUN_LIMIT:-1000}"
-  local repo cutoff queued_runs active_runs runs created rid jobs cand
+  local repo cutoff queued_runs active_runs runs created rid jobs cand queued_count
 
   CQA_NOW="$(date +%s)"
   CQA_OLDEST=""
@@ -101,13 +100,14 @@ ci_oldest_waiting_job() {
            fi
            [[ "$_cqa_saved_opts" == *e* ]] || set +e; return 1; }
 
-    # Depth for triage: every listed run is breach-eligible demand (older
-    # than the floor), whether or not the oldest-first walk below reaches
-    # its jobs call before the early stop. An empty list adds nothing;
-    # grep -c . counts only non-empty lines.
-    if [[ -n "$runs" ]]; then
-      CQA_RUNS_INSPECTED=$((CQA_RUNS_INSPECTED + $(printf '%s\n' "$runs" | grep -c .)))
-    fi
+    # Count old queued runs only. In-progress runs may be healthy executing
+    # work, so including them would make one stuck job look like saturation.
+    queued_count="$(jq -rs --arg c "$cutoff" --argjson lim "$run_limit" '
+      if any(.[]; length >= $lim) then error("truncated") else . end
+      | add | map(select(.createdAt < $c)) | unique_by(.databaseId) | length' \
+      <<<"$queued_runs")" \
+      || { CQA_ERROR="unparseable queued run list for $repo"; [[ "$_cqa_saved_opts" == *e* ]] || set +e; return 1; }
+    CQA_RUNS_INSPECTED=$((CQA_RUNS_INSPECTED + queued_count))
 
     while read -r created rid; do
       [[ -n "$rid" ]] || continue

@@ -305,7 +305,8 @@
     "invariant views suite:1",
     "project regen prune manifest atomic suite:1",
     "sweep-auto node7b1ff338 pressure-gate suite:1",
-    "host regenerable cache reclaim hostile suite:1"
+    "host regenerable cache reclaim hostile suite:1",
+    "queue age depth contract suite:1"
   ],
   "retained": [
     {
@@ -1707,6 +1708,11 @@
       "name": "host regenerable cache reclaim hostile suite",
       "definition_sha256": "78073dbf9a3d03094eaa143eba9f93f8a6a85da68d79e4e48d92b48b27ef4001",
       "id": "host regenerable cache reclaim hostile suite:1"
+    },
+    {
+      "name": "queue age depth contract suite",
+      "definition_sha256": "8ca1e2a63ba97130c428665099c43db06c748272bb96882606596bdc8f197a92",
+      "id": "queue age depth contract suite:1"
     }
   ],
   "removed": [

@@ -31,10 +31,9 @@
 # younger runs cannot breach, and skipping them keeps the per-run jobs calls
 # bounded as repos are added.
 #
-# Queue depth: the failure text also reports how many breach-eligible runs
-# were listed, so a single wedged job ("1 breach-eligible run") and a fleet
-# saturation ("16 breach-eligible runs") no longer page identically —
-# on-call sees saturation vs stuck at a glance.
+# Triage context: the failure text also reports how many old queued runs were
+# listed. In-progress runs are excluded because they may be healthy executing
+# work; the count is a run-level signal, not a count of individual waiting jobs.
 #
 # Server-side age filter (case_6bb27f43): the run list sorts newest-first, so a
 # client-side `--limit 50` kept the 50 NEWEST runs and dropped the oldest.
@@ -109,7 +108,7 @@ if [[ -z "$oldest" ]]; then
     gatus_push platform_ci-queue-age false "jobs API unreadable for $jobs_unreadable run(s)" || true
     exit 1
   fi
-  gatus_push platform_ci-queue-age true || true   # nothing waiting: nothing stale
+  gatus_push platform_ci-queue-age true            # push failures must reach cron
   exit 0
 fi
 
@@ -118,7 +117,7 @@ then="$(date -d "$oldest" +%s 2>/dev/null)" \
 age_min=$(( (now - then) / 60 ))
 
 if (( age_min > 10#$THRESHOLD_MIN )); then
-  gatus_push platform_ci-queue-age false "oldest runner-waiting job ${age_min}m old in ${oldest_repo} (threshold ${THRESHOLD_MIN}m; ${runs_inspected} breach-eligible run(s))"
+  gatus_push platform_ci-queue-age false "oldest runner-waiting job ${age_min}m old in ${oldest_repo} (threshold ${THRESHOLD_MIN}m; ${runs_inspected} old queued run(s))"
 else
   gatus_push platform_ci-queue-age true
 fi

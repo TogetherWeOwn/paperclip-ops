@@ -40,6 +40,12 @@ jobs:
           # the merge ref, so the range starts at the merge base (never a bare
           # merge commit, whose empty diff would scan zero commits and pass).
           # When no non-empty range can be derived the script prints --all and
-          # the scan fails closed instead of passing empty.
+          # the scan fails closed instead of passing empty. Gitleaks exits 0
+          # with "0 commits scanned" on an invalid revision range, so verify
+          # the range with git first and fail closed instead of passing empty.
           RANGE="$(bash .github/scripts/public-safety-range.sh "${{ github.event_name }}" "${{ github.event.before }}")"
+          if [ "$RANGE" != "--all" ]; then
+            COUNT="$(git rev-list --count "$RANGE")" || { echo "public-safety: invalid history range $RANGE"; exit 1; }
+            [ "$COUNT" != "0" ] || { echo "public-safety: empty history range $RANGE"; exit 1; }
+          fi
           docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts="$RANGE" --config /repo/.gitleaks.toml --redact=100 --no-banner

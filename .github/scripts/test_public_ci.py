@@ -659,6 +659,14 @@ class PublicCI(unittest.TestCase):
         # A bare merge commit has an empty `git log -p` diff, so scanning one
         # reports clean over zero commits. The fallback must never be one.
         self.assertNotIn("-1 HEAD", safety)
+        # An invalid revision range also scans zero commits with a clean
+        # gitleaks exit code, so the workflow verifies the range with git.
+        self.assertIn("rev-list --count", safety)
+        # `git rev-parse --verify` accepts any well-formed hex string, so the
+        # helper must verify the pushed object exists before trusting it.
+        helper = script.read_text()
+        self.assertIn('cat-file -e', helper)
+        self.assertNotIn("rev-parse --verify", helper)
         with tempfile.TemporaryDirectory() as tmp:
             env = {"PATH": os.environ["PATH"], "HOME": tmp,
                    "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
@@ -717,10 +725,31 @@ class PublicCI(unittest.TestCase):
             # No derivable range fails closed to --all, never to a merge commit.
             git("update-ref", "-d", "refs/remotes/origin/main")
             self.assertEqual(run_range("pull_request", ""), "--all")
-            # Push scans what was pushed; a new branch (all-zero before) scans all.
+            # Push scans what was pushed when the before commit is present.
             git("update-ref", "refs/remotes/origin/main", "main")
             self.assertEqual(run_range("push", main_tip), f"{main_tip}..HEAD")
-            self.assertEqual(run_range("push", "0" * 40), "--all")
+            # A force-push or rebase leaves a well-formed before SHA that is
+            # absent from the checkout: trusting it scans zero commits and
+            # passes. The helper must fall back to the merge-base range.
+            absent = "1" * 40
+            # Fixture precondition: the SHA is well-formed but names no
+            # object in this checkout (the force-push hole).
+            probe = subprocess.run(
+                ["git", "-C", tmp, "cat-file", "-e", absent + "^{commit}"],
+                env=env, capture_output=True)
+            self.assertNotEqual(probe.returncode, 0)
+            ranged_absent = run_range("push", absent)
+            self.assertEqual(ranged_absent, f"{merge_base}..HEAD")
+            self.assertNotIn(absent, ranged_absent)
+            self.assertNotEqual(
+                git("rev-list", ranged_absent, "--count").stdout.strip(), "0")
+            # A new branch (all-zero before) has no pushed range: it scans the
+            # branch commits via the merge base, not --all (which reds the
+            # gate on unrelated branches' fixtures).
+            ranged_new = run_range("push", "0" * 40)
+            self.assertEqual(ranged_new, f"{merge_base}..HEAD")
+            self.assertNotEqual(
+                git("rev-list", ranged_new, "--count").stdout.strip(), "0")
 
     def test_renamed_archive_sources_use_public_paths(self):
         manifest = (ROOT / "vendor/toolkit-files.txt").read_text().splitlines()

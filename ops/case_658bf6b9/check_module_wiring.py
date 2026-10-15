@@ -15,8 +15,9 @@ Rule. Every `external-endpoints:` entry declared in
 is a PUSHED endpoint: Gatus marks it unhealthy when no push arrives within its
 heartbeat. It must therefore have all three of
 
-  script    some ops/**/push-*.sh names its `<group>_<name>` key in CODE (a
-            comment that merely mentions the key does not count; a key built
+  script    some ops/**/push-*.sh, push-*.py or probe-*.sh names its
+            `<group>_<name>` key in CODE (comments and Python docstrings do
+            not count; a key built
             from a variable counts when the literal prefix is in code, for
             example `cliproxy_lane-${lane}` or `ci_main-$slug`);
   cron      that script is referenced by a cron line in an ops/**/OPERATOR.md
@@ -39,6 +40,7 @@ Exit status:  0 = every endpoint wired (or exempted with an owning card)
 Stdlib only. Offline. Read-only: it reads repo files and writes nothing.
 """
 import argparse
+import ast
 import json
 import re
 import sys
@@ -141,8 +143,23 @@ def parse_external_endpoints(text):
     return entries
 
 
-def _code_text(script_text):
-    """Script body without full-line comments (shebang included)."""
+def _code_text(script_text, suffix=".sh"):
+    """Source without full-line shell comments or Python comments/docstrings.
+
+    Python is parsed, never executed. Invalid Python supplies no wiring evidence.
+    """
+    if suffix == ".py":
+        try:
+            tree = ast.parse(script_text)
+        except SyntaxError:
+            return ""
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                if (node.body and isinstance(node.body[0], ast.Expr)
+                        and isinstance(node.body[0].value, ast.Constant)
+                        and isinstance(node.body[0].value.value, str)):
+                    node.body.pop(0)
+        return ast.unparse(tree)
     return "\n".join(l for l in script_text.splitlines() if not l.lstrip().startswith("#"))
 
 
@@ -240,9 +257,11 @@ def evaluate(root, registry=None, allowlist=None):
         return [("allowlist-invalid", allowlist.as_posix(), err)], [], 2
 
     scripts = {}
-    for p in _walk(root, "push-*.sh"):
+    for p in sorted({p for pattern in ("push-*.sh", "push-*.py", "probe-*.sh")
+                     for p in _walk(root, pattern)}):
         try:
-            scripts[p.relative_to(root).as_posix()] = _code_text(p.read_text(encoding="utf-8", errors="replace"))
+            scripts[p.relative_to(root).as_posix()] = _code_text(
+                p.read_text(encoding="utf-8", errors="replace"), p.suffix)
         except OSError:
             continue
     op_lines = []
@@ -262,7 +281,7 @@ def evaluate(root, registry=None, allowlist=None):
             "registry": registry_lists(reg_text, group, name),
         }
         detail[key] = {
-            "script": f"no ops/**/push-*.sh names `{key}` in code",
+            "script": f"no ops/**/push-*.sh, push-*.py or probe-*.sh names `{key}` in code",
             "cron": ("no OPERATOR.md cron line runs " + ", ".join(named_by)) if named_by
                     else f"no push script, so nothing for a cron line to run",
             "registry": f"{REGISTRY_REL} does not list {group}/{name}",

@@ -51,7 +51,22 @@ locations also belong in the protected environment, not in this repository.
 */5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-queue-forecast.sh
 */5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_a814f742/push-runner-disk.sh
 */5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_66436e78/push-db-backup-freshness.sh
+*/5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_c542accd/push-ci-main.sh
+*/5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_34ee2cf0/push-hindsight-recall.sh
+*/5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_5605c29e/push-keeper-ingest.sh
+*/5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_654dd2ec/push-paperclip-invariants.sh
+*/5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_e1e23b50/push-ci-hung-job.sh
+*/5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-garm-pool.sh
+*/5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_56fff4c6/probe-gatus.sh
+*/5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec python3 /opt/status-page/current/ops/case_ebbb469a/push-runner-census.py
+*/5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_a2ab2937/push-staging-login-smoke.sh
 ```
+
+The wiring check recognizes shell `push-*.sh` and `probe-*.sh` producers plus
+Python `push-*.py` producers. It parses Python without executing it and does not
+count comments or docstrings as key evidence. The public source allowlist is
+empty: these examples document all declared producers, not historical private
+exemptions or proof that any job is installed.
 
 ## Source validation and response
 

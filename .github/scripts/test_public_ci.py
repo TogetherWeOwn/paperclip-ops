@@ -92,6 +92,44 @@ class PublicCI(unittest.TestCase):
                 other.write_text(pin)
                 self.assertIn("private artifact or live environment file", public_safety.inspect(other))
 
+    def test_reviewed_zip_exception_requires_exact_path_bytes_and_public_payload(self):
+        for relative, (_, member, public_name) in public_safety.PUBLIC_ZIP_FIXTURES.items():
+            source = ROOT / relative
+            raw = source.read_bytes()
+            payload = (source.parent / public_name).read_bytes()
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                path = root / relative
+                path.parent.mkdir(parents=True)
+                public = path.parent / public_name
+                public.write_bytes(payload)
+                path.write_bytes(raw)
+                with mock.patch.object(public_safety, "ROOT", root):
+                    self.assertEqual(public_safety.inspect(path), [])
+                    other = root / "other.zip"
+                    other.write_bytes(raw)
+                    self.assertIn("unreviewed binary payload", public_safety.inspect(other))
+                    path.write_bytes(raw + b"unreviewed trailer")
+                    self.assertIn("unreviewed binary payload", public_safety.inspect(path))
+                    path.write_bytes(raw)
+                    public.write_bytes(payload + b" ")
+                    self.assertIn("unreviewed binary payload", public_safety.inspect(path))
+                    public.unlink()
+                    self.assertIn("unreviewed binary payload", public_safety.inspect(path))
+
+    def test_unreviewed_zip_with_matching_public_json_is_still_refused(self):
+        import zipfile
+        relative, (_, member, public_name) = next(iter(public_safety.PUBLIC_ZIP_FIXTURES.items()))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / relative
+            path.parent.mkdir(parents=True)
+            (path.parent / public_name).write_text('{}')
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr(member, '{}')
+            with mock.patch.object(public_safety, "ROOT", root):
+                self.assertIn("unreviewed binary payload", public_safety.inspect(path))
+
     def test_private_bakeoff_skip_requires_both_markers_and_complete_absence(self):
         source = (ROOT / "test_case_61df0b37_review_bakeoff.sh").read_text()
         cases = [

@@ -7,9 +7,12 @@ PR: https://github.com/TogetherWeOwn/paperclip-ops/pull/3
 What this pins (landing criteria):
   Group A -- the PR's own feature. Stop-path reads get a short per-read
   budget (~900 ms against the 1 s Stop budget) and a shared card cache:
-  fresh cache skips the network, stale cache decides when the network is
-  slow, and a slow control plane fails open with its own timeout signal
-  instead of stalling the Stop or spiking `card-unreadable`.
+  a fresh allow-cache entry skips the network, a stale allow-cache entry
+  decides when the network is slow, and a slow control plane fails open
+  with its own timeout signal instead of stalling the Stop or spiking
+  `card-unreadable`. A block (or would-block) is never served from cache
+  and never written: the Stop after a hand-back always re-reads, and the
+  cache stores only the classifier shape (never title or description).
   RED on the base (origin/main: unbounded 6500 ms read, no cache),
   GREEN on the PR head.
   Group B -- the CI red blocking the landing (triage 2026-10-15):
@@ -257,21 +260,31 @@ console.log("cache-api-ok " + dir);"""
         self.assertIn("cache-api-ok", out)
 
     def test_stop_card_cache_roundtrip(self):
-        """Cache round-trips; foreign/missing/corrupt entries read as null."""
+        """Cache round-trips the classifier shape only; foreign/missing/corrupt read as null."""
         rc, out, err = run_node(
             f"""import assert from "node:assert/strict";
-import {{ mkdtempSync, writeFileSync }} from "node:fs";
+import {{ mkdtempSync, readFileSync, writeFileSync }} from "node:fs";
 import {{ tmpdir }} from "node:os";
 import {{ join }} from "node:path";
 import {{ cacheFileFor, readCardCache, writeCardCache }} from {HOOK_URI!r};
 const dir = mkdtempSync(join(tmpdir(), "pr3-land-cache-"));
 const env = {{ DISPOSITION_STOP_GUARD_CACHE_DIR: dir }};
 assert.equal(readCardCache(env, "T"), null);
-assert.equal(writeCardCache(env, "T", {{ card: {{ id: "T", status: "in_progress" }},
+assert.equal(writeCardCache(env, "T", {{ card: {{ id: "T", identifier: "OPS-1",
+  status: "in_progress", title: "must never touch tmp",
+  description: "sensitive card text", notes: "extra" }},
   pendingInteractions: 0 }}), true);
 const entry = readCardCache(env, "T");
 assert.ok(entry && entry.card.status === "in_progress" && Number.isInteger(entry.ts));
 assert.equal(entry.pendingInteractions, 0);
+// The cache stores only the classifier shape: no title, description or
+// other card text ever reaches the shared tmp file.
+const raw = JSON.parse(readFileSync(cacheFileFor(env, "T").file, "utf8"));
+assert.equal(raw.card.title, undefined);
+assert.equal(raw.card.description, undefined);
+assert.equal(raw.card.notes, undefined);
+assert.equal(raw.card.identifier, "OPS-1");
+assert.equal(raw.card.status, "in_progress");
 assert.equal(readCardCache(env, "OTHER"), null);
 const {{ file }} = cacheFileFor(env, "OTHER");
 writeFileSync(file, "not json{{{{");
@@ -306,38 +319,81 @@ console.log(`stop-budget-ok elapsed=${{elapsed}}ms budget=${{budget}}ms`);"""
         self.assertIn("stop-budget-ok", out)
         print(f"  [measure] {out.strip()}")
 
-    def test_stop_fresh_cache_skips_network(self):
-        """decide() on a fresh cache entry never touches the network."""
+    def test_stop_fresh_cache_blocks_never_cached(self):
+        """Fresh allow-cache skips the network; blocks are never served from cache.
+
+        Corrected contract (Paperclip Review 3/5 on 2d8cba9): a cached entry
+        whose verdict is a block is dropped and re-read, so the Stop after a
+        hand-back cannot re-block a card the agent just fixed. Only a fresh
+        allow is served from cache (marked cached); a stale block fails open
+        on the read's own class and drops the entry.
+        """
         rc, out, err = run_node(
             f"""import assert from "node:assert/strict";
 import {{ mkdtempSync }} from "node:fs";
 import {{ tmpdir }} from "node:os";
 import {{ join }} from "node:path";
-import {{ decide, writeCardCache }} from {HOOK_URI!r};
-const dir = mkdtempSync(join(tmpdir(), "pr3-land-decide-"));
-const env = {{ PAPERCLIP_TASK_ID: "T", PAPERCLIP_AGENT_ID: "A", PAPERCLIP_RUN_ID: "R",
+import {{ decide, readCardCache, writeCardCache }} from {HOOK_URI!r};
+const baseEnv = (dir) => ({{ PAPERCLIP_TASK_ID: "T", PAPERCLIP_AGENT_ID: "A", PAPERCLIP_RUN_ID: "R",
   DISPOSITION_STOP_GUARD_STATE_DIR: join(dir, "state"),
   DISPOSITION_STOP_GUARD_CACHE_DIR: join(dir, "cache"),
   DISPOSITION_STOP_GUARD_LOG: join(dir, "d.jsonl"),
-  DISPOSITION_STOP_GUARD_MODE: "enforce" }};
-const card = {{ id: "T", identifier: "OPS-1", status: "in_progress",
+  DISPOSITION_STOP_GUARD_MODE: "enforce" }});
+const blockedCard = () => ({{ id: "T", identifier: "OPS-1", status: "in_progress",
   assigneeAgentId: "A", executionRunId: "R", conversationAgentId: null,
   originKind: null, externalChannelBinding: null,
   monitorNextCheckAt: null, executionState: null, blockedBy: [],
   blockerAttention: {{ unresolvedBlockerCount: 0 }},
-  activeRecoveryAction: null, scheduledRetry: null, successfulRunHandoff: null }};
-assert.equal(writeCardCache(env, "T", {{ card, pendingInteractions: 0 }}), true);
+  activeRecoveryAction: null, scheduledRetry: null, successfulRunHandoff: null }});
+const fixedCard = () => ({{ ...blockedCard(), status: "done" }});
+const deps = (fetchJson) => ({{ fetchJson, config: {{}}, killSwitchPresent: () => false }});
+// 1. A fresh allow-cache entry skips the network entirely.
+{{
+const dir = mkdtempSync(join(tmpdir(), "pr3-land-allow-"));
+const env = baseEnv(dir);
+assert.equal(writeCardCache(env, "T", {{ card: fixedCard(), pendingInteractions: 0 }}), true);
 let calls = 0;
 const fetchJson = async (path) => {{ calls++; throw new Error("network used: " + path); }};
-const verdict = await decide({{ hook_event_name: "Stop", session_id: "s1" }}, env,
-  {{ fetchJson, config: {{}}, killSwitchPresent: () => false }});
-assert.equal(calls, 0, "fresh cache must skip the network entirely");
+const verdict = await decide({{ hook_event_name: "Stop", session_id: "s1" }}, env, deps(fetchJson));
+assert.equal(calls, 0, "fresh allow-cache must skip the network entirely");
 assert.equal(verdict.cached, true);
-assert.equal(verdict.action, "block");
-console.log("fresh-cache-ok");"""
+assert.equal(verdict.action, "allow");
+assert.equal(verdict.why, "status-done");
+}}
+// 2. A fresh block-cache entry is never served: the Stop re-reads and drops it.
+{{
+const dir = mkdtempSync(join(tmpdir(), "pr3-land-freshblock-"));
+const env = baseEnv(dir);
+assert.equal(writeCardCache(env, "T", {{ card: blockedCard(), pendingInteractions: 0 }}), true);
+const calls = [];
+const fetchJson = async (path) => {{
+  calls.push(path);
+  if (path.endsWith("/interactions")) return {{ ok: true, status: 200, body: [] }};
+  return {{ ok: true, status: 200, body: fixedCard() }};
+}};
+const verdict = await decide({{ hook_event_name: "Stop", session_id: "s1" }}, env, deps(fetchJson));
+assert.ok(calls.length > 0, "fresh block-cache must re-read instead of serving cache");
+assert.equal(verdict.action, "allow");
+assert.equal(verdict.why, "status-done");
+assert.equal(verdict.cached, undefined);
+}}
+// 3. A stale block-cache entry fails open on a slow read and drops the entry.
+{{
+const dir = mkdtempSync(join(tmpdir(), "pr3-land-staleblock-"));
+const env = {{ ...baseEnv(dir), DISPOSITION_STOP_GUARD_CACHE_FRESH_MS: "0" }};
+assert.equal(writeCardCache(env, "T", {{ card: blockedCard(), pendingInteractions: 0 }}), true);
+const fetchJson = async () => ({{ ok: false, status: 0, timeout: true }});
+const verdict = await decide({{ hook_event_name: "Stop", session_id: "s1" }}, env, deps(fetchJson));
+assert.equal(verdict.action, "allow");
+assert.equal(verdict.why, "card-timeout");
+assert.equal(verdict.timeout, true);
+assert.equal(verdict.cached, undefined);
+assert.equal(readCardCache(env, "T"), null, "stale block entry dropped");
+}}
+console.log("fresh-cache-contract-ok");"""
         )
-        self.assertEqual(rc, 0, f"fresh-cache decision failed: {err.strip()}")
-        self.assertIn("fresh-cache-ok", out)
+        self.assertEqual(rc, 0, f"fresh-cache contract failed: {err.strip()}")
+        self.assertIn("fresh-cache-contract-ok", out)
 
     # ---- Group B: CI red blockers (Land fix target) ----
 

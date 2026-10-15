@@ -12,7 +12,7 @@ from two_web_promote import (
     decide_promotion,
     derive_live_prod_identity,
     main,
-    rollback_command,
+    rollback_target,
 )
 
 # Synthetic fixture identifiers only (zero-padded, not production secrets).
@@ -25,7 +25,9 @@ RELEASE_COMMIT = "e360cca2" + "0" * 32
 ACTIVE_VERSION = "eced969f" + "0" * 32
 ACTIVE_COMMIT = "15423dc9" + "0" * 32
 ACTIVE_BUILD = "b1" + "0" * 30
-SMOKE_CMD = "./run-smoke.sh"
+OLD_VERSION = "a1b2c3d4" + "0" * 32
+OLD_COMMIT = "9f8e7d6c" + "0" * 32
+OLD_BUILD = "c2" + "0" * 30
 
 
 def deployments(version_id=ACTIVE_VERSION, percentage=100):
@@ -78,29 +80,22 @@ class LiveIdentity(unittest.TestCase):
         identity = derive_live_prod_identity(deployments(), builds())
         self.assertEqual(decide_promotion(identity["commit"], ACTIVE_COMMIT), "already-live")
         self.assertEqual(decide_promotion(identity["commit"], RELEASE_COMMIT), "promote")
-        expected = [
-            "scripts/dispatch_deploy.sh",
-            "rollback",
-            "--commit",
-            ACTIVE_COMMIT,
-            "--smoke-cmd",
-            SMOKE_CMD,
-        ]
-        self.assertEqual(rollback_command(identity["commit"], SMOKE_CMD), expected)
-        self.assertNotIn(RELEASE_COMMIT, rollback_command(identity["commit"], SMOKE_CMD))
+        self.assertEqual(rollback_target(identity["commit"]), ACTIVE_COMMIT)
+        self.assertNotEqual(rollback_target(identity["commit"]), RELEASE_COMMIT)
 
-    def test_rollback_matches_dispatch_cli(self):
-        cmd = rollback_command(ACTIVE_COMMIT, SMOKE_CMD)
-        self.assertEqual(cmd[0], "scripts/dispatch_deploy.sh")
-        self.assertIn("rollback", cmd)
-        self.assertIn("--smoke-cmd", cmd)
-        self.assertIn(ACTIVE_COMMIT, cmd)
+    def test_rollback_target_is_live_commit_not_dispatch_argv(self):
+        target = rollback_target(ACTIVE_COMMIT)
+        self.assertEqual(target, ACTIVE_COMMIT)
+        # Never a dispatch-src argv: that script manages a different repo
+        # checkout and can never replay a two-web Worker build commit.
+        self.assertNotIn("dispatch_deploy", target)
+        self.assertNotIn("rollback", target)
 
-    def test_rollback_requires_commit_and_smoke_cmd(self):
+    def test_rollback_target_requires_commit(self):
         with self.assertRaises(LiveIdentityError):
-            rollback_command("", SMOKE_CMD)
+            rollback_target("")
         with self.assertRaises(LiveIdentityError):
-            rollback_command(ACTIVE_COMMIT, "")
+            rollback_target(None)
 
     def test_decide_requires_both_commits(self):
         with self.assertRaises(LiveIdentityError):
@@ -181,6 +176,102 @@ class LiveIdentity(unittest.TestCase):
         }
         with self.assertRaisesRegex(LiveIdentityError, "no serving version"):
             derive_live_prod_identity(parked, builds())
+
+    def test_first_deployment_is_live_not_last(self):
+        # Cloudflare lists deployments newest-first: the first entry serves
+        # live traffic. A second (older) deployment must never win, even at
+        # 100%. Mutating deployments[0] -> deployments[-1] must fail here.
+        two = {
+            "result": {
+                "deployments": [
+                    {"versions": [{"version_id": ACTIVE_VERSION, "percentage": 100}]},
+                    {"versions": [{"version_id": OLD_VERSION, "percentage": 100}]},
+                ]
+            }
+        }
+        both_builds = {
+            "result": {
+                "builds": {
+                    ACTIVE_VERSION: {
+                        "build_uuid": ACTIVE_BUILD,
+                        "build_trigger_metadata": {"commit_hash": ACTIVE_COMMIT},
+                    },
+                    OLD_VERSION: {
+                        "build_uuid": OLD_BUILD,
+                        "build_trigger_metadata": {"commit_hash": OLD_COMMIT},
+                    },
+                }
+            }
+        }
+        identity = derive_live_prod_identity(two, both_builds)
+        self.assertEqual(identity["version_id"], ACTIVE_VERSION)
+        self.assertEqual(identity["commit"], ACTIVE_COMMIT)
+        self.assertNotEqual(identity["commit"], OLD_COMMIT)
+
+    def test_null_percentage_treated_as_serving(self):
+        null_pct = {
+            "result": {
+                "deployments": [
+                    {"versions": [{"version_id": ACTIVE_VERSION, "percentage": None}]}
+                ]
+            }
+        }
+        identity = derive_live_prod_identity(null_pct, builds())
+        self.assertEqual(identity["version_id"], ACTIVE_VERSION)
+        self.assertEqual(identity["commit"], ACTIVE_COMMIT)
+
+    def test_missing_percentage_defaults_to_100(self):
+        no_pct = {
+            "result": {
+                "deployments": [{"versions": [{"version_id": ACTIVE_VERSION}]}]
+            }
+        }
+        identity = derive_live_prod_identity(no_pct, builds())
+        self.assertEqual(identity["version_id"], ACTIVE_VERSION)
+        self.assertEqual(identity["commit"], ACTIVE_COMMIT)
+
+    def test_build_commit_fallback_keys(self):
+        # build.commit_hash fallback (no build_trigger_metadata).
+        flat = {
+            "result": {
+                "builds": {
+                    ACTIVE_VERSION: {
+                        "build_uuid": ACTIVE_BUILD,
+                        "commit_hash": ACTIVE_COMMIT,
+                    }
+                }
+            }
+        }
+        self.assertEqual(
+            derive_live_prod_identity(deployments(), flat)["commit"], ACTIVE_COMMIT
+        )
+        # build.commit fallback.
+        legacy = {
+            "result": {
+                "builds": {
+                    ACTIVE_VERSION: {
+                        "build_uuid": ACTIVE_BUILD,
+                        "commit": ACTIVE_COMMIT,
+                    }
+                }
+            }
+        }
+        self.assertEqual(
+            derive_live_prod_identity(deployments(), legacy)["commit"], ACTIVE_COMMIT
+        )
+        # build.id fallback for the build uuid.
+        by_id = {
+            "result": {
+                "builds": {
+                    ACTIVE_VERSION: {
+                        "id": ACTIVE_BUILD,
+                        "build_trigger_metadata": {"commit_hash": ACTIVE_COMMIT},
+                    }
+                }
+            }
+        }
+        identity = derive_live_prod_identity(deployments(), by_id)
+        self.assertEqual(identity["build_uuid"], ACTIVE_BUILD)
 
     def test_duplicate_serving_entries_refuse(self):
         dup = {

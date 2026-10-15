@@ -23,10 +23,12 @@ Fail-closed rules:
   - live version with no known build, a build with no commit, or non-object
     build metadata -> refuse.
 
-Standalone port: this helper is not wired into scripts/dispatch_deploy.sh.
-It emits the same rollback argv that script expects (caller supplies the
---smoke-cmd used for deploy) so the recorded rollback target can be replayed
-there, but no code path here performs a deploy.
+Standalone port: this helper is not wired into any deploy script and
+performs no deploy. The rollback target is the live commit hash itself,
+to be redeployed through the two-web Cloudflare pipeline
+(deployments API / dashboard); it is never replayed via
+scripts/dispatch_deploy.sh, which manages only the dispatch-src
+in-place checkout from a different repository.
 
 Offline: stdlib only, no network, no credentials, no subprocess. Callers pass
 already-fetched JSON payloads (dicts) so unit tests and the CLI stay hermetic.
@@ -184,25 +186,18 @@ def decide_promotion(live_commit: str, candidate_commit: str) -> str:
     return "promote"
 
 
-def rollback_command(live_commit: str, smoke_cmd: str) -> list[str]:
-    """Record the rollback target from the live identity (never a tag).
+def rollback_target(live_commit: str) -> str:
+    """Return the rollback target for the live identity (never a tag).
 
-    Mirrors ``scripts/dispatch_deploy.sh rollback``, which requires
-    ``--smoke-cmd``: the caller passes the same smoke command used for
-    deploy so the recorded argv replays verbatim.
+    The target is the live commit hash itself, to be redeployed through
+    the two-web Cloudflare pipeline. This helper emits no deploy argv:
+    scripts/dispatch_deploy.sh manages only the dispatch-src checkout
+    from a different repository and can never replay a two-web Worker
+    build commit.
     """
-    if not live_commit:
-        raise LiveIdentityError("live commit is required for a rollback command")
-    if not smoke_cmd:
-        raise LiveIdentityError("smoke command is required for a rollback command")
-    return [
-        "scripts/dispatch_deploy.sh",
-        "rollback",
-        "--commit",
-        live_commit,
-        "--smoke-cmd",
-        smoke_cmd,
-    ]
+    if not isinstance(live_commit, str) or not live_commit:
+        raise LiveIdentityError("live commit is required for a rollback target")
+    return live_commit
 
 
 def main(argv: list[str] | None = None) -> int:

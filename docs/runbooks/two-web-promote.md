@@ -35,12 +35,14 @@ Refuse the promotion with a clear reason when:
 The CLI exits 2 with `refused: <reason>` on every refusal above, so shell
 callers can treat rc 2 as the refusal signal.
 
-The decision and the recorded rollback command both use the derived commit.
+The decision and the recorded rollback target both use the derived commit.
 A stale tag must never feed either path. This helper is a standalone
-offline port: it is not wired into `scripts/dispatch_deploy.sh`, and the
-rollback argv it emits (`scripts/dispatch_deploy.sh rollback --commit
-<live-commit> --smoke-cmd <cmd>`) replays there with the caller's smoke
-command.
+offline port: it is not wired into any deploy script and performs no
+deploy. The rollback target is the live commit hash itself, to be
+redeployed through the two-web Cloudflare pipeline (deployments API /
+dashboard). It is never replayed via `scripts/dispatch_deploy.sh`,
+which manages only the dispatch-src in-place checkout from a different
+repository.
 
 ## Offline verification
 

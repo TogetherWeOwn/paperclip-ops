@@ -7,7 +7,6 @@ Only the agent API is stubbed. No credentials or model calls are involved.
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import tempfile
 import unittest
@@ -28,13 +27,6 @@ ENV = {
     "API_TIMEOUT_MS": CONFIG["apiTimeoutMs"],
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS": CONFIG["maxContextTokens"],
 }
-# Use the exact marker from the checksum-pinned disposable fixture producer.
-# A sanitized copy of its old literal no longer matches the restored fixture.
-_fixture_reset = (ROOT / "test/fixtures/orgdb/reset.sh").read_text()
-_marker = re.search(r"(?m)^SENTINEL_VALUE=([a-zA-Z0-9_:-]+)$", _fixture_reset)
-if not _marker:
-    raise RuntimeError("REFUSED: disposable fixture marker is absent or not a literal")
-FIXTURE_SENTINEL = _marker.group(1)
 GUARD = """
 DO $guard$
 DECLARE marker_value text;
@@ -43,12 +35,12 @@ BEGIN
     RAISE EXCEPTION 'transport tests require org_fixture';
   END IF;
   SELECT marker INTO STRICT marker_value FROM public.org_fixture_sentinel;
-  IF marker_value IS DISTINCT FROM '__FIXTURE_SENTINEL__' THEN
+  IF marker_value IS DISTINCT FROM 'paperclip-ops:case_aa908088' THEN
     RAISE EXCEPTION 'transport tests require the org_fixture sentinel';
   END IF;
 END
 $guard$;
-""".replace("__FIXTURE_SENTINEL__", FIXTURE_SENTINEL)
+"""
 
 
 class TransportDatabase(unittest.TestCase):

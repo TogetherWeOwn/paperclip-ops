@@ -45,7 +45,7 @@ jobs:
     # case_1c9ba624 first cohort off Coolify: was [self-hosted, two-selfhosted]
     # (static Coolify-co-resident Docker pool). Now GARM ephemeral; no Docker,
     # no service, sparse checkout + python only. Required check name unchanged.
-    runs-on: [self-hosted, two-ephemeral]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Prove a GARM runner selected this job

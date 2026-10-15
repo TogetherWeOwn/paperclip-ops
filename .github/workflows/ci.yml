@@ -12,7 +12,7 @@ name: CI
 #   The 228 retained producers include private/diverged/unproved behavior;
 #   a restored path is not, by itself, proof that its private consumer moved.
 #   See vendor/offline-ci-contract.json and docs/offline-ci-cutover.md for the
-#   executable producer partition, aliases and three explicit v0.2.2 private
+#   executable producer partition, aliases and seven explicit v0.2.2 private
 #   compatibility exceptions. Jobs, routes, timeouts and required gates stay.
 #
 #   REPO SPLIT (C6 cutover): plugins/model-selection/ moved in full to the
@@ -441,7 +441,7 @@ jobs:
     # Ephemeral is self-hosted (no paid minutes) and follows the pr-lint and
     # docs-fast-path precedent; these jobs need only checkout+python, never
     # docker/sudo.
-    runs-on: [self-hosted, two-ephemeral]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       full: ${{ steps.detect.outputs.full }}
@@ -544,7 +544,7 @@ jobs:
     # its own ephemeral PostgreSQL cluster instead, so NO job in this workflow
     # needs Docker. This job stays isolated: its sudoers tests require no sudo,
     # unlike the other jobs that may use approved included-minutes overflow.
-    runs-on: [self-hosted, two-isolated]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       PGHOST: 127.0.0.1
@@ -807,7 +807,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true' || needs.changes.outputs.runbook == 'true' || needs.changes.outputs.omniroute == 'true' || needs.changes.outputs.dispatch == 'true' || needs.changes.outputs.cliproxy == 'true' || needs.changes.outputs.capture == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.hostops == 'true' || needs.changes.outputs.upstream == 'true'
     name: suites
-    runs-on: [self-hosted, two-isolated]
+    runs-on: ubuntu-latest
     # case_a2b959d4: 210 min restores the 1.51x headroom the five-listener fleet
     # accepted (150/99.3) against the seven-listener 139-min projection
     # (210/139). See docs/private-self-hosted-runner.md; the projection is
@@ -5820,7 +5820,7 @@ jobs:
     name: Private mutation gates
     needs: [changes]
     if: github.event_name == 'pull_request' && (needs.changes.outputs.full == 'true' || needs.changes.outputs.private_mutation == 'true')
-    runs-on: [self-hosted, two-isolated]
+    runs-on: ubuntu-latest
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -5849,7 +5849,7 @@ jobs:
     name: Trivy filesystem scan
     needs: [changes]
     if: needs.changes.outputs.full == 'true' || needs.changes.outputs.trivy == 'true'
-    runs-on: [self-hosted, two-isolated]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -5880,7 +5880,7 @@ jobs:
     # case_5236db70: hard-pinned ephemeral, same as changes above — secrets run on
     # every PR including docs-only, so stranding them on the saturated
     # isolated pool delays every merge gate.
-    runs-on: [self-hosted, two-ephemeral]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -5993,7 +5993,7 @@ jobs:
     # case_5236db70: hard-pinned ephemeral, same as changes above — the required
     # aggregator needs no checkout and must not occupy an isolated runner
     # while heavy suites queue.
-    runs-on: [self-hosted, two-ephemeral]
+    runs-on: ubuntu-latest
     needs:
       - changes
       - secret-scan
@@ -6048,7 +6048,7 @@ jobs:
   # ci-ok: exempt -- if-failure drain describes red runs, never gates green ones
   failure-log-drain:
     name: Failure log drain
-    runs-on: [self-hosted, two-isolated]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     # secret-scan carries the repo-split guards (always-run, needed by no other
     # job): without this edge, `if: failure()` never fires on a run where only

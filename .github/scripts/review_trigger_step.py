@@ -7,10 +7,11 @@ JSON payload to review_trigger.decide(), and on `request` posts exactly one
 `@togetherweown-reviewer review <sha>` comment plus the `review-ready` label.
 
 Exit 0 with a notice for every documented skip (no open PR on this head,
-decision is `skip`, trigger already posted). Exit 1 for anything else that
-stops us from reaching a decision: API errors, missing env, malformed
-responses. A workflow that cannot see the head state must fail loudly, never
-silently skip a review (fail closed).
+decision is `skip`, trigger already posted, a live or completed review run
+already covers the head). Exit 1 for anything else that stops us from
+reaching a decision: API errors, missing env, malformed responses, or the
+missing same-head guard. A workflow that cannot see the head state must fail
+loudly, never silently skip a review (fail closed).
 """
 
 import json
@@ -18,8 +19,15 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import review_trigger
+
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ops" / "productivity"))
+    import review_dedup
+except ImportError:
+    review_dedup = None
 
 TRIGGER_PREFIX = "@togetherweown-reviewer review"
 READY_LABEL = "review-ready"
@@ -140,6 +148,23 @@ def main():
     marker = "%s %s" % (TRIGGER_PREFIX, head_sha)
     if any(marker in (c.get("body") or "") for c in comments):
         notice("trigger already posted for head %s; one review per head"
+               % head_sha[:12])
+        return 0
+
+    if review_dedup is None:
+        raise SystemExit("::error::ops/productivity/review_dedup.py is missing from this checkout; "
+                         "refusing to post a review trigger without the same-head guard")
+    # Same-head idempotency: re-read the head's check-runs just
+    # before posting. The decision above fires on verdicts (success/failure),
+    # but a review requested through another path (manual mention, gate
+    # listing, an overlapping delivery) shows as a live run with no verdict
+    # and no marker comment yet; posting on top of it opens a second
+    # same-head review row. Error outcomes stay retryable: the reconciler owns
+    # the one-retry path for those heads.
+    fresh_runs = paginate("/commits/%s/check-runs" % head_sha, key="check_runs")
+    if any(review_dedup.check_run_suppresses(r.get("name"), r.get("status"), r.get("conclusion"))
+           for r in fresh_runs):
+        notice("a Paperclip Review run already covers head %s; one review per head"
                % head_sha[:12])
         return 0
 

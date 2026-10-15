@@ -480,6 +480,45 @@ class Wiring(unittest.TestCase):
         self.assertEqual(out['state'], {})
 
 
+class DedupGuard(unittest.TestCase):
+    """Error-kind heads consult review_dedup over the head's rows.
+
+    The stranded rows carry the head's recent server row states as a comma
+    blob (4th column); legacy 3-tuples mean one known error (existing tests).
+    """
+    tick = Wiring.tick
+
+    def test_second_error_suppresses_the_wake(self):
+        out = self.tick(stranded=[[REPO, '7', SHA, 'error,error']], facts_now=facts())
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['comments'], [])
+        self.assertEqual(out['state'], {})
+        self.assertIn('retry budget', out['stdout'])
+
+    def test_error_on_an_already_completed_head_suppresses_the_wake(self):
+        out = self.tick(stranded=[[REPO, '7', SHA, 'completed,error']], facts_now=facts())
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['comments'], [])
+        self.assertEqual(out['state'], {})
+
+    def test_error_behind_a_live_attempt_suppresses_the_wake(self):
+        out = self.tick(stranded=[[REPO, '7', SHA, 'running,error']], facts_now=facts())
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['comments'], [])
+        self.assertEqual(out['state'], {})
+
+    def test_first_error_still_wakes(self):
+        out = self.tick(stranded=[[REPO, '7', SHA, 'error']], facts_now=facts())
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['comments'], [CARD_ID])
+
+    def test_unrecognized_row_state_suppresses_the_wake(self):
+        out = self.tick(stranded=[[REPO, '7', SHA, 'error,splines_reticulated']], facts_now=facts())
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['comments'], [])
+        self.assertEqual(out['state'], {})
+
+
 class GhAndCurl(unittest.TestCase):
     def test_pr_head_is_none_when_gh_output_is_not_json(self):
         with mock.patch.object(r.subprocess, 'run', return_value=types.SimpleNamespace(stdout='HTTP 502')):

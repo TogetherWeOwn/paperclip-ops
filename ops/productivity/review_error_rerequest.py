@@ -7,6 +7,7 @@ identity) starts a new one. 2026-10-07 02:45-03:38Z the Claude 5h window was exh
 stranded this way. For each stranded (repo, pr, head): if no review for that head is queued/running and the error is
 older than MIN_AGE_MIN, comment on the open card that owns the PR until a 2xx answer is recorded (the comment wakes its
 assignee). Cards with a live run are skipped this tick (a comment would cancel their retries). Dry-run by default; --apply comments.
+Before waking for an errored head the tick consults review_dedup.head_decision() over that head's recent row states: a completed or in-flight review, or a second error (one retry max), suppresses the wake. Suppressions are not recorded in state, so the decision is re-made as rows evolve; the error count only grows and a completed row persists, which is what makes the suppression permanent.
 Every wake and the merge-ready notice also pass card_hold(): blocked or backlog cards, unblock descriptors, recovery
 holds, open blocking edges and out-of-focus cards while focus_gate is ACTIVE all suppress them. Cards with a live or
 scheduled-retry run are skipped first. A pending ask suppresses the merge-ready notice only. The merge-ready notice asks
@@ -108,6 +109,19 @@ def comment(issue_id, body):
     except subprocess.TimeoutExpired:
         return 'timeout'
     return r.stdout.strip()
+
+
+def head_row_states(blob):
+    """Server row states for one stranded head, from the query's state blob.
+
+    A missing blob predates the state-blob column and means exactly one known
+    error: the failure this tick is handling, so the first retry stays
+    allowed. The stranded query only returns heads whose latest row is
+    error/incomplete, so a legacy-shaped row is always that failure.
+    """
+    if blob:
+        return [s for s in str(blob).split(',') if s]
+    return ['error']
 
 
 def save_state(state):
@@ -235,6 +249,7 @@ def merge_notice(repo, n, sha):
 
 def main():
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import review_dedup  # noqa: E402  (same-head idempotency guard)
     from host_ok import host_ok
     ok, why = host_ok()
     if not ok:
@@ -245,13 +260,19 @@ def main():
     stranded = psql(f"""with l as (select distinct on (repository, pull_number, head_sha) repository, pull_number,
         head_sha, state, updated_at from chat_github_reviews where company_id='{CID}'
         and created_at > now() - interval '3 days' order by repository, pull_number, head_sha, updated_at desc)
-        select repository, pull_number, head_sha from l where state in ('error','incomplete')
-        and updated_at < now() - interval '{MIN_AGE_MIN} minutes' order by updated_at""")
+        select l.repository, l.pull_number, l.head_sha, (select string_agg(c.state, ',')
+        from chat_github_reviews c where c.company_id='{CID}' and lower(c.repository)=lower(l.repository)
+        and c.pull_number=l.pull_number and c.head_sha=l.head_sha and c.created_at > now() - interval '3 days')
+        from l where l.state in ('error','incomplete')
+        and l.updated_at < now() - interval '{MIN_AGE_MIN} minutes' order by l.updated_at""")
     env = gh_env()
     done = 0
-    stranded = ([(r, n, s, 'error') for r, n, s in stranded] + [(r, n, s, 'none') for r, n, s in unreviewed(env)]
-                + [(r, n, s, 'ready') for r, n, s in merge_ready(env)])
-    for repo, n, sha, kind in stranded:
+    # The 4th column (state blob) carries the head's recent row states;
+    # 3-tuples mean one known error (head_row_states maps them to the first retry, as before).
+    stranded = ([(row[0], row[1], row[2], 'error', row[3] if len(row) > 3 else None) for row in stranded]
+                + [(r, n, s, 'none', None) for r, n, s in unreviewed(env)]
+                + [(r, n, s, 'ready', None) for r, n, s in merge_ready(env)])
+    for repo, n, sha, kind, blob in stranded:
         key = f'{repo}#{n}@{sha}' + {'error': '', 'none': ':unreviewed', 'ready': ':mergeready'}[kind]
         if key in state or done >= MAX_PER_TICK:
             continue
@@ -292,6 +313,11 @@ def main():
         if pr_state != 'OPEN' or head != sha:
             state[key] = 'moot'
             continue
+        if kind == 'error':
+            action, why = review_dedup.head_decision(head_row_states(blob))
+            if action != 'request':
+                print(f'{key}: {why}; no second request for this head')
+                continue
         try:
             card = owning_card(repo, n)
         except Exception as e:

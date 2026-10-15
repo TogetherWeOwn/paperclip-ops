@@ -313,3 +313,10 @@ class TimeoutConfig(unittest.TestCase):
                 with mock.patch.object(op.subprocess, 'run') as run, self.assertRaises(ValueError):
                     spec.loader.exec_module(importlib.util.module_from_spec(spec))
                 run.assert_not_called()
+
+
+class ShepherdCardText(unittest.TestCase):
+    def test_review_step_has_the_same_head_dedup_rule(self):
+        text = op.card_description('https://github.com/TogetherWeOwn/paperclip-ops/pull/1')
+        self.assertIn('at most once per head', text)
+        self.assertIn('Paperclip Review', text)

@@ -9,7 +9,7 @@ Usage: collect.py <runs.json> <out dataset.json>
 """
 import json,os,re,sys,urllib.request,concurrent.futures as cf
 from urllib.parse import quote, urlencode
-from uuid import UUID
+from uuid import RFC_4122, UUID
 
 PAGE_SIZE = 100
 MAX_COMMENT_PAGES = 1000
@@ -66,7 +66,12 @@ def comments(issue_path):
                 raise CollectionError('invalid comment')
             ident = item.get('id')
             try:
-                valid_id = isinstance(ident, str) and str(UUID(ident)) == ident
+                parsed = UUID(ident) if isinstance(ident, str) else None
+                # The comments API treats unsupported UUID versions/variants as
+                # an empty page. Reject them instead of silently truncating.
+                valid_id = (parsed is not None and str(parsed) == ident
+                            and parsed.variant == RFC_4122
+                            and parsed.version in range(1, 6))
             except (ValueError, AttributeError):
                 valid_id = False
             if not valid_id or ident in seen:

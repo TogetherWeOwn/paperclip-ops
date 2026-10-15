@@ -259,6 +259,28 @@ class CommentPagination(unittest.TestCase):
             with self.subTest(page=page), self.assertRaises(collect.CollectionError):
                 self.collect_with([API_ISSUE, page])
 
+    def test_api_invalid_uuid_cannot_fake_an_empty_terminal_page(self):
+        # The API returns [] for a cursor outside versions 1-5 / RFC variant.
+        # Python UUID() alone accepts these; refuse before requesting that page.
+        for bad in ("00000000-0000-0000-0000-000000000000",
+                    "00000000-0000-6000-8000-000000000100",
+                    "00000000-0000-7000-8000-000000000100",
+                    "00000000-0000-8000-8000-000000000100",
+                    "00000000-0000-4000-c000-000000000100"):
+            page = [comment(i) for i in range(1, 101)]
+            page[-1]["id"] = bad
+            with self.subTest(cursor=bad), \
+                    mock.patch.dict(os.environ, REVIEWER_ENV, clear=True), \
+                    mock.patch.object(collect, "get", side_effect=[API_ISSUE, page, []]) as get:
+                with self.assertRaises(collect.CollectionError):
+                    collect.one("i1")
+            self.assertEqual(get.call_count, 2)
+
+    def test_deleted_comment_empty_body_is_valid(self):
+        item = dict(comment(1, "fixture-reviewer"), body="")
+        data = self.collect_with([API_ISSUE, [item]])[1]
+        self.assertEqual(data["comments"][0]["body"], "")
+
     def test_older_reviewer_verdict_survives_full_nonreviewer_page(self):
         page = [comment(i) for i in range(1, 101)]
         older = comment(101, "fixture-reviewer")

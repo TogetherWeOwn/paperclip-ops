@@ -68,10 +68,10 @@ class PublicHistoricalProvenanceScope(unittest.TestCase):
             verification.mkdir()
             gate = verification / "case_c89b5362-drift-pin-mutation-gate.sh"
             shutil.copy2(HERE / "verification" / gate.name, gate)
-            (verification / "case_5dfa9150-handoff-copy-drift.sh").write_text(
-                'PINNED_BLOB="' + 'a' * 40 + '"\n'
-                'PINNED_SHA256="' + 'b' * 64 + '"\n'
-            )
+            # The public gate now runs its semantic controls, so stage the real
+            # checker rather than a pin-only no-op that cannot detect drift.
+            shutil.copy2(HERE / "verification/case_5dfa9150-handoff-copy-drift.sh",
+                         verification / "case_5dfa9150-handoff-copy-drift.sh")
             (root / "README.md").write_text(
                 "## Fresh-history publication candidate\n" if public_readme else "Private source\n"
             )
@@ -84,7 +84,9 @@ class PublicHistoricalProvenanceScope(unittest.TestCase):
     def test_public_snapshot_reports_explicit_private_artifact_skip(self):
         result = self.run_historical_gate(True, True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("SKIP: historical private handoff blob", result.stdout)
+        self.assertIn("SKIP: historical private handoff provenance only", result.stdout)
+        self.assertIn("GATE GREEN: 8 scenarios behaved and 5 mutants were killed.",
+                      result.stdout)
 
     def test_missing_provenance_elsewhere_still_refuses(self):
         for scanner, readme in ((False, False), (True, False), (False, True)):

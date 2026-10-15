@@ -325,6 +325,10 @@ canonical main SHA above is retained, not the toolkit version. The list is exhau
 - `tests/fixtures/pacer-concurrency/audit.jsonl`: redundant fixture. The canonical pacer test already uses its existing synthetic `audit.fixture`; that fixture and its malformed-line control remain unchanged.
 - `test_omniroute_rehearsal.sh`: deliberately dropped as an orphan suite. Its subjects `omniroute/rehearsal/operator-action.sh`, `prepare-db-preimage.sh`, `verify-package.sh`, and `package.json` are absent from toolkit main, the canonical source snapshot, and both pinned public archive commits (`533c7ae2b013340bfae20cfcc711220048295855`, `7c4b39a2157ceb122ae50c7f554cc43c6891c829`). It cannot provide coverage without its subject package; the other rehearsal preflight and translator coverage remains.
 
+- `execution-image/` (11 files): the whole source packet is deferred. Canonical Trivy rejects its final root `USER` (DS-0002), while its inherited-initialization contract and tests explicitly require that startup identity. Do not weaken Trivy or silently change the runtime contract. A high-priority DevOps follow-up must resolve non-root execution with a passing unchanged scan, or obtain a documented, reviewed, exact-scope CISO exception only if runtime root is essential, then port the complete packet here. The source remains pinned at the toolkit commit above and is preserved in a separate local source archive. Retirement is blocked until the packet is ported or explicitly retired.
+
+After all exclusions, this import contains 537 toolkit-only files and the one toolkit-alone shared-path change.
+
 ## Content-only publication adaptations
 
 The canonical privacy gate is unchanged. Imported card identifiers use neutral example
@@ -342,7 +346,8 @@ The conflict list above records source selection, not a prohibition on the follo
 integration edits. No toolkit version of these shared files was substituted:
 
 - `vendor/toolkit-tracked-allowlist.txt`: explicitly registers the imported manifest paths. Two stale entries for actually-untracked aliases are removed so their archive bytes are checked.
-- `vendor/offline-ci-contract.json`: separates 251 deliberately tracked inputs from 34 remaining archive-restored inputs, pinning both sets by SHA-256.
+- `vendor/offline-ci-contract.json`: separates 251 deliberately tracked inputs from 35 archive-restored inputs, pinning both sets by SHA-256.
+- `vendor/toolkit-files.txt`, `.gitignore`, and `test_toolkit_sync.py`: restore the original archive's sibling-guard test subject under an explicit ignored fixture alias, separate from the now-tracked first-party root guard. Preserve the original archive checksum, subject digest, and behavior assertions rather than relabeling newer source as archived bytes.
 - `verification/offline_ci_contract.py`: checks both disjoint, exhaustive input sets and their exact bytes; removed-producer provenance must still have an immutable input closure.
 - `test_offline_ci_contract.py`: retains existing assertions and adds missing/wrong tracked-byte and omitted/reclassified/duplicated/invalid-hash controls.
 - `.gitleaks.toml`: adds exactly nine rule-scoped, exact-path AND exact-full-line allowances for provenance digests independently recomputed from the pinned files. Default rules remain enabled; no broad path or hash exemption is added. The canonical privacy gate remains unchanged.
@@ -352,9 +357,10 @@ integration edits. No toolkit version of these shared files was substituted:
 The project default and repository-placement mappings select paperclip-ops for new work.
 Existing toolkit-bound issues finish their current PRs in the toolkit. Later merged toolkit
 changes require a refreshed reconciliation before merge or a subsequent reviewed sync PR.
-Retirement requires this consolidation to merge, zero open toolkit PRs, and zero active
-toolkit-bound issues (including realized workspaces). Once all gates hold, make the toolkit
-repository **private first, then archive it**. Do not change the existing private source
+Retirement requires this consolidation to merge, zero open toolkit PRs, zero active
+toolkit-bound issues (including realized workspaces), and the **execution-image packet ported
+or explicitly retired**. Once all gates hold, make the toolkit repository **private first,
+then archive it**. Do not change the existing private source
 repository's visibility. Existing private PR grandfathering is unchanged.
 
 The omitted historical account fixture was already present in the public toolkit history.

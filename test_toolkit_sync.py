@@ -227,21 +227,27 @@ cp "$source" "$dest"
 
     def prepare_guard(self):
         self.assertIn(COMMIT, GUARD_SUBJECTS, "add a verified immutable test subject for this pin")
-        fixture = ROOT / "sibling_guard.sh"
+        # The root guard is now first-party tracked source. Keep the selected
+        # archive's immutable subject separate so this suite still verifies the
+        # real archive pin, not a rewritten copy or the newer canonical guard.
+        fixture = ROOT / "verification/fixtures/toolkit-sync/sibling_guard.sh"
         self.assertTrue(fixture.is_file(), "restore pinned public dependencies with scripts/sync-toolkit.sh")
         subject = fixture.read_bytes()
         self.assertEqual(hashlib.sha256(subject).hexdigest(), GUARD_SUBJECTS[COMMIT])
         contract = json.loads((ROOT / "vendor/offline-ci-contract.json").read_text())
-        self.assertEqual(contract["restored_files_sha256"]["sibling_guard.sh"],
+        self.assertEqual(contract["restored_files_sha256"][
+                             "verification/fixtures/toolkit-sync/sibling_guard.sh"],
                          GUARD_SUBJECTS[COMMIT])
         # Repack only the needed immutable bytes, with a fixture checksum. The
         # real archive checksum is asserted separately, not relabelled as this tar.
         self.pack({"LICENSE": b"fixture license\n", "sibling_guard.sh": subject})
         entries = [line for line in (ROOT / "vendor/toolkit-files.txt").read_text().splitlines()
-                   if line.split("|", 1)[0] == "sibling_guard.sh"]
-        self.assertEqual(entries, ["sibling_guard.sh"],
+                   if line.split("|", 1)[0] == "verification/fixtures/toolkit-sync/sibling_guard.sh"]
+        self.assertEqual(entries, ["verification/fixtures/toolkit-sync/sibling_guard.sh|sibling_guard.sh"],
                          "guard must consume the selected default, not an old compatibility pin")
-        (self.root / "vendor/toolkit-files.txt").write_text(entries[0] + "\n")
+        # The synthetic archive restores that same verified subject under its
+        # original name. Its checksum and bytes remain asserted independently.
+        (self.root / "vendor/toolkit-files.txt").write_text("sibling_guard.sh\n")
         result = self.run_sync()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.guard = self.root / "sibling_guard.sh"

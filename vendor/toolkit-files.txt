@@ -181,6 +181,7 @@ scripts/storage_audit.sh
 scripts/case_e20effbb-mapping-guard-calibration.mjs|scripts/mapping-guard-calibration.mjs
 secret_exposure_audit.sh
 sibling_guard.sh
+verification/fixtures/toolkit-sync/sibling_guard.sh|sibling_guard.sh
 skills.sh
 test/external-disclosure.test.mjs
 test/fixtures/gh_ci_status/RECORDED.md

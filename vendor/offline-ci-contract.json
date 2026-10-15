@@ -2092,8 +2092,9 @@
     ]
   },
   "suites_job_sha256": "5d0d517daadcbf5743afdf5f9b131afb162bfaed3980a112ba9c4824d546726c",
-  "manifest_sha256": "45002e0b5e92e94f5bda7df2d92c40384f1c6d7b054f1a7ede163f5c3999b13e",
+  "manifest_sha256": "bb7c4b3d51e03cb7b6dad305b4b239945407698a0fdf94c0f60fe96f9b39c25f",
   "restored_files_sha256": {
+    "verification/fixtures/toolkit-sync/sibling_guard.sh": "93b14debe4cfb5fd7a059103a431cc87afbc36e66fa0705d0e4ba77cf3019874",
     "plugins/gh-token-broker/dist/disclosure.js": "e57bd6c71ab31a459242cb0d80f77fb0ff1bf4fa0267c997fe8b324bb1cf3e9d",
     "plugins/gh-token-broker/dist/ownership.js": "2bc828e418c4250cc039510f621230c84ab9a04b5e4c5cc5540d84ea33550a6a",
     "plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql": "90a7b4bbc5b6f58d07df212c065f2ce04eeed18e4c1cdb1bd44b9f1a1e90e2df",

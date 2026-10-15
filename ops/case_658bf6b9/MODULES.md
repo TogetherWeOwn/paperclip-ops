@@ -69,7 +69,9 @@ Suite: `test_case_60330d6f_cliproxy_lanes.sh`.
 
 ## Runner census
 
-`platform/runner-census`: `ops/case_ebbb469a/gatus-endpoints.yaml`,
+### runner-census (case_ebbb469a)
+
+`platform/runner-census` / `platform_runner-census`: `ops/case_ebbb469a/gatus-endpoints.yaml`,
 `ops/case_ebbb469a/push-runner-census.py`,
 `ops/case_ebbb469a/test_runner_census.py`,
 `ops/case_ebbb469a/mutation_gate.py`.

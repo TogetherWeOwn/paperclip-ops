@@ -130,6 +130,76 @@ class PublicCI(unittest.TestCase):
             with mock.patch.object(public_safety, "ROOT", root):
                 self.assertIn("unreviewed binary payload", public_safety.inspect(path))
 
+    def test_private_artifact_skip_is_named_marked_and_absence_only(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "public_snapshot_test_support", ROOT / "public_snapshot_test_support.py")
+        support = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(support)
+        for relative in support.PRIVATE_ARTIFACTS:
+            for scanner in (False, True):
+                for marker in (False, True):
+                    for artifact in (None, "empty", "partial", "directory", "dangling-symlink"):
+                        with self.subTest(relative=relative, scanner=scanner, marker=marker,
+                                          artifact=artifact), tempfile.TemporaryDirectory() as tmp:
+                            root = Path(tmp)
+                            (root / "README.md").write_text(
+                                "## Fresh-history publication candidate\n" if marker else "private source\n")
+                            if scanner:
+                                (root / ".github/scripts").mkdir(parents=True)
+                                (root / ".github/scripts/public_safety.py").touch()
+                            path = root / relative
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                            if artifact == "empty":
+                                path.touch()
+                            elif artifact == "partial":
+                                path.write_text("invalid partial JSON")
+                            elif artifact == "directory":
+                                path.mkdir()
+                            elif artifact == "dangling-symlink":
+                                path.symlink_to(root / "absent-target")
+                            self.assertEqual(support.private_artifact_absent(root, relative),
+                                             scanner and marker and artifact is None)
+        with self.assertRaises(ValueError):
+            support.private_artifact_absent(ROOT, "unreviewed-fixture.json")
+        with self.assertRaises(ValueError):
+            support.private_artifact_absent(ROOT, "../tests/dead-feed-2026-08-26.jsonl")
+
+    def test_auth_mutation_gate_rejects_unattributable_results(self):
+        import importlib.util
+        import json
+        spec = importlib.util.spec_from_file_location(
+            "auth_mutation_gate", ROOT / "verification/auth-denial-mutation-gate.py")
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        baseline = dict(success=True, run=55, failures=[], errors=[], skipped=[],
+                        loader_errors=[], expected_failures=0, unexpected_successes=0)
+        cases = [
+            (False, (), {}, True),
+            (True, (), {"skipped": sorted(gate.PRIVATE_TESTS)}, True),
+            (False, (), {"skipped": sorted(gate.PRIVATE_TESTS)}, False),
+            (True, ("named-control",), {"skipped": sorted(gate.PRIVATE_TESTS)}, False),
+            (True, (), {"skipped": sorted(gate.PRIVATE_TESTS) + ["unexpected"]}, False),
+            (True, (), {"skipped": sorted(gate.PRIVATE_TESTS)[:-1]}, False),
+            (True, (), {"skipped": sorted(gate.PRIVATE_TESTS), "errors": ["startup-error"]}, False),
+            (True, (), {"skipped": sorted(gate.PRIVATE_TESTS), "run": 5}, False),
+            (False, ("named-control",), {"run": 0}, False),
+            (False, ("named-control",), {"loader_errors": ["missing test"]}, False),
+            (False, ("named-control",), {"expected_failures": 1}, False),
+            (False, ("named-control",), {"unexpected_successes": 1}, False),
+        ]
+        for public_absence, names, changes, accepted in cases:
+            result = {**baseline, **changes}
+            proc = subprocess.CompletedProcess([], 0, json.dumps(result), "")
+            with self.subTest(public_absence=public_absence, names=names, changes=changes), \
+                    mock.patch.object(gate, "private_artifact_absent", return_value=public_absence), \
+                    mock.patch.object(gate.subprocess, "run", return_value=proc):
+                if accepted:
+                    self.assertEqual(gate.run_suite("unused", names), result)
+                else:
+                    with self.assertRaises(RuntimeError):
+                        gate.run_suite("unused", names)
+
     def test_private_bakeoff_skip_requires_both_markers_and_complete_absence(self):
         source = (ROOT / "test_case_61df0b37_review_bakeoff.sh").read_text()
         cases = [

@@ -8,3 +8,9 @@ omniroute/case_05be2d4e-mapping-plan.json
 plugins/omniroute-broker/dist/approvals.js
 plugins/omniroute-broker/dist/audit.js
 plugins/omniroute-broker/dist/manifest.js
+# Public baseline excludes private incident records; named mutation kills remain mandatory.
+test_auth_denial_discriminator.py
+test_pacing_verdict.py
+verification/auth-denial-mutation-gate.py
+# Keep private-history assertions plus unconditional synthetic stale-feed CLI coverage.
+test_quota_burn_derive.sh

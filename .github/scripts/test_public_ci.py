@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Public CI regression checks; no network, host inventory or credentials."""
 from pathlib import Path
+import json
 import os
 import re
 import subprocess
@@ -9,20 +10,86 @@ import unittest
 from unittest import mock
 
 import public_safety
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+# Reviewed immutable callee: its sole job uses fromJSON(inputs.runs-on-json).
+# New reusable workflows or pins require inspection, not blind trust in an input.
+HOSTED_TEST_GUARD = (
+    "TogetherWeOwn/.github/.github/workflows/test-guard.yml@"
+    "866275517a9875f02110f946411401db8907ec8a"
+)
 
 
 class PublicCI(unittest.TestCase):
+    def assert_public_hosted_routes(self, directory):
+        workflows = sorted([*directory.glob("*.yml"), *directory.glob("*.yaml")])
+        self.assertTrue(workflows, "no workflows inspected")
+        for workflow in workflows:
+            data = yaml.safe_load(workflow.read_text())
+            self.assertIsInstance(data, dict, str(workflow))
+            jobs = data.get("jobs")
+            self.assertIsInstance(jobs, dict, str(workflow))
+            self.assertTrue(jobs, str(workflow))
+            for name, job in jobs.items():
+                label = f"{workflow.name}: {name}"
+                self.assertIsInstance(job, dict, label)
+                if "uses" in job:
+                    self.assertEqual(job["uses"], HOSTED_TEST_GUARD, label)
+                    self.assertNotIn("runs-on", job, label)
+                    inputs = job.get("with", {})
+                    self.assertIsInstance(inputs, dict, label)
+                    try:
+                        route = json.loads(inputs.get("runs-on-json", "null"))
+                    except (TypeError, ValueError):
+                        self.fail(f"{label}: runner input must be literal JSON")
+                    self.assertEqual(route, ["ubuntu-latest"], label)
+                else:
+                    # Fail closed on expressions, matrices, groups, aliases to
+                    # private labels, and missing routes. This public snapshot
+                    # needs no private branch in its routing expression.
+                    self.assertEqual(job.get("runs-on"), "ubuntu-latest", label)
+
     def test_all_runner_routes_are_standard_hosted(self):
-        routes = []
-        for workflow in (ROOT / ".github/workflows").glob("*.yml"):
-            for line in workflow.read_text().splitlines():
-                if re.match(r"\s*runs-on(?:-json)?:", line):
-                    routes.append(line)
-                    self.assertIn("ubuntu-latest", line, str(workflow))
-                    self.assertNotIn("self-hosted", line, str(workflow))
-        self.assertTrue(routes)
+        self.assert_public_hosted_routes(ROOT / ".github/workflows")
+
+    def test_public_routing_guard_accepts_hosted_and_reviewed_reusable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "direct.yaml").write_text(
+                "on: pull_request\njobs:\n  direct:\n    runs-on: ubuntu-latest\n")
+            (directory / "reusable.yml").write_text(
+                "on: pull_request\njobs:\n  guard:\n    uses: " + HOSTED_TEST_GUARD
+                + "\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n")
+            self.assert_public_hosted_routes(directory)
+
+    def test_public_routing_guard_rejects_private_dynamic_and_unreviewed_jobs(self):
+        bad_jobs = {
+            "private-array": "    runs-on: [self-hosted, two-ephemeral]\n",
+            "private-multiline": "    runs-on:\n      - self-hosted\n      - two-isolated\n",
+            "runner-group": "    runs-on:\n      group: private-runners\n      labels: ubuntu-latest\n",
+            "expression": "    runs-on: ${{ github.event.repository.private && 'ubuntu-latest' || 'self-hosted' }}\n",
+            "matrix": "    strategy:\n      matrix:\n        runner: [ubuntu-latest, self-hosted]\n    runs-on: ${{ matrix.runner }}\n",
+            "missing-route": "    steps: []\n",
+            "unknown-reusable": "    uses: example/workflows/.github/workflows/check.yml@" + "a" * 40
+                + "\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "reusable-private-default": "    uses: " + HOSTED_TEST_GUARD + "\n",
+            "reusable-private-input": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    with:\n      runs-on-json: '[\"self-hosted\", \"two-ephemeral\"]'\n",
+            "reusable-expression": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    with:\n      runs-on-json: ${{ inputs.runner }}\n",
+        }
+        for name, job in bad_jobs.items():
+            for suffix in (".yml", ".yaml"):
+                with self.subTest(case=name, suffix=suffix), tempfile.TemporaryDirectory() as tmp:
+                    directory = Path(tmp)
+                    # A green route must not hide a later unsafe job or file.
+                    (directory / "first.yml").write_text(
+                        "jobs:\n  green:\n    runs-on: ubuntu-latest\n")
+                    (directory / ("second" + suffix)).write_text(
+                        "jobs:\n  green:\n    runs-on: ubuntu-latest\n  unsafe:\n" + job)
+                    with self.assertRaises(AssertionError):
+                        self.assert_public_hosted_routes(directory)
 
     def test_required_producers_handle_merge_groups(self):
         for name in ("ci.yml", "pr-lint.yml", "public-safety.yml"):

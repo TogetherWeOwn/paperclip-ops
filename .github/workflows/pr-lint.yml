@@ -65,7 +65,12 @@ jobs:
       - name: Restore pinned toolkit test dependencies
         run: bash scripts/sync-toolkit.sh
 
+      - name: Install pinned workflow parser
+        run: python3 -m pip install --disable-pip-version-check --no-deps --target "${RUNNER_TEMP}/public-ci-python" 'PyYAML==6.0.2'
+
       - name: Unit-test the lint
+        env:
+          PYTHONPATH: ${{ runner.temp }}/public-ci-python
         run: |
           python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
           python3 -m unittest discover -s .github/scripts -p 'test_ci_policy.py'

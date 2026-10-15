@@ -1363,6 +1363,63 @@ test("a block is never cached: the Stop after a hand-back re-reads the fixed car
   }
 });
 
+test("a fresh cross-run cache entry without a count never blocks a fixed card", async () => {
+  // Written by another run's Stop (allow other-run-holds-card caches the card
+  // without a count): this run's Stop classifies it as need-extras and takes
+  // the light interactions read. The cached block verdict must fall through to
+  // a full re-read instead of re-blocking the card this run just set to done.
+  const dir = scratch();
+  try {
+    const env = isolatedEnv(dir);
+    assert.equal(writeCardCache(env, TASK, { card: card() }), true);
+    const api = API(card({ status: "done" }));
+    const out = await decide(STOP, env, { fetchJson: api.fetchJson, config: {}, killSwitchPresent: () => false });
+    assert.ok(api.calls.length > 1, "the cached block fell through to a full re-read");
+    assert.equal(out.action, "allow");
+    assert.equal(out.why, "status-done");
+    assert.equal(out.cached, undefined);
+    assert.equal(readCardCache(env, TASK)?.card.status, "done");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a fresh cross-run cache entry without a count fails open on a timed-out card read", async () => {
+  // Same entry, but the card read times out while the light interactions read
+  // succeeds with a zero count: a stale card plus a fresh count is still a
+  // stale card, so the Stop fails open as card-timeout instead of blocking.
+  const dir = scratch();
+  try {
+    const env = isolatedEnv(dir);
+    assert.equal(writeCardCache(env, TASK, { card: card() }), true);
+    const fetchJson = async (path) => {
+      if (path.endsWith("/interactions")) return { ok: true, status: 200, body: [] };
+      return { ok: false, status: 0, timeout: true };
+    };
+    // The stale block verdict must never be written back: without the guard the
+    // fresh count is remembered before the fall-through fail-open deletes it.
+    // writeCardCache here is the module import above, wrapped to record calls.
+    const writes = [];
+    const out = await decide(STOP, env, {
+      fetchJson,
+      config: {},
+      killSwitchPresent: () => false,
+      writeCardCache: (...args) => {
+        writes.push(args);
+        return writeCardCache(...args);
+      },
+    });
+    assert.equal(out.action, "allow");
+    assert.equal(out.why, "card-timeout");
+    assert.equal(out.timeout, true);
+    assert.equal(out.cached, undefined);
+    assert.deepEqual(writes, [], "the stale block verdict is never re-cached");
+    assert.equal(readCardCache(env, TASK), null, "the stale block entry is dropped, never re-cached");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a successful allow decision is cached for the next Stop of the same run", async () => {
   const dir = scratch();
   try {

@@ -651,6 +651,77 @@ class PublicCI(unittest.TestCase):
                     self.assertIn("FAIL dataset shape", proc.stdout)
                     self.assertIn("FAIL no token-shaped string", proc.stdout)
 
+    def test_history_scan_range_covers_pr_commits_after_main_advances(self):
+        script = ROOT / ".github/scripts/public-safety-range.sh"
+        self.assertTrue(script.is_file(), "range helper missing")
+        safety = (ROOT / ".github/workflows/public-safety.yml").read_text()
+        self.assertIn("public-safety-range.sh", safety)
+        # A bare merge commit has an empty `git log -p` diff, so scanning one
+        # reports clean over zero commits. The fallback must never be one.
+        self.assertNotIn("-1 HEAD", safety)
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"PATH": os.environ["PATH"], "HOME": tmp,
+                   "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                   "GIT_AUTHOR_NAME": "Synthetic Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+                   "GIT_COMMITTER_NAME": "Synthetic Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+                   "GIT_EDITOR": "true"}
+
+            def git(*args):
+                return subprocess.run(["git", "-C", tmp, *args], env=env, check=True,
+                                      capture_output=True, text=True)
+
+            # Identity travels as -c flags: the sandbox git wrapper does not
+            # honor GIT_AUTHOR_* / GIT_COMMITTER_* from the environment.
+            ident = ("-c", "user.name=Synthetic Fixture",
+                     "-c", "user.email=fixture@example.invalid")
+
+            def run_range(*args):
+                return subprocess.run(["bash", str(script), *args], cwd=tmp, env=env,
+                                      check=True, capture_output=True, text=True,
+                                      timeout=30).stdout.strip()
+
+            git("init", "-q", ".")
+            git("checkout", "-q", "-b", "main")
+            (Path(tmp) / "base.txt").write_text("base\n")
+            git("add", "base.txt")
+            git(*ident, "commit", "-qm", "main: base")
+            base = git("rev-parse", "HEAD").stdout.strip()
+            git("checkout", "-qb", "pr")
+            (Path(tmp) / "feature.txt").write_text("feature\n")
+            git("add", "feature.txt")
+            git(*ident, "commit", "-qm", "pr: add feature")
+            pr_commit = git("rev-parse", "HEAD").stdout.strip()
+            git("checkout", "-q", "main")
+            (Path(tmp) / "other.txt").write_text("other\n")
+            git("add", "other.txt")
+            git(*ident, "commit", "-qm", "main: advances after the merge ref is cut")
+            main_tip = git("rev-parse", "HEAD").stdout.strip()
+            # The checkout fetches the base the merge ref was built on, then
+            # main moves on: origin/main is no longer an ancestor of HEAD.
+            git("update-ref", "refs/remotes/origin/main", "main")
+            git("checkout", "-qb", "mergeref", base)
+            git(*ident, "merge", "--no-ff", "--no-edit", "-q", "pr")
+            ancestor = subprocess.run(
+                ["git", "-C", tmp, "merge-base", "--is-ancestor",
+                 "refs/remotes/origin/main", "HEAD"],
+                env=env, capture_output=True)
+            self.assertNotEqual(
+                ancestor.returncode, 0,
+                "fixture must reproduce main moving past the merge ref")
+            merge_base = git("merge-base", "refs/remotes/origin/main", "HEAD").stdout.strip()
+            ranged = run_range("pull_request", "")
+            self.assertEqual(ranged, f"{merge_base}..HEAD")
+            log = git("log", ranged, "--format=%H").stdout.split()
+            self.assertIn(pr_commit, log, "the PR commit must be inside the scanned range")
+            self.assertNotEqual(git("rev-list", ranged, "--count").stdout.strip(), "0")
+            # No derivable range fails closed to --all, never to a merge commit.
+            git("update-ref", "-d", "refs/remotes/origin/main")
+            self.assertEqual(run_range("pull_request", ""), "--all")
+            # Push scans what was pushed; a new branch (all-zero before) scans all.
+            git("update-ref", "refs/remotes/origin/main", "main")
+            self.assertEqual(run_range("push", main_tip), f"{main_tip}..HEAD")
+            self.assertEqual(run_range("push", "0" * 40), "--all")
+
     def test_renamed_archive_sources_use_public_paths(self):
         manifest = (ROOT / "vendor/toolkit-files.txt").read_text().splitlines()
         expected = {

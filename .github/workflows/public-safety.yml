@@ -36,11 +36,10 @@ jobs:
           # branches (e.g. vendor/offline-ci-contract.json churn elsewhere)
           # against this commit's allowlist and reds every PR for another
           # branch's fixtures. The dir scan above already covers the tree.
-          BASE="origin/main"
-          RANGE="$BASE..HEAD"
-          if ! git rev-parse --verify "$BASE" >/dev/null 2>&1 || \
-             ! git merge-base --is-ancestor "$BASE" HEAD 2>/dev/null || \
-             [ "$(git rev-list "$RANGE" --count 2>/dev/null || echo 0)" = "0" ]; then
-            RANGE="-1 HEAD"
-          fi
+          # The range comes from public-safety-range.sh: on pull_request HEAD is
+          # the merge ref, so the range starts at the merge base (never a bare
+          # merge commit, whose empty diff would scan zero commits and pass).
+          # When no non-empty range can be derived the script prints --all and
+          # the scan fails closed instead of passing empty.
+          RANGE="$(bash .github/scripts/public-safety-range.sh "${{ github.event_name }}" "${{ github.event.before }}")"
           docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts="$RANGE" --config /repo/.gitleaks.toml --redact=100 --no-banner

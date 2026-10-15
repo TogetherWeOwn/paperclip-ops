@@ -230,10 +230,14 @@ class PublicCI(unittest.TestCase):
         # The history scan fails closed: no --all sweep of unrelated
         # branches, no narrowed single-commit fallback (on a pull-request
         # merge commit -p -U0 prints no patch, passing vacuously).
+        # Pushes validate BEFORE and every range validates via rev-list.
         self.assertNotIn('--log-opts="--all"', safety)
         self.assertNotIn('RANGE="-1 HEAD"', safety)
         self.assertIn("git merge-base origin/main HEAD", safety)
         self.assertIn("github.event.before", safety)
+        self.assertIn('git cat-file -e "$BEFORE^{commit}"', safety)
+        self.assertIn('git rev-list --count "$RANGE"', safety)
+        self.assertIn("covers 0 commits; failing closed", safety)
 
     def test_history_range_survives_advanced_main(self):
         # Pins the range logic against a scratch repo shaped like the review
@@ -297,6 +301,173 @@ class PublicCI(unittest.TestCase):
             single = out("log", "-p", "-U0", "-1", "merge-ref")
             self.assertNotIn("secret.txt", single,
                              "single-commit scan unexpectedly saw a patch")
+
+    def _history_scan_shell(self):
+        # Slice the real `run:` block out of public-safety.yml so this test
+        # executes the workflow's shell, not a reimplementation. Stub only
+        # the docker invocations; every git conditional stays verbatim.
+        data = yaml.safe_load(
+            (ROOT / ".github/workflows/public-safety.yml").read_text())
+        steps = data["jobs"]["public-safety"]["steps"]
+        run = next(
+            s["run"] for s in steps
+            if (s.get("name") or "").startswith("Scan working tree"))
+        script = run.replace(
+            "${{ github.event_name }}", "${EVENT_NAME}").replace(
+            "${{ github.event.before }}", "${BEFORE}")
+        out_lines = []
+        for line in script.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("docker pull"):
+                out_lines.append(": docker-pull stubbed")
+            elif stripped.startswith("docker run") and " dir /repo" in stripped:
+                out_lines.append(": dir-scan stubbed")
+            elif stripped.startswith("docker run") and " git /repo" in stripped:
+                out_lines.append('echo "SCAN_RANGE=$RANGE"')
+            else:
+                out_lines.append(line)
+        return "\n".join(out_lines) + "\n"
+
+    def _run_history_scan(self, tmp, base_env, event_name, before):
+        script = self._history_scan_shell()
+        env = dict(base_env, EVENT_NAME=event_name,
+                   BEFORE=before or "", SCANNER="stub")
+        return subprocess.run(
+            ["bash", "-e", "-c", script], cwd=tmp, env=env,
+            capture_output=True, text=True)
+
+    def test_history_scan_script_uses_fail_closed_ranges(self):
+        # Executes the workflow's actual range block in scratch repos for:
+        # pull_request with and without an advanced main, push with a real
+        # before, push with a zero before (new branch), push with an
+        # unreachable before (force-push), plus the fail-closed empty range.
+        # Asserts on the printed RANGE and that the secret-bearing commits
+        # are inside it. Mutating the workflow's RANGE, the cat-file guard,
+        # or either exit-1 arm breaks this test.
+        try:
+            subprocess.run(["git", "--version"], capture_output=True,
+                           check=True)
+            subprocess.run(["bash", "--version"], capture_output=True,
+                           check=True)
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest("git or bash not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ,
+                       GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                       GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+            def git(*args):
+                subprocess.run(["git", *args], cwd=tmp, env=env,
+                               capture_output=True, text=True, check=True)
+            def out(*args):
+                r = subprocess.run(["git", *args], cwd=tmp, env=env,
+                                   capture_output=True, text=True,
+                                   check=True)
+                return r.stdout.strip()
+            git("init", "-q")
+            git("checkout", "-q", "-B", "main")
+            Path(tmp, "base.txt").write_text("base\n")
+            git("add", "base.txt")
+            git("commit", "-qm", "base")
+            base0 = out("rev-parse", "main")
+            git("checkout", "-qb", "pr")
+            Path(tmp, "secret.txt").write_text("token = hunter2-hunter2\n")
+            git("add", "secret.txt")
+            git("commit", "-qm", "add credential-shaped file")
+            first_pr = out("rev-parse", "HEAD")
+            git("rm", "-q", "secret.txt")
+            git("commit", "-qm", "remove credential-shaped file")
+            pr_tip = out("rev-parse", "HEAD")
+            git("checkout", "-q", "main")
+            Path(tmp, "other.txt").write_text("advance\n")
+            git("add", "other.txt")
+            git("commit", "-qm", "advance main")
+            main1 = out("rev-parse", "main")
+            git("checkout", "-qb", "tmp-merge")
+            git("merge", "--no-ff", "--no-edit", "-q", "pr", "-m", "merge pr")
+            git("branch", "-f", "merge-ref", "HEAD")
+            git("checkout", "-q", "main")
+            Path(tmp, "later.txt").write_text("later\n")
+            git("add", "later.txt")
+            git("commit", "-qm", "main moves after merge-ref creation")
+            main2 = out("rev-parse", "main")
+            zero = "0" * 40
+            bogus = "d" * 40
+
+            def set_origin(sha_or_none):
+                if sha_or_none is None:
+                    subprocess.run(
+                        ["git", "update-ref", "-d",
+                         "refs/remotes/origin/main"],
+                        cwd=tmp, env=env, capture_output=True)
+                else:
+                    git("update-ref", "refs/remotes/origin/main",
+                        sha_or_none)
+
+            def range_log(rng):
+                r = subprocess.run(
+                    ["git", "log", "-p", "-U0", rng], cwd=tmp, env=env,
+                    capture_output=True, text=True, check=True)
+                return r.stdout
+
+            # 1. pull_request without an advanced main.
+            set_origin(main1)
+            git("checkout", "-q", "merge-ref")
+            r = self._run_history_scan(tmp, env, "pull_request", "")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            m = next((l for l in r.stdout.splitlines()
+                      if l.startswith("SCAN_RANGE=")), None)
+            self.assertIsNotNone(m, r.stdout + r.stderr)
+            rng = m.split("=", 1)[1]
+            self.assertIn("..HEAD", rng)
+            self.assertIn("secret.txt", range_log(rng))
+
+            # 2. pull_request with main advanced after the merge ref.
+            set_origin(main2)
+            git("checkout", "-q", "merge-ref")
+            r = self._run_history_scan(tmp, env, "pull_request", "")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rng = next(l for l in r.stdout.splitlines()
+                       if l.startswith("SCAN_RANGE=")).split("=", 1)[1]
+            self.assertIn("secret.txt", range_log(rng),
+                          "merge-base range lost PR history after advance")
+
+            # 3. push with a real before (multi-commit push scans all).
+            set_origin(main2)
+            git("checkout", "-q", "pr")
+            r = self._run_history_scan(tmp, env, "push", first_pr)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rng = next(l for l in r.stdout.splitlines()
+                       if l.startswith("SCAN_RANGE=")).split("=", 1)[1]
+            self.assertEqual(rng, first_pr + "..HEAD")
+
+            # 4. push with a zero before (new branch) falls back to
+            # merge-base instead of exiting 1.
+            set_origin(base0)
+            git("checkout", "-q", "pr")
+            r = self._run_history_scan(tmp, env, "push", zero)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rng = next(l for l in r.stdout.splitlines()
+                       if l.startswith("SCAN_RANGE=")).split("=", 1)[1]
+            self.assertIn("..HEAD", rng)
+            self.assertIn("secret.txt", range_log(rng))
+
+            # 5. push with an unreachable before (force-push) falls back
+            # to merge-base instead of scanning an empty range green.
+            set_origin(base0)
+            git("checkout", "-q", "pr")
+            r = self._run_history_scan(tmp, env, "push", bogus)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rng = next(l for l in r.stdout.splitlines()
+                       if l.startswith("SCAN_RANGE=")).split("=", 1)[1]
+            self.assertIn("secret.txt", range_log(rng))
+
+            # 6. fail closed on a range covering 0 commits.
+            set_origin(base0)
+            git("checkout", "-q", "pr")
+            r = self._run_history_scan(tmp, env, "push", pr_tip)
+            self.assertNotEqual(r.returncode, 0,
+                                "empty history range must fail closed")
+            self.assertIn("covers 0 commits", r.stderr)
 
     def test_metadata_protocol_constant_does_not_exempt_private_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -319,6 +319,9 @@ class FreezeListDrift(unittest.TestCase):
         self.assertNotIn('RANGE="-1 HEAD"', safety)
         self.assertIn("git merge-base origin/main HEAD", safety)
         self.assertIn("github.event.before", safety)
+        self.assertIn('git cat-file -e "$BEFORE^{commit}"', safety)
+        self.assertIn('git rev-list --count "$RANGE"', safety)
+        self.assertIn("covers 0 commits; failing closed", safety)
 
     def test_freeze_list_entries_are_manifest_destinations(self):
         """Committed and regenerated lists name only manifest dests."""

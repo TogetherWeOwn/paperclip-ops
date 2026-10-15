@@ -651,16 +651,25 @@ class PublicCI(unittest.TestCase):
                     self.assertIn("FAIL dataset shape", proc.stdout)
                     self.assertIn("FAIL no token-shaped string", proc.stdout)
 
-    def test_renamed_archive_sources_use_public_paths(self):
+    def test_first_party_gates_not_vendored(self):
+        # These gates are committed as tracked first-party files, so no
+        # vendored row may claim them: a row for a tracked path is
+        # unrestorable and the restore step exits 1.
         manifest = (ROOT / "vendor/toolkit-files.txt").read_text().splitlines()
-        expected = {
-            "verification/case_9e76f76d-recorded-command.sh": "verification/recorded-monitor-command-gate.sh",
-            "verification/case_9e76f76d-recorded-command.txt": "verification/recorded-monitor-command.txt",
-            "verification/case_46e26fa6-mutation-gate.sh": "verification/plugin-deploy-drift-detector-mutation-gate.sh",
-            "verification/case_f909ca1f-mutation-gate.sh": "verification/grant-attribution-resolver-mutation-gate.sh",
-        }
-        for dest, source in expected.items():
-            self.assertIn(f"{dest}|{source}", manifest)
+        first_party = [
+            "verification/case_9e76f76d-recorded-command.sh",
+            "verification/case_9e76f76d-recorded-command.txt",
+            "verification/case_46e26fa6-mutation-gate.sh",
+            "verification/case_f909ca1f-mutation-gate.sh",
+        ]
+        for dest in first_party:
+            self.assertFalse(
+                any(line.split("|")[0] == dest for line in manifest),
+                f"{dest} is first-party tracked and must not be vendored",
+            )
+            self.assertTrue(
+                (ROOT / dest).is_file(), f"{dest} missing from the tree"
+            )
 
 
 if __name__ == "__main__":

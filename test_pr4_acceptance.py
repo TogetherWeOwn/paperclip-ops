@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 """Offline acceptance for PR #4: toolkit-manifest landing blockers.
 
-Reproduces, without network, database, or credentials, the three CI reds
-seen on the pre-fix head plus the manifest core of the PR:
+Reproduces, without network, database, or credentials, the CI reds that
+block this PR plus the manifest core of the change:
 
 * change detection red: ``vendor/toolkit-files.txt`` listed vendored rows
-  for paths shipped by no release, so the restore step exited 1.
-* suites red: workflows pinned to private pools in every gate and comment
-  carried ``runs-on: ubuntu-latest`` (paid fallback).
-* pr-lint red: the lint job ran on ``ubuntu-latest`` while its first step
-  refuses any runner that is not a GARM runner.
-* privilege-ceiling red: ``test_provisioned_transport_db.py`` guarded on a
-  stale hard-coded marker that no longer matches the vendored fixture.
+  for first-party gates shipped by no release, so the restore step exited 1.
+* suites red: ``verification/case_f909ca1f-mutation-gate.sh`` aimed one limb
+  at a refusal line the provisioner no longer carries, so the gate
+  asserted nothing (mutation did not apply).
+* pr-lint red: ``.github/scripts/test_public_ci.py`` still expected the
+  vendored rows this PR removes.
+* public-safety red: the history scan used ``--all``, which flags other
+  branches' findings against this commit's allowlist.
+* privilege-ceiling guard: ``test_provisioned_transport_db.py`` must keep
+  reading its marker from the vendored fixture, never a stale literal.
+
+Also pins the public-repo runner contract this tree runs on: every workflow
+schedules on the free GitHub-hosted pool and pr-lint refuses any other runner.
 
 Stdlib only, hermetic, under a second. Run with
 ``python3 -m unittest test_pr4_acceptance`` (also wired into
@@ -69,34 +75,36 @@ class ManifestRows(unittest.TestCase):
 
 
 class RunnerPools(unittest.TestCase):
-    def test_no_paid_fallback(self):
-        """No workflow may schedule on the paid fallback pool."""
+    def test_public_pool(self):
+        """Public repo schedules on the free GitHub-hosted pool."""
         offenders = []
         for rel in WORKFLOWS:
             text = (ROOT / rel).read_text()
             for value in runs_on_values(text):
-                if "ubuntu-latest" in value:
+                if "ubuntu-latest" not in value:
                     offenders.append("%s: %s" % (rel, value))
         self.assertEqual(
-            offenders, [], "paid-fallback runs-on (suites red): %r" % (offenders,)
+            offenders, [], "non-public runs-on (public CI red): %r" % (offenders,)
         )
 
-    def test_every_pool_is_private(self):
-        """Every runs-on value stays on a private pool or expression."""
+    def test_no_self_hosted_labels(self):
+        """No workflow may pin a private static runner label."""
         offenders = []
         for rel in WORKFLOWS:
             text = (ROOT / rel).read_text()
             for value in runs_on_values(text):
-                if "self-hosted" not in value and "fromJSON" not in value:
+                if "self-hosted" in value:
                     offenders.append("%s: %s" % (rel, value))
         self.assertEqual(
-            offenders, [], "non-private runs-on (suites red): %r" % (offenders,)
+            offenders,
+            [],
+            "private static runner label (public CI red): %r" % (offenders,),
         )
 
-    def test_pr_lint_garm_guard_present(self):
-        """The lint job still refuses non-GARM runners (not weakened)."""
+    def test_github_hosted_guard_present(self):
+        """The lint job still refuses non-GitHub-hosted runners (not weakened)."""
         text = (ROOT / ".github/workflows/pr-lint.yml").read_text()
-        self.assertIn("not a GARM runner", text)
+        self.assertIn("public CI requires a GitHub-hosted runner", text)
 
 
 class TransportGuard(unittest.TestCase):

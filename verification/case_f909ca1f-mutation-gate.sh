@@ -332,7 +332,7 @@ PY
   #     that reintroduces anonymous rows the first time a call site forgets the
   #     argument, and it fails silently and permanently.
   wmutate "a missing requesting agent defaulted instead of refused" \
-    '  [[ -n "$requested_by" ]] || die "apply_exact_grants: refusing to write grants with no requesting agent (case_f909ca1f: an unattributed grant is unrecoverable)."' \
+    '  [[ -n "$requested_by" ]] || die "apply_exact_grants: refusing to write grants with no requesting agent (an unattributed grant is unrecoverable)."' \
     '  [[ -n "$requested_by" ]] || requested_by="00000000-0000-0000-0000-000000000000"' \
     "a missing requesting agent -> REFUSED" \
     "...and no write transaction reached the database"

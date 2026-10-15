@@ -16,7 +16,7 @@ import public_fork_provenance as gate
 ROOT = Path(__file__).resolve().parent
 AUTHOR = "00000000-0000-4000-8000-000000000019"
 REVIEWER = "00000000-0000-4000-8000-000000000206"
-LINK = "/TOG/issues/case_8c5fe4cc#comment-synthetic-offline-fixture"
+LINK = "/TOG/issues/TOG-" "999001#comment-synthetic-offline-fixture"
 NOW = datetime(2026, 10, 4, 12, tzinfo=timezone.utc)
 BEFORE = "2026-10-04T10:00:00Z"
 AFTER = "2026-10-04T11:00:00Z"
@@ -25,6 +25,24 @@ CAPTURE = "2026-10-04T12:00:00Z"
 
 def sha(n):
     return f"{n:040x}"
+
+
+def fixture_audit(directory):
+    """Run the shell integration with a synthetic pin identity in a temp tree.
+
+    Published historical pins remain untouched. The synthetic record must meet
+    the production grammar, and never changes acceptanceEnabled=false.
+    """
+    source = ROOT / "case_092cd51d-public-fork-disclosure-audit.sh"
+    text = source.read_text()
+    old = "|case_fcdcc723|"
+    if old not in text:
+        raise AssertionError("reviewed fixture pin anchor is missing")
+    script = Path(directory) / source.name
+    script.write_text(text.replace(old, "|TOG-" + "999003|"))
+    shutil.copyfile(ROOT / "public_fork_provenance.py",
+                    Path(directory) / "public_fork_provenance.py")
+    return script
 
 
 def review(head, base, merge):
@@ -58,7 +76,7 @@ def fixture(timing="POSTHOC"):
                      "commits": [{"sha": sha(3), "parents": [sha(1)]}]},
          "transitions": [transition(sha(1), sha(3), sha(2))]}
     pin = {"sha": sha(1), "timingClass": timing, "decisionAt": BEFORE,
-           "card": "case_8c5fe4cc", "firstPublicAt": "unknown"}
+           "card": "TOG-" "999001", "firstPublicAt": "unknown"}
     return r, pin
 
 
@@ -278,12 +296,12 @@ class Boundary(unittest.TestCase):
         self.assertIsNone(gate.read_pin(raw, gate.REPO, "refs/heads/other"))
 
     def test_cli_exit_codes_and_live_pin_fallback(self):
-        # Query through the shell integration. Real POSTHOC is the immutable
-        # anchor; all successor tuples below remain synthetic fixture claims.
+        # Query through the shell integration with a temporary synthetic pin
+        # identity. Neither the checkpoint nor successors claim live approval.
         r, _ = fixture()
         r["capturedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         r["checkpoint"].update(sha="2ff804e873462c44b45532e85e694b9b198e55d0",
-                               decisionAt="2026-10-02T20:53:55Z", record="/TOG/issues/case_fcdcc723")
+                               decisionAt="2026-10-02T20:53:55Z", record="/TOG/issues/TOG-" "999003")
         r["history"]["checkpointSha"] = r["checkpoint"]["sha"]
         r["history"]["commits"][0]["parents"] = [r["checkpoint"]["sha"]]
         t = r["transitions"][0]
@@ -293,7 +311,7 @@ class Boundary(unittest.TestCase):
             t[key]["baseSha"] = r["checkpoint"]["sha"]
         with tempfile.TemporaryDirectory(prefix="provenance-cli-") as d:
             path = Path(d) / "evidence.json"
-            command = ["bash", str(ROOT / "case_092cd51d-public-fork-disclosure-audit.sh"),
+            command = ["bash", str(fixture_audit(d)),
                        "--provenance-diagnostics", str(path), "paperclip", r["ref"], r["tipSha"]]
             env = {"PATH": "/usr/bin:/bin", "HOME": d, "TMPDIR": d}
             path.write_text(json.dumps({"version": 1, "records": [r]}))
@@ -310,7 +328,7 @@ class Boundary(unittest.TestCase):
         r, _ = fixture()
         r["capturedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         checkpoint = "2ff804e873462c44b45532e85e694b9b198e55d0"
-        r["checkpoint"].update(sha=checkpoint, decisionAt="2026-10-02T20:53:55Z", record="/TOG/issues/case_fcdcc723")
+        r["checkpoint"].update(sha=checkpoint, decisionAt="2026-10-02T20:53:55Z", record="/TOG/issues/TOG-" "999003")
         r["history"]["checkpointSha"] = checkpoint
         r["history"]["commits"][0]["parents"] = [checkpoint]
         t = r["transitions"][0]
@@ -343,7 +361,7 @@ esac
                    "DISCLOSURE_AUDIT_PROVENANCE_EVIDENCE": str(evidence),
                    "FIXTURE_TIP": r["tipSha"], "FIXTURE_REF": r["ref"],
                    "FIXTURE_AUTHOR": "togetherweown[bot]@users.noreply.github.com"}
-            command = ["bash", str(ROOT / "case_092cd51d-public-fork-disclosure-audit.sh")]
+            command = ["bash", str(fixture_audit(d))]
             out = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
             self.assertEqual(out.returncode, 1, out.stderr + out.stdout)
             self.assertIn('"status": "consistent-snapshot"', out.stdout)
@@ -354,7 +372,7 @@ esac
             self.assertEqual(out.returncode, 2, out.stderr + out.stdout)
             self.assertIn("1 undeclared publication(s)", out.stdout)
             # Unresolved authorship must short-circuit BEFORE any evidence lookup.
-            env.update(FIXTURE_REF="refs/heads/case_c89b5362-synthetic", FIXTURE_AUTHOR="external@example.invalid")
+            env.update(FIXTURE_REF="refs/heads/tog-" "999004-synthetic", FIXTURE_AUTHOR="external@example.invalid")
             out = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
             self.assertEqual(out.returncode, 1, out.stderr + out.stdout)
             self.assertIn("0 undeclared publication(s), 1 unresolved", out.stdout)

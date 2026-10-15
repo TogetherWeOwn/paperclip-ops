@@ -167,6 +167,7 @@ python3 -m unittest test_case_dcf07273_assignment_bundle || fail "assignment hos
 (cd ops/case_1ccef1dc/reviewer-eval/observational && python3 -m unittest test_collect_atomic) || fail "observational-collect atomic-write suite failed"
 (cd ops/pr-hygiene && python3 -m unittest test_owner_match) || fail "pr-hygiene owner-match suite failed"
 (cd ops/lib && python3 -m unittest test_live_run_guard) || fail "live-run guard suite failed"
+(cd ops/productivity && python3 -m unittest test_nongit_quarantine_custody) || fail "nongit quarantine custody suite failed"
 ./test_review_route.sh || fail "review-route suite failed"
 (cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_arm_import) || fail "arm-import suite failed"
 (cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_build_corpus_atomic) || fail "corpus atomic-write suite failed"

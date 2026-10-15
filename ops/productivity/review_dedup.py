@@ -6,17 +6,26 @@ rows, all with DISTINCT delivery_ids (separately triggered, not fan-out).
 Second rows by triggering event: ready_for_review 501, mention 365,
 synchronize 136, opened 92, reopened 20, comment 7.
 
-One shared rule for every host path that can request a Paperclip Review:
+What is actually enforced in this repo, and by which function:
 
-- never request (repository, pull_number, head_sha) while a completed or
-  in-flight review already covers that head;
-- an errored head gets at most one retry (error -> one retry max).
-
-Consumers: ops/productivity/review_error_rerequest.py (host reconciler, which
-reads server rows) and .github/scripts/review_trigger_step.py (CI gate, which
-reads GitHub check-runs). Pure stdlib, no network, no DB, no credentials, so
-both runtimes import this one file; the step resolves it relative to the repo
-root because its workflow sparse-checkout does not include ops/ by default.
+- CI trigger step (.github/scripts/review_trigger_step.py) calls
+  check_run_suppresses(): never open a second request while a
+  non-completed Paperclip Review run covers the head, or a completed
+  success/failure verdict does. Completed error outcomes stay retryable.
+- Error reconciler (ops/productivity/review_error_rerequest.py) calls
+  covering_review_exists(): its wake is a card comment, not a review
+  request, so only a completed verdict or a live attempt suppresses it.
+  Repeated errors must not suppress it, or outage-stranded heads would
+  never be woken. One wake per head comes from the reconciler's state
+  key, not from an error count.
+- head_decision() plus idempotency_key() reserve the stricter
+  new-review-request rule (an errored head gets at most one retry;
+  unrecognized row states fail closed toward suppress). No production
+  path in this repo calls them today: the reconciler deliberately does
+  not, because it must wake on repeated errors and on unknown states
+  rather than strand the head. Adopters that open real review requests
+  (e.g. a review gate) should call head_decision(); the TwoDeliveriesOneRow
+  tests pin its contract (two deliveries, same head -> one row).
 
 Server row vocabulary (chat_github_reviews.state) follows the review-gate
 taxonomy: completed = published verdict; queued/running = live;
@@ -92,6 +101,8 @@ def covering_review_exists(row_states):
 def head_decision(row_states):
     """Return (action, reason) for one head given its server row states.
 
+    For paths that open real review requests (not the error reconciler,
+    which uses covering_review_exists so repeated errors still wake).
     Action is 'request' or 'suppress'. Precedence: published verdict ->
     in-flight attempt -> exhausted error budget -> unrecognized state ->
     request. A bare head, a first error, a manual_required head, or a head

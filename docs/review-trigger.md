@@ -46,7 +46,7 @@ before posting, the step re-reads the head's check-runs and suppresses the
 post when a live Paperclip Review run already covers the head (manual
 mention, gate listing, or an overlapping delivery started it without leaving
 the sha marker the comment check looks for). Error outcomes stay retryable;
-the host reconciler owns the one-retry path for those heads.
+the host reconciler owns the wake path for those heads (one wake per head via its state key; repeated errors still wake).
 
 ## Platform half (Operator)
 

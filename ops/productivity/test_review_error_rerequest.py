@@ -484,7 +484,8 @@ class DedupGuard(unittest.TestCase):
     """Error-kind heads consult review_dedup over the head's rows.
 
     The stranded rows carry the head's recent server row states as a comma
-    blob (4th column); legacy 3-tuples mean one known error (existing tests).
+    blob (4th column); legacy 3-tuples carry no blob (no known states, hence
+    no cover, hence a wake like any other uncovered error head).
     """
     tick = Wiring.tick
 
@@ -534,6 +535,20 @@ class DedupGuard(unittest.TestCase):
         out = self.tick(stranded=[[REPO, '7', SHA, 'error,splines_reticulated']], facts_now=facts())
         self.assertIsNone(out['error'])
         self.assertEqual(out['comments'], [CARD_ID])
+
+
+class HeadRowStates(unittest.TestCase):
+    def test_missing_blob_is_no_known_states(self):
+        # Predates the state-blob column: no known cover, so the head wakes.
+        # Pinned: mutating this fallback back to ['error'] must fail, because
+        # the reconciler no longer counts errors toward a retry budget.
+        self.assertEqual(r.head_row_states(None), [])
+        self.assertEqual(r.head_row_states(''), [])
+
+    def test_blob_splits_on_commas_and_drops_empties(self):
+        self.assertEqual(r.head_row_states('error,error'), ['error', 'error'])
+        self.assertEqual(r.head_row_states('superseded,error'), ['superseded', 'error'])
+        self.assertEqual(r.head_row_states('error,'), ['error'])
 
 
 class GhAndCurl(unittest.TestCase):

@@ -114,14 +114,15 @@ def comment(issue_id, body):
 def head_row_states(blob):
     """Server row states for one stranded head, from the query's state blob.
 
-    A missing blob predates the state-blob column and means exactly one known
-    error: the failure this tick is handling, so the first retry stays
-    allowed. The stranded query only returns heads whose latest row is
-    error/incomplete, so a legacy-shaped row is always that failure.
+    A missing blob predates the state-blob column and carries no known
+    states, so it is []: under the covering check that means "no known
+    cover", and the head wakes, exactly as an explicit error blob does.
+    (The stranded query only returns heads whose latest row is
+    error/incomplete, so a legacy-shaped row is always that failure.)
     """
     if blob:
         return [s for s in str(blob).split(',') if s]
-    return ['error']
+    return []
 
 
 def save_state(state):
@@ -268,7 +269,8 @@ def main():
     env = gh_env()
     done = 0
     # The 4th column (state blob) carries the head's recent row states;
-    # 3-tuples mean one known error (head_row_states maps them to the first retry, as before).
+    # 3-tuples have no blob (head_row_states maps them to no known states,
+    # hence no cover, hence a wake like any other uncovered error head).
     stranded = ([(row[0], row[1], row[2], 'error', row[3] if len(row) > 3 else None) for row in stranded]
                 + [(r, n, s, 'none', None) for r, n, s in unreviewed(env)]
                 + [(r, n, s, 'ready', None) for r, n, s in merge_ready(env)])

@@ -160,7 +160,8 @@ def main():
     # listing, an overlapping delivery) shows as a live run with no verdict
     # and no marker comment yet; posting on top of it opens a second
     # same-head review row. Error outcomes stay retryable: the reconciler owns
-    # the one-retry path for those heads.
+    # the wake path for those heads (one wake per head via its state key;
+    # repeated errors still wake).
     fresh_runs = paginate("/commits/%s/check-runs" % head_sha, key="check_runs")
     if any(review_dedup.check_run_suppresses(r.get("name"), r.get("status"), r.get("conclusion"))
            for r in fresh_runs):

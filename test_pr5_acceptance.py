@@ -98,7 +98,7 @@ class FreezeList(unittest.TestCase):
         work_tree = git_lines("ls-files")
         self.assertIsNotNone(work_tree, "git ls-files failed")
         survivors = set(base_tree) & set(work_tree)
-        regen = sorted(d for d in dests if d in survivors)
+        regen = sorted(d for d in dests if d not in survivors)
         committed_text = (ROOT / "public-owned-paths.txt").read_text()
         committed = sorted(
             line.strip()

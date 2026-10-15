@@ -488,12 +488,27 @@ class DedupGuard(unittest.TestCase):
     """
     tick = Wiring.tick
 
-    def test_second_error_suppresses_the_wake(self):
+    def test_second_error_still_wakes_exactly_once(self):
+        # The host green gate retries errored heads on its own, so an outage
+        # leaves 2-3 error rows before this backstop tick runs. The wake is a
+        # card comment, not a review request, and the state key (not the error
+        # count) is what limits it to one wake per head.
         out = self.tick(stranded=[[REPO, '7', SHA, 'error,error']], facts_now=facts())
         self.assertIsNone(out['error'])
-        self.assertEqual(out['comments'], [])
-        self.assertEqual(out['state'], {})
-        self.assertIn('retry budget', out['stdout'])
+        self.assertEqual(out['comments'], [CARD_ID])
+        again = self.tick(stranded=[[REPO, '7', SHA, 'error,error']], facts_now=facts(),
+                          state=out['state'])
+        self.assertEqual(again['comments'], [])
+
+    def test_third_error_still_wakes(self):
+        out = self.tick(stranded=[[REPO, '7', SHA, 'error,error,error']], facts_now=facts())
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['comments'], [CARD_ID])
+
+    def test_superseded_rows_do_not_suppress_the_wake(self):
+        out = self.tick(stranded=[[REPO, '7', SHA, 'superseded,error']], facts_now=facts())
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['comments'], [CARD_ID])
 
     def test_error_on_an_already_completed_head_suppresses_the_wake(self):
         out = self.tick(stranded=[[REPO, '7', SHA, 'completed,error']], facts_now=facts())
@@ -512,11 +527,13 @@ class DedupGuard(unittest.TestCase):
         self.assertIsNone(out['error'])
         self.assertEqual(out['comments'], [CARD_ID])
 
-    def test_unrecognized_row_state_suppresses_the_wake(self):
+    def test_unrecognized_row_state_still_wakes(self):
+        # The reconciler suppresses only on a completed or live cover: an
+        # unknown row state must not strand an errored head with no wake.
+        # (head_decision stays fail-closed for actual new review requests.)
         out = self.tick(stranded=[[REPO, '7', SHA, 'error,splines_reticulated']], facts_now=facts())
         self.assertIsNone(out['error'])
-        self.assertEqual(out['comments'], [])
-        self.assertEqual(out['state'], {})
+        self.assertEqual(out['comments'], [CARD_ID])
 
 
 class GhAndCurl(unittest.TestCase):

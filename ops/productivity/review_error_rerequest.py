@@ -7,7 +7,7 @@ identity) starts a new one. 2026-10-07 02:45-03:38Z the Claude 5h window was exh
 stranded this way. For each stranded (repo, pr, head): if no review for that head is queued/running and the error is
 older than MIN_AGE_MIN, comment on the open card that owns the PR until a 2xx answer is recorded (the comment wakes its
 assignee). Cards with a live run are skipped this tick (a comment would cancel their retries). Dry-run by default; --apply comments.
-Before waking for an errored head the tick consults review_dedup.head_decision() over that head's recent row states: a completed or in-flight review, or a second error (one retry max), suppresses the wake. Suppressions are not recorded in state, so the decision is re-made as rows evolve; the error count only grows and a completed row persists, which is what makes the suppression permanent.
+Before waking for an errored head the tick consults review_dedup.covering_review_exists() over that head's recent row states: only a completed or in-flight review suppresses the wake. Repeated errors never suppress it — the host green gate retries errored heads on its own (up to 3 attempts), so outage-stranded heads typically carry 2-3 error rows, and this tick is their backstop. One wake per head comes from the state key, not from the error count. Suppressions are not recorded in state, so the decision is re-made as rows evolve; a completed row persists, which is what makes that suppression permanent.
 Every wake and the merge-ready notice also pass card_hold(): blocked or backlog cards, unblock descriptors, recovery
 holds, open blocking edges and out-of-focus cards while focus_gate is ACTIVE all suppress them. Cards with a live or
 scheduled-retry run are skipped first. A pending ask suppresses the merge-ready notice only. The merge-ready notice asks
@@ -314,9 +314,8 @@ def main():
             state[key] = 'moot'
             continue
         if kind == 'error':
-            action, why = review_dedup.head_decision(head_row_states(blob))
-            if action != 'request':
-                print(f'{key}: {why}; no second request for this head')
+            if review_dedup.covering_review_exists(head_row_states(blob)):
+                print(f'{key}: head already has a completed or in-flight review; no wake for this head')
                 continue
         try:
             card = owning_card(repo, n)

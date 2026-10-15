@@ -105,6 +105,42 @@ class HeadDecision(unittest.TestCase):
         action, _ = d.head_decision(['error', 'splines_reticulated'])
         self.assertEqual(action, 'suppress')
 
+    def test_superseded_rows_are_ignored_not_unknown(self):
+        # Abandoned when the head moved: no verdict, no live attempt.
+        action, _ = d.head_decision(['superseded'])
+        self.assertEqual(action, 'request')
+        # Moved away and back, then errored: still gets the first retry.
+        action, _ = d.head_decision(['superseded', 'error'])
+        self.assertEqual(action, 'request')
+
+    def test_superseded_beside_a_cover_still_suppresses(self):
+        action, _ = d.head_decision(['superseded', 'completed'])
+        self.assertEqual(action, 'suppress')
+        action, _ = d.head_decision(['superseded', 'running'])
+        self.assertEqual(action, 'suppress')
+
+    def test_superseded_does_not_consume_the_error_budget(self):
+        action, _ = d.head_decision(['superseded', 'error', 'error'])
+        self.assertEqual(action, 'suppress')
+
+
+class CoveringReviewExists(unittest.TestCase):
+    def test_completed_or_live_covers_the_head(self):
+        for states in (['completed'], ['queued'], ['running'],
+                       ['superseded', 'completed'], ['error', 'running']):
+            with self.subTest(states=states):
+                self.assertTrue(d.covering_review_exists(states))
+
+    def test_errors_superseded_and_manual_alone_do_not_cover(self):
+        for states in ([], ['error'], ['error', 'error'], ['incomplete'],
+                       ['superseded'], ['superseded', 'error'], ['manual_required']):
+            with self.subTest(states=states):
+                self.assertFalse(d.covering_review_exists(states))
+
+    def test_matches_case_insensitively(self):
+        self.assertTrue(d.covering_review_exists(['Completed']))
+        self.assertFalse(d.covering_review_exists(['ERROR', 'ERROR']))
+
 
 class TwoDeliveriesOneRow(unittest.TestCase):
     """Acceptance cover: two deliveries for the same head -> one row.

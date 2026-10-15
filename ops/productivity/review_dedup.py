@@ -20,12 +20,15 @@ root because its workflow sparse-checkout does not include ops/ by default.
 
 Server row vocabulary (chat_github_reviews.state) follows the review-gate
 taxonomy: completed = published verdict; queued/running = live;
-error/incomplete = failed attempt; manual_required = needs a human mention.
-A state this file does not recognize fails closed toward suppress: piling a
-second request onto a head we cannot prove is bare is the harm being removed,
-and a wrongly suppressed request surfaces as a visible skip notice (the
-reconciler and manual-mention paths still exist) while a duplicate review
-burns reviewer budget silently.
+error/incomplete = failed attempt; manual_required = needs a human mention;
+superseded = abandoned when the head moved (the green gate marks queued or
+running rows superseded when a newer assessment exists). A superseded row
+carries no verdict and no live attempt for this head, so it is ignored: it
+neither suppresses nor consumes the error budget. A state this file does not
+recognize fails closed toward suppress: piling a second request onto a head
+we cannot prove is bare is the harm being removed, and a wrongly suppressed
+request surfaces as a visible skip notice (the reconciler and manual-mention
+paths still exist) while a duplicate review burns reviewer budget silently.
 """
 
 REVIEW_CHECK_NAME = 'Paperclip Review'
@@ -42,6 +45,10 @@ LIVE_ROW_STATES = frozenset({'queued', 'running'})
 PUBLISHED_ROW_STATES = frozenset({'completed'})
 ERROR_ROW_STATES = frozenset({'error', 'incomplete'})
 MANUAL_ROW_STATES = frozenset({'manual_required'})
+# Abandoned when the head moved; ignored by every decision below (neither a
+# cover nor a spent attempt). Kept separate so a head that moved away and back
+# (rows [superseded, error]) still gets its first retry.
+SUPERSEDED_ROW_STATES = frozenset({'superseded'})
 MAX_ERROR_RETRIES = 1
 
 
@@ -70,13 +77,26 @@ def check_run_suppresses(name, status, conclusion):
     return (conclusion or '') in TERMINAL_CHECK_CONCLUSIONS
 
 
+def covering_review_exists(row_states):
+    """True when a completed verdict or a live attempt already covers the head.
+
+    The error reconciler uses this narrower check instead of head_decision:
+    its wake is a card comment, not a review request, and its state key
+    already limits it to one wake per head — so repeated errors must not
+    suppress it, or outage-stranded heads would never be woken.
+    """
+    states = [(s or '').strip().lower() for s in row_states]
+    return any(s in PUBLISHED_ROW_STATES or s in LIVE_ROW_STATES for s in states)
+
+
 def head_decision(row_states):
     """Return (action, reason) for one head given its server row states.
 
     Action is 'request' or 'suppress'. Precedence: published verdict ->
     in-flight attempt -> exhausted error budget -> unrecognized state ->
-    request. A bare head, a first error, or a manual_required head requests;
-    anything else suppresses.
+    request. A bare head, a first error, a manual_required head, or a head
+    whose only non-error rows are superseded requests; anything else
+    suppresses.
     """
     states = [(s or '').strip().lower() for s in row_states]
     if any(s in PUBLISHED_ROW_STATES for s in states):
@@ -86,7 +106,8 @@ def head_decision(row_states):
     errors = sum(1 for s in states if s in ERROR_ROW_STATES)
     if errors > MAX_ERROR_RETRIES:
         return 'suppress', 'error retry budget exhausted (one retry max)'
-    known = LIVE_ROW_STATES | PUBLISHED_ROW_STATES | ERROR_ROW_STATES | MANUAL_ROW_STATES
+    known = (LIVE_ROW_STATES | PUBLISHED_ROW_STATES | ERROR_ROW_STATES
+             | MANUAL_ROW_STATES | SUPERSEDED_ROW_STATES)
     unknown = sorted({s for s in states if s and s not in known})
     if unknown:
         return 'suppress', 'unrecognized row state(s) %s; refusing to pile on' % ', '.join(unknown)

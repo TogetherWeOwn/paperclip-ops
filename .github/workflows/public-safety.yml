@@ -37,10 +37,21 @@ jobs:
           # allowlist and reds every PR for another branch's contract-hash
           # churn. The dir scan above already covers the checked-out tree.
           BASE="origin/main"
-          RANGE="$BASE..HEAD"
-          if ! git rev-parse --verify "$BASE" >/dev/null 2>&1 || \
-             ! git merge-base --is-ancestor "$BASE" HEAD 2>/dev/null || \
-             [ "$(git rev-list "$RANGE" --count 2>/dev/null || echo 0)" = "0" ]; then
+          if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
+            echo "public-safety: $BASE is missing; failing closed" >&2
+            exit 1
+          fi
+          # Scan every commit introduced on this side of the merge base, so a
+          # diverged branch (or a PR merge ref re-run after main has moved)
+          # cannot hide a secret added and removed in an earlier commit. A tip
+          # scan would miss those; on a merge commit it would scan nothing.
+          MB="$(git merge-base "$BASE" HEAD)" || {
+            echo "public-safety: no merge base with $BASE; failing closed" >&2
+            exit 1
+          }
+          RANGE="$MB..HEAD"
+          if [ "$(git rev-list "$RANGE" --count)" = "0" ]; then
+            # Push to main itself: the branch range is empty, so scan the tip.
             RANGE="-1 HEAD"
           fi
           docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts="$RANGE" --config /repo/.gitleaks.toml --redact=100 --no-banner

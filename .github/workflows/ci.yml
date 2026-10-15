@@ -3292,9 +3292,11 @@ jobs:
       # reddens on a future README edit, and is cheap. Per case_dfb5e6fb this repo
       # has a history of gates that exist and are never run — ci.yml registers
       # by explicit path, so an unregistered suite is the same as no suite.
+      # The source checker stays fail-closed. Its harness always runs synthetic
+      # report controls; only the absent private disclosure packet may skip.
       - name: upstream bundle filing-strip gate
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.upstream == 'true'
-        run: ./verification/upstream-bundle-filing-strip-gate.sh
+        run: python3 verification/test_filing_strip.py
 
       - name: filing-strip gate is not vacuous (mutation-gated)
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.upstream == 'true'

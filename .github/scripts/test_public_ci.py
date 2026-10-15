@@ -40,6 +40,10 @@ class PublicCI(unittest.TestCase):
         # A .github/vendor-only sparse checkout silently omits both.
         self.assertNotIn("sparse-checkout:", text)
         self.assertIn("test_public_ci.py", text)
+        # Renderer and filing reference checker are immutable public archive inputs,
+        # not tracked files. A fresh checkout needs the same checksum-verified restore.
+        self.assertLess(text.index("run: bash scripts/sync-toolkit.sh"),
+                        text.index("- name: Unit-test the lint"))
 
     def test_explicit_tool_grant_map_absence_is_not_skipped(self):
         for relative in ("tool_grant_expectations.json", "absent-explicit-map.json"):
@@ -155,6 +159,65 @@ class PublicCI(unittest.TestCase):
                 archive.writestr(member, '{}')
             with mock.patch.object(public_safety, "ROOT", root):
                 self.assertIn("unreviewed binary payload", public_safety.inspect(path))
+
+    def test_private_filing_integration_requires_absence_and_no_explicit_ref(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("filing_strip_tests", ROOT / "verification/test_filing_strip.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for case in ("public-absent", "nonpublic-absent", "partial-bundle", "explicit-ref"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "verification").mkdir()
+                for name in (module.GATE, "verification/upstream-bundle-filing-gate.sh"):
+                    (root / name).write_bytes((ROOT / name).read_bytes())
+                (root / "README.md").write_text("private source\n" if case == "nonpublic-absent"
+                                               else "## Fresh-history publication candidate\n")
+                (root / ".github/scripts").mkdir(parents=True)
+                (root / ".github/scripts/public_safety.py").touch()
+                if case == "partial-bundle":
+                    (root / "docs/upstream").mkdir(parents=True)
+                environment = {"PATH": os.environ["PATH"]}
+                if case == "explicit-ref":
+                    environment["GATE_REF"] = "missing-synthetic-ref"
+                result = unittest.TestResult()
+                with mock.patch.object(module, "ROOT", root), mock.patch.dict(os.environ, environment, clear=True):
+                    module.FilingStrip("test_private_report_integration").run(result)
+                self.assertEqual(len(result.skipped), 1 if case == "public-absent" else 0)
+                self.assertEqual(len(result.failures), 0 if case == "public-absent" else 1)
+                self.assertEqual(result.errors, [])
+
+    def test_posthoc_private_card_skip_requires_marker_and_exact_alias(self):
+        script_name = "verification/case_092cd51d-public-fork-disclosure-audit.sh"
+        original = (ROOT / script_name).read_text()
+        dispatch = "\nif [ \"${1:-}\" = '--provenance-diagnostics' ]; then"
+        self.assertIn(dispatch, original)
+        # Only definitions and the offline POSTHOC self-test; never the audit's API path.
+        script = original.split(dispatch, 1)[0] + "\nposthoc_test\n"
+        for case in ("public-redacted", "nonpublic-redacted", "unknown-alias"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "verification").mkdir()
+                text = script
+                if case == "unknown-alias":
+                    self.assertIn("|case_fcdcc723|", text)
+                    text = text.replace("|case_fcdcc723|", "|unknown-alias|")
+                (root / script_name).write_text(text)
+                (root / "public_snapshot_test_support.py").write_bytes((ROOT / "public_snapshot_test_support.py").read_bytes())
+                (root / "README.md").write_text("private source\n" if case == "nonpublic-redacted"
+                                               else "## Fresh-history publication candidate\n")
+                (root / ".github/scripts").mkdir(parents=True)
+                (root / ".github/scripts/public_safety.py").touch()
+                result = subprocess.run(["bash", str(root / script_name)], env={"PATH": os.environ["PATH"]},
+                                        capture_output=True, text=True, timeout=20)
+                output = result.stdout + result.stderr
+                self.assertEqual(result.returncode, 0 if case == "public-redacted" else 1, output)
+                if case == "public-redacted":
+                    self.assertIn("SKIP: 11 private historical card identities", output)
+                    self.assertIn("111/111 POSTHOC checks correct", output)
+                else:
+                    self.assertNotIn("SKIP:", output)
+                    self.assertIn("bad card:", output)
 
     def test_withdrawal_fixture_boundary_and_digest_fail_closed(self):
         for case in ("public-absent", "nonpublic-absent", "partial-classification",

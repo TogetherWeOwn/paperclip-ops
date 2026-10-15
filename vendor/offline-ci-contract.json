@@ -1110,7 +1110,7 @@
     },
     {
       "name": "upstream bundle filing-strip gate",
-      "definition_sha256": "eaa180ca35547c5361faae83a0ed92e4a54e5a6ff879a2eacbdadcaf0171321c",
+      "definition_sha256": "ec68f4246c20a6677fdf0481777a3751d44e679fc532863016a752937c498c04",
       "id": "upstream bundle filing-strip gate:1"
     },
     {

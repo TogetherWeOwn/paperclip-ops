@@ -16,6 +16,8 @@ PRIVATE_ARTIFACTS = frozenset({
     "tool_grant_expectations.json",
     "operator_runbook_classification.json",
     "docs/OPERATOR-RUNBOOK.md",
+    "docs/upstream",
+    "verification/fixtures/case_4d10ac5e-prefix-readme.md",
 })
 
 

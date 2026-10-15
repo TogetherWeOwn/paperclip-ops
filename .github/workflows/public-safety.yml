@@ -31,4 +31,8 @@ jobs:
         run: |
           docker pull "$SCANNER"
           docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" dir /repo --config /repo/.gitleaks.toml --redact=100 --no-banner
-          docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts=--all --config /repo/.gitleaks.toml --redact=100 --no-banner
+          # Scan only history reachable from HEAD: --all also scans unrelated
+          # fetched branches, whose commits are judged by this branch's
+          # allowlist (a branch that recomputes a fixture digest and
+          # allowlists it only on itself would fail every open PR).
+          docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts=HEAD --config /repo/.gitleaks.toml --redact=100 --no-banner

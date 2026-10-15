@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Public CI regression checks; no network, host inventory or credentials."""
 from pathlib import Path
+import os
 import re
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -89,6 +91,55 @@ class PublicCI(unittest.TestCase):
                 other = root / "other.env"
                 other.write_text(pin)
                 self.assertIn("private artifact or live environment file", public_safety.inspect(other))
+
+    def test_private_bakeoff_skip_requires_both_markers_and_complete_absence(self):
+        source = (ROOT / "test_case_61df0b37_review_bakeoff.sh").read_text()
+        cases = [
+            (True, True, None, 0, True),
+            (True, True, None, 1, False),  # harness failures cannot be hidden
+            (False, True, None, 0, False),
+            (True, False, None, 0, False),
+            (False, False, None, 0, False),
+            (True, True, "dataset", 0, False),
+            (True, True, "results", 0, False),
+            (True, True, "RESULTS-r1.md", 0, True),  # report is not its private inputs
+        ]
+        for scanner, marker, artifact, harness_rc, success in cases:
+            with self.subTest(scanner=scanner, marker=marker, artifact=artifact,
+                              harness_rc=harness_rc), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "suite.sh").write_text(source)
+                (root / "README.md").write_text(
+                    "## Fresh-history publication candidate\n" if marker else "private source\n")
+                if scanner:
+                    (root / ".github/scripts").mkdir(parents=True)
+                    (root / ".github/scripts/public_safety.py").touch()
+                if artifact:
+                    path = root / "eval/review-bakeoff" / artifact
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("partial bundle\n")
+                # Only the expensive harness is stubbed here. The real shell's
+                # marker/absence predicates and nonpublic failure path execute.
+                (root / "bin").mkdir()
+                stub = root / "bin/python3"
+                stub.write_text(
+                    "#!/bin/sh\n"
+                    "if [ \"$1\" = -m ] && [ \"$2\" = unittest ]; then\n"
+                    "  printf 'harness-called\\n'\n"
+                    f"  exit {harness_rc}\n"
+                    "fi\nexit 77\n")
+                stub.chmod(0o755)
+                proc = subprocess.run(
+                    ["bash", str(root / "suite.sh")], cwd=root, text=True,
+                    capture_output=True, timeout=15,
+                    env={**os.environ, "PATH": str(root / "bin") + os.pathsep + os.defpath})
+                self.assertIn("harness-called", proc.stdout)
+                self.assertEqual(proc.returncode == 0, success, proc.stdout + proc.stderr)
+                skipped = scanner and marker and artifact in (None, "RESULTS-r1.md")
+                self.assertEqual("SKIP: historical private bake-off" in proc.stdout, skipped)
+                if not skipped:
+                    self.assertIn("FAIL dataset shape", proc.stdout)
+                    self.assertIn("FAIL no token-shaped string", proc.stdout)
 
     def test_renamed_archive_sources_use_public_paths(self):
         manifest = (ROOT / "vendor/toolkit-files.txt").read_text().splitlines()

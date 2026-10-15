@@ -1,0 +1,15 @@
+{
+  "runs": {
+    "r1": {"model": "model-a", "in": 100000, "out": 9000, "start": "2026-10-03T00:00:00Z", "fin": "2026-10-03T00:02:00Z", "status": "succeeded", "issue": "i1"},
+    "r2": {"model": "model-a", "in": 120000, "out": 11000, "start": "2026-10-03T01:00:00Z", "fin": "2026-10-03T01:04:00Z", "status": "succeeded", "issue": "i1"},
+    "r3": {"model": "model-b", "in": 300000, "out": 20000, "start": "2026-10-03T02:00:00Z", "fin": "2026-10-03T02:10:00Z", "status": "succeeded", "issue": "i2"}
+  },
+  "issues": {
+    "i1": {"ident": "X-1", "title": "Review PR #1", "status": "done", "comments": [
+      {"id": "c1", "at": "2026-10-03T00:02:00Z", "run": "r1", "agent": "a", "body": "Review 1111111: CHANGES - one item"},
+      {"id": "c2", "at": "2026-10-03T01:04:00Z", "run": "r2", "agent": "a", "body": "Review 2222222: APPROVE - merged"}]},
+    "i2": {"ident": "X-2", "title": "Review PR #2", "status": "done", "comments": [
+      {"id": "c3", "at": "2026-10-03T02:10:00Z", "run": "r3", "agent": "a", "body": "Review 3333333: APPROVE"},
+      {"id": "c4", "at": "2026-10-03T02:20:00Z", "run": "r3", "agent": "a", "body": "Review 3333333: CHANGES - disagreement on the same head"}]}
+  }
+}

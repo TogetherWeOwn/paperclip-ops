@@ -1,0 +1,13 @@
+{
+  "name": "togetherweown-review-bot",
+  "url": "https://github.com/TogetherWeOwn",
+  "description": "Independent review identity for TogetherWeOwn agent-authored pull requests. Submits exact-head reviews only: it cannot push, merge, or change settings.",
+  "public": false,
+  "default_permissions": {
+    "metadata": "read",
+    "pull_requests": "write",
+    "checks": "read",
+    "statuses": "read"
+  },
+  "default_events": []
+}

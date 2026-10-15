@@ -1,0 +1,18 @@
+{
+  "repo": "TogetherWeOwn/two-web-next",
+  "note": "Public source references for offline synthetic mutation definitions; not a private review dataset or current defect inventory.",
+  "bases": [
+    {"pr": 314, "sha": "913339d", "area": "auth/session"},
+    {"pr": 343, "sha": "a4ef0d4", "area": "errors/perf cache"},
+    {"pr": 321, "sha": "1ad1fee", "area": "readiness"},
+    {"pr": 196, "sha": "0515ef4", "area": "csp logging"},
+    {"pr": 146, "sha": "ca96cb4", "area": "admin id parsing"},
+    {"pr": 289, "sha": "0758c9f", "area": "timezone fold"},
+    {"pr": 269, "sha": "8ac1c54", "area": "event reads"},
+    {"pr": 288, "sha": "1894c02", "area": "discord widget health"},
+    {"pr": 377, "sha": "ed87c28", "area": "image policy"},
+    {"pr": 114, "sha": "150da59", "area": "recurrence counts"},
+    {"pr": 141, "sha": "1ad79ec", "area": "oauth single-use"},
+    {"pr": 346, "sha": "51f5f9e", "area": "operator erase command"}
+  ]
+}

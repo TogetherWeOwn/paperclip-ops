@@ -32,6 +32,16 @@ class PublicCI(unittest.TestCase):
         self.assertIn('"${RUNNER_ENVIRONMENT:-}" == github-hosted', text)
         self.assertNotIn('case "${RUNNER_NAME:-}"', text)
 
+    def test_contract_dependency_is_restored_before_contract_tests(self):
+        text = (ROOT / ".github/workflows/ci.yml").read_text()
+        suites = text.split("\n  suites:\n", 1)[1].split("\n  private-mutation-gates:\n", 1)[0]
+        restore = suites.index("      - name: Restore toolkit-vendored files\n")
+        contract = suites.index("      - name: change-gating contract holds\n")
+        self.assertLess(restore, contract)
+        step = suites[restore:].split("      - ", 2)[1]
+        self.assertIn("bash scripts/sync-toolkit.sh", step)
+        self.assertNotRegex(step, r"(?m)^\s*if:")
+
     def test_obsolete_split_guards_apply_only_to_private_source(self):
         text = (ROOT / ".github/workflows/ci.yml").read_text()
         for name in ("Fail if the moved plugin path is touched",

@@ -46,9 +46,19 @@ PINNED_SHA256="$(sed -n 's/^PINNED_SHA256="\([0-9a-f]\{64\}\)"$/\1/p' "$CHECK_SR
   exit 2; }
 
 REVIEWED="$GATE_TMP/reviewed.py"
+# This particular assertion proves the historical private host handoff bytes,
+# not a generic source fixture. Fresh public history intentionally excludes that
+# artifact. Keep every assertion below for private checkouts; never fetch old
+# private objects to make the public snapshot pass.
+if [[ -f "$HERE/.github/scripts/public_safety.py" ]] &&
+   grep -qFx '## Fresh-history publication candidate' "$HERE/README.md" &&
+   ! git -C "$HERE" cat-file -e "$PINNED_BLOB" 2>/dev/null; then
+  echo 'SKIP: historical private handoff blob is intentionally absent from the fresh public snapshot; private provenance assertions remain intact.'
+  exit 0
+fi
 git -C "$HERE" cat-file blob "$PINNED_BLOB" > "$REVIEWED" 2>/dev/null || {
   echo "cannot evaluate: pinned blob ${PINNED_BLOB:0:12} absent from this checkout" >&2
-  echo "  run: git -C '$HERE' fetch --all --tags" >&2
+  echo '  restore reviewed provenance only in the private checkout; never import private history into a public snapshot' >&2
   exit 2; }
 [ -s "$REVIEWED" ] || { echo "cannot evaluate: pinned blob extracted empty" >&2; exit 2; }
 

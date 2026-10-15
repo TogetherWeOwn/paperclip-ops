@@ -360,7 +360,7 @@
     },
     {
       "name": "Restore toolkit-vendored files",
-      "definition_sha256": "c03ece6186f7152677cd5e80ba86bb376f4337ee493a44b80b26045f901f29c0",
+      "definition_sha256": "c9ff5b8dbc7539c9582bf853cc40af8c9bd7c877b2231a8de7a839be3e3c8b8b",
       "id": "Restore toolkit-vendored files:1"
     },
     {

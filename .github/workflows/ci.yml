@@ -982,6 +982,11 @@ jobs:
       # the always-run aggregator, the full-run triggers, and the absence of
       # workflow-level paths filters -- with a positive control for each.
       #
+      # Contract tests execute the immutable public sibling guard. Restore its
+      # pinned bytes first, even when a non-core area selected this job.
+      - name: Restore toolkit-vendored files
+        run: bash scripts/sync-toolkit.sh
+
       - name: change-gating contract holds
         run: ./test_ci_gating.sh
 
@@ -1035,10 +1040,6 @@ jobs:
 
       - name: Syntax check every script
         run: ./scripts/verify-fast.sh --parse-only
-
-      - name: Restore toolkit-vendored files
-        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: bash scripts/sync-toolkit.sh
 
       # case_6d842160. acceptance_transport.sh reply classification: the stub
       # transport covers success, transport failure and a malformed reply, and

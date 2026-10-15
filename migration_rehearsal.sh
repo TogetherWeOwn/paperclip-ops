@@ -38,7 +38,7 @@
 #
 # Exit: 0 ok | 1 verification/apply failure | 2 bad input or missing
 # capability (REFUSED).
-set -uo pipefail
+set -euo pipefail
 ME="$(basename "${BASH_SOURCE[0]}")"
 EVIDENCE_VERSION=1
 
@@ -84,7 +84,8 @@ case "$cmd" in
       || die "--provider must be planetscale or pitr"
     [[ -n "$OUT" ]] || die "--out is required"
     CHAIN="$(chain_json "$DIR")" || die "cannot enumerate $DIR"
-    COUNT="$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])))' "$CHAIN")"
+    COUNT="$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])))' "$CHAIN")" \
+      || die "cannot digest the pending chain in $DIR"
     python3 - "$OUT" "$CHAIN" <<EOF
 import json, sys
 doc = {"version": $EVIDENCE_VERSION, "provider": "$PROVIDER",

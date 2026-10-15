@@ -8,7 +8,7 @@
 # applies through the preamble injector in order, evidence freshness/expiry,
 # and the refusal paths (unknown provider, missing credentials, redaction).
 # ===========================================================================
-set -uo pipefail
+set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GATE="$HERE/migration_rehearsal.sh"
 PASS=0; FAIL=0
@@ -47,7 +47,7 @@ export REC="$WORK/rec"; mkdir -p "$REC"
 "$GATE" plan --migrations-dir "$WORK/migs" --provider planetscale --out "$WORK/plan.json" >/dev/null 2>&1 \
   && ok "plan enumerates the chain offline" \
   || bad "plan enumerates the chain offline"
-python3 - "$WORK/plan.json" "$WORK/migs" <<'EOF'
+if python3 - "$WORK/plan.json" "$WORK/migs" <<'EOF'
 import hashlib, json, sys
 from pathlib import Path
 doc = json.load(open(sys.argv[1]))
@@ -58,9 +58,11 @@ want = {p.stem: hashlib.sha256(p.read_bytes()).hexdigest()
 assert {m["tag"]: m["sha256"] for m in doc["migrations"]} == want
 assert [m["tag"] for m in doc["migrations"]] == sorted(want), "chain order"
 EOF
-[[ $? -eq 0 ]] \
-  && ok "plan digests match file content in sorted order" \
-  || bad "plan digests match file content in sorted order"
+then
+  ok "plan digests match file content in sorted order"
+else
+  bad "plan digests match file content in sorted order"
+fi
 "$GATE" plan --migrations-dir "$WORK/migs" --provider oracle --out "$WORK/x.json" >/dev/null 2>&1 \
   && bad "plan refuses an unknown provider" || ok "plan refuses an unknown provider"
 
@@ -93,7 +95,7 @@ grep -q "rehearsal/test-001" "$REC/restore.argv" \
   && grep -q "SET lock_timeout" "$REC/apply.firstlines" \
   && ok "run applies files wrapped with the timeout preamble" \
   || bad "run applies files wrapped with the timeout preamble"
-python3 - "$WORK/evidence.json" <<'EOF'
+if python3 - "$WORK/evidence.json" <<'EOF'
 import json, sys
 doc = json.load(open(sys.argv[1]))
 assert doc["status"] == "passed", doc
@@ -101,9 +103,11 @@ assert doc["cleanup"] == "deleted", doc
 assert doc["branch"] == "rehearsal/test-001", doc
 assert [m["result"] for m in doc["migrations"]] == ["applied", "applied"], doc
 EOF
-[[ $? -eq 0 ]] \
-  && ok "run writes passed evidence with per-migration results" \
-  || bad "run writes passed evidence with per-migration results"
+then
+  ok "run writes passed evidence with per-migration results"
+else
+  bad "run writes passed evidence with per-migration results"
+fi
 
 # 3. verify: fresh passes, stale/failed/unreadable do not.
 "$GATE" verify --evidence "$WORK/evidence.json" --max-age-hours 24 >/dev/null 2>&1 \

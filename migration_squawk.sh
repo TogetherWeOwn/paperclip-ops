@@ -30,7 +30,7 @@
 # finding failed | 2 bad input / strict refusal (squawk missing).
 # Offline: no database, no network. Never prints file contents beyond the
 # offending line and its number.
-set -uo pipefail
+set -euo pipefail
 ME="$(basename "${BASH_SOURCE[0]}")"
 
 DIR="migrations"

@@ -5,7 +5,7 @@
 # Fully offline: fixture files in a throwaway temp dir, no database, no
 # network, no credentials. Proves print/check/inject plus the refusal paths.
 # ===========================================================================
-set -uo pipefail
+set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GATE="$HERE/migration_timeout_preamble.sh"
 PASS=0; FAIL=0
@@ -14,14 +14,15 @@ bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
-# 1. print emits both SET statements with defaults.
-out="$("$GATE" print)"
+# 1. print emits both SET statements with defaults. A failed print leaves a
+# sentinel so the content assertions below fail as findings, not as an abort.
+out="$("$GATE" print)" || out="PRINT-FAILED"
 grep -q "SET lock_timeout = '10s';" <<< "$out" && grep -q "SET statement_timeout = '120s';" <<< "$out" \
   && ok "print emits default lock/statement timeouts" \
   || bad "print emits default lock/statement timeouts"
 
 # 2. print honors overrides and refuses garbage.
-out="$("$GATE" print --lock-timeout 5s --statement-timeout 30s)"
+out="$("$GATE" print --lock-timeout 5s --statement-timeout 30s)" || out="PRINT-FAILED"
 grep -q "SET lock_timeout = '5s';" <<< "$out" && grep -q "SET statement_timeout = '30s';" <<< "$out" \
   && ok "print honors timeout overrides" \
   || bad "print honors timeout overrides"

@@ -21,7 +21,7 @@
 #
 # Exit: 0 ok | 1 check failed | 2 bad input / unreadable file (REFUSED).
 # Offline: reads files only, never touches a database, prints no secrets.
-set -uo pipefail
+set -euo pipefail
 ME="$(basename "${BASH_SOURCE[0]}")"
 
 LOCK_TIMEOUT="10s"

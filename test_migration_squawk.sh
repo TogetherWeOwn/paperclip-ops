@@ -10,7 +10,7 @@
 # squawk step whenever squawk is absent would pass while that step is
 # broken, so both outcomes are driven with fakes that are always present.
 # ===========================================================================
-set -uo pipefail
+set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GATE="$HERE/migration_squawk.sh"
 PASS=0; FAIL=0

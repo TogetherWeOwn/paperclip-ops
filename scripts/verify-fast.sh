@@ -187,7 +187,7 @@ if ! node -e "require.resolve('typescript/bin/tsc')" >/dev/null 2>&1; then
   npm install --no-save --ignore-scripts typescript@5.9.3 || fail "typescript install failed"
 fi
 node --test test_omniroute_rehearsal_translator.mjs || fail "translator fixture failed"
-./templates/org-github/check-staged-drift.sh || fail "staged Tier-0 drift gate failed"
+python3 test_staged_drift.py || fail "staged Tier-0 drift gate failed"
 
 if [[ "$rc" -ne 0 ]]; then
   echo "verify-fast: FAILED"

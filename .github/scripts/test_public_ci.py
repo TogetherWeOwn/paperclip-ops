@@ -156,6 +156,98 @@ class PublicCI(unittest.TestCase):
             with mock.patch.object(public_safety, "ROOT", root):
                 self.assertIn("unreviewed binary payload", public_safety.inspect(path))
 
+    def test_private_tier_zero_skip_is_absence_only(self):
+        import importlib.util
+        import sys
+        spec = importlib.util.spec_from_file_location("staged_drift_tests", ROOT / "test_staged_drift.py")
+        module = importlib.util.module_from_spec(spec)
+        with mock.patch.object(sys, "path", [str(ROOT)] + sys.path):
+            spec.loader.exec_module(module)
+        for case in ("public-absent", "nonpublic-absent", "partial-source",
+                     "dangling-source", "existing-rules", "malformed-pin", "present-history"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                env = {"PATH": os.environ["PATH"], "HOME": tmp,
+                       "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+                subprocess.run(["git", "init", "--quiet", tmp], env=env, check=True)
+                pin = "0" * 40
+                if case == "present-history":
+                    subprocess.run(["git", "-C", tmp, "-c", "user.name=Synthetic Fixture",
+                                    "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty",
+                                    "--quiet", "-m", "test: synthetic source\n\nCo-Authored-By: Claude Code <noreply@anthropic.com>"],
+                                   env=env, check=True)
+                    pin = subprocess.check_output(["git", "-C", tmp, "rev-parse", "HEAD"], env=env, text=True).strip()
+                files = {
+                    "README.md": "private source\n" if case == "nonpublic-absent" else "## Fresh-history publication candidate\n",
+                    ".github/scripts/public_safety.py": "# fixture marker\n",
+                    str(module.SCRIPT): (ROOT / module.SCRIPT).read_text(),
+                    str(module.STAGE / "SOURCE"): "SOURCE_SHA=" + ("invalid" if case == "malformed-pin" else pin) + "\n",
+                }
+                for name, text in files.items():
+                    target = root / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(text)
+                source = root / ".github/workflows/tier-0-quality-gate.yml"
+                source.parent.mkdir(parents=True)
+                if case == "partial-source":
+                    source.write_text("{}")
+                if case == "dangling-source":
+                    source.symlink_to(root / "missing")
+                if case == "existing-rules":
+                    (root / "semgrep-rules").mkdir()
+                result = unittest.TestResult()
+                with mock.patch.object(module, "ROOT", root):
+                    module.HistoricalSourcePort("test_retained_private_source_port").run(result)
+                self.assertEqual(len(result.skipped), 1 if case == "public-absent" else 0)
+                self.assertEqual(len(result.failures), 0 if case == "public-absent" else 1)
+                self.assertEqual(result.errors, [])
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertIn("run: python3 test_staged_drift.py", workflow)
+        self.assertIn("python3 test_staged_drift.py || fail", (ROOT / "scripts/verify-fast.sh").read_text())
+
+    def test_private_render_skip_keeps_carrier_and_userns_refusals(self):
+        for case in ("public-absent", "bad-carrier", "partial-receipt", "nonpublic-absent"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                for name in ("test_paperclip_immutable_runtime.sh", "public_snapshot_test_support.py",
+                             "deploy/paperclip-immutable/paperclip.container",
+                             "deploy/paperclip-immutable/agent-run.container.in"):
+                    target = root / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes((ROOT / name).read_bytes())
+                (root / "README.md").write_text(
+                    "private source\n" if case == "nonpublic-absent"
+                    else "## Fresh-history publication candidate\n")
+                (root / ".github/scripts").mkdir(parents=True)
+                (root / ".github/scripts/public_safety.py").touch()
+                binary = root / "bin"
+                binary.mkdir()
+                stub = binary / "unshare"
+                stub.write_text("#!/bin/sh\nexit 1\n")
+                stub.chmod(0o755)
+                if case == "bad-carrier":
+                    path = root / "deploy/paperclip-immutable/paperclip.container"
+                    original = path.read_text()
+                    self.assertIn("ReadOnly=true", original)
+                    path.write_text(original.replace("ReadOnly=true", "ReadOnly=false"))
+                if case == "partial-receipt":
+                    path = root / "deploy/paperclip-immutable/generated/board-quadlet-render.json"
+                    path.parent.mkdir(parents=True)
+                    path.write_text("{}")
+                result = subprocess.run(
+                    ["bash", str(root / "test_paperclip_immutable_runtime.sh")],
+                    env={"PATH": str(binary) + ":" + os.environ["PATH"]},
+                    capture_output=True, text=True, timeout=10)
+                output = result.stdout + result.stderr
+                self.assertEqual(result.returncode, 3 if case == "public-absent" else 1, output)
+                self.assertNotIn("PASS:", output)
+                if case == "public-absent":
+                    self.assertIn("SKIP: historical private-carrier", output)
+                    self.assertIn("REFUSE: unprivileged user namespaces", output)
+                else:
+                    self.assertNotIn("SKIP:", output)
+                    self.assertIn("FAIL:", output)
+
     def test_private_artifact_skip_is_named_marked_and_absence_only(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location(

@@ -5,6 +5,9 @@ import os
 
 PRIVATE_ARTIFACTS = frozenset({
     ".github/workflows/runner-disk-pressure.yml",
+    ".github/workflows/tier-0-quality-gate.yml",
+    "semgrep-rules",
+    "deploy/paperclip-immutable/generated/board-quadlet-render.json",
     "ops/case_c542accd/job_baselines.json",
     "ops/case_30b51a0f/host-timer-registry.json",
     "plugins/model-selection/config/reviewed-roster.json",

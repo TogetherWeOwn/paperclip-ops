@@ -53,6 +53,7 @@ parser, not a standing operator command. Test entry points begin with `test_`.
 
 | Tool |
 | --- |
+| `public_snapshot_test_support.py` (test-only private-artifact boundary; not a runtime policy or operator command) |
 | `acceptance_transport.sh` |
 | `agent_error_proposer.py` |
 | `approval_timeout_probe.sh` |

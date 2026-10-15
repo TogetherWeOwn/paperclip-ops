@@ -4718,14 +4718,13 @@ jobs:
       # case_34675099. Staged Tier-0 port drift gate: the staged copy under
       # templates/org-github/tier-0/ is a port of the recorded source pin,
       # not a fork. check-staged-drift.sh diffs it offline against
-      # tier-0/SOURCE (the suites checkout fetches full history, so the pin
-      # is available) and fails naming the drifted file plus the re-port
-      # command. Without this step the gate runs only in the full local
-      # verify-fast tier while CI runs --parse-only, so a hand-edited staged
-      # copy would merge green.
+      # tier-0/SOURCE and fails naming the drifted file plus the re-port
+      # command. The test harness always exercises synthetic drift/refusal
+      # controls; only the excluded private-history integration may skip in
+      # a marked fresh public snapshot. The production checker stays closed.
       - name: staged Tier-0 port drift gate
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: ./templates/org-github/check-staged-drift.sh
+        run: python3 test_staged_drift.py
 
       # == area: runbook (was runbook-gates; runs only when runbook or full changed) ==
       - name: DLQ redrive CLI standalone suite

@@ -76,6 +76,18 @@ fi
 # The checked-in evidence is a sanitized capture of disposable revised-carrier dry-runs
 # from the installed Podman 4.9.3/systemd 255 generator. Fail closed unless the exact
 # carrier bytes and evidence bytes remain bound to that capture.
+PRIVATE_RENDER_ABSENT=0
+if python3 - "$ROOT" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from public_snapshot_test_support import private_artifact_absent
+raise SystemExit(0 if private_artifact_absent(
+    sys.argv[1], "deploy/paperclip-immutable/generated/board-quadlet-render.json") else 1)
+PY
+then
+  PRIVATE_RENDER_ABSENT=1
+  printf '%s\n' 'SKIP: historical private-carrier generator receipt is excluded from the fresh public snapshot; source-carrier assertions and kernel isolation controls remain enabled'
+else
 [ -f "$GENERATOR_EVIDENCE" ] || fail 'sanitized generated ExecStart evidence is missing'
 [ "$(sha256sum "$GENERATOR_EVIDENCE" | cut -d' ' -f1)" = "$GENERATOR_EVIDENCE_SHA256" ] || fail 'generated ExecStart evidence hash drifted'
 mapfile -t generated_values < <(python3 - \
@@ -197,6 +209,7 @@ grep -Eq -- '(^|[[:space:]])--network=none([[:space:]]|$)' <<<"$run_exec" || fai
 grep -Eq -- '(^|[[:space:]])--user 61111:61112([[:space:]]|$)' <<<"$run_exec" || fail 'run ExecStart lacks distinct run identity'
 grep -Fq -- '-v /run/paperclip-runs/run-a:/run/paperclip-run:rw,Z' <<<"$run_exec" || fail 'run ExecStart lacks generated run-root bind'
 grep -Fq -- '-v /run/paperclip-runs/run-a/workspace:/workspace:rw,Z' <<<"$run_exec" || fail 'run ExecStart lacks generated workspace bind'
+fi
 
 # case_786dae75. Everything below this line measures kernel behaviour inside an
 # unprivileged user namespace: a read-only bind mount, then a uid/gid map. If
@@ -385,6 +398,8 @@ test "$(cat "$run_root/dependencies/output")" = dependency
 test "$(cat "$run_root/tmp/output")" = tmp
 rm -rf "$run_base"
 
-printf 'PASS: carrier hashes bind to sanitized Podman 4.9.3/systemd 255 generated ExecStart evidence with exactly one whole-root read-only setting\n'
+if (( ! PRIVATE_RENDER_ABSENT )); then
+  printf 'PASS: carrier hashes bind to sanitized Podman 4.9.3/systemd 255 generated ExecStart evidence with exactly one whole-root read-only setting\n'
+fi
 printf 'PASS: every negative mutation preserved the complete path/type/mode/uid/gid/link/content manifest\n'
 printf 'PASS: launcher ownership handoff enabled distinct-UID workspace/cache/store/dependency/tmp writes\n'

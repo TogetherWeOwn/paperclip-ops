@@ -248,11 +248,125 @@ function cacheTtls(env = {}, config = {}) {
  * Deliberately NOT the run scratch dir (deleted with the run): the tail to bound is
  * first-Stops of unrelated runs on the same box hitting the same slow API. Keyed by
  * task id; entries carry no credential, only the card shape the classifier reads.
+ * A block (or would-block) verdict is never served from cache and never written:
+ * the Stop after a hand-back always re-reads, so a card the agent just fixed
+ * (done, or a monitor armed) cannot be blocked again from the pre-fix card.
  */
 export function cacheFileFor(env = {}, taskId = "") {
   const dir = env.DISPOSITION_STOP_GUARD_CACHE_DIR || join(tmpdir(), "disposition-stop-guard");
   const safe = String(taskId).replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 128) || "unknown";
   return { dir, file: join(dir, `card-cache.${safe}.json`) };
+}
+
+/**
+ * The card shape the classifier reads, and nothing else. Title, description and
+ * every other API field never reach the cache file (the guard never writes
+ * model text or card text anywhere).
+ */
+export function projectCardForCache(card) {
+  if (!card || typeof card !== "object") return null;
+  const out = {};
+  if (card.status !== undefined) out.status = card.status;
+  if (card.identifier !== undefined) out.identifier = card.identifier;
+  if (card.conversationAgentId !== undefined) out.conversationAgentId = card.conversationAgentId;
+  if (card.originKind !== undefined) out.originKind = card.originKind;
+  if (card.externalChannelBinding !== undefined) {
+    // The classifier only checks truthiness; keep the value when it is a
+    // primitive, otherwise keep presence so no card text is stored.
+    const value = card.externalChannelBinding;
+    out.externalChannelBinding = value && typeof value === "object" ? true : value;
+  }
+  if (card.assigneeAgentId !== undefined) out.assigneeAgentId = card.assigneeAgentId;
+  if (card.executionRunId !== undefined) out.executionRunId = card.executionRunId;
+  if (card.monitorNextCheckAt !== undefined) out.monitorNextCheckAt = card.monitorNextCheckAt;
+  if (card.executionState !== undefined && card.executionState !== null) {
+    if (typeof card.executionState !== "object") {
+      out.executionState = card.executionState;
+    } else {
+      const projected = {};
+      if (card.executionState.monitor !== undefined && card.executionState.monitor !== null) {
+        if (typeof card.executionState.monitor !== "object") {
+          projected.monitor = card.executionState.monitor;
+        } else {
+          const monitor = {};
+          if (card.executionState.monitor.status !== undefined) monitor.status = card.executionState.monitor.status;
+          if (card.executionState.monitor.nextCheckAt !== undefined) monitor.nextCheckAt = card.executionState.monitor.nextCheckAt;
+          if (card.executionState.monitor.attemptCount !== undefined) monitor.attemptCount = card.executionState.monitor.attemptCount;
+          if (card.executionState.monitor.maxAttempts !== undefined) monitor.maxAttempts = card.executionState.monitor.maxAttempts;
+          projected.monitor = monitor;
+        }
+      } else if (card.executionState.monitor !== undefined) {
+        projected.monitor = card.executionState.monitor;
+      }
+      if (card.executionState.currentParticipant !== undefined) {
+        projected.currentParticipant = card.executionState.currentParticipant && typeof card.executionState.currentParticipant === "object" ? true : card.executionState.currentParticipant;
+      }
+      if (card.executionState.reviewRequest !== undefined) {
+        projected.reviewRequest = card.executionState.reviewRequest && typeof card.executionState.reviewRequest === "object" ? true : card.executionState.reviewRequest;
+      }
+      out.executionState = projected;
+    }
+  }
+  if (card.executionPolicy !== undefined && card.executionPolicy !== null) {
+    if (typeof card.executionPolicy !== "object") {
+      out.executionPolicy = card.executionPolicy;
+    } else if (card.executionPolicy.monitor !== undefined) {
+      const monitor = card.executionPolicy.monitor;
+      if (monitor === null || typeof monitor !== "object") {
+        out.executionPolicy = { monitor };
+      } else {
+        const projected = {};
+        if (monitor.status !== undefined) projected.status = monitor.status;
+        if (monitor.nextCheckAt !== undefined) projected.nextCheckAt = monitor.nextCheckAt;
+        if (monitor.attemptCount !== undefined) projected.attemptCount = monitor.attemptCount;
+        if (monitor.maxAttempts !== undefined) projected.maxAttempts = monitor.maxAttempts;
+        out.executionPolicy = { monitor: projected };
+      }
+    }
+  }
+  if (Array.isArray(card.blockedBy)) {
+    out.blockedBy = card.blockedBy.map((blocker) =>
+      blocker && typeof blocker === "object" ? { status: blocker.status } : { status: undefined },
+    );
+  }
+  if (card.blockerAttention !== undefined && card.blockerAttention !== null) {
+    if (typeof card.blockerAttention !== "object") {
+      out.blockerAttention = card.blockerAttention;
+    } else if (card.blockerAttention.unresolvedBlockerCount !== undefined) {
+      out.blockerAttention = { unresolvedBlockerCount: card.blockerAttention.unresolvedBlockerCount };
+    } else {
+      out.blockerAttention = {};
+    }
+  }
+  if (card.activeRecoveryAction !== undefined && card.activeRecoveryAction !== null) {
+    if (typeof card.activeRecoveryAction !== "object") {
+      out.activeRecoveryAction = card.activeRecoveryAction;
+    } else if (card.activeRecoveryAction.kind !== undefined) {
+      out.activeRecoveryAction = { kind: card.activeRecoveryAction.kind };
+    } else {
+      out.activeRecoveryAction = {};
+    }
+  }
+  if (card.scheduledRetry !== undefined && card.scheduledRetry !== null) {
+    if (typeof card.scheduledRetry !== "object") {
+      out.scheduledRetry = card.scheduledRetry;
+    } else if (card.scheduledRetry.runId !== undefined) {
+      out.scheduledRetry = { runId: card.scheduledRetry.runId };
+    } else {
+      out.scheduledRetry = {};
+    }
+  }
+  if (card.successfulRunHandoff !== undefined && card.successfulRunHandoff !== null) {
+    if (typeof card.successfulRunHandoff !== "object") {
+      out.successfulRunHandoff = card.successfulRunHandoff;
+    } else {
+      const projected = {};
+      if (card.successfulRunHandoff.state !== undefined) projected.state = card.successfulRunHandoff.state;
+      if (card.successfulRunHandoff.correctiveRunId !== undefined) projected.correctiveRunId = card.successfulRunHandoff.correctiveRunId;
+      out.successfulRunHandoff = projected;
+    }
+  }
+  return out;
 }
 
 export function readCardCache(env, taskId) {
@@ -270,7 +384,8 @@ export function readCardCache(env, taskId) {
 }
 
 export function writeCardCache(env, taskId, { card, pendingInteractions } = {}) {
-  if (!card || typeof card !== "object") return false;
+  const projected = projectCardForCache(card);
+  if (!projected) return false;
   const { dir, file } = cacheFileFor(env, taskId);
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -279,14 +394,55 @@ export function writeCardCache(env, taskId, { card, pendingInteractions } = {}) 
       v: 1,
       taskId: String(taskId),
       ts: Date.now(),
-      card,
+      card: projected,
       ...(Number.isInteger(pendingInteractions) && pendingInteractions >= 0 ? { pendingInteractions } : {}),
     };
     writeFileSync(temporary, `${JSON.stringify(payload)}\n`, { mode: 0o600 });
     renameSync(temporary, file);
+    // The hand-back counter lives in the run scratch dir in production, so its
+    // prune never touches this dir. Prune here instead: every cache write bounds
+    // the shared dir, in tests and in production alike.
+    try {
+      const ttls = cacheTtls(env, {});
+      pruneOldCache(dir, Math.min(ttls.stale, 48 * 3600 * 1000));
+    } catch {
+      /* pruning must never fail the write */
+    }
     return true;
   } catch {
     return false;
+  }
+}
+
+export function deleteCardCache(env, taskId) {
+  const { file } = cacheFileFor(env, taskId);
+  try {
+    unlinkSync(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Prune expired card-cache entries in any cache dir (shared or isolated). Bounded. */
+function pruneOldCache(dir, maxAgeMs = 48 * 3600 * 1000) {
+  try {
+    const cutoff = Date.now() - maxAgeMs;
+    let removed = 0;
+    for (const name of readdirSync(dir)) {
+      if (removed >= 50) break;
+      if (!name.startsWith("card-cache.") || !name.endsWith(".json")) continue;
+      try {
+        if (statSync(join(dir, name)).mtimeMs < cutoff) {
+          unlinkSync(join(dir, name));
+          removed += 1;
+        }
+      } catch {
+        /* another stop is pruning too */
+      }
+    }
+  } catch {
+    /* a missing dir is not an error */
   }
 }
 
@@ -443,10 +599,21 @@ async function decideUnsafe(input, env, deps) {
       /* the cache must never change the decision */
     }
   };
+  const forget = () => {
+    try {
+      const del = deps.deleteCardCache ?? deleteCardCache;
+      del(env, taskId);
+    } catch {
+      /* the cache must never change the decision */
+    }
+  };
   // Shared finish: a cached verdict carries `cached: true` so the log can tell a
   // sub-millisecond cache decision apart from a network one. Everything else is identical.
+  // A block (or would-block) is never kept: the entry is deleted so the Stop after a
+  // hand-back always re-reads instead of re-blocking from the pre-fix card.
   const finish = (verdict, card, extra = {}) => {
     if (verdict.action !== "block") return { action: "allow", why: verdict.why, mode, status: card.status, ...extra };
+    forget();
     const reason = handbackReason(verdict, card);
     if (mode === "observe") {
       return { action: "allow", why: verdict.why, wouldBlock: true, kind: verdict.kind, mode, status: card.status, reasonChars: reason.length, ...extra };
@@ -469,13 +636,22 @@ async function decideUnsafe(input, env, deps) {
   const fresh = stale && stale.ageMs < ttls.fresh && cachedCardUsable(stale) ? stale : null;
   const usableStale = stale && stale.ageMs < ttls.stale && cachedCardUsable(stale) ? stale : null;
 
-  // Fast path: a fresh cache entry skips the network entirely. A fast API always wins
-  // over cache otherwise: stale entries are only consulted when the network is slow.
+  // Fast path: a fresh cache entry skips the network entirely, but never for a
+  // block. A block is always re-read: the agent may have fixed the card after the
+  // hand-back inside the fresh window, and the cached pre-fix card must not
+  // re-block it. A fast API always wins over cache otherwise: stale entries are
+  // only consulted when the network is slow.
   if (fresh) {
     const cachedCtx =
       fresh.pendingInteractions === undefined ? { ...ctx } : { ...ctx, pendingInteractions: fresh.pendingInteractions };
     const verdict = classifyCard(fresh.card, cachedCtx);
-    if (verdict.action !== "need-extras") return finish(verdict, fresh.card, { cached: true });
+    if (verdict.action !== "need-extras") {
+      if (verdict.action === "block") {
+        forget();
+      } else {
+        return finish(verdict, fresh.card, { cached: true });
+      }
+    }
     // Fresh card, but the cached interactions count is missing: fetch only the light read.
     if (fresh.pendingInteractions === undefined) {
       const issuePath = `/api/issues/${encodeURIComponent(taskId)}`;
@@ -497,8 +673,13 @@ async function decideUnsafe(input, env, deps) {
         };
       }
       const pending = countPendingInteractions(interactions.body);
-      remember(fresh.card, pending);
-      return finish(classifyCard(fresh.card, { ...ctx, pendingInteractions: pending }), fresh.card, { cached: true });
+      const cachedVerdict = classifyCard(fresh.card, { ...ctx, pendingInteractions: pending });
+      if (cachedVerdict.action === "block") {
+        forget();
+      } else {
+        remember(fresh.card, pending);
+        return finish(cachedVerdict, fresh.card, { cached: true });
+      }
     }
   }
 
@@ -541,8 +722,20 @@ async function decideUnsafe(input, env, deps) {
         }
         if (interactions && interactions.ok) {
           const pending = countPendingInteractions(interactions.body);
+          const freshVerdict = classifyCard(usable.card, { ...ctx, pendingInteractions: pending });
+          if (freshVerdict.action === "block") {
+            // A stale card plus a fresh count is still a stale card: never block from it.
+            forget();
+            return {
+              action: "allow",
+              why: cardRead.timeout ? "card-timeout" : "card-unreadable",
+              mode,
+              httpStatus: cardRead.status,
+              ...(cardRead.timeout ? { timeout: true } : {}),
+            };
+          }
           remember(usable.card, pending);
-          verdict = classifyCard(usable.card, { ...ctx, pendingInteractions: pending });
+          verdict = freshVerdict;
         } else if (usable.pendingInteractions !== undefined) {
           verdict = classifyCard(usable.card, { ...ctx, pendingInteractions: usable.pendingInteractions });
         } else {
@@ -554,6 +747,18 @@ async function decideUnsafe(input, env, deps) {
             ...(cardRead.timeout ? { timeout: true } : {}),
           };
         }
+      }
+      if (verdict.action === "block") {
+        // Never serve a block from a stale card: the post-fix read may just be slow.
+        // Fail open on the read's own class and drop the stale block entry.
+        forget();
+        return {
+          action: "allow",
+          why: cardRead.timeout ? "card-timeout" : "card-unreadable",
+          mode,
+          httpStatus: cardRead.status,
+          ...(cardRead.timeout ? { timeout: true } : {}),
+        };
       }
       return finish(verdict, usable.card, { cached: true });
     }
@@ -577,9 +782,21 @@ async function decideUnsafe(input, env, deps) {
       return { action: "allow", why: "error", mode, kind: verdict.kind, status: card.status };
     }
     if (!interactions.ok) {
-      // A stale count for the same still-owned card still decides; otherwise fail open.
+      // A stale count for the same still-owned card still decides, but never a
+      // block: a stale zero must not hand back a run whose live count is pending.
       if (usableStale && usableStale.pendingInteractions !== undefined) {
-        return finish(classifyCard(card, { ...ctx2, pendingInteractions: usableStale.pendingInteractions }), card, { cached: true });
+        const staleVerdict = classifyCard(card, { ...ctx2, pendingInteractions: usableStale.pendingInteractions });
+        if (staleVerdict.action === "block") {
+          return {
+            action: "allow",
+            why: interactions.timeout ? "interactions-timeout" : "interactions-unreadable",
+            mode,
+            kind: verdict.kind,
+            status: card.status,
+            ...(interactions.timeout ? { timeout: true } : {}),
+          };
+        }
+        return finish(staleVerdict, card, { cached: true });
       }
       return {
         action: "allow",
@@ -591,12 +808,14 @@ async function decideUnsafe(input, env, deps) {
       };
     }
     const pending = countPendingInteractions(interactions.body);
-    remember(card, pending);
     verdict = classifyCard(card, { ...ctx2, pendingInteractions: pending });
+    // A block is never cached: the next Stop always re-reads. Only an allow (or a
+    // need-extras that cannot happen here) is worth remembering.
+    if (verdict.action !== "block") remember(card, pending);
   } else {
-    // The fresh card decided without the count: store the card alone so a later Stop
+    // The fresh card decided without the count: store allows alone so a later Stop
     // that needs extras refetches the count instead of trusting a count from an older card.
-    remember(card);
+    if (verdict.action !== "block") remember(card);
   }
   return finish(verdict, card);
 }

@@ -146,15 +146,20 @@ no credential, throwaway HOME.
   session on the lane the agent already uses.
 - **Latency.** One card read and one interactions read, started together, per task run end, each on
   a 900 ms budget (`DISPOSITION_STOP_GUARD_REQUEST_TIMEOUT_MS` / `requestTimeoutMs`,
-  clamp 50–8,000 ms). A shared card cache covers the tail: fresh entries (< 30 s,
-  `cacheFreshMs`) skip the network (single-digit ms); stale entries (< 5 min, `cacheStaleMs`)
-  decide when the network is slow, marked `cached: true`. Slow reads without usable cache fail
-  open on their own classes (`card-timeout` / `interactions-timeout`, never `card-unreadable`).
+  clamp 50–8,000 ms). A shared card cache covers the tail: fresh allow entries (< 30 s,
+  `cacheFreshMs`) skip the network (single-digit ms); stale allow entries (< 5 min, `cacheStaleMs`)
+  decide when the network is slow, marked `cached: true`. A block (or would-block) is never
+  served from cache and never written: the Stop after a hand-back always re-reads, so a card
+  the agent just fixed cannot be re-blocked from the pre-fix card. Slow reads without usable
+  cache fail open on their own classes (`card-timeout` / `interactions-timeout`, never
+  `card-unreadable`); a slow read with only a stale block cached fails open the same way.
   Measured 2026-10-10: card read p50 2.6 s, p90 4.6 s, interactions p50 0.9 s. Observe
   23:37Z→05:41Z (624 stops): Stop p50 533 ms, p95 3.1 s, max 6.5 s. After: the slow path costs
   the ~900 ms budget (CLI hang test: 928 ms empty-cache, 30 ms fresh-cache) and the 8 s deadline
   stays as backstop. Cached cards are validated (same assignee, same or no holding run) before
   use; monitor/blocker/interaction drift inside the TTL is the accepted staleness tradeoff.
+  The cache stores only the classifier shape (no title, description or other card text) and
+  every cache write prunes entries older than the stale TTL (backstop 48 h, bounded 50).
 - **Fails open.** Any error, missing credential, unreadable card, bad input, or the 8 s deadline: allow, exit 0.
 - **Read only.** It issues GETs against `PAPERCLIP_API_URL` with the run's own key. It never writes a card,
   comment or status, and never prints the key.
@@ -319,9 +324,9 @@ node hooks/disposition-stop-guard/measure/census.mjs --bundle "$PAPERCLIP_SCRATC
 | `mode` | `DISPOSITION_STOP_GUARD_MODE` | `enforce` | `off`, `observe` (log only) or `enforce`. |
 | `maxHandbacks` | `DISPOSITION_STOP_GUARD_MAX_HANDBACKS` | 2 | Hand-backs per run. 0 turns blocking off. |
 | `requestTimeoutMs` | `DISPOSITION_STOP_GUARD_REQUEST_TIMEOUT_MS` | 900 | Per-read budget in ms (clamp 50–8,000). Lower bounds the Stop tail; higher catches more on a slow plane. |
-| `cacheFreshMs` | `DISPOSITION_STOP_GUARD_CACHE_FRESH_MS` | 30,000 | Fresh cache skips the network. 0 disables the fast path. |
-| `cacheStaleMs` | `DISPOSITION_STOP_GUARD_CACHE_STALE_MS` | 300,000 | Stale cache decides when the network is slow (marked `cached`). At least the fresh window. |
-| cache dir | `DISPOSITION_STOP_GUARD_CACHE_DIR` | `$TMPDIR/disposition-stop-guard` | Shared card cache (no credential in it). Per-test isolation sets this per dir. |
+| `cacheFreshMs` | `DISPOSITION_STOP_GUARD_CACHE_FRESH_MS` | 30,000 | Fresh allow-cache skips the network (blocks always re-read). 0 disables the fast path. |
+| `cacheStaleMs` | `DISPOSITION_STOP_GUARD_CACHE_STALE_MS` | 300,000 | Stale allow-cache decides when the network is slow (marked `cached`); stale blocks fail open. At least the fresh window. |
+| cache dir | `DISPOSITION_STOP_GUARD_CACHE_DIR` | `$TMPDIR/disposition-stop-guard` | Shared card cache (no credential, no title/description in it; pruned on every write). Per-test isolation sets this per dir. |
 
 ## Known limits
 

@@ -1,4 +1,4 @@
-// Default subscription fixture for check-subscription.sh (TOG-24443 slice 1).
+// Default subscription fixture for check-subscription.sh.
 // The drift script defaults EXPECTED_SUBSCRIPTION to
 // gh-event-capture/expected-subscription.json; without this file the default
 // path exits 3 ("cannot read"). This pins the file's shape (event set +

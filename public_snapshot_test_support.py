@@ -14,6 +14,8 @@ PRIVATE_ARTIFACTS = frozenset({
     "tests/auth-denial-incident-2026-09-22.json",
     "tests/dead-feed-2026-08-26.jsonl",
     "tool_grant_expectations.json",
+    "operator_runbook_classification.json",
+    "docs/OPERATOR-RUNBOOK.md",
 })
 
 

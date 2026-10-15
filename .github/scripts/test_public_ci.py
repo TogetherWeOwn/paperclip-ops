@@ -156,6 +156,47 @@ class PublicCI(unittest.TestCase):
             with mock.patch.object(public_safety, "ROOT", root):
                 self.assertIn("unreviewed binary payload", public_safety.inspect(path))
 
+    def test_withdrawal_fixture_boundary_and_digest_fail_closed(self):
+        for case in ("public-absent", "nonpublic-absent", "partial-classification",
+                     "partial-document", "changed-fixture"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                gate = "verification/case_786dae75-runbook-withdrawal-render-gate.sh"
+                for name in (gate, "operator_runbook.sh", "public_snapshot_test_support.py",
+                             "tests/fixtures/operator-withdrawal-synthetic.json"):
+                    target = root / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes((ROOT / name).read_bytes())
+                (root / "README.md").write_text("private source\n" if case == "nonpublic-absent"
+                                               else "## Fresh-history publication candidate\n")
+                (root / ".github/scripts").mkdir(parents=True)
+                (root / ".github/scripts/public_safety.py").touch()
+                if case == "partial-classification":
+                    (root / "operator_runbook_classification.json").write_text("{}")
+                if case == "partial-document":
+                    (root / "docs").mkdir()
+                    (root / "docs/OPERATOR-RUNBOOK.md").write_text("partial")
+                if case == "changed-fixture":
+                    path = root / "tests/fixtures/operator-withdrawal-synthetic.json"
+                    original = path.read_text()
+                    self.assertIn("synthetic withdrawn rendering", original)
+                    path.write_text(original.replace("synthetic withdrawn rendering", "synthetic changed rendering"))
+                result = subprocess.run(["bash", str(root / gate)], env={"PATH": os.environ["PATH"]},
+                                        capture_output=True, text=True, timeout=20)
+                output = result.stdout + result.stderr
+                if case == "public-absent":
+                    self.assertEqual(result.returncode, 0, output)
+                    self.assertIn("All mutants caught", output)
+                else:
+                    self.assertNotEqual(result.returncode, 0, output)
+                    self.assertNotIn("All mutants caught", output)
+                if case in ("public-absent", "changed-fixture"):
+                    self.assertIn("SKIP: private deployed classification/render binding", output)
+                else:
+                    self.assertNotIn("SKIP:", output)
+                if case == "changed-fixture":
+                    self.assertIn("synthetic expected render drifted", output)
+
     def test_private_tier_zero_skip_is_absence_only(self):
         import importlib.util
         import sys

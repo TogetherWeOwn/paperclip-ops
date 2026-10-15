@@ -61,10 +61,6 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-          sparse-checkout: |
-            .github
-            vendor
-          sparse-checkout-cone-mode: true
 
       - name: Unit-test the lint
         run: |

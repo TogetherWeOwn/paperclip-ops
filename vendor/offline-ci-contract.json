@@ -1080,7 +1080,7 @@
     },
     {
       "name": "The case_9e76f76d monitor's recorded command still runs from a clean tree",
-      "definition_sha256": "f13a543bfe025fd0a03dd0acee590511cbc0307493010915407c7de4fbc5bb2a",
+      "definition_sha256": "d39eb8e37e62bb63c43cd32649d8fd9d501da3bb8e5bb40f68516b265f1b2cb9",
       "id": "The case_9e76f76d monitor's recorded command still runs from a clean tree:1"
     },
     {
@@ -1190,7 +1190,7 @@
     },
     {
       "name": "host timer registry (offline, mutation-controlled)",
-      "definition_sha256": "abe14346f3262ac921dd02db99bf5ad886b090e9a65cd7a49a9cac2af3480aa1",
+      "definition_sha256": "76e2d6719e926124a4be97299999bb2ba4dfee02e3f9591782bae013252d7485",
       "id": "host timer registry (offline, mutation-controlled):1"
     },
     {
@@ -1260,17 +1260,17 @@
     },
     {
       "name": "Prove the rotation watcher still detects a wrong verdict",
-      "definition_sha256": "dbb2aca79d630357611f910b10edb3b81aec645dfc3bb621fa6b6f3d48c69cb1",
+      "definition_sha256": "38c52a655f9a37ac4f667925e846766d294f160bca104ea547348c03207f52fe",
       "id": "Prove the rotation watcher still detects a wrong verdict:1"
     },
     {
       "name": "Prove the brake still derives its burn rather than reading it",
-      "definition_sha256": "6462a5c686164f1c61587a549420f46a187f3ab78b2382b3846b9e16b5a93ca9",
+      "definition_sha256": "41b1421296ea89845ba382c2bf415b22a2c4cca5a20e40ea6d1cf626277d5a38",
       "id": "Prove the brake still derives its burn rather than reading it:1"
     },
     {
       "name": "Prove the 120m staleness cutoff is load-bearing (mutation-gated)",
-      "definition_sha256": "3ab06483e335a216090130ab904eef9da8475fe1195614e5d2b31688bf0a30b8",
+      "definition_sha256": "5b902a7990f8a5340cb3b9b01f885dc16cbedd6fd12fb3283670b429c43d3d7c",
       "id": "Prove the 120m staleness cutoff is load-bearing (mutation-gated):1"
     },
     {
@@ -2298,14 +2298,12 @@
     "test/parked_backlog_guard_preservation.cjs": "525695fc728b9a3fdb98cc89269e5847bb284a8286e6902863c1446734ea897e",
     "test_app_tree_guard.sh": "171bb761705c075ecf6985d56872bb07f3962cb1c90fcd6d69e204cf26bb63fc",
     "test_approval_timeout_probe.sh": "4fedddf70d17bfabf5fc76ceb96f5e7ae5ca95eef62f0c042fba80eaa99c2484",
-    "test_auth_denial_discriminator.py": "96a03f82880ae524a8bba9bf19de9ecb901532edef5626860555927714151e69",
     "test_blocked_audit.sh": "bb6a15e4ec91dd174948a8f0ea775648528f89026bbb2ebc148f776f992c5f0b",
     "test_bootstrap_operating_model.sh": "aa7185467d5afae3237c71a07d114148643151b42d0556b911c7d216335df99a",
     "test_breaker_cotenancy_probe.sh": "08ea402908aa0ceea97abf8093d4d1f8c3c1b95bd935c98ea6d5da737a6ebb4b",
     "test_capability_gate.sh": "cf7548a457392c2ce41f6be424a3d29caad2a2bc4e710c1a7d655c81425e2223",
     "test_capture_network_name_evidence.sh": "270b68e38b0dfc414c6f13046a3e9485ede198c8331ce055f88fa400dcb32c39",
     "test_channel_drift.sh": "596d6d537d3b73b37a54b8342089ba681583ec7fd525b737fae4aec46a27484d",
-    "test_cold_start_detector.sh": "9a5b447fb66c3d822283005e6fa570499e0595cb3885cdeebf22fe82aa443974",
     "test_credential_chain_audit.sh": "fef7398b0ff2ef3d45b1be944a7c2289ec6565de610f52bca6001db9ebf73907",
     "test_credential_chain_pin_gate.sh": "d3259a3a01ae32c5048e0a4721319744f82c9fe15ce37c55e186765a645b4728",
     "test_decision_notify.sh": "d8b53623c7170b09c3c48fa3d4a964b237f0329663017dceaba83c293716bb5c",
@@ -2322,7 +2320,6 @@
     "test_omniroute_rehearsal_translator.mjs": "f4e3ceb5a35bc8b193bfb624b149f8e6503d6389b0dcd849f54d03af2424a7e6",
     "test_opencode_shared_budget_probe.sh": "fbe5a2e3fde4e5aed59e5c5caaa25c713028fd9587a1402a74c6d0fc1c990fbc",
     "test_orgdb_fixture.sh": "9faf8aa5d9e3ced8252b5eece0b4797f870adb47ec9358251ebb4e1e5feecb77",
-    "test_pacing_verdict.py": "8dee827bd336b84676e24097d5999c4f67fa990c3f6192a712be51d440793084",
     "test_paperclip_activation_gate.sh": "df1ee47ebf779733bd7d3da0ace0a54a03092c9e068ccae5ed2bea0227ca39f4",
     "test_paperclip_run_path_guard.py": "b8f2b984b7f52d5e80718b92d8232f6aa829ce67b79e91112c18286853e74727",
     "test_parked_backlog_guard.sh": "1dc898c0ecb2cb0b423ec6843ec82e7db8b8dd1ee63e0c544ed3e62b7a250e7a",
@@ -2330,7 +2327,6 @@
     "test_provisioning_policy.sh": "4c17e05c0b641d6dc612de5f342c43c5d03f8a5d80e2d15a95fe1d1bfad17530",
     "test_queue_liveness.sh": "15b525b1d411d4d10f1ccfbc7368120be14fbbb55c9ec24169546840d63ec143",
     "test_quota_brake.sh": "691bf19cf4301a972ddbfc2481cc7806c5ce81222a28d4de335b0aa5306c11cc",
-    "test_quota_burn_derive.sh": "e72525dccf08aa382a3c30dd217cd475eb99c58a2c7e33f17d58a11fc6875b22",
     "test_render_binding_normalization.sh": "c69bdb5104d90c449e7ece7e9137ef31e0def8fc4496ff7e84a48833df00748a",
     "test_responsible_leader.sh": "7467fd1ede05afa043db6c977fcc3be4cf1a177f5c0ed2d72e83b61a6649cb27",
     "test_secret_exposure_audit.sh": "399703e781a26a6c2555f16da37c9968c386eeb7b91f938bef53208db04601cc",
@@ -2355,20 +2351,17 @@
     "case_8b8a8c87_predispatch_deploy_gate.sh": "1012110aa0045728db59f2548fdae2d1fec4f871b750f688971104ba31097c95",
     "tool_drift.sh": "24a9f063d273cb4b39990488289443a0c3a3d7e18858a7f0d5c61ebf9d114ea8",
     "upstream_filing_readiness.sh": "f05e274aaf5a98861e015f6572b9472090a82f833e18d06700a50b110f986e3b",
-    "verification/auth-denial-mutation-gate.py": "d413e66270e945dbc6fbfd7f60de073c3d37c1bfc218a770ae0f2f98c220718e",
     "verification/case_bb74e741-filing-gate-check5-mutants.sh": "293c8bd32760b8d50344997263df4fc73546f5c7c4fd53999dc513cba13f395c",
     "verification/case_214ad18c-empty-gzip-residue-repro.mjs": "ee99a806f06575168facfdfe808d9f2dc20b40830738e0e6f4395d86c1166a25",
     "verification/case_79b85f97-truncated-reasoning-502.sh": "52173d4d339a43d935c896574b126f8a24f8c2d26b16e3fb8fcd379dbbf6d7a7",
     "verification/case_317e6404-mutation-gate.cjs": "bffb7f7983524081acae4f4f863f792a8cad6e2bceab81e1bf709bf7a5c92de5",
     "verification/case_bb2ac7f4-mutation-gate.sh": "e51b7b821aa9159d6ae262736f4b5e825013fe61e0a3c99796eca06431bcb45f",
-    "verification/case_77bba75d-mutation-gate.sh": "9be48867df693da6bb1c05b50090711f35a846f809d24b03f63ec364d643e898",
     "verification/case_5516df1c-monitor-mutation-gate.sh": "3465f0dccb82d2a2cb627955fd764d560ac15e8c9be525878039913c9dfa200b",
     "verification/case_5516df1c-mutation-gate.sh": "1b255f396d794b663915d5eea6768e7179aed5d48b593d5eb96f1ed1afce00a1",
     "verification/case_f17dd2a7-find-hash-collision.mjs": "7e375bb8855bfe68b52c0d38476c21c821b71c085e586658295d20eecf66494b",
     "verification/case_9e76f76d-recorded-command.sh": "5f71330c3c6329ae62cbe8eee598dd80a3c05690a9210ddcd86e5fb7d7b52419",
     "verification/case_9e76f76d-recorded-command.txt": "09a83a87254a37a810b577ad0304f4f7d0695bb2d041e669f791fbee045268b3",
     "verification/case_28030601-mutation-gate.sh": "a9fb85724e6b8bed3b4cd79fb311660747199d3a5ff291d3a2a70e26a944efec",
-    "verification/case_46e26fa6-mutation-gate.sh": "0fca6fbe9c3ad7f22c2c07c8c2ae4c2a94826c6a80c7a1b969056189cad79a72",
     "verification/case_ce726d7b-mutation-gate.sh": "bc0a7581e3c721f06761aca7f42794f3b5779bd68f4ec0f27d84965d17e8df2a",
     "verification/case_f909ca1f-mutation-gate.sh": "319f651038d075362536efbadbc86b05ce4207391c6efef147dec697ab147ed7",
     "verification/case_c22b6545-mutation-gate.sh": "12720839464be617fb0a3343da3a97baf49fbb4d6e95b7c2d299dc952e862d4d",

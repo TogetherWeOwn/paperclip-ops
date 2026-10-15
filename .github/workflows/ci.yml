@@ -3132,7 +3132,7 @@ jobs:
       # suite went red" would have scored that as a pass.
       - name: The case_9e76f76d monitor's recorded command still runs from a clean tree
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: ./verification/case_9e76f76d-recorded-command.sh
+        run: RECORDED_MONITOR_COMMAND=verification/case_9e76f76d-recorded-command.txt ./verification/case_9e76f76d-recorded-command.sh
 
       # case_18155f0d. A THIRD drift question, and the one a hash cannot answer.
       # tool_drift.sh asks whether two copies differ; this asks whether the
@@ -3560,7 +3560,11 @@ jobs:
       - name: host timer registry (offline, mutation-controlled)
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: |
-          python3 ops/case_30b51a0f/host_timer_registry_check.py
+          if python3 -c 'from public_snapshot_test_support import private_artifact_absent; raise SystemExit(0 if private_artifact_absent(".", "ops/case_30b51a0f/host-timer-registry.json") else 1)'; then
+            printf '%s\n' 'SKIP: private installed timer inventory is absent from the marked public snapshot; all synthetic registry and capture controls run below'
+          else
+            python3 ops/case_30b51a0f/host_timer_registry_check.py
+          fi
           cd ops/case_30b51a0f && python3 -m unittest -v test_host_timer_consolidation
 
       # case_0bf02bac. The home-PC guard reconciles CI_nodecf677d86_RUNNER with
@@ -4380,7 +4384,7 @@ jobs:
             local mut; mut="$(mktemp -d)"
             cp quota_rotation_watch.py pacing_verdict.py test_quota_rotation_watch.sh "$mut/"
             mkdir -p "$mut/tests"
-            cp tests/dead-feed-2026-08-26.jsonl "$mut/tests/"
+            python3 public_snapshot_test_support.py . "$mut" tests/dead-feed-2026-08-26.jsonl || { rm -rf "$mut"; return 1; }
 
             if ! (cd "$mut" && ./test_quota_rotation_watch.sh >/dev/null 2>&1); then
               echo "::error::$label: the UNMUTATED copy already fails — this gate proves nothing"
@@ -4447,7 +4451,7 @@ jobs:
             local mut; mut="$(mktemp -d)"
             cp quota_brake.sh pacing_verdict.py test_quota_brake.sh quota_brake_exempt.txt "$mut/"
             mkdir -p "$mut/tests"
-            cp tests/dead-feed-2026-08-26.jsonl "$mut/tests/"
+            python3 public_snapshot_test_support.py . "$mut" tests/dead-feed-2026-08-26.jsonl || { rm -rf "$mut"; return 1; }
 
             # Baseline first. Without it "the mutated suite failed" is
             # unattributable, which is how two gates in this repo sat vacuous
@@ -4586,12 +4590,12 @@ jobs:
             local mut; mut="$(mktemp -d)"
             cp pacing_verdict.py test_pacing_verdict.py "$mut/"
             mkdir -p "$mut/tests"
-            cp tests/dead-feed-2026-08-26.jsonl "$mut/tests/"
+            python3 public_snapshot_test_support.py . "$mut" tests/dead-feed-2026-08-26.jsonl || { rm -rf "$mut"; return 1; }
 
-            # Baseline in the SAME staging directory. §1 of the suite asserts
-            # the fixture is present rather than skipping, so a staging error
-            # is caught here as a red baseline instead of quietly deleting
-            # five checks from every run below.
+            # Baseline in the SAME staging directory. The helper carries the
+            # exact reviewed public-only absence boundary; nonpublic missing
+            # input fails staging. Synthetic staleness controls always run,
+            # and every mutant still needs its named assertion failure.
             if ! (cd "$mut" && python3 -m unittest test_pacing_verdict.py >/dev/null 2>&1); then
               echo "::error::$label: the UNMUTATED copy already fails — this gate proves nothing"
               (cd "$mut" && python3 -m unittest test_pacing_verdict.py 2>&1 | tail -25); rm -rf "$mut"; return 1

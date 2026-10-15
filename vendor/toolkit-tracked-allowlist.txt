@@ -14,3 +14,8 @@ test_pacing_verdict.py
 verification/auth-denial-mutation-gate.py
 # Keep private-history assertions plus unconditional synthetic stale-feed CLI coverage.
 test_quota_burn_derive.sh
+# Public absence staging must retain the test helper in mutation copies.
+test_cold_start_detector.sh
+verification/case_77bba75d-mutation-gate.sh
+# Align pinned mutation gate with the retained sanitized fixture and current broker.
+verification/case_46e26fa6-mutation-gate.sh

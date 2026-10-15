@@ -34,6 +34,32 @@ class PublicCI(unittest.TestCase):
         self.assertIn('"${RUNNER_ENVIRONMENT:-}" == github-hosted', text)
         self.assertNotIn('case "${RUNNER_NAME:-}"', text)
 
+    def test_lint_checkout_includes_public_regression_inputs(self):
+        text = (ROOT / ".github/workflows/pr-lint.yml").read_text()
+        # The suite reads tracked ZIP fixtures and the adapted mutation gate.
+        # A .github/vendor-only sparse checkout silently omits both.
+        self.assertNotIn("sparse-checkout:", text)
+        self.assertIn("test_public_ci.py", text)
+
+    def test_explicit_tool_grant_map_absence_is_not_skipped(self):
+        for relative in ("tool_grant_expectations.json", "absent-explicit-map.json"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                for name in ("test_case_6c24eff5_check12_reconcile.sh",
+                             "public_snapshot_test_support.py"):
+                    (root / name).write_bytes((ROOT / name).read_bytes())
+                (root / "README.md").write_text("## Fresh-history publication candidate\n")
+                (root / ".github/scripts").mkdir(parents=True)
+                (root / ".github/scripts/public_safety.py").touch()
+                (root / "org_access_review.sh").touch()
+                result = subprocess.run(
+                    ["bash", str(root / "test_case_6c24eff5_check12_reconcile.sh")],
+                    env={"PATH": os.environ["PATH"], "TOOL_GRANT_MAP": str(root / relative)},
+                    capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("no readable tool_grant_expectations.json", result.stderr)
+                self.assertNotIn("SKIP:", result.stdout)
+
     def test_contract_dependency_is_restored_before_contract_tests(self):
         text = (ROOT / ".github/workflows/ci.yml").read_text()
         suites = text.split("\n  suites:\n", 1)[1].split("\n  private-mutation-gates:\n", 1)[0]
@@ -199,6 +225,47 @@ class PublicCI(unittest.TestCase):
                 else:
                     with self.assertRaises(RuntimeError):
                         gate.run_suite("unused", names)
+
+    def test_mutation_stage_preserves_exact_private_artifact_boundary(self):
+        import sys
+        sys.path.insert(0, str(ROOT))
+        from public_snapshot_test_support import (
+            private_artifact_absent, stage_private_artifact)
+        relative = "tests/dead-feed-2026-08-26.jsonl"
+        for public in (False, True):
+            for state in ("absent", "empty", "partial", "directory", "dangling"):
+                with self.subTest(public=public, state=state), tempfile.TemporaryDirectory() as tmp:
+                    source, stage = Path(tmp) / "source", Path(tmp) / "stage"
+                    source.mkdir()
+                    (source / "public_snapshot_test_support.py").write_text(
+                        (ROOT / "public_snapshot_test_support.py").read_text())
+                    if public:
+                        (source / "README.md").write_text("## Fresh-history publication candidate\n")
+                        marker = source / ".github/scripts/public_safety.py"
+                        marker.parent.mkdir(parents=True)
+                        marker.write_text("# actual source marker\n")
+                    artifact = source / relative
+                    artifact.parent.mkdir(parents=True)
+                    if state in ("empty", "partial"):
+                        artifact.write_text("" if state == "empty" else "incomplete\n")
+                    elif state == "directory":
+                        artifact.mkdir()
+                    elif state == "dangling":
+                        artifact.symlink_to("absent-target")
+                    if state in ("directory", "dangling") or (state == "absent" and not public):
+                        with self.assertRaises(OSError):
+                            stage_private_artifact(source, stage, relative)
+                    else:
+                        skipped = stage_private_artifact(source, stage, relative)
+                        self.assertEqual(skipped, public and state == "absent")
+                        self.assertEqual(private_artifact_absent(stage, relative), skipped)
+                        if not skipped:
+                            self.assertEqual((stage / relative).read_bytes(), artifact.read_bytes())
+                        else:
+                            self.assertEqual((stage / ".github/scripts/public_safety.py").read_bytes(),
+                                             (source / ".github/scripts/public_safety.py").read_bytes())
+                    with self.assertRaises(ValueError):
+                        stage_private_artifact(source, stage, "../unreviewed")
 
     def test_private_bakeoff_skip_requires_both_markers_and_complete_absence(self):
         source = (ROOT / "test_case_61df0b37_review_bakeoff.sh").read_text()

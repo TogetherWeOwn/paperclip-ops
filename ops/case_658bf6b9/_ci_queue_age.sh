@@ -39,6 +39,10 @@
 #   CQA_OLDEST           created_at of the oldest runner-waiting job, "" none
 #   CQA_OLDEST_REPO      repo holding it
 #   CQA_JOBS_UNREADABLE  runs whose jobs API could not be read
+#   CQA_RUNS_INSPECTED   breach-eligible runs listed across repos (queued plus
+#                        in_progress older than the floor; lets the alert
+#                        report queue depth alongside age so a single wedged
+#                        job and a fleet saturation no longer page identically)
 #   CQA_ERROR            failure text when the call returns 1
 # Returns 0 when the lists were read (CQA_OLDEST may still be empty);
 # returns 1 with CQA_ERROR set when a run list failed, was truncated or was
@@ -46,6 +50,13 @@
 # A run whose jobs API fails is counted in CQA_JOBS_UNREADABLE instead: the
 # caller decides, because an oldest job found elsewhere still stands.
 ci_oldest_waiting_job() {
+  # Sourced, never executed: no top-level `set -e` here, or it would leak
+  # into every caller. Enable errexit for this call only and restore the
+  # caller's setting on every return path. Every expected failure below
+  # (gh, jq, date) stays guarded with `||`, so those paths still return
+  # 1 / count CQA_JOBS_UNREADABLE instead of exiting the caller's shell.
+  local _cqa_saved_opts="$-"
+  set -e
   local min_age="$1"; shift
   local gh_bin="${GH_BIN:-gh}"
   local ignore_job="${QUEUE_AGE_IGNORE_JOB:-Failure log drain}"
@@ -56,6 +67,7 @@ ci_oldest_waiting_job() {
   CQA_OLDEST=""
   CQA_OLDEST_REPO=""
   CQA_JOBS_UNREADABLE=0
+  CQA_RUNS_INSPECTED=0
   CQA_ERROR=""
 
   # 10# forces base-10: bash arithmetic treats a leading-0 value as octal, so
@@ -63,17 +75,17 @@ ci_oldest_waiting_job() {
   # cutoff matches nothing → nothing waiting). Callers allow leading zeros, so
   # pin decimal here (case_0b2d9007).
   cutoff="$(date -u -d "@$(( CQA_NOW - 10#$min_age * 60 ))" +%Y-%m-%dT%H:%M:%SZ)" \
-    || { CQA_ERROR="could not compute the run-age cutoff"; return 1; }
+    || { CQA_ERROR="could not compute the run-age cutoff"; [[ "$_cqa_saved_opts" == *e* ]] || set +e; return 1; }
 
   for repo in "$@"; do
     # Runs that may hold runner-waiting jobs, created before the cutoff only
     # (server-side, so the newest-first limit cannot drop the oldest runs).
     queued_runs="$("$gh_bin" run list --repo "$repo" --status queued --created "<$cutoff" \
                      --limit "$run_limit" --json databaseId,createdAt 2>&1)" \
-      || { CQA_ERROR="gh run list (queued) failed for $repo"; return 1; }
+      || { CQA_ERROR="gh run list (queued) failed for $repo"; [[ "$_cqa_saved_opts" == *e* ]] || set +e; return 1; }
     active_runs="$("$gh_bin" run list --repo "$repo" --status in_progress --created "<$cutoff" \
                      --limit "$run_limit" --json databaseId,createdAt 2>&1)" \
-      || { CQA_ERROR="gh run list (in_progress) failed for $repo"; return 1; }
+      || { CQA_ERROR="gh run list (in_progress) failed for $repo"; [[ "$_cqa_saved_opts" == *e* ]] || set +e; return 1; }
 
     # "<createdAt> <id>" oldest-first. The client-side cutoff re-check is kept
     # so a gh that ignores --created still never inspects a young run.
@@ -87,7 +99,15 @@ ci_oldest_waiting_job() {
            else
              CQA_ERROR="unparseable run list for $repo"
            fi
-           return 1; }
+           [[ "$_cqa_saved_opts" == *e* ]] || set +e; return 1; }
+
+    # Depth for triage: every listed run is breach-eligible demand (older
+    # than the floor), whether or not the oldest-first walk below reaches
+    # its jobs call before the early stop. An empty list adds nothing;
+    # grep -c . counts only non-empty lines.
+    if [[ -n "$runs" ]]; then
+      CQA_RUNS_INSPECTED=$((CQA_RUNS_INSPECTED + $(printf '%s\n' "$runs" | grep -c .)))
+    fi
 
     while read -r created rid; do
       [[ -n "$rid" ]] || continue
@@ -106,5 +126,6 @@ ci_oldest_waiting_job() {
       fi
     done <<<"$runs"
   done
+  [[ "$_cqa_saved_opts" == *e* ]] || set +e
   return 0
 }

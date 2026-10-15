@@ -150,6 +150,9 @@ env -u BASH_ENV ./test_approval_timeout_probe.sh || fail "approval-timeout probe
 ./test_credential_chain_offline.sh || fail "credential-chain offline fixture suite failed"
 ./test_gh_access_dispatch.sh || fail "gh-access dispatch suite failed"
 ./test_org_snapshot.sh || fail "org-snapshot offline suite failed"
+# PR #2 landing acceptance: pins the CI wiring-gate/push-key contracts
+# (case_f3500d44/case_6d874ecd) red-to-green. Offline, stdlib only.
+python3 -m unittest test_pr2_acceptance || fail "pr2 acceptance suite failed"
 python3 -m unittest test_alert_queue || fail "alert-queue suite failed"
 python3 -m unittest test_watchdog_snapshot_builder || fail "watchdog snapshot-builder suite failed"
 python3 -m unittest test_case_da79e241_fleet_run_stall || fail "fleet-run-stall suite failed"

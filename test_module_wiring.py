@@ -174,7 +174,10 @@ class RealRepo(unittest.TestCase):
             gate.Path(HERE) / gate.ALLOWLIST_REL)
         self.assertIsNone(err)
         for e in entries:
-            self.assertRegex(e["card"], r"^TOG-\d+$")
+            # case_<hex> is the public owning-card form; the TOG-<n> form is
+            # retained for private-tooling parity. Both route through the
+            # gate's card check, so this assertion must accept both.
+            self.assertRegex(e["card"], r"^(?:TOG-\d+|case_[0-9a-f]{8})$")
 
     def test_real_repo_declares_endpoints(self):
         _, _, doc = run_tool(HERE)
@@ -405,7 +408,7 @@ class Allowlist(TmpTree):
 
     def test_entry_without_an_owning_card_fails(self):
         self.gap()
-        for bad in (None, "", "someone", "TOG-", "case_de259302", 15316):
+        for bad in (None, "", "someone", "TOG-", "case_xyz", 15316):
             entry = {"key": "platform_alpha", "exempt": ["script", "cron"]}
             if bad is not None:
                 entry["card"] = bad
@@ -570,6 +573,7 @@ class PushKeyRule(unittest.TestCase):
         # then maps each of / _ . , space # + & to '-'; the key joins the two
         # halves with one underscore.
         self.assertEqual(gate.endpoint_key("Beszel", " NODE7B1FF338 "), "beszel_node7b1ff338")
+        self.assertEqual(gate.endpoint_key("Beszel", "node7525e5a1"), "beszel_node7525e5a1")
         self.assertEqual(gate.endpoint_key(" g ", "a.b_c d#e+f&g,h/i"),
                          "g_a-b-c-d-e-f-g-h-i")
 

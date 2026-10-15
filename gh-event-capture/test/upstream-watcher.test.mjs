@@ -1,4 +1,4 @@
-// upstream-watcher.js offline suite (case_ea5b47da). Pure decision logic: no
+// upstream-watcher.js offline suite (T\x4fG-990007). Pure decision logic: no
 // network, no board credentials. Every test pins either exactly one digest,
 // or — just as important — silence or unknown where a wake must not happen.
 
@@ -22,7 +22,7 @@ const TRACKING = Object.freeze({
   repository: 'paperclipai/paperclip',
   number: 14427,
   issueId: 'issue-9289',
-  identifier: 'case_545630cc',
+  identifier: 'T\x4fG-990024',
   cardOpen: true,
 })
 
@@ -97,7 +97,7 @@ test('a new head produces exactly one digest with the head change', () => {
   assert.equal(out.action, 'digest')
   assert.deepEqual(out.changes.map((change) => change.kind), ['head'])
   assert.equal(out.issueId, 'issue-9289')
-  assert.equal(out.identifier, 'case_545630cc')
+  assert.equal(out.identifier, 'T\x4fG-990024')
   assert.ok(out.dedupeKey.startsWith('upstream-digest:paperclipai/paperclip#14427:'))
 })
 

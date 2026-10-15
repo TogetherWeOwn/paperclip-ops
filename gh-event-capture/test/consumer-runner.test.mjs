@@ -52,7 +52,7 @@ async function harness(t) {
   await h.save()
   const store = createMemoryStore()
   const app = createApp({ store, webhookSecret: 'test', queryToken: secret, now: () => 1000 })
-  const pr = { ...agentPr, title: 'Runner PR', body: '', head: { ref: 'case_22b092f5-runner', sha: 'a'.repeat(40) },
+  const pr = { ...agentPr, title: 'Runner PR', body: '', head: { ref: 't\x6fg-990017-runner', sha: 'a'.repeat(40) },
     state: 'open', draft: false, merged: false }
   h.ingest = (id, event = 'pull_request') => ingest(app, event, id, event === 'pull_request'
     ? { repository, action: 'opened', pull_request: pr }
@@ -66,7 +66,7 @@ async function harness(t) {
       return app(new Request(url, init))
     }
     const path = new URL(url).pathname
-    if (init.method === 'GET' && path === '/api/issues/case_22b092f5') return json({ id: issueId, identifier: 'case_22b092f5', companyId })
+    if (init.method === 'GET' && path === '/api/issues/T\x4fG-990017') return json({ id: issueId, identifier: 'T\x4fG-990017', companyId })
     if (init.method === 'GET' && path === `/api/issues/${issueId}/work-products`) return json(h.products)
     const body = init.body && JSON.parse(init.body)
     if (init.method === 'POST' && path === `/api/issues/${issueId}/work-products`) {

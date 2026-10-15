@@ -45,6 +45,15 @@ class PublicCI(unittest.TestCase):
         self.assertLess(text.index("run: bash scripts/sync-toolkit.sh"),
                         text.index("- name: Unit-test the lint"))
 
+    def test_org_request_suite_retains_nul_control_without_binary_source(self):
+        relative = "mcp/test/org-request-mcp.test.mjs"
+        source = (ROOT / relative).read_text()
+        self.assertIn('a forged requester argument never becomes the recorded requester', source)
+        self.assertIn('from "../org-request-mcp.mjs"', source)
+        self.assertIn(r'alternatives: ["safe\0er"]', source)
+        self.assertNotIn(chr(0), source)
+        self.assertEqual(public_safety.inspect(ROOT / relative), [])
+
     def test_explicit_tool_grant_map_absence_is_not_skipped(self):
         for relative in ("tool_grant_expectations.json", "absent-explicit-map.json"):
             with self.subTest(relative=relative), tempfile.TemporaryDirectory() as tmp:

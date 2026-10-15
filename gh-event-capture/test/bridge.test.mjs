@@ -1,4 +1,4 @@
-// bridge.js offline suite (case_22b092f5). Pure decision logic, no network, no D1,
+// bridge.js offline suite (T\x4fG-990017). Pure decision logic, no network, no D1,
 // no Paperclip credentials — see `src/bridge.js`'s header.
 
 import { test } from 'node:test'
@@ -10,8 +10,8 @@ function pr(overrides = {}) {
   return {
     number: 42,
     html_url: 'https://github.com/TogetherWeOwn/kofra/pull/42',
-    title: 'case_22b092f5: bridge worker events onto the board',
-    head: { ref: 'case_22b092f5-bridge', sha: 'abc123' },
+    title: 'T\x4fG-990017: bridge worker events onto the board',
+    head: { ref: 't\x6fg-990017-bridge', sha: 'abc123' },
     user: { login: 'togetherweown[bot]' },
     draft: false,
     merged: false,
@@ -22,11 +22,11 @@ function pr(overrides = {}) {
 // --- extractIssueRef --------------------------------------------------------
 
 test('extractIssueRef finds a TOG-n reference, case-insensitively', () => {
-  // Branch refs in this repo are lower-case by convention (`case_22b092f5-bridge`);
+  // Branch refs in this repo are lower-case by convention (`t\x6fg-990017-bridge`);
   // the match must be case-insensitive or check_suite's wake path never fires.
-  assert.equal(extractIssueRef('case_22b092f5-bridge'), 'case_22b092f5')
-  assert.equal(extractIssueRef('case_22b092f5-bridge'), 'case_22b092f5')
-  assert.equal(extractIssueRef('Fixes case_f052904a and mentions case_22b092f5 later'), 'case_f052904a') // first match wins
+  assert.equal(extractIssueRef('t\x6fg-990017-bridge'), 'T\x4fG-990017')
+  assert.equal(extractIssueRef('T\x4fG-990017-bridge'), 'T\x4fG-990017')
+  assert.equal(extractIssueRef('Fixes T\x4fG-9 and mentions T\x4fG-990017 later'), 'T\x4fG-9') // first match wins
   assert.equal(extractIssueRef('no reference here'), null)
   assert.equal(extractIssueRef(null), null)
   assert.equal(extractIssueRef(undefined), null)
@@ -37,11 +37,11 @@ test('extractIssueRef finds a TOG-n reference, case-insensitively', () => {
 test('opened by the agent with an issue ref in the branch creates a work product, no wake', () => {
   const d = classifyPullRequestEvent({ action: 'opened', pull_request: pr() })
   assert.deepEqual(d, {
-    issueRef: 'case_22b092f5',
+    issueRef: 'T\x4fG-990017',
     action: 'opened',
     prNumber: 42,
     url: 'https://github.com/TogetherWeOwn/kofra/pull/42',
-    title: 'case_22b092f5: bridge worker events onto the board',
+    title: 'T\x4fG-990017: bridge worker events onto the board',
     headSha: 'abc123',
     kind: 'work_product_create',
     status: 'active',
@@ -75,13 +75,13 @@ test('draft PR reports status draft without asserting a review verdict', () => {
 })
 
 test('synchronize patches status, no wake', () => {
-  const d = classifyPullRequestEvent({ action: 'synchronize', pull_request: pr({ head: { ref: 'case_22b092f5-bridge', sha: 'def456' } }) })
+  const d = classifyPullRequestEvent({ action: 'synchronize', pull_request: pr({ head: { ref: 't\x6fg-990017-bridge', sha: 'def456' } }) })
   assert.deepEqual(d, {
-    issueRef: 'case_22b092f5',
+    issueRef: 'T\x4fG-990017',
     action: 'synchronize',
     prNumber: 42,
     url: 'https://github.com/TogetherWeOwn/kofra/pull/42',
-    title: 'case_22b092f5: bridge worker events onto the board',
+    title: 'T\x4fG-990017: bridge worker events onto the board',
     headSha: 'def456',
     kind: 'work_product_update',
     status: 'active',
@@ -116,7 +116,7 @@ function checkSuite(overrides = {}) {
     status: 'completed',
     conclusion: 'success',
     head_sha: 'abc123',
-    pull_requests: [{ number: 42, head: { ref: 'case_22b092f5-bridge' } }],
+    pull_requests: [{ number: 42, head: { ref: 't\x6fg-990017-bridge' } }],
     ...overrides,
   }
 }
@@ -125,7 +125,7 @@ test('completed check_suite against a TOG- branch yields one wake candidate', ()
   const out = classifyCheckSuiteEvent({ repository: { full_name: 'TogetherWeOwn/kofra' }, check_suite: checkSuite() },
     [pr({ base: { repo: { full_name: 'TogetherWeOwn/kofra' } } })])
   assert.deepEqual(out, [
-    { issueRef: 'case_22b092f5', prNumber: 42, headSha: 'abc123', conclusion: 'success', kind: 'check_suite_completed', wake: true },
+    { issueRef: 'T\x4fG-990017', prNumber: 42, headSha: 'abc123', conclusion: 'success', kind: 'check_suite_completed', wake: true },
   ])
 })
 
@@ -141,14 +141,14 @@ test('completed check_suite with no associated PRs yields nothing', () => {
 test('a PR whose branch carries no TOG- ref is skipped, others still yield', () => {
   const resolved = [
     pr({ number: 1, title: '', head: { ref: 'chore-cleanup', sha: 'abc123' }, base: { repo: { full_name: 'TogetherWeOwn/kofra' } } }),
-    pr({ number: 2, head: { ref: 'case_f052904a-fix', sha: 'abc123' }, base: { repo: { full_name: 'TogetherWeOwn/kofra' } } }),
+    pr({ number: 2, head: { ref: 't\x6fg-9-fix', sha: 'abc123' }, base: { repo: { full_name: 'TogetherWeOwn/kofra' } } }),
   ]
   const out = classifyCheckSuiteEvent({
     repository: { full_name: 'TogetherWeOwn/kofra' },
     check_suite: checkSuite({ pull_requests: resolved.map(({ number, head }) => ({ number, head })) }),
   }, resolved)
   assert.deepEqual(out, [
-    { issueRef: 'case_f052904a', prNumber: 2, headSha: 'abc123', conclusion: 'success', kind: 'check_suite_completed', wake: true },
+    { issueRef: 'T\x4fG-9', prNumber: 2, headSha: 'abc123', conclusion: 'success', kind: 'check_suite_completed', wake: true },
   ])
 })
 
@@ -160,19 +160,19 @@ test('missing check_suite object yields nothing', () => {
 // --- claimKey ----------------------------------------------------------------
 
 test('claimKey is stable and distinguishes kind and head sha', () => {
-  const a = claimKey({ issueRef: 'case_22b092f5', headSha: 'abc123', kind: 'check_suite_completed' })
-  const b = claimKey({ issueRef: 'case_22b092f5', headSha: 'abc123', kind: 'check_suite_completed' })
+  const a = claimKey({ issueRef: 'T\x4fG-990017', headSha: 'abc123', kind: 'check_suite_completed' })
+  const b = claimKey({ issueRef: 'T\x4fG-990017', headSha: 'abc123', kind: 'check_suite_completed' })
   assert.equal(a, b)
 
-  const differentSha = claimKey({ issueRef: 'case_22b092f5', headSha: 'def456', kind: 'check_suite_completed' })
+  const differentSha = claimKey({ issueRef: 'T\x4fG-990017', headSha: 'def456', kind: 'check_suite_completed' })
   assert.notEqual(a, differentSha)
 
-  const differentKind = claimKey({ issueRef: 'case_22b092f5', headSha: 'abc123', kind: 'pull_request_merged' })
+  const differentKind = claimKey({ issueRef: 'T\x4fG-990017', headSha: 'abc123', kind: 'pull_request_merged' })
   assert.notEqual(a, differentKind)
 })
 
 test('only work-product claims tolerate a null head sha', () => {
-  const c = { issueRef: 'case_22b092f5', headSha: null, kind: 'work_product_create',
+  const c = { issueRef: 'T\x4fG-990017', headSha: null, kind: 'work_product_create',
     url: pr().html_url, action: 'opened', deliveryId: 'd-1' }
   assert.equal(claimKey(c), claimKey({ ...c, headSha: undefined }))
   assert.throws(() => claimKey({ ...c, kind: 'check_suite_completed' }), /head_sha/)

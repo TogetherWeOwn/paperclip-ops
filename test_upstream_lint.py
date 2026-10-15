@@ -266,7 +266,9 @@ class Branch(Base):
         self.assertRed(self.run_lint(), "branch")
 
     def test_internal_id_branch(self):
-        self.branch = "fix/TOG-" "999001-sessions"
+        self.branch = "fix/tog-" "999001-sessions"
+        # Isolate ID detection: uppercase would fail the independent format rule.
+        self.assertIsNotNone(ul.BRANCH_OK.match(self.branch))
         self.assertRed(self.run_lint(), "branch")  # case-insensitive on purpose
         self.branch = "TOG-" "999001-sessions"
         rep = self.run_lint()

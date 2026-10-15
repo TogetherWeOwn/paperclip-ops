@@ -127,7 +127,7 @@ class TimeoutPass(unittest.TestCase):
                                     loops='card-1\tTOG-900\t6\n')
         self.assertFalse(any('PATCH' in a for a, _ in calls))
         self.assert_steps_ran(calls)
-        log.assert_any_call('continuation loop on case_63ac0cf0: executionPolicy unreadable, card not changed')
+        log.assert_any_call('continuation loop on TOG-' '900: executionPolicy unreadable, card not changed')
 
     def test_failed_card_read_does_not_block_a_later_measured_card(self):
         calls, _, _ = self.run_pass(lambda a, k: a[0] == 'curl' and a[-1].endswith('/issues/card-1'),

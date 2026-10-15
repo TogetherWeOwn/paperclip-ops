@@ -109,7 +109,7 @@ class ReconcileBounds(unittest.TestCase):
             self.assertEqual(rr.main([]), 0)
         self.assertEqual(run.call_count, 1)
         self.assertNotEqual(run.call_args.args[0][0], 'curl')
-        self.assertIn('case_8c5fe4cc', out.getvalue())
+        self.assertIn('TOG-' '1', out.getvalue())
 
     def test_psql_timeout_aborts_before_anything_is_applied(self):
         import tempfile
@@ -216,9 +216,9 @@ class ReconcileDeadline(unittest.TestCase):
         sqls, out, oplog = self._apply_with_rows(
             3, [0.0, 0.0, rr.RUN_DEADLINE_SECONDS + 1.0, rr.RUN_DEADLINE_SECONDS + 1.0])
         # First wake attempted and marked; the rest deferred past the deadline.
-        self.assertIn('case_05330ec4 woke run', out)
-        self.assertNotIn('case_8c5fe4cc woke run', out)
-        self.assertNotIn('case_d02d0252 woke run', out)
+        self.assertIn('TOG-' '0 woke run', out)
+        self.assertNotIn('TOG-' '1 woke run', out)
+        self.assertNotIn('TOG-' '2 woke run', out)
         self.assertIn('run deadline', out)
         # Only the woken row is released; deferred rows are never touched and stay 'blocked'.
         self.assertTrue(any('operator_reconciled' in s and 'ra0' in s for s in sqls),
@@ -238,9 +238,9 @@ class ReconcileDeadline(unittest.TestCase):
         self.assertLess(late, rr.RUN_DEADLINE_SECONDS,
                         'test setup: the budget gate must bind before the run deadline')
         sqls, out, oplog = self._apply_with_rows(3, [0.0, 0.0, 0.0, late])
-        self.assertIn('case_05330ec4 woke run', out)
-        self.assertIn('case_8c5fe4cc woke run', out)
-        self.assertNotIn('case_d02d0252 woke run', out)
+        self.assertIn('TOG-' '0 woke run', out)
+        self.assertIn('TOG-' '1 woke run', out)
+        self.assertNotIn('TOG-' '2 woke run', out)
         self.assertIn('step budget', out)
         self.assertFalse(any('operator_reconciled' in s and 'ra2' in s for s in sqls),
                          'budget-deferred rows must never be marked reconciled')

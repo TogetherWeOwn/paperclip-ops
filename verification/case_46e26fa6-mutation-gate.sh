@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =====================================================================================
-# plugin-deploy-drift-detector-mutation-gate.sh — proof that
+# case_46e26fa6-mutation-gate.sh — proof that
 # test_plugin_deploy_drift.sh is not vacuous.
 #
 # The suite is 19 green assertions about a detector, and 19 green assertions are worth
@@ -14,7 +14,7 @@
 # the same staging directory: "the mutated suite failed" is unattributable without it,
 # because a staging error produces the same red.
 #
-#   ./verification/plugin-deploy-drift-detector-mutation-gate.sh
+#   ./verification/case_46e26fa6-mutation-gate.sh
 #
 # Exit 0 = every mutation was detected by the case that claims to cover it.
 # =====================================================================================
@@ -261,9 +261,9 @@ fixture_mutate "a fixture with no empty package_path is rejected" \
 
 echo
 if [ "$fail" -gt 0 ]; then
-  red "plugin-deploy-drift-detector-mutation-gate: $pass passed, $fail FAILED"
+  red "case_46e26fa6-mutation-gate: $pass passed, $fail FAILED"
   red "A limb of the detector can be removed without any test noticing. The suite is vacuous there."
   exit 1
 fi
-grn "plugin-deploy-drift-detector-mutation-gate: $pass passed, 0 failed"
+grn "case_46e26fa6-mutation-gate: $pass passed, 0 failed"
 grn "Every limb removed was caught by the case that claims to cover it."

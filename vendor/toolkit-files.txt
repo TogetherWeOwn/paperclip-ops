@@ -275,11 +275,7 @@ verification/case_77bba75d-mutation-gate.sh|verification/cold-start-detector-mut
 verification/case_5516df1c-monitor-mutation-gate.sh|verification/job-health-monitor-wrapper-mutation-gate.sh
 verification/case_5516df1c-mutation-gate.sh|verification/digest-delivery-detector-mutation-gate.sh
 verification/case_f17dd2a7-find-hash-collision.mjs|verification/hash-collision-fixture-finder.mjs
-verification/case_9e76f76d-recorded-command.sh|verification/recorded-monitor-command-gate.sh
-verification/case_9e76f76d-recorded-command.txt|verification/recorded-monitor-command.txt
 verification/case_28030601-mutation-gate.sh|verification/filing-readiness-check-mutation-gate.sh
-verification/case_46e26fa6-mutation-gate.sh|verification/plugin-deploy-drift-detector-mutation-gate.sh
 verification/case_ce726d7b-mutation-gate.sh|verification/dispatch-plugin-mutation-gate.sh
-verification/case_f909ca1f-mutation-gate.sh|verification/grant-attribution-resolver-mutation-gate.sh
 verification/case_c22b6545-mutation-gate.sh|verification/stale-descriptor-sweep-mutation-gate.sh
 verification/upstream-bundle-filing-gate.sh

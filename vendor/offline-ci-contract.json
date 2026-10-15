@@ -310,7 +310,7 @@
   "retained": [
     {
       "name": "Prove the private runner selected this job",
-      "definition_sha256": "8a994f756ed9d9f739950f4cdb1f32a34b5115ac11b9e4ab7e82f1432e708d05",
+      "definition_sha256": "a10df79e39f0f03abe5b1c129118cdc6e8833aa226cb8ace06e05f3bbe51a297",
       "id": "Prove the private runner selected this job:1"
     },
     {
@@ -330,12 +330,12 @@
     },
     {
       "name": "runner disk-pressure preflight",
-      "definition_sha256": "57af64025931508367e41e147be9461292cde36b2cc1968a1ba5e26df1df7b07",
+      "definition_sha256": "7be30079bcbff879f237371cc4dd88fb9510f661cf174facfb806cc30a10e526",
       "id": "runner disk-pressure preflight:1"
     },
     {
       "name": "self-hosted runner migration contract",
-      "definition_sha256": "c742ada874353d1f7635bdb038e696edba7fdc4ebc44fe29b1c0a04cf5149853",
+      "definition_sha256": "a115d066001809e212f7df7d71ad79b5a7f81a6c5dfb3a1573626a56af39d7b3",
       "id": "self-hosted runner migration contract:1"
     },
     {
@@ -360,7 +360,7 @@
     },
     {
       "name": "Restore toolkit-vendored files",
-      "definition_sha256": "c9ff5b8dbc7539c9582bf853cc40af8c9bd7c877b2231a8de7a839be3e3c8b8b",
+      "definition_sha256": "c03ece6186f7152677cd5e80ba86bb376f4337ee493a44b80b26045f901f29c0",
       "id": "Restore toolkit-vendored files:1"
     },
     {
@@ -405,22 +405,22 @@
     },
     {
       "name": "status-page pilot suite",
-      "definition_sha256": "95946c30ff27f54342256de514191c112f191e73c785bfcb96332bd4f02938ad",
+      "definition_sha256": "01649437c40762e60b1436348f03942a5c3ac26acfccca61b3ede60fc23db529",
       "id": "status-page pilot suite:1"
     },
     {
       "name": "TLS and Neon dependency probes suite",
-      "definition_sha256": "42bb3439fd343a338b34c8827c44b0698b723268bfb34038b9135e5cfdde8ef4",
+      "definition_sha256": "abb91039f8ae17f17ac656f24df7dcff9936047b7605cb9be8cccb088e5c6873",
       "id": "TLS and Neon dependency probes suite:1"
     },
     {
       "name": "shadow window gatus module suite",
-      "definition_sha256": "24e1c7b222071898ac3fa40990207d817d6713bd8733789101366c3ec9f7be73",
+      "definition_sha256": "6671e18973688385e3e0218aab4e16498edcf7c37e603ff85549a112c438cfd8",
       "id": "shadow window gatus module suite:1"
     },
     {
       "name": "monitoring-of-monitor suite",
-      "definition_sha256": "a5120b3dde6c06db112526384074d622849608d83dc6369627757637a4fa1917",
+      "definition_sha256": "1748ec2cf187e47bcb101abeba20ecca11b39b0b33bec2fa598f4435f9e69bab",
       "id": "monitoring-of-monitor suite:1"
     },
     {
@@ -430,67 +430,67 @@
     },
     {
       "name": "keeper ingest freshness suite",
-      "definition_sha256": "3ec027865094d96b55ef793b1d5e82be379e05068d0f1e620908a15942134c10",
+      "definition_sha256": "c312ab496f226f4140d5fae34ed628a78194e8cd3e0126e95f14ebe0ff364004",
       "id": "keeper ingest freshness suite:1"
     },
     {
       "name": "enforce readiness gatus module suite",
-      "definition_sha256": "e67f055bb8f35cf985a4c5441455c4b98c005e167cf0ffac032f3dabde5153b7",
+      "definition_sha256": "f65e89b0787e28b8ef19b241d6e778490d8b1e059f316f11eef14b93b723a72b",
       "id": "enforce readiness gatus module suite:1"
     },
     {
       "name": "staging app-health suite",
-      "definition_sha256": "60d9ea2d23f38ebbd0885df2721f11116b4c246e2f259e6452321ebdd1e96948",
+      "definition_sha256": "27206b3b772c3421616a26340d1b06b6fb6b34e4063f5b6b3c036ac291304c86",
       "id": "staging app-health suite:1"
     },
     {
       "name": "Workers and GitHub rate-limit dependency probes suite",
-      "definition_sha256": "0dbe7d904aac34a067ffeff7ce22cb3caa64f6498ae32d64183acb2cf46a6048",
+      "definition_sha256": "a8d0a1b260771f7a895e41ffbc9c59b7dba6dc12676c1ad420601d20b26e2643",
       "id": "Workers and GitHub rate-limit dependency probes suite:1"
     },
     {
       "name": "merge queue gatus module suite",
-      "definition_sha256": "6406030b8c38c7984702ac61ca8c840aea21854028729de30b64d354cdd65a0f",
+      "definition_sha256": "17f122c974427ab99c17a45f96c069034d8e638e8ac3614f507783cabb64a834",
       "id": "merge queue gatus module suite:1"
     },
     {
       "name": "queue wait-time SLO suite",
-      "definition_sha256": "cf4b2fe9a0aabc80d2052a88be841949a6d4bb64fef3eb06b5c7e2c4dcd9009c",
+      "definition_sha256": "8d2f913734b9190a90f9649b0e11d3fa1ebc522fd0ba9b018524ad798834adbe",
       "id": "queue wait-time SLO suite:1"
     },
     {
       "name": "pool freshness gatus module suite",
-      "definition_sha256": "70086a09e5900563049c67e7924a68b3ea636dc173606efe881a7e8caf5f64a0",
+      "definition_sha256": "1708461f56cf0b094848232ed75eefd50f111e23da50a17b56137b69f60ca485",
       "id": "pool freshness gatus module suite:1"
     },
     {
       "name": "queue forecast gatus module suite",
-      "definition_sha256": "9d209b53b0b4d08659793c5abd635f3f7a72216b1370724d07c7ae39aa195cf3",
+      "definition_sha256": "00732f33b855c2531645d16062078cc4a98fa06bd8467c233c85321a4375edc9",
       "id": "queue forecast gatus module suite:1"
     },
     {
       "name": "garm pool-health suite",
-      "definition_sha256": "79c1d0629985322e58c4ae2acc7ee29b3ddb976c177d15dd2255d5a7136c136d",
+      "definition_sha256": "fcac1ca06ade0066c067fe4e496f90b6e3bd0046a34c41580f4c227e23615e85",
       "id": "garm pool-health suite:1"
     },
     {
       "name": "hindsight recall canary suite",
-      "definition_sha256": "1e5166ad4fe1f7cbf47167a2e8a290841a9a6526bc01ec337ba03d25ec55a52d",
+      "definition_sha256": "9ebfafe6294b32aed27359ba68c45fb9f16689c514ac4653098626cf949df4f5",
       "id": "hindsight recall canary suite:1"
     },
     {
       "name": "review stack kit suite",
-      "definition_sha256": "e7d6d10348f83e1fa122cc604df1c0e522f6c6f7ccd90e11649a36e80a2d7a61",
+      "definition_sha256": "480eb2e96525af5a070abf4bbe8c309f19aa4b83d98661e121d1e0f0dce276e6",
       "id": "review stack kit suite:1"
     },
     {
       "name": "reviewer bake-off suite",
-      "definition_sha256": "6a6e6844ee7a58c730492b1df4e170c14bd5642a6b3efd647db8ba1bbe20bf11",
+      "definition_sha256": "e32272901a92277155957ab50d374118731efecaf48334ce13d0b5020a161a7b",
       "id": "reviewer bake-off suite:1"
     },
     {
       "name": "run-scratch reaper suite",
-      "definition_sha256": "5a93e0064518536b9b950d71c5a2d1c30459075a48600f83d279a0d1daef3720",
+      "definition_sha256": "b3943b0d063231f8f340f68bc176232dc00f1ac2e7d97c40d19c1204965a02f9",
       "id": "run-scratch reaper suite:1"
     },
     {
@@ -505,12 +505,12 @@
     },
     {
       "name": "controller /tmp retention suite",
-      "definition_sha256": "1fcb0e8e28d38e097ec1201516489426e0e00625f86d2eac95471890575afefc",
+      "definition_sha256": "bbbdda84cdf292d57fe513996cb4f1794ca10411c164082125ec0cc4fed33518",
       "id": "controller /tmp retention suite:1"
     },
     {
       "name": "controller /tmp disk alarm suite",
-      "definition_sha256": "c83cacc9584ba6e0166f2d21968e39ccc34aa5ed4a3ba542b13220f58a69407d",
+      "definition_sha256": "4acc37d7216790f80f04b602017a7afe12f92a66dfea1e0e3c68708545ba72e9",
       "id": "controller /tmp disk alarm suite:1"
     },
     {
@@ -525,32 +525,32 @@
     },
     {
       "name": "cliproxy lanes gatus module suite",
-      "definition_sha256": "54a370a0ae5428e0d4e0d33d4a29b025b411795e349c35eb58ad1db36fe32bd2",
+      "definition_sha256": "35f91369e16a196bba4b51f6467b08d78a41e841d22c52aa3216d7858abf40c0",
       "id": "cliproxy lanes gatus module suite:1"
     },
     {
       "name": "staging login-smoke probe suite",
-      "definition_sha256": "00e0dda681157127078945f992899071099bfa097dcb7fafbb02570a1a5e14e1",
+      "definition_sha256": "1171ee7baec77b38cc731c36453a9cc001c608229fe38b4aa30b539fc5791bac",
       "id": "staging login-smoke probe suite:1"
     },
     {
       "name": "runner-disk gatus module suite",
-      "definition_sha256": "7721f5d5f7443da04ad40f4c01ffd761babf74e16ff7662c5d0e6f8b0578cdd3",
+      "definition_sha256": "880325e9967e614beee459d4244aeeea810dad2e2b0d4292df5ecd12b6ab70d6",
       "id": "runner-disk gatus module suite:1"
     },
     {
       "name": "discord-bot gatus pusher suite",
-      "definition_sha256": "ed109d756a14551f5b635d214957904c9db2846fe9c955a922317aa76f3046b7",
+      "definition_sha256": "022170d1f32ac92803e581d02d218e782baf91fe8b7b16d49ae7411548eaa56b",
       "id": "discord-bot gatus pusher suite:1"
     },
     {
       "name": "gatus module wiring gate",
-      "definition_sha256": "7ff5701e35ec3c87177c09a203758a2951582c51ef8330b3a664fe2a77453467",
+      "definition_sha256": "34a13ceeaad639b469b7a30d1aedaec3eb12f9a13edb40b19f49549471c0d06b",
       "id": "gatus module wiring gate:1"
     },
     {
       "name": "balancer silence gatus module suite",
-      "definition_sha256": "86fa2b20cd218df7eebb4c5e45a5950564079967db1b1a5df0f92edde26b3195",
+      "definition_sha256": "ae9f90e9b00924d900706a01b0d08789ed0e6287df4e950a2e43da29c9edca1f",
       "id": "balancer silence gatus module suite:1"
     },
     {
@@ -575,7 +575,7 @@
     },
     {
       "name": "dispatch_deploy.sh suite is not vacuous (mutation-gated)",
-      "definition_sha256": "eda4be99c03aa88e068336bb81ba1d6a69a57c96126bc3fe8a56e7df11f5c21f",
+      "definition_sha256": "84554eef63f04a3794226b515e0b1dd1f84fd34fbdcf3c3c3cb38e774865cc52",
       "id": "dispatch_deploy.sh suite is not vacuous (mutation-gated):1"
     },
     {
@@ -585,7 +585,7 @@
     },
     {
       "name": "dispatch_deploy_monitor.sh suite is not vacuous (mutation-gated)",
-      "definition_sha256": "a3b631d25238fe53df68a55eafe8f9fe132da9732ca4d28921179c607c47c4be",
+      "definition_sha256": "6a42b26c671149dda8f1caa1b833cf62e25d7589f066579653d839312ff4488c",
       "id": "dispatch_deploy_monitor.sh suite is not vacuous (mutation-gated):1"
     },
     {
@@ -610,7 +610,7 @@
     },
     {
       "name": "case_d06b6dba operator artifact suite",
-      "definition_sha256": "7b0c47aa27ab3d37c88324a775b82ef345401f5f67d51d6542bf0a247304e345",
+      "definition_sha256": "cf02e2901543d2e3befcb275d26df7322039a73e6745c0d4339b9945b86ab390",
       "id": "case_d06b6dba operator artifact suite:1"
     },
     {
@@ -620,17 +620,17 @@
     },
     {
       "name": "omniroute selftest is hermetic w.r.t. COMBO_OWNED_PREFIX",
-      "definition_sha256": "31154a474f48851999d4dc3060974151bd22507db172912b60dfb9f1ae12d74b",
+      "definition_sha256": "c41dd8036c53ac3844e0a185a4e23471b01b3aeee5af7f27d70b8043ffaf3b9e",
       "id": "omniroute selftest is hermetic w.r.t. COMBO_OWNED_PREFIX:1"
     },
     {
       "name": "case_30ade3fb snapshot-section redaction suite",
-      "definition_sha256": "9ac370f644db582f6282c1634fa8290f8f4cf31a72de43be8a0e737213c4a6b8",
+      "definition_sha256": "e7661a84d59abb56b2ccafe64a31650c4c344ab741d139f51595653e09aed55b",
       "id": "case_30ade3fb snapshot-section redaction suite:1"
     },
     {
       "name": "case_30ade3fb redaction fixes are load-bearing (mutation-gated)",
-      "definition_sha256": "1ac70760f0ccf2294e238885534ae87325a2e6f9cec861fae74e17c9a287a60c",
+      "definition_sha256": "a55b3937e8e41b86f9e5784e637c6e909ce3aad401c5857a32408c5b9e410634",
       "id": "case_30ade3fb redaction fixes are load-bearing (mutation-gated):1"
     },
     {
@@ -675,7 +675,7 @@
     },
     {
       "name": "grant attribution is load-bearing (mutation-gated)",
-      "definition_sha256": "8280bd0faebb721db197fdbf44456b03405bec200aa1d9375361ae480e7d4b7e",
+      "definition_sha256": "13f58d51c5aec7dfe2069aa6a111179df2b465cf7bfebd8ec28da07cbbaae16b",
       "id": "grant attribution is load-bearing (mutation-gated):1"
     },
     {
@@ -725,7 +725,7 @@
     },
     {
       "name": "task liveness deployment gates are load-bearing",
-      "definition_sha256": "3a47a8a559af72000dc5b1a232534bc7df8a6860d637945a44ee9a0409817825",
+      "definition_sha256": "7c3a3472b3e99781eb684bb4bac921d9717609d681a1ee8575968a84c4f32b3b",
       "id": "task liveness deployment gates are load-bearing:1"
     },
     {
@@ -760,7 +760,7 @@
     },
     {
       "name": "admitted-PR closeout gates are load-bearing",
-      "definition_sha256": "7eb872b67bdc779e447441ac821f85aca789183aee458e2f063a4209650a48f5",
+      "definition_sha256": "4f88a396063f20f1e5f94df43431cda3807dde9e380615e200dde4052f257654",
       "id": "admitted-PR closeout gates are load-bearing:1"
     },
     {
@@ -770,7 +770,7 @@
     },
     {
       "name": "closeout snapshot repair gates are load-bearing",
-      "definition_sha256": "0e3397e08c6ff1f1b709cbb684e1abd28b760ae3a2b26e1aaf5a0b02d8812f24",
+      "definition_sha256": "c91494d7b4528655b260fa0c00546cfe03ff724fba79f406c8bef0bdf38a47fb",
       "id": "closeout snapshot repair gates are load-bearing:1"
     },
     {
@@ -800,27 +800,27 @@
     },
     {
       "name": "CI main and runtime Gatus suite",
-      "definition_sha256": "57de8f470055af04d6da42a61d627e2fcfb9e6ff8a1955451389983f0cbc3e08",
+      "definition_sha256": "d0bf83b3d9dfcfe49775590dad00f472df2eab46feb8f5e534ab07761b50f771",
       "id": "CI main and runtime Gatus suite:1"
     },
     {
       "name": "hung CI job evaluator suite",
-      "definition_sha256": "af0fb8178d8eadba923a12d9cf3e37d205f50ef86b16c9956c9a37fa6ba8e361",
+      "definition_sha256": "c3ee25949e70c4c9877ad9e4473eed722d5caf070405dadb62426d62b0aa6cab",
       "id": "hung CI job evaluator suite:1"
     },
     {
       "name": "Runner census Gatus suite",
-      "definition_sha256": "4065cb64238229d21c9591c45164ae803e10c820cd8dd38efff0874d3d1d3c1c",
+      "definition_sha256": "612ceef4bf8896fe88f4cd3311afa23afd829183c6abafc541ade135d2fc84ea",
       "id": "Runner census Gatus suite:1"
     },
     {
       "name": "Runner census mutation gate",
-      "definition_sha256": "92f54b02ef15c98b63a76212c51434cb8327da81ba3478a6ed88ff4cef0e3ba8",
+      "definition_sha256": "860e3a48e0922b1b88251410183f89074779b75d1a0ffdf7d29bd245207bd0f6",
       "id": "Runner census mutation gate:1"
     },
     {
       "name": "DB backup freshness suite",
-      "definition_sha256": "2d0e9e1499a90afefc73e45c1484041838c0c552d613f893c034bb01d026e736",
+      "definition_sha256": "da51aa83353511f9194eb8677e83e81bcd14add983fde4f0b553f8431bb526e7",
       "id": "DB backup freshness suite:1"
     },
     {
@@ -885,22 +885,22 @@
     },
     {
       "name": "terminal worktree cache reclaim hostile suite",
-      "definition_sha256": "1172ce7abc8f29ae6925d154a51af694daf3814d5f9be6eddf9e9403f27e9775",
+      "definition_sha256": "c52256149f31c9503e78bf795b3f4951ecca03304f678bcb2e90894c4f89af4e",
       "id": "terminal worktree cache reclaim hostile suite:1"
     },
     {
       "name": "terminal worktree prune hostile suite",
-      "definition_sha256": "33fb1152d6424a8bb959ae2bdd8bc2086889884e9bffd452a8c6438c758fa73c",
+      "definition_sha256": "8db756e70edb9ab7868306fdbcd993df0c25b0dccc2114099a3b11e5caeb3ed8",
       "id": "terminal worktree prune hostile suite:1"
     },
     {
       "name": "worktree prune wrapper contract suite",
-      "definition_sha256": "13fcf3a5ba73a37212b6fc1d13d61a621a9a2789bd860136354b10c38428840f",
+      "definition_sha256": "30f14bb10ded6c60427ee8c8d95063ddc914d4edaa275dc56024e3b12fd041cc",
       "id": "worktree prune wrapper contract suite:1"
     },
     {
       "name": "worktree prune deployment contract suite",
-      "definition_sha256": "d3010960691ec1870dacaf9fa2d3ae4ac29ee81c8577387dbb0cfe511a9334a4",
+      "definition_sha256": "218cf3bb992da9a1c2caf4ee049369c1d99f4944f1562d28fbe743d140ac1084",
       "id": "worktree prune deployment contract suite:1"
     },
     {
@@ -940,7 +940,7 @@
     },
     {
       "name": "capability-pathway host verifier suite",
-      "definition_sha256": "58ff4fa814c1497b7d1e2e49fab2d0f3ceeb9d47df42497a3618230caca9c6e6",
+      "definition_sha256": "fa1314917618a815d38ea085aa779c333004a5df5693064eb3c260b7a048596e",
       "id": "capability-pathway host verifier suite:1"
     },
     {
@@ -990,7 +990,7 @@
     },
     {
       "name": "Prove the dark-step reporter still detects a silenced report",
-      "definition_sha256": "0779a8a33bcd1347d3de4243bf042cef7abec1d5ae91139c94a38d8de2d16c1e",
+      "definition_sha256": "7ed3dd55bf05ba3ab5671ee9bf4ac56313b90bc3b72c598a9efd87093001df5e",
       "id": "Prove the dark-step reporter still detects a silenced report:1"
     },
     {
@@ -1010,37 +1010,37 @@
     },
     {
       "name": "dropchannel_scan narrowing is not vacuous (mutation-gated)",
-      "definition_sha256": "8bbca652f7e64ac372944c200d516713f09a993864b23375bcc04dfca5c7cda1",
+      "definition_sha256": "e69625684d52dd5fba0a8d7a171c414e8e29d9ceddadb3ba8752a89273cd4b25",
       "id": "dropchannel_scan narrowing is not vacuous (mutation-gated):1"
     },
     {
       "name": "a matched pattern never reads as a miss (SIGPIPE verdict gate)",
-      "definition_sha256": "36cf1f35e713567bf1c8a9cb6577e6c4bd3569f53cd36f065d1d4c32c6cf554f",
+      "definition_sha256": "1f22398e6f2750bfe139708c4efbc4a063da9f1eb9d99c3a0bb5e9065511f6b1",
       "id": "a matched pattern never reads as a miss (SIGPIPE verdict gate):1"
     },
     {
       "name": "cold-start detector refusals are not vacuous (mutation-gated)",
-      "definition_sha256": "434cab9e71840c711ab7fbb881e80364b66aa0751f5403280c6903c6a05563b5",
+      "definition_sha256": "059bd869942bb3addc4aa4c39263bfd71220a5a8f5204d449a2f5164c02198e0",
       "id": "cold-start detector refusals are not vacuous (mutation-gated):1"
     },
     {
       "name": "check 9 filters both sides of its join (case_d0a36ded)",
-      "definition_sha256": "61b7751b3c945e38b0538e2a890fb1efc705b1a4d8ac1517e051257b4f7b7851",
+      "definition_sha256": "837cd3f5fe256c894e58aeeddac9a4769984fa32a64b9a149c1966f3b5f724f3",
       "id": "check 9 filters both sides of its join (case_d0a36ded):1"
     },
     {
       "name": "check 12 measures the two-layer boundary (case_b51dd455)",
-      "definition_sha256": "adce7527e1fd4eac4344ab7339fee6f4e1ea05af76ad838ddedc95a8d0e96764",
+      "definition_sha256": "3b5c28f4276cc1cc494c4f32be55aa1cce376fb4b77525681bd129fad942069e",
       "id": "check 12 measures the two-layer boundary (case_b51dd455):1"
     },
     {
       "name": "orphan retirement refuses what it must (case_d0a36ded)",
-      "definition_sha256": "cacf063b2bfaa6596d6e188e392e840bed682b326cc165838e688d705784f876",
+      "definition_sha256": "f05a6286552ae7a79e04785404ef67464c14b0718f924eabc0fdf56e33fce9b8",
       "id": "orphan retirement refuses what it must (case_d0a36ded):1"
     },
     {
       "name": "Discord delivery proof is not vacuous (mutation-gated)",
-      "definition_sha256": "380226e51d9d8c28a5aacaead90dfac5637e67702860aafb76cc98ea9b063d37",
+      "definition_sha256": "d81b51e9a4bcbe063dc9b20675b81d6e0c826f87e97e31166abc6d65595cfd2f",
       "id": "Discord delivery proof is not vacuous (mutation-gated):1"
     },
     {
@@ -1070,7 +1070,7 @@
     },
     {
       "name": "host-side database backup deployment gates are load-bearing",
-      "definition_sha256": "5276a79bea6742d66872aa181373d549f127cbb2d964458cf83fdc87637eec9b",
+      "definition_sha256": "2f18a0676bd44c998f66f918c3bb37a3113066b3afb5ab645029ed3633e6e4dd",
       "id": "host-side database backup deployment gates are load-bearing:1"
     },
     {
@@ -1080,7 +1080,7 @@
     },
     {
       "name": "The case_9e76f76d monitor's recorded command still runs from a clean tree",
-      "definition_sha256": "d39eb8e37e62bb63c43cd32649d8fd9d501da3bb8e5bb40f68516b265f1b2cb9",
+      "definition_sha256": "9047b6b03aded690ee5d307c2ec3de19e532c69bb74897ce8a75eb7b3397cd4e",
       "id": "The case_9e76f76d monitor's recorded command still runs from a clean tree:1"
     },
     {
@@ -1090,7 +1090,7 @@
     },
     {
       "name": "deployed-vs-repo drift suite is not vacuous (mutation-gated)",
-      "definition_sha256": "26a28e539fda1dc55bae9e554636aaf64fab399985a7010f87b6b47a63629bd8",
+      "definition_sha256": "c6cc3ffb833c50d43dbd02416fd2123dba1275e6f9a969e47cd3588e475cb822",
       "id": "deployed-vs-repo drift suite is not vacuous (mutation-gated):1"
     },
     {
@@ -1100,47 +1100,47 @@
     },
     {
       "name": "upstream readiness suite is not vacuous (mutation-gated)",
-      "definition_sha256": "8c7ed59a1bd73248c19c14fae241b1207636ded56ad9553c2715b85db3c4acde",
+      "definition_sha256": "0892271fae5c85dfe5fec70d410545a92e6fb246f14792c9c7f7ccde1f9e0024",
       "id": "upstream readiness suite is not vacuous (mutation-gated):1"
     },
     {
       "name": "pinned upstream blobs are filable, and sendable blobs are pinned (mutation-gated)",
-      "definition_sha256": "fe0ff38ec60c9bc85a35f9e0b4ff4c7bba92372c590fd7fa97c0d91aa3d671fb",
+      "definition_sha256": "c2db82bd40ea089de04c6a2333962d2ec6ea08ffebbf5a1c2181827607d7e356",
       "id": "pinned upstream blobs are filable, and sendable blobs are pinned (mutation-gated):1"
     },
     {
       "name": "upstream bundle filing-strip gate",
-      "definition_sha256": "ec68f4246c20a6677fdf0481777a3751d44e679fc532863016a752937c498c04",
+      "definition_sha256": "eaa180ca35547c5361faae83a0ed92e4a54e5a6ff879a2eacbdadcaf0171321c",
       "id": "upstream bundle filing-strip gate:1"
     },
     {
       "name": "filing-strip gate is not vacuous (mutation-gated)",
-      "definition_sha256": "47c798d967008cc078cbcabb6088d28d85082997e9f88cc821ed0b04db0aade2",
+      "definition_sha256": "7e94ff590a55f2e284ab7936662eb1a70280bb63d514d472994c577034fc81ff",
       "id": "filing-strip gate is not vacuous (mutation-gated):1"
     },
     {
       "name": "fork-disclosure author classifier + token placement (case_092cd51d gate, offline half)",
-      "definition_sha256": "31f5d1a990e90c3e71b04af16d13f22ecca105c074cf5172e5887965fa75068f",
+      "definition_sha256": "f2d28249d908798ad127a14bdd3fa9f9a4692c10dd0ea37ce9248761cf2a86ca",
       "id": "fork-disclosure author classifier + token placement (case_092cd51d gate, offline half):1"
     },
     {
       "name": "case_35e86d49 host-validation activation gate suite",
-      "definition_sha256": "d08ee9f9adea45c8bdc9ab908dc48eec7d18d60a66667835345a42613bd9d4b4",
+      "definition_sha256": "dace98a2d66857cadef290f235b69491d4eaaff906e4cc8b7136756e6daefd93",
       "id": "case_35e86d49 host-validation activation gate suite:1"
     },
     {
       "name": "case_3dd27f43 host-evidence capture suite",
-      "definition_sha256": "0401470509e7e1ddd2a8c0c43422b37c6569b23ba9878ef34b6452d69696a973",
+      "definition_sha256": "657759849fa307ee74305cd435f7fe56e2f48b6c140afcb86c6fcc9376686d57",
       "id": "case_3dd27f43 host-evidence capture suite:1"
     },
     {
       "name": "case_3dd27f43 host-render capture suite",
-      "definition_sha256": "4b53384aca1ab90c1a32fd6b2aac0d70ed12d64eca4cace3008b3ae76953db1a",
+      "definition_sha256": "43aed11290e12f3bc0fe2a127bf592591db0a4b04e3d8386e2e3e17dafd9cadb",
       "id": "case_3dd27f43 host-render capture suite:1"
     },
     {
       "name": "case_3dd27f43 carrier/render binding normalization",
-      "definition_sha256": "9260dcad3807e4e9a4c9169a9e5abb6dc90087dc5b8285802b3013f441973284",
+      "definition_sha256": "b621be2afe19081a070d3e50f9c032322fd9d31aae02708a2b7f7b5f85f141f6",
       "id": "case_3dd27f43 carrier/render binding normalization:1"
     },
     {
@@ -1165,12 +1165,12 @@
     },
     {
       "name": "OmniRoute chain verifier credential suite",
-      "definition_sha256": "ab72c6868c9780dcde8ed84893b03d35a0e0ebff303675ceda519ca9a7193ab5",
+      "definition_sha256": "e15ca9eebd9eb5ca6ecb9b088f4204dbacdf0f216ae87720f0efc16dcf6c988c",
       "id": "OmniRoute chain verifier credential suite:1"
     },
     {
       "name": "OmniRoute registration credential suite",
-      "definition_sha256": "aed07fc7567a4f43bf9e3523cde77c706d688e648d187b54387d56cc5971c804",
+      "definition_sha256": "a58a90480b985c859166945e7a6a432c35328f6c687068ecbac7d728b0748b0d",
       "id": "OmniRoute registration credential suite:1"
     },
     {
@@ -1185,22 +1185,22 @@
     },
     {
       "name": "case_4ea7d92e host-check contracts (mutation-gated)",
-      "definition_sha256": "5171d7ea0cad6d4e6dcfdd0a9978f9208a4b67ef1febc4c53c06836bc4b2a11b",
+      "definition_sha256": "ca9553338baeb0167c03cf2a83e078ec404bfd06609eb6cdf8492ba7f71be1cb",
       "id": "case_4ea7d92e host-check contracts (mutation-gated):1"
     },
     {
       "name": "host timer registry (offline, mutation-controlled)",
-      "definition_sha256": "76e2d6719e926124a4be97299999bb2ba4dfee02e3f9591782bae013252d7485",
+      "definition_sha256": "ef23a1cb3e2c4342d198b40f760d1c034a7f8c922f35b37be3984bb7ed88a530",
       "id": "host timer registry (offline, mutation-controlled):1"
     },
     {
       "name": "home-PC runner guard suite",
-      "definition_sha256": "0c3e4e73043a9cc6c4b43df316758368d553a094e9aead04d0f0741b895e82cf",
+      "definition_sha256": "ece27dbe4cfd4bd28669c20ff2515f25a11c6b0a9c17bfcac3e45f4f8683ad71",
       "id": "home-PC runner guard suite:1"
     },
     {
       "name": "home-PC guard deployment contract suite",
-      "definition_sha256": "ed909b95d375407dac4c58d381411e37d50bebde40dfcbc099d86f326ed757d7",
+      "definition_sha256": "26184df8465fa04c443062d71990da6038ba1c3d5fa2dd8280ebb92386bc56ea",
       "id": "home-PC guard deployment contract suite:1"
     },
     {
@@ -1215,7 +1215,7 @@
     },
     {
       "name": "Prove the argv-leak suite still detects a credential on argv",
-      "definition_sha256": "2baea99a1fb4fd1630bae96a96d5088d9bc558dd193965f8a3aa76755a05cffc",
+      "definition_sha256": "6b9d6d39d1d56f83d0864c5029046aeb0bca623fbc1d4e43ee819b13b45449f1",
       "id": "Prove the argv-leak suite still detects a credential on argv:1"
     },
     {
@@ -1225,7 +1225,7 @@
     },
     {
       "name": "Prove the api-body suite still detects a dropped request body",
-      "definition_sha256": "cdc8c347703397249d921585dec5bd66da0473c43a235605e5fe7ad446f1c3cd",
+      "definition_sha256": "37814e7f635af876427c4aab9eb4e0a743657dd8a055625047f32598673fd823",
       "id": "Prove the api-body suite still detects a dropped request body:1"
     },
     {
@@ -1245,37 +1245,37 @@
     },
     {
       "name": "Prove the precondition suite still detects each undeserved green",
-      "definition_sha256": "c3e81bcffab8430a10f69d92a9dba4c3838be3d553363b8d728d8f9c8794fe37",
+      "definition_sha256": "8978e9e2a633ed621c08f396b88e1d835e2b1ad9fea6e93d830ce71bb4a333b7",
       "id": "Prove the precondition suite still detects each undeserved green:1"
     },
     {
       "name": "Prove the CI status suite still detects a weakened refusal",
-      "definition_sha256": "2cee5af7a64099a5857ccda7220cdf70c1fcc207c0e143caa733c9ec51859b70",
+      "definition_sha256": "a6730b4f31b481ce966f2c8effb0ea1bbada837fb5defaad1e7e38979cefcdb3",
       "id": "Prove the CI status suite still detects a weakened refusal:1"
     },
     {
       "name": "Prove the drift suite still detects a weakened detector",
-      "definition_sha256": "0117d7930d454db00cec861ed84b29277431ae047ab3932d1908bd6d11324f04",
+      "definition_sha256": "a988182fb315731e35f2e497d821a00cbf001d64fb94ed94fd0dd520a5e7228f",
       "id": "Prove the drift suite still detects a weakened detector:1"
     },
     {
       "name": "Prove the rotation watcher still detects a wrong verdict",
-      "definition_sha256": "38c52a655f9a37ac4f667925e846766d294f160bca104ea547348c03207f52fe",
+      "definition_sha256": "dbb2aca79d630357611f910b10edb3b81aec645dfc3bb621fa6b6f3d48c69cb1",
       "id": "Prove the rotation watcher still detects a wrong verdict:1"
     },
     {
       "name": "Prove the brake still derives its burn rather than reading it",
-      "definition_sha256": "41b1421296ea89845ba382c2bf415b22a2c4cca5a20e40ea6d1cf626277d5a38",
+      "definition_sha256": "2576143107ed12ed0258b6847576cfa8e3abd127228249b78feccc50b69cb2bd",
       "id": "Prove the brake still derives its burn rather than reading it:1"
     },
     {
       "name": "Prove the 120m staleness cutoff is load-bearing (mutation-gated)",
-      "definition_sha256": "5b902a7990f8a5340cb3b9b01f885dc16cbedd6fd12fb3283670b429c43d3d7c",
+      "definition_sha256": "c8b0888ab4f32912a2838c30b4878aeacd734f99026fa437c2ea25f43226389e",
       "id": "Prove the 120m staleness cutoff is load-bearing (mutation-gated):1"
     },
     {
       "name": "case_09629d76 immutable carrier / host-render binding",
-      "definition_sha256": "a66070c7e48dff478a8905af1c27772843dc0e315a778277737a7ecfb0d39543",
+      "definition_sha256": "d4ca406f0e7c912dc30d0189cf347199f9aa9110f912d609a290adc23da305c6",
       "id": "case_09629d76 immutable carrier / host-render binding:1"
     },
     {
@@ -1295,7 +1295,7 @@
     },
     {
       "name": "operator runbook \u2014 a withdrawn line survives regeneration",
-      "definition_sha256": "17274e29b5bae705d27978971852a2126915b354ea72e0ccb43ed8bfa7b76810",
+      "definition_sha256": "3cfb7ac3f450112200428ad8eb2e3428924916805c34219726b8b27e934d72bb",
       "id": "operator runbook \u2014 a withdrawn line survives regeneration:1"
     },
     {
@@ -1310,7 +1310,7 @@
     },
     {
       "name": "Mapping-guard calibration mutation suite",
-      "definition_sha256": "e0dac852020487e49e485e2372180e00f5fd2ab69e20d1621cf65e8f856e3ccc",
+      "definition_sha256": "7cdd61395fe97e6691d1960a47503af66ea6f0d798fb6908c02caf7bb3f15df3",
       "id": "Mapping-guard calibration mutation suite:1"
     },
     {
@@ -1410,7 +1410,7 @@
     },
     {
       "name": "Prove the suite detects a receiver that skips verification",
-      "definition_sha256": "7c67c637fd2cd7fb7d5fa31bfa9387e4e58cd5300a39a8bfd8d2f8758ced94d4",
+      "definition_sha256": "848262dda4f82acbc4d94e2bea6ccdeb3110778b57cc013237f8d00d63b8f483",
       "id": "Prove the suite detects a receiver that skips verification:1"
     },
     {
@@ -1430,7 +1430,7 @@
     },
     {
       "name": "Prove the suite rejects each tempting simplification",
-      "definition_sha256": "daab40cb177c5d1b468350902a86792ef3d9a6d7315bad1b05cbb14106ed0fb1",
+      "definition_sha256": "7a4e6cb16cb477cf5fe0abc339904939a8de6886111935a91d3a5328b00e0565",
       "id": "Prove the suite rejects each tempting simplification:1"
     },
     {
@@ -1445,7 +1445,7 @@
     },
     {
       "name": "Prove the suite rejects each tempting simplification",
-      "definition_sha256": "85e1f236a49cf992e6b005a3cf1c12977b98a079eb7eb01a78e2e28ac4ea0aa3",
+      "definition_sha256": "e6f801721c87dc6eb31e46538b21f635a90b791528030b6b0b3f70dae56e87fa",
       "id": "Prove the suite rejects each tempting simplification:2"
     },
     {
@@ -1465,7 +1465,7 @@
     },
     {
       "name": "upstream pipeline suites are not vacuous (mutation-gated)",
-      "definition_sha256": "bba8fe45e10454489aea597fa42477467e812bc7a52e69646da6e195e79dc41c",
+      "definition_sha256": "0559a88d3647f9bc102b4ad1b2fbfbec3454e2b7033b04a736f151baca27ad1b",
       "id": "upstream pipeline suites are not vacuous (mutation-gated):1"
     },
     {
@@ -1475,27 +1475,27 @@
     },
     {
       "name": "operator run dirs hostile suite",
-      "definition_sha256": "60efe4842521d2f3cdf9f8c47c700e22fbaf11ece18fe7c2e32bb3d648eb2d1b",
+      "definition_sha256": "93e88096feac59e97dd2a2219a8c1d16a82b8d5431a7648801461f37c2a1fee0",
       "id": "operator run dirs hostile suite:1"
     },
     {
       "name": "operator runs disk push contract suite",
-      "definition_sha256": "96915872b06807c1c892fc3a720131a1d9b221b709fff288303f58be47a09b1f",
+      "definition_sha256": "0ada295ff751c78c0e8cb3e65304bf9a53645a40f4b1538ec6efa5750ae405db",
       "id": "operator runs disk push contract suite:1"
     },
     {
       "name": "project regen prune hostile suite",
-      "definition_sha256": "2de13d65ff83375e9e0cac2c4003ebbc0d6cd124e9b71455d075ce35a52231ce",
+      "definition_sha256": "d9088f32cb42a8c2c3a39064e7219f606c0407d237ab41faf14334e8a13ba650",
       "id": "project regen prune hostile suite:1"
     },
     {
       "name": "project regen prune deployment contract suite",
-      "definition_sha256": "eb5719aff343724e4f392666a5c8ebf793e60fd175b2d17be45c3626f87182d4",
+      "definition_sha256": "235c97106e247de4554d3e1bdf4d3aca2c15b9790728ef77f8ce00b512d8f4a6",
       "id": "project regen prune deployment contract suite:1"
     },
     {
       "name": "operator regen strip suite",
-      "definition_sha256": "8048d315ab42671e448c42dd61f1291d489cdb599736acfd189bc98648a20612",
+      "definition_sha256": "c243eeae05943ecedc78dcd1abcbcb35436223989884b174422fe7ffe49cf43a",
       "id": "operator regen strip suite:1"
     },
     {
@@ -1515,12 +1515,12 @@
     },
     {
       "name": "deploy-window wrapper and pin mutation suites",
-      "definition_sha256": "7332eb34b614fca3b59b25b92996721d0c8b5676b39c62dec5f0cff423ba9f48",
+      "definition_sha256": "de99c1a2f368f74aef6a0ee13125f27390acd796387ff13f956ad0179c833ce5",
       "id": "deploy-window wrapper and pin mutation suites:1"
     },
     {
       "name": "bounded shadow-reader suite",
-      "definition_sha256": "c7dcfda48c45661549b91c4dcf19376c93d6b9af1f8ad31d954ddf7d1c178de0",
+      "definition_sha256": "b41c4dbb70365f9060c98aec0fa53105cd1566cd75f14f93871c6076b389a71c",
       "id": "bounded shadow-reader suite:1"
     },
     {
@@ -1550,7 +1550,7 @@
     },
     {
       "name": "reviewer-eval survival atomic-write suite",
-      "definition_sha256": "6bdee9245769453c73d0d3a16ceaffc2805638dbfe22c1a8941410aaf1174aea",
+      "definition_sha256": "3e2c69da8e292600ff137f0822bf1d988e774afcca7f1e788ada0c383cd361f5",
       "id": "reviewer-eval survival atomic-write suite:1"
     },
     {
@@ -1565,22 +1565,22 @@
     },
     {
       "name": "reviewer-eval observational-collect atomic-write suite",
-      "definition_sha256": "4ae6c8d287250d2980a0bc6a039fcf858c174e44c6678d2ae96c332c9a3c75f4",
+      "definition_sha256": "2dd18b564c90ba85954c34f967b56de0677abb1aa41b5431e22e8ae7342329e0",
       "id": "reviewer-eval observational-collect atomic-write suite:1"
     },
     {
       "name": "reviewer-eval arm-import atomic-write suite",
-      "definition_sha256": "57d1428b60a9891421da865662604d8a8b32431303774de14c71cf8bc7643578",
+      "definition_sha256": "adee48f5c4ce471d65409a2cc7352c449d7af9d7e34b20efee63a677f74d32e1",
       "id": "reviewer-eval arm-import atomic-write suite:1"
     },
     {
       "name": "staged Tier-0 port drift gate",
-      "definition_sha256": "033a533f282fe6008b03114b5d34a38cde0b86269798d89b1488fffc0d921917",
+      "definition_sha256": "119fb48d46ccfce91b7c3262cc1fd993e84f17fa1be4be1e76578f37201c7bc1",
       "id": "staged Tier-0 port drift gate:1"
     },
     {
       "name": "reviewer-eval merge-survival atomic-write suite",
-      "definition_sha256": "cc857764b43b33deeea3a6461d8bddc7fd889176459ed23997c0610ed9d4639b",
+      "definition_sha256": "25bb4e38823e7e959f9b911f7ca390c9570bc14f0c657e2e8231c9169835c03b",
       "id": "reviewer-eval merge-survival atomic-write suite:1"
     },
     {
@@ -1590,17 +1590,17 @@
     },
     {
       "name": "balancer silence guard is not vacuous (mutation-gated)",
-      "definition_sha256": "62b97919566e7577ef028e5ba84f8aa94a518fcc0a316c68749839ae5720b3fd",
+      "definition_sha256": "9c21790c9d87e95992fbb62eebdf9187413f07ed281049f4c311546c01e3ef43",
       "id": "balancer silence guard is not vacuous (mutation-gated):1"
     },
     {
       "name": "red-main poll suite is not vacuous (mutation-gated)",
-      "definition_sha256": "099de91d82e6135f2ac2aa0717cd12e0c6d82ada3f04c375888586da85bb2ff9",
+      "definition_sha256": "6139ba6bfdec72906ab96ab225d1388035eb1e2816dea16ba38180924c16f787",
       "id": "red-main poll suite is not vacuous (mutation-gated):1"
     },
     {
       "name": "fleet-run-stall 20-min window suite",
-      "definition_sha256": "6e436b78ceca7579b60f4831b1ffc6ae92379590ff266f0f7f09d42c18a118cc",
+      "definition_sha256": "e7d98ed4709effe0cbeebefa68770a3b4e953e48611e13416234c712e51ecfb6",
       "id": "fleet-run-stall 20-min window suite:1"
     },
     {
@@ -1635,7 +1635,7 @@
     },
     {
       "name": "cliproxy config gate suite",
-      "definition_sha256": "85a295f6623d31530c5ffa87812685dcf31bdcf4dfbd500328eb355c7fa2a712",
+      "definition_sha256": "47b9932b6849341802896c09dbeaec3b9d80702cf2001f604ee3ab66cab8f1df",
       "id": "cliproxy config gate suite:1"
     },
     {
@@ -1645,17 +1645,17 @@
     },
     {
       "name": "operator copy-risk gate suite",
-      "definition_sha256": "b224a0b3acada0f4dd108884cbdd8bb435e24af2f177ceb9bcf163fc4e251d57",
+      "definition_sha256": "99ab5d4d0dc07ce2ef2dd1c0f2ed5dff906676811e83e756f55199b8c468d38f",
       "id": "operator copy-risk gate suite:1"
     },
     {
       "name": "reviewer-eval corpus atomic-write suite",
-      "definition_sha256": "c1c776ccac6e4516123a3dae02d3557f3978bdcf06fc8e82f63a8d8c4bddff7d",
+      "definition_sha256": "58a53f01dc3584cf1da00d391406a804986d7f06b559a7acf60112bd379e08d1",
       "id": "reviewer-eval corpus atomic-write suite:1"
     },
     {
       "name": "cliproxy feed-contract suite",
-      "definition_sha256": "6a31f7a0884fb444157a8ab5dd56b41b9dfc3122a79424e484af5000cae8fef8",
+      "definition_sha256": "b35414e65be6ec8fe61248d717f8b7dc5de2b5dcaa1128f8c64d48e04da02410",
       "id": "cliproxy feed-contract suite:1"
     },
     {
@@ -1685,27 +1685,27 @@
     },
     {
       "name": "operator workspace reconciler and sweep suites",
-      "definition_sha256": "db286f615a355791735820aea75e0fd8eb7409a23a0bd049f667aaa3889d7351",
+      "definition_sha256": "92c3d3ebb151364423cbf35a0a258a51331834739402a43976b837c49679100c",
       "id": "operator workspace reconciler and sweep suites:1"
     },
     {
       "name": "invariant views suite",
-      "definition_sha256": "4b1ddffcb776c730eb7988a99ffc6b0f46061937f537e74649741d27a0a49141",
+      "definition_sha256": "84963b915490027c3ad326cd3e514f02158f7046817cbbd2aead16d64432a1a2",
       "id": "invariant views suite:1"
     },
     {
       "name": "project regen prune manifest atomic suite",
-      "definition_sha256": "22e787e36096c2c72baca5a3c87612b2cf3dfabd847b4ebaeec472de7c388c26",
+      "definition_sha256": "ac590838022b65d1d3fc805df636ebd2345551088d725ac58c7d5dbad8e11a35",
       "id": "project regen prune manifest atomic suite:1"
     },
     {
       "name": "sweep-auto node7b1ff338 pressure-gate suite",
-      "definition_sha256": "f7a578e5dbff386bd5ccf05719d3932a2302643f6966b0f458ef7da0d3024766",
+      "definition_sha256": "43098e7002af54a9e1758a667165cd59feac95e204e166031562dd8501f6e9dd",
       "id": "sweep-auto node7b1ff338 pressure-gate suite:1"
     },
     {
       "name": "host regenerable cache reclaim hostile suite",
-      "definition_sha256": "78073dbf9a3d03094eaa143eba9f93f8a6a85da68d79e4e48d92b48b27ef4001",
+      "definition_sha256": "69fc2ac9c541d59d8707058c53efda87779a7ea33c350f5bfe9df31b5d0636f7",
       "id": "host regenerable cache reclaim hostile suite:1"
     }
   ],
@@ -1936,7 +1936,7 @@
       "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Gate changes comments and temporary-directory prefix only. Wrapper, detector and complete baseline exact.",
       "index": 159,
       "working_directory": ".",
-      "run_sha256": "692bea1268095d08124681e3338d322ad5c0c78a73fa40a7acf3e3b808d2767d",
+      "run_sha256": "6a55283eaaaab66befdaf491e0de24b05d7482b8ded2c6587f078a8efccbe082",
       "private_command": "./verification/case_5516df1c-monitor-mutation-gate.sh",
       "input_paths": [
         "discord_job_health_monitor.sh",
@@ -1996,7 +1996,7 @@
       "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Only initial gate comment loses card identifier; detector/test/preservation helper exact. Named mutant assertions and baseline/restore logic unchanged. Not run locally.",
       "index": 162,
       "working_directory": ".",
-      "run_sha256": "5dbfe000e05355357c567f85df7fe8c18ae6a693ce2f3709c22f4ca05d6d1804",
+      "run_sha256": "f15da967f20ae6e0e02db17732d9c4383d4ed1cb86c638de56e17123c8252a19",
       "private_command": "node ./verification/case_317e6404-mutation-gate.cjs",
       "input_paths": [
         "scripts/parked_backlog_guard.js",
@@ -2017,7 +2017,7 @@
       "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Gate comments/usage scrubbed; executable mutation operators, guards and named assertions unchanged. Detector/test exact.",
       "index": 170,
       "working_directory": ".",
-      "run_sha256": "1a96dcdc68756291ddda31e6f4564b4c3ee7f2344f9fc9229664109601ea7e24",
+      "run_sha256": "848da2281d32bb2ad8266b138c8fd8f294df990936bedf482a9bd489cc04bc5f",
       "private_command": "./verification/case_c22b6545-mutation-gate.sh",
       "input_paths": [
         "scripts/stale_descriptor_sweep.js",
@@ -2091,8 +2091,8 @@
       "plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|v0.2.2"
     ]
   },
-  "suites_job_sha256": "5d0d517daadcbf5743afdf5f9b131afb162bfaed3980a112ba9c4824d546726c",
-  "manifest_sha256": "45002e0b5e92e94f5bda7df2d92c40384f1c6d7b054f1a7ede163f5c3999b13e",
+  "suites_job_sha256": "2f0de7be5319a1e00f4a2d207a942fc43e9dc8f050a1620aa378bc724c9e7531",
+  "manifest_sha256": "b019e154407287f75cea4267ed3788469ee5e901b9af312ed340ab57800464b5",
   "restored_files_sha256": {
     "acceptance_org_lib.sh": "8db92e9d11f5a21776dbc1f71296b752291e6758ddc2a5ad67a129a86a5ed00a",
     "acceptance_rehearsal.sh": "a54e0b0bc79bb1a52edee3ea865b852e855c7f706370846cd512cc69c1c3080c",
@@ -2298,12 +2298,14 @@
     "test/parked_backlog_guard_preservation.cjs": "525695fc728b9a3fdb98cc89269e5847bb284a8286e6902863c1446734ea897e",
     "test_app_tree_guard.sh": "171bb761705c075ecf6985d56872bb07f3962cb1c90fcd6d69e204cf26bb63fc",
     "test_approval_timeout_probe.sh": "4fedddf70d17bfabf5fc76ceb96f5e7ae5ca95eef62f0c042fba80eaa99c2484",
+    "test_auth_denial_discriminator.py": "96a03f82880ae524a8bba9bf19de9ecb901532edef5626860555927714151e69",
     "test_blocked_audit.sh": "bb6a15e4ec91dd174948a8f0ea775648528f89026bbb2ebc148f776f992c5f0b",
     "test_bootstrap_operating_model.sh": "aa7185467d5afae3237c71a07d114148643151b42d0556b911c7d216335df99a",
     "test_breaker_cotenancy_probe.sh": "08ea402908aa0ceea97abf8093d4d1f8c3c1b95bd935c98ea6d5da737a6ebb4b",
     "test_capability_gate.sh": "cf7548a457392c2ce41f6be424a3d29caad2a2bc4e710c1a7d655c81425e2223",
     "test_capture_network_name_evidence.sh": "270b68e38b0dfc414c6f13046a3e9485ede198c8331ce055f88fa400dcb32c39",
     "test_channel_drift.sh": "596d6d537d3b73b37a54b8342089ba681583ec7fd525b737fae4aec46a27484d",
+    "test_cold_start_detector.sh": "9a5b447fb66c3d822283005e6fa570499e0595cb3885cdeebf22fe82aa443974",
     "test_credential_chain_audit.sh": "fef7398b0ff2ef3d45b1be944a7c2289ec6565de610f52bca6001db9ebf73907",
     "test_credential_chain_pin_gate.sh": "d3259a3a01ae32c5048e0a4721319744f82c9fe15ce37c55e186765a645b4728",
     "test_decision_notify.sh": "d8b53623c7170b09c3c48fa3d4a964b237f0329663017dceaba83c293716bb5c",
@@ -2320,6 +2322,7 @@
     "test_omniroute_rehearsal_translator.mjs": "f4e3ceb5a35bc8b193bfb624b149f8e6503d6389b0dcd849f54d03af2424a7e6",
     "test_opencode_shared_budget_probe.sh": "fbe5a2e3fde4e5aed59e5c5caaa25c713028fd9587a1402a74c6d0fc1c990fbc",
     "test_orgdb_fixture.sh": "9faf8aa5d9e3ced8252b5eece0b4797f870adb47ec9358251ebb4e1e5feecb77",
+    "test_pacing_verdict.py": "8dee827bd336b84676e24097d5999c4f67fa990c3f6192a712be51d440793084",
     "test_paperclip_activation_gate.sh": "df1ee47ebf779733bd7d3da0ace0a54a03092c9e068ccae5ed2bea0227ca39f4",
     "test_paperclip_run_path_guard.py": "b8f2b984b7f52d5e80718b92d8232f6aa829ce67b79e91112c18286853e74727",
     "test_parked_backlog_guard.sh": "1dc898c0ecb2cb0b423ec6843ec82e7db8b8dd1ee63e0c544ed3e62b7a250e7a",
@@ -2327,6 +2330,7 @@
     "test_provisioning_policy.sh": "4c17e05c0b641d6dc612de5f342c43c5d03f8a5d80e2d15a95fe1d1bfad17530",
     "test_queue_liveness.sh": "15b525b1d411d4d10f1ccfbc7368120be14fbbb55c9ec24169546840d63ec143",
     "test_quota_brake.sh": "691bf19cf4301a972ddbfc2481cc7806c5ce81222a28d4de335b0aa5306c11cc",
+    "test_quota_burn_derive.sh": "e72525dccf08aa382a3c30dd217cd475eb99c58a2c7e33f17d58a11fc6875b22",
     "test_render_binding_normalization.sh": "c69bdb5104d90c449e7ece7e9137ef31e0def8fc4496ff7e84a48833df00748a",
     "test_responsible_leader.sh": "7467fd1ede05afa043db6c977fcc3be4cf1a177f5c0ed2d72e83b61a6649cb27",
     "test_secret_exposure_audit.sh": "399703e781a26a6c2555f16da37c9968c386eeb7b91f938bef53208db04601cc",
@@ -2351,19 +2355,18 @@
     "case_8b8a8c87_predispatch_deploy_gate.sh": "1012110aa0045728db59f2548fdae2d1fec4f871b750f688971104ba31097c95",
     "tool_drift.sh": "24a9f063d273cb4b39990488289443a0c3a3d7e18858a7f0d5c61ebf9d114ea8",
     "upstream_filing_readiness.sh": "f05e274aaf5a98861e015f6572b9472090a82f833e18d06700a50b110f986e3b",
+    "verification/auth-denial-mutation-gate.py": "d413e66270e945dbc6fbfd7f60de073c3d37c1bfc218a770ae0f2f98c220718e",
     "verification/case_bb74e741-filing-gate-check5-mutants.sh": "293c8bd32760b8d50344997263df4fc73546f5c7c4fd53999dc513cba13f395c",
     "verification/case_214ad18c-empty-gzip-residue-repro.mjs": "ee99a806f06575168facfdfe808d9f2dc20b40830738e0e6f4395d86c1166a25",
     "verification/case_79b85f97-truncated-reasoning-502.sh": "52173d4d339a43d935c896574b126f8a24f8c2d26b16e3fb8fcd379dbbf6d7a7",
     "verification/case_317e6404-mutation-gate.cjs": "bffb7f7983524081acae4f4f863f792a8cad6e2bceab81e1bf709bf7a5c92de5",
     "verification/case_bb2ac7f4-mutation-gate.sh": "e51b7b821aa9159d6ae262736f4b5e825013fe61e0a3c99796eca06431bcb45f",
+    "verification/case_77bba75d-mutation-gate.sh": "9be48867df693da6bb1c05b50090711f35a846f809d24b03f63ec364d643e898",
     "verification/case_5516df1c-monitor-mutation-gate.sh": "3465f0dccb82d2a2cb627955fd764d560ac15e8c9be525878039913c9dfa200b",
     "verification/case_5516df1c-mutation-gate.sh": "1b255f396d794b663915d5eea6768e7179aed5d48b593d5eb96f1ed1afce00a1",
     "verification/case_f17dd2a7-find-hash-collision.mjs": "7e375bb8855bfe68b52c0d38476c21c821b71c085e586658295d20eecf66494b",
-    "verification/case_9e76f76d-recorded-command.sh": "5f71330c3c6329ae62cbe8eee598dd80a3c05690a9210ddcd86e5fb7d7b52419",
-    "verification/case_9e76f76d-recorded-command.txt": "09a83a87254a37a810b577ad0304f4f7d0695bb2d041e669f791fbee045268b3",
     "verification/case_28030601-mutation-gate.sh": "a9fb85724e6b8bed3b4cd79fb311660747199d3a5ff291d3a2a70e26a944efec",
     "verification/case_ce726d7b-mutation-gate.sh": "bc0a7581e3c721f06761aca7f42794f3b5779bd68f4ec0f27d84965d17e8df2a",
-    "verification/case_f909ca1f-mutation-gate.sh": "319f651038d075362536efbadbc86b05ce4207391c6efef147dec697ab147ed7",
     "verification/case_c22b6545-mutation-gate.sh": "12720839464be617fb0a3343da3a97baf49fbb4d6e95b7c2d299dc952e862d4d",
     "verification/upstream-bundle-filing-gate.sh": "a3fc430692b445eea53fa78a1d302a8148cf00f61fcd5f74d39dd166a72d99c1"
   },

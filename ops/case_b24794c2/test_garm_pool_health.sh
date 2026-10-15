@@ -155,7 +155,7 @@ expect 2 "bad label" "4d. bad label refused exit 2" \
   env -i PATH="/usr/bin:/bin" bash "$EVAL" --pool-json "$FIX/healthy.json" --label 'a b'
 
 # === 5. renderer: shape, refusal, regen-sync ================================
-rendered="$(GARM_POOLS="00000000-0000-4000-8000-000000000064 00000000-0000-4000-8000-000000000065" GARM_ELIGIBLE_LABEL=two-ephemeral bash "$RENDER")"
+rendered="$(GARM_POOLS="aa101234-1111-4222-8333-444444444444 bb202345-1111-4222-8333-444444444444" GARM_ELIGIBLE_LABEL=two-ephemeral bash "$RENDER")"
 if grep -q "name: garm-pool-aa101234" <<<"$rendered" \
   && grep -q "name: garm-pool-bb202345" <<<"$rendered" \
   && grep -q "name: garm-runners-two-ephemeral" <<<"$rendered" \
@@ -172,11 +172,11 @@ else (( $? == 2 )) && ok "5c. renderer refuses bad pool ID exit 2" || bad "5c. r
 fi
 # Regen-sync: the checked-in example is byte-identical to renderer output for
 # the documented fake pools — the example cannot silently drift from the tool.
-if diff <(GARM_POOLS="00000000-0000-4000-8000-000000000064 00000000-0000-4000-8000-000000000065" GARM_ELIGIBLE_LABEL=two-ephemeral bash "$RENDER") "$EXAMPLE" >/dev/null; then
+if diff <(GARM_POOLS="aa101234-1111-4222-8333-444444444444 bb202345-1111-4222-8333-444444444444" GARM_ELIGIBLE_LABEL=two-ephemeral bash "$RENDER") "$EXAMPLE" >/dev/null; then
   ok "5d. checked-in example byte-identical to renderer output"
 else bad "5d. example sync" "example drifted from renderer — re-generate it"; fi
 # Mutant: an example with a pool block deleted must fail the same diff.
-if grep -v "name: garm-pool-bb202345" "$EXAMPLE" | diff - <(GARM_POOLS="00000000-0000-4000-8000-000000000064 00000000-0000-4000-8000-000000000065" GARM_ELIGIBLE_LABEL=two-ephemeral bash "$RENDER") >/dev/null; then
+if grep -v "name: garm-pool-bb202345" "$EXAMPLE" | diff - <(GARM_POOLS="aa101234-1111-4222-8333-444444444444 bb202345-1111-4222-8333-444444444444" GARM_ELIGIBLE_LABEL=two-ephemeral bash "$RENDER") >/dev/null; then
   bad "5e. example-sync mutant" "block-deleted example still matches — check vacuous?"
 else ok "5e. example-sync mutant goes red"; fi
 

@@ -1,0 +1,11 @@
+{
+  "effort": "base",
+  "autoReview": [],
+  "statusCheck": false,
+  "shouldUpdateDescription": false,
+  "autoApprove": { "enabled": false },
+  "includeAuthors": ["togetherweown[bot]"],
+  "excludeAuthors": ["github-actions[bot]", "dependabot[bot]", "renovate[bot]"],
+  "strictness": 2,
+  "commentTypes": ["syntax", "logic"]
+}

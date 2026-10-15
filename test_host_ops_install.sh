@@ -780,7 +780,7 @@ render_e3_parses() {
 }
 
 render_e3_parses "rendered E3 grant parses for the captured unit" "cliproxy.service"
-render_e3_parses "rendered E3 grant parses for an instanced unit name" "person-1d54d7e5@example.invalid"
+render_e3_parses "rendered E3 grant parses for an instanced unit name" "cliproxy@fixture.service"
 
 # case_b981db13: --public-key-out must not collide with the installer's own PUBLIC_KEY.
 #

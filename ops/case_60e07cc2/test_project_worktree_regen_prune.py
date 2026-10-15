@@ -203,12 +203,12 @@ class ProjectFixture:
         self.wtdir = os.path.join(self.primary, ".paperclip", "worktrees")
         os.makedirs(self.wtdir)
         self.worktrees = {}
-        for name in ("case_1cab5f7f-alpha", "case_9250936e-beta"):
+        for name in ("TOG-" "99701-alpha", "TOG-" "99702-beta"):
             path = os.path.join(self.wtdir, name)
             git("worktree", "add", "-q", "-b", name, path, "origin/main",
                 cwd=self.primary)
             self.worktrees[name] = os.path.realpath(path)
-        self.side = os.path.join(self.root, "co", "proj", "case_2dd66922-side")
+        self.side = os.path.join(self.root, "co", "proj", "TOG-" "99703-side")
         git("clone", "-q", self.origin, self.side, cwd=base)
         for key, val in (("user.email", "t@t"), ("user.name", "t"),
                          ("commit.gpgsign", "false")):
@@ -253,30 +253,30 @@ class StaleGateTests(unittest.TestCase):
     # stale (host parity keeps them), or dropping the upgrade- carve-out.
 
     def test_done_and_cancelled_are_stale(self):
-        self.assertEqual(stale_gate("done", None, 24, True, "case_8c5fe4cc"),
+        self.assertEqual(stale_gate("done", None, 24, True, "TOG-" "99601"),
                          (True, None))
-        self.assertEqual(stale_gate("cancelled", 0, 24, True, "case_8c5fe4cc"),
+        self.assertEqual(stale_gate("cancelled", 0, 24, True, "TOG-" "99601"),
                          (True, None))
 
     def test_open_with_recent_run_is_active(self):
-        self.assertEqual(stale_gate("in_progress", 1, 24, True, "case_8c5fe4cc"),
+        self.assertEqual(stale_gate("in_progress", 1, 24, True, "TOG-" "99601"),
                          (False, "card-active"))
 
     def test_open_with_old_run_is_stale(self):
-        self.assertEqual(stale_gate("todo", 25, 24, True, "case_8c5fe4cc"),
+        self.assertEqual(stale_gate("todo", 25, 24, True, "TOG-" "99601"),
                          (True, None))
 
     def test_exactly_the_bar_is_stale(self):
-        self.assertEqual(stale_gate("todo", 24, 24, True, "case_8c5fe4cc"),
+        self.assertEqual(stale_gate("todo", 24, 24, True, "TOG-" "99601"),
                          (True, None))
 
     def test_open_with_no_run_in_window_keeps(self):
         # STRICTER than the host script: an unseen history is unverifiable.
-        self.assertEqual(stale_gate("todo", None, 24, True, "case_8c5fe4cc"),
+        self.assertEqual(stale_gate("todo", None, 24, True, "TOG-" "99601"),
                          (False, "run-history-unknown"))
 
     def test_unknown_tog_keeps(self):
-        self.assertEqual(stale_gate(None, None, 24, False, "case_7e3f4b37-x"),
+        self.assertEqual(stale_gate(None, None, 24, False, "TOG-" "99799-x"),
                          (False, "card-unknown"))
 
     def test_upgrade_without_card_is_stale(self):
@@ -289,11 +289,11 @@ class StaleGateTests(unittest.TestCase):
 
 
 class CardIdentTests(unittest.TestCase):
-    # Kills: zero-padding slips (case_e8cc98dc vs case_4e5328d7) in the card join.
+    # Kills: zero-padding slips (TOG-" "099604 vs TOG-" "99604) in the card join.
 
     def test_exact_digits_first_then_stripped(self):
-        self.assertEqual(card_idents("case_e8cc98dc-x"), ["case_e8cc98dc", "case_4e5328d7"])
-        self.assertEqual(card_idents("case_c2643f6d"), ["case_705d2a71"])
+        self.assertEqual(card_idents("TOG-" "099604-x"), ["TOG-" "099604", "TOG-" "99604"])
+        self.assertEqual(card_idents("tog_" "99605"), ["TOG-" "99605"])
 
     def test_no_tog_is_empty(self):
         self.assertEqual(card_idents("upgrade-x"), [])
@@ -302,10 +302,10 @@ class CardIdentTests(unittest.TestCase):
     def test_join_prefers_exact(self):
         fx = ProjectFixture()
         try:
-            card = issue_row("case_e8cc98dc")
-            res = fx.evaluate(fx.worktrees["case_1cab5f7f-alpha"],
-                              [card, issue_row("case_4e5328d7")],
-                              heartbeat=[run_row("id-case_4e5328d7", 1)])
+            card = issue_row("TOG-" "099604")
+            res = fx.evaluate(fx.worktrees["TOG-" "99701-alpha"],
+                              [card, issue_row("TOG-" "99604")],
+                              heartbeat=[run_row("id-TOG-" "99604", 1)])
             # Neither card matches this worktree: unknown keeps it.
             self.assertEqual(res["reason"], "card-unknown")
         finally:
@@ -320,11 +320,11 @@ class PerWorktreeLivenessTests(unittest.TestCase):
     def test_busy_sibling_does_not_protect_idle_worktree(self):
         fx = ProjectFixture()
         try:
-            busy = fx.worktrees["case_1cab5f7f-alpha"]
-            idle = fx.worktrees["case_9250936e-beta"]
+            busy = fx.worktrees["TOG-" "99701-alpha"]
+            idle = fx.worktrees["TOG-" "99702-beta"]
             fx.add_regen(idle)
             make_old(busy)
-            issues = done_issues("case_1cab5f7f", "case_9250936e")
+            issues = done_issues("TOG-" "99701", "TOG-" "99702")
             busy_res = fx.evaluate(busy, issues,
                                    proc_refs={os.path.join(busy, "app.py")})
             idle_res = fx.evaluate(idle, issues,
@@ -340,9 +340,9 @@ class PerWorktreeLivenessTests(unittest.TestCase):
         # skipped every stale worktree in the project. Here it skips none.
         fx = ProjectFixture()
         try:
-            idle = fx.worktrees["case_9250936e-beta"]
+            idle = fx.worktrees["TOG-" "99702-beta"]
             fx.add_regen(idle)
-            issues = done_issues("case_9250936e")
+            issues = done_issues("TOG-" "99702")
             res = fx.evaluate(idle, issues,
                               proc_refs={os.path.join(fx.primary, "app.py")})
             self.assertIsNone(res["reason"])
@@ -353,14 +353,14 @@ class PerWorktreeLivenessTests(unittest.TestCase):
     def test_prefix_sibling_is_not_a_match(self):
         fx = ProjectFixture()
         try:
-            idle = fx.worktrees["case_9250936e-beta"]
+            idle = fx.worktrees["TOG-" "99702-beta"]
             fx.add_regen(idle)
-            issues = done_issues("case_9250936e")
-            # A ref to case_4e5328d7 (prefix of nothing here) must not touch
-            # case_9250936e; and a case_9250936e ref must not touch a case_9250936ex name.
+            issues = done_issues("TOG-" "99702")
+            # A ref to TOG-" "99604 (prefix of nothing here) must not touch
+            # TOG-" "99702; and a TOG-" "99702 ref must not touch a TOG-" "99702x name.
             res = fx.evaluate(idle, issues, run_paths={
                 os.path.join(fx.primary, ".paperclip", "worktrees",
-                             "case_4e5328d7")})
+                             "TOG-" "99604")})
             self.assertIsNone(res["reason"])
         finally:
             fx.close()
@@ -368,11 +368,11 @@ class PerWorktreeLivenessTests(unittest.TestCase):
     def test_live_run_ref_keeps_this_worktree_only(self):
         fx = ProjectFixture()
         try:
-            idle = fx.worktrees["case_9250936e-beta"]
+            idle = fx.worktrees["TOG-" "99702-beta"]
             fx.add_regen(idle)
-            issues = done_issues("case_9250936e")
+            issues = done_issues("TOG-" "99702")
             res = fx.evaluate(idle, issues,
-                              run_issue_ids={"id-case_9250936e"})
+                              run_issue_ids={"id-TOG-" "99702"})
             self.assertEqual(res["reason"], "live-run-ref")
         finally:
             fx.close()
@@ -380,9 +380,9 @@ class PerWorktreeLivenessTests(unittest.TestCase):
     def test_run_snapshot_path_under_candidate_keeps(self):
         fx = ProjectFixture()
         try:
-            idle = fx.worktrees["case_9250936e-beta"]
+            idle = fx.worktrees["TOG-" "99702-beta"]
             fx.add_regen(idle)
-            issues = done_issues("case_9250936e")
+            issues = done_issues("TOG-" "99702")
             res = fx.evaluate(
                 idle, issues,
                 run_paths={os.path.join(idle, "node_modules", "blob")})
@@ -432,9 +432,9 @@ class ToHostTests(unittest.TestCase):
         self.assertEqual(to_host("/paperclip-evil/a"), "/paperclip-evil/a")
 
     def test_worktree_busy_is_per_worktree(self):
-        self.assertTrue(worktree_busy("/w/case_8c5fe4cc", {"/w/case_8c5fe4cc/app.py"}))
-        self.assertFalse(worktree_busy("/w/case_8c5fe4cc", {"/w/case_d02d0252/app.py"}))
-        self.assertFalse(worktree_busy("/w/case_8c5fe4cc", {"/w/case_de259302"}))
+        self.assertTrue(worktree_busy("/w/TOG-" "99601", {"/w/TOG-" "99601/app.py"}))
+        self.assertFalse(worktree_busy("/w/TOG-" "99601", {"/w/TOG-" "99602/app.py"}))
+        self.assertFalse(worktree_busy("/w/TOG-" "99601", {"/w/TOG-" "996012"}))
 
 
 class IdleTests(unittest.TestCase):
@@ -444,7 +444,7 @@ class IdleTests(unittest.TestCase):
     def test_fresh_source_file_is_busy(self):
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             fx.add_regen(cand)
             with open(os.path.join(cand, "app.py"), "w") as handle:
                 handle.write("print(2)\n")
@@ -459,7 +459,7 @@ class IdleTests(unittest.TestCase):
         # contents must not reset the idle clock on a tree nobody edits.
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             target = fx.add_regen(cand)
             blob = os.path.join(target, "blob")
             with open(blob, "ab") as handle:
@@ -471,7 +471,7 @@ class IdleTests(unittest.TestCase):
     def test_fresh_entry_under_node_modules_is_busy(self):
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             target = fx.add_regen(cand)
             with open(os.path.join(target, "fresh"), "w") as handle:
                 handle.write("x")
@@ -484,7 +484,7 @@ class IdleTests(unittest.TestCase):
         # keeps the candidate. Safe direction, host parity.
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             fx.add_regen(cand, name="target")
             with open(os.path.join(cand, "target", "fresh"), "w") as handle:
                 handle.write("x")
@@ -495,7 +495,7 @@ class IdleTests(unittest.TestCase):
     def test_deep_change_beyond_maxdepth_is_idle(self):
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             fx.add_regen(cand)
             deep = os.path.join(cand, "a", "b", "c", "d")
             os.makedirs(deep)
@@ -522,8 +522,8 @@ class EnumerateTests(unittest.TestCase):
         try:
             cands, unlistable = enumerate_candidates(fx.root)
             self.assertEqual(unlistable, [])
-            self.assertIn(fx.worktrees["case_1cab5f7f-alpha"], cands)
-            self.assertIn(fx.worktrees["case_9250936e-beta"], cands)
+            self.assertIn(fx.worktrees["TOG-" "99701-alpha"], cands)
+            self.assertIn(fx.worktrees["TOG-" "99702-beta"], cands)
             self.assertIn(os.path.realpath(fx.side), cands)
             self.assertIn(os.path.realpath(fx.upgrade), cands)
             self.assertNotIn(os.path.realpath(fx.primary), cands)
@@ -539,7 +539,7 @@ class EnumerateTests(unittest.TestCase):
         fx = ProjectFixture()
         try:
             extra = os.path.join(fx.primary, ".claude", "worktrees",
-                                 "case_3bf7ce3b-x")
+                                 "TOG-" "99704-x")
             os.makedirs(extra)
             cands, _ = enumerate_candidates(fx.root)
             self.assertIn(os.path.realpath(extra), cands)
@@ -554,10 +554,10 @@ class GitProofTests(unittest.TestCase):
     def test_ignored_untracked_regen_is_a_cache(self):
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             fx.add_regen(cand)
-            res = fx.evaluate(cand, done_issues("case_9250936e"),
-                              heartbeat=[run_row("id-case_9250936e", 30)])
+            res = fx.evaluate(cand, done_issues("TOG-" "99702"),
+                              heartbeat=[run_row("id-TOG-" "99702", 30)])
             self.assertIsNone(res["reason"])
             self.assertEqual([c["name"] for c in res["caches"]],
                              ["node_modules"])
@@ -567,7 +567,7 @@ class GitProofTests(unittest.TestCase):
     def test_tracked_dir_is_never_a_cache(self):
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             target = os.path.join(cand, "node_modules")
             os.makedirs(target)
             with open(os.path.join(target, "blob"), "w") as handle:
@@ -575,8 +575,8 @@ class GitProofTests(unittest.TestCase):
             git("add", "-f", "node_modules", cwd=cand)
             git("commit", "-qm", "tracked regen", cwd=cand)
             make_old(cand)
-            res = fx.evaluate(cand, done_issues("case_9250936e"),
-                              heartbeat=[run_row("id-case_9250936e", 30)])
+            res = fx.evaluate(cand, done_issues("TOG-" "99702"),
+                              heartbeat=[run_row("id-TOG-" "99702", 30)])
             # Per-dir refusals land in refusal lists with empty caches;
             # only worktree-level gates set reason. Git reports a dir with
             # tracked files as not-ignored (rc=1); the ls-files backstop
@@ -599,8 +599,8 @@ class GitProofTests(unittest.TestCase):
             # A fresh clone's .git is genuinely fresh: backdate it to model
             # an idle checkout (the host probe counts .git, same as here).
             make_old(cand, include_git=True)
-            res = fx.evaluate(cand, done_issues("case_2dd66922"),
-                              heartbeat=[run_row("id-case_2dd66922", 30)])
+            res = fx.evaluate(cand, done_issues("TOG-" "99703"),
+                              heartbeat=[run_row("id-TOG-" "99703", 30)])
             self.assertIsNone(res["reason"])
             self.assertEqual(res["caches"], [])
             self.assertEqual(res.get("not-ignored"), ["target"])
@@ -610,7 +610,7 @@ class GitProofTests(unittest.TestCase):
     def test_symlink_regen_is_recorded_never_deleted(self):
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             real = os.path.join(fx.tmp.name, "outside-store")
             os.makedirs(real)
             with open(os.path.join(real, "blob"), "w") as handle:
@@ -622,8 +622,8 @@ class GitProofTests(unittest.TestCase):
             # the link so the test judges the symlink rule, not the clock.
             stamp = time.time() - 8 * HOUR
             os.utime(link, (stamp, stamp), follow_symlinks=False)
-            res = fx.evaluate(cand, done_issues("case_9250936e"),
-                              heartbeat=[run_row("id-case_9250936e", 30)])
+            res = fx.evaluate(cand, done_issues("TOG-" "99702"),
+                              heartbeat=[run_row("id-TOG-" "99702", 30)])
             self.assertEqual(res.get("skipped_symlink"), ["node_modules"])
             self.assertEqual(res["caches"], [])
             self.assertTrue(os.path.islink(
@@ -634,7 +634,7 @@ class GitProofTests(unittest.TestCase):
     def test_container_pointer_gitdir_resolves(self):
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             dotgit = os.path.join(cand, ".git")
             # The real pointer resolves without any mapping.
             self.assertTrue(os.path.isdir(tool.resolve_git_dir(cand)))
@@ -657,11 +657,11 @@ class GitProofTests(unittest.TestCase):
     def test_all_five_host_names_are_strippable(self):
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             for name in tool.REGEN_NAMES:
                 fx.add_regen(cand, name=name)
-            res = fx.evaluate(cand, done_issues("case_9250936e"),
-                              heartbeat=[run_row("id-case_9250936e", 30)])
+            res = fx.evaluate(cand, done_issues("TOG-" "99702"),
+                              heartbeat=[run_row("id-TOG-" "99702", 30)])
             self.assertIsNone(res["reason"])
             self.assertEqual(sorted(c["name"] for c in res["caches"]),
                              sorted(tool.REGEN_NAMES))
@@ -675,14 +675,14 @@ class GitProofTests(unittest.TestCase):
         # regen dir (reclaimable space silently missed).
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             nested = os.path.join(cand, "packages", "web", "node_modules")
             os.makedirs(nested)
             with open(os.path.join(nested, "blob"), "wb") as handle:
                 handle.write(b"\0" * 3)
             make_old(cand)
-            res = fx.evaluate(cand, done_issues("case_9250936e"),
-                              heartbeat=[run_row("id-case_9250936e", 30)])
+            res = fx.evaluate(cand, done_issues("TOG-" "99702"),
+                              heartbeat=[run_row("id-TOG-" "99702", 30)])
             self.assertIsNone(res["reason"])
             self.assertEqual([c["name"] for c in res["caches"]],
                              ["node_modules"])
@@ -698,7 +698,7 @@ class GitProofTests(unittest.TestCase):
         # cache) and is kept.
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             vend = os.path.join(cand, "packages", "vend")
             target = os.path.join(vend, "node_modules")
             os.makedirs(target)
@@ -710,8 +710,8 @@ class GitProofTests(unittest.TestCase):
                 "packages/vend/.gitignore", cwd=cand)
             git("commit", "-qm", "tracked vend", cwd=cand)
             make_old(cand)
-            res = fx.evaluate(cand, done_issues("case_9250936e"),
-                              heartbeat=[run_row("id-case_9250936e", 30)])
+            res = fx.evaluate(cand, done_issues("TOG-" "99702"),
+                              heartbeat=[run_row("id-TOG-" "99702", 30)])
             self.assertIsNone(res["reason"])
             self.assertEqual(res["caches"], [])
             self.assertEqual(res.get("not-ignored"),
@@ -726,12 +726,12 @@ class GitProofTests(unittest.TestCase):
         # gate. The nested checkout's live card must decide its own dirs.
         fx = ProjectFixture()
         try:
-            parent = os.path.join(fx.root, "co", "proj", "case_6e825a7a-main")
+            parent = os.path.join(fx.root, "co", "proj", "TOG-" "99706-main")
             git("clone", "-q", fx.origin, parent, cwd=fx.tmp.name)
             nested = os.path.join(parent, ".paperclip", "worktrees",
-                                  "case_864f3dbf")
+                                  "TOG-" "99707")
             os.makedirs(os.path.dirname(nested))
-            git("worktree", "add", "-q", "-b", "case_864f3dbf", nested,
+            git("worktree", "add", "-q", "-b", "TOG-" "99707", nested,
                 "origin/main", cwd=parent)
             nested = os.path.realpath(nested)
             parent = os.path.realpath(parent)
@@ -740,10 +740,10 @@ class GitProofTests(unittest.TestCase):
             with open(os.path.join(target, "blob"), "wb") as handle:
                 handle.write(b"\0" * 3)
             make_old(parent, include_git=True)
-            issues = [issue_row("case_6e825a7a", "done"),
-                      issue_row("case_864f3dbf", "todo")]
-            heartbeat = [run_row("id-case_6e825a7a", 30),
-                         run_row("id-case_864f3dbf", 1)]
+            issues = [issue_row("TOG-" "99706", "done"),
+                      issue_row("TOG-" "99707", "todo")]
+            heartbeat = [run_row("id-TOG-" "99706", 30),
+                         run_row("id-TOG-" "99707", 1)]
             parent_res = fx.evaluate(parent, issues, heartbeat=heartbeat)
             self.assertIsNone(parent_res["reason"])
             self.assertEqual(parent_res["caches"], [])
@@ -802,10 +802,10 @@ class EvaluateEndToEndTests(unittest.TestCase):
     def test_open_recent_run_keeps(self):
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             fx.add_regen(cand)
-            res = fx.evaluate(cand, [issue_row("case_9250936e", "in_progress")],
-                              heartbeat=[run_row("id-case_9250936e", 1)])
+            res = fx.evaluate(cand, [issue_row("TOG-" "99702", "in_progress")],
+                              heartbeat=[run_row("id-TOG-" "99702", 1)])
             self.assertEqual(res["reason"], "card-active")
             self.assertEqual(res["caches"], [])
         finally:
@@ -814,10 +814,10 @@ class EvaluateEndToEndTests(unittest.TestCase):
     def test_open_old_run_strips(self):
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             fx.add_regen(cand)
-            res = fx.evaluate(cand, [issue_row("case_9250936e", "todo")],
-                              heartbeat=[run_row("id-case_9250936e", 30)])
+            res = fx.evaluate(cand, [issue_row("TOG-" "99702", "todo")],
+                              heartbeat=[run_row("id-TOG-" "99702", 30)])
             self.assertIsNone(res["reason"])
             self.assertEqual(len(res["caches"]), 1)
         finally:
@@ -826,9 +826,9 @@ class EvaluateEndToEndTests(unittest.TestCase):
     def test_open_no_history_keeps(self):
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             fx.add_regen(cand)
-            res = fx.evaluate(cand, [issue_row("case_9250936e", "todo")],
+            res = fx.evaluate(cand, [issue_row("TOG-" "99702", "todo")],
                               heartbeat=[run_row("id-OTHER", 30)])
             self.assertEqual(res["reason"], "run-history-unknown")
         finally:
@@ -850,13 +850,13 @@ class EvaluateEndToEndTests(unittest.TestCase):
     def test_fixture_without_git_proof_keeps(self):
         fx = ProjectFixture()
         try:
-            plain = os.path.join(fx.root, "co", "proj", "case_6d56a632-plain")
+            plain = os.path.join(fx.root, "co", "proj", "TOG-" "99705-plain")
             os.makedirs(os.path.join(plain, "node_modules"))
             with open(os.path.join(plain, "node_modules", "b"), "w") as h:
                 h.write("x")
             make_old(plain)
-            res = fx.evaluate(plain, done_issues("case_6d56a632"),
-                              heartbeat=[run_row("id-case_6d56a632", 30)])
+            res = fx.evaluate(plain, done_issues("TOG-" "99705"),
+                              heartbeat=[run_row("id-TOG-" "99705", 30)])
             self.assertIsNone(res["reason"])
             self.assertEqual(res["caches"], [])
             self.assertEqual(res.get("git-unreadable"), ["node_modules"])
@@ -981,14 +981,14 @@ class ApplyTests(unittest.TestCase):
     def test_apply_removes_only_the_stale_regen(self):
         fx = ProjectFixture()
         try:
-            idle = fx.worktrees["case_9250936e-beta"]
+            idle = fx.worktrees["TOG-" "99702-beta"]
             doomed = fx.add_regen(idle)
-            busy = fx.worktrees["case_1cab5f7f-alpha"]
+            busy = fx.worktrees["TOG-" "99701-alpha"]
             fx.add_regen(busy)
-            issues = done_issues("case_1cab5f7f", "case_9250936e")
+            issues = done_issues("TOG-" "99701", "TOG-" "99702")
             api = FakeApi(issues=issues,
-                          heartbeat=[run_row("id-case_1cab5f7f", 30),
-                                     run_row("id-case_9250936e", 30)])
+                          heartbeat=[run_row("id-TOG-" "99701", 30),
+                                     run_row("id-TOG-" "99702", 30)])
             with mock.patch.object(tool, "host_proc_refs",
                                    return_value={os.path.join(busy,
                                                               "app.py")}):
@@ -1016,10 +1016,10 @@ class ApplyTests(unittest.TestCase):
     def test_cap_zero_removes_nothing(self):
         fx = ProjectFixture()
         try:
-            idle = fx.worktrees["case_9250936e-beta"]
+            idle = fx.worktrees["TOG-" "99702-beta"]
             doomed = fx.add_regen(idle)
-            api = FakeApi(issues=done_issues("case_9250936e"),
-                          heartbeat=[run_row("id-case_9250936e", 30)])
+            api = FakeApi(issues=done_issues("TOG-" "99702"),
+                          heartbeat=[run_row("id-TOG-" "99702", 30)])
             summary, _manifest = self.run_pass(fx, api, 0)
             self.assertTrue(os.path.exists(doomed))
             self.assertEqual(summary["apply"]["removed_dirs"], 0)
@@ -1030,12 +1030,12 @@ class ApplyTests(unittest.TestCase):
     def test_reopened_card_survives_apply(self):
         fx = ProjectFixture()
         try:
-            idle = fx.worktrees["case_9250936e-beta"]
+            idle = fx.worktrees["TOG-" "99702-beta"]
             doomed = fx.add_regen(idle)
             scan_api = FakeApi(
-                issues=done_issues("case_9250936e"),
-                heartbeat=[run_row("id-case_9250936e", 30)],
-                reread={"id-case_9250936e": "in_progress"})
+                issues=done_issues("TOG-" "99702"),
+                heartbeat=[run_row("id-TOG-" "99702", 30)],
+                reread={"id-TOG-" "99702": "in_progress"})
             summary, _manifest = self.run_pass(fx, scan_api, 200)
             self.assertTrue(os.path.exists(doomed))
             self.assertEqual(
@@ -1047,10 +1047,10 @@ class ApplyTests(unittest.TestCase):
     def test_reread_error_skips_loudly(self):
         fx = ProjectFixture()
         try:
-            idle = fx.worktrees["case_9250936e-beta"]
+            idle = fx.worktrees["TOG-" "99702-beta"]
             doomed = fx.add_regen(idle)
-            scan_api = FakeApi(issues=done_issues("case_9250936e"),
-                               heartbeat=[run_row("id-case_9250936e", 30)],
+            scan_api = FakeApi(issues=done_issues("TOG-" "99702"),
+                               heartbeat=[run_row("id-TOG-" "99702", 30)],
                                dead=False)
             with mock.patch.object(FakeApi, "issue_status",
                                    side_effect=OSError("down")):
@@ -1064,11 +1064,11 @@ class ApplyTests(unittest.TestCase):
     def test_failed_rm_is_loud_exit_3(self):
         fx = ProjectFixture()
         try:
-            idle = fx.worktrees["case_9250936e-beta"]
+            idle = fx.worktrees["TOG-" "99702-beta"]
             doomed = fx.add_regen(idle)
             os.chmod(idle, 0o555)
-            api = FakeApi(issues=done_issues("case_9250936e"),
-                          heartbeat=[run_row("id-case_9250936e", 30)])
+            api = FakeApi(issues=done_issues("TOG-" "99702"),
+                          heartbeat=[run_row("id-TOG-" "99702", 30)])
             manifest = os.path.join(fx.tmp.name, "manifests")
             opts = parse_argv(["--apply", "--projects-root", fx.root,
                                "--manifest-dir", manifest,
@@ -1094,10 +1094,10 @@ class ApplyTests(unittest.TestCase):
     def test_kill_switch_forces_dry_run(self):
         fx = ProjectFixture()
         try:
-            idle = fx.worktrees["case_9250936e-beta"]
+            idle = fx.worktrees["TOG-" "99702-beta"]
             doomed = fx.add_regen(idle)
-            api = FakeApi(issues=done_issues("case_9250936e"),
-                          heartbeat=[run_row("id-case_9250936e", 30)])
+            api = FakeApi(issues=done_issues("TOG-" "99702"),
+                          heartbeat=[run_row("id-TOG-" "99702", 30)])
             manifest = os.path.join(fx.tmp.name, "manifests")
             os.makedirs(manifest)
             with open(os.path.join(manifest, tool.KILL_FILE_NAME),
@@ -1142,13 +1142,13 @@ class RevalidateTests(unittest.TestCase):
     def test_fresh_run_path_under_candidate_skips(self):
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             fx.add_regen(cand)
-            res = fx.evaluate(cand, done_issues("case_9250936e"),
-                              heartbeat=[run_row("id-case_9250936e", 30)])
+            res = fx.evaluate(cand, done_issues("TOG-" "99702"),
+                              heartbeat=[run_row("id-TOG-" "99702", 30)])
             self.assertIsNone(res["reason"])
-            api = FakeApi(issues=done_issues("case_9250936e"),
-                          heartbeat=[run_row("id-case_9250936e", 30)])
+            api = FakeApi(issues=done_issues("TOG-" "99702"),
+                          heartbeat=[run_row("id-TOG-" "99702", 30)])
             why = self.check(api, res, self.live_refs(
                 run_paths={os.path.join(cand, "node_modules", "blob")}))
             self.assertEqual(why, "run-path-appeared")
@@ -1158,15 +1158,15 @@ class RevalidateTests(unittest.TestCase):
     def test_fresh_live_issue_id_skips(self):
         fx = ProjectFixture()
         try:
-            cand = fx.worktrees["case_9250936e-beta"]
+            cand = fx.worktrees["TOG-" "99702-beta"]
             fx.add_regen(cand)
-            res = fx.evaluate(cand, done_issues("case_9250936e"),
-                              heartbeat=[run_row("id-case_9250936e", 30)])
+            res = fx.evaluate(cand, done_issues("TOG-" "99702"),
+                              heartbeat=[run_row("id-TOG-" "99702", 30)])
             self.assertIsNone(res["reason"])
-            api = FakeApi(issues=done_issues("case_9250936e"),
-                          heartbeat=[run_row("id-case_9250936e", 30)])
+            api = FakeApi(issues=done_issues("TOG-" "99702"),
+                          heartbeat=[run_row("id-TOG-" "99702", 30)])
             why = self.check(api, res, self.live_refs(
-                run_issue_ids={"id-case_9250936e"}))
+                run_issue_ids={"id-TOG-" "99702"}))
             self.assertEqual(why, "live-run-appeared")
         finally:
             fx.close()
@@ -1209,9 +1209,9 @@ class SummarizeTests(unittest.TestCase):
     def test_open_old_run_is_speculative_never_headline(self):
         fx = ProjectFixture()
         try:
-            fx.add_regen(fx.worktrees["case_9250936e-beta"])
-            api = FakeApi(issues=[issue_row("case_9250936e", "todo")],
-                          heartbeat=[run_row("id-case_9250936e", 30)])
+            fx.add_regen(fx.worktrees["TOG-" "99702-beta"])
+            api = FakeApi(issues=[issue_row("TOG-" "99702", "todo")],
+                          heartbeat=[run_row("id-TOG-" "99702", 30)])
             summary = self.dry_run(fx, api)
             self.assertEqual(summary["stale_candidates"], 1)
             self.assertEqual(summary["regen_dirs"], 0)
@@ -1223,9 +1223,9 @@ class SummarizeTests(unittest.TestCase):
     def test_terminal_card_stays_headline(self):
         fx = ProjectFixture()
         try:
-            fx.add_regen(fx.worktrees["case_9250936e-beta"])
-            api = FakeApi(issues=done_issues("case_9250936e"),
-                          heartbeat=[run_row("id-case_9250936e", 30)])
+            fx.add_regen(fx.worktrees["TOG-" "99702-beta"])
+            api = FakeApi(issues=done_issues("TOG-" "99702"),
+                          heartbeat=[run_row("id-TOG-" "99702", 30)])
             summary = self.dry_run(fx, api)
             self.assertEqual(summary["regen_dirs"], 1)
             self.assertEqual(summary["speculative_dirs"], 0)
@@ -1267,9 +1267,9 @@ class EntryPointTests(unittest.TestCase):
     def test_line_reports_mode_and_counts(self):
         fx = ProjectFixture()
         try:
-            fx.add_regen(fx.worktrees["case_9250936e-beta"])
-            api = FakeApi(issues=done_issues("case_9250936e"),
-                          heartbeat=[run_row("id-case_9250936e", 30)])
+            fx.add_regen(fx.worktrees["TOG-" "99702-beta"])
+            api = FakeApi(issues=done_issues("TOG-" "99702"),
+                          heartbeat=[run_row("id-TOG-" "99702", 30)])
             manifest = os.path.join(fx.tmp.name, "manifests")
             opts = parse_argv(["--projects-root", fx.root,
                                "--manifest-dir", manifest,

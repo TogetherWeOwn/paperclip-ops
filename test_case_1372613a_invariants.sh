@@ -128,8 +128,8 @@ check("V1 stuck error agent trips",
       ids("paperclip_inv_agents_error_10m") == ["00000000-0000-4000-8000-000000000003"],
       f"got {ids('paperclip_inv_agents_error_10m')}")
 check("V2 subtype-success 143 pair trips",
-      ids("paperclip_inv_failed_subtype_success") == ["00000000-0000-4000-8000-000000000079",
-                                                      "00000000-0000-4000-8000-000000000020"],
+      ids("paperclip_inv_failed_subtype_success") == ["00000000-0000-4000-8000-000000000020",
+                                                      "00000000-0000-4000-8000-000000000079"],
       f"got {ids('paperclip_inv_failed_subtype_success')}")
 rows = db.execute("SELECT issue_id, wake_count FROM paperclip_inv_cards_rewoken_6h").fetchall()
 check("V3 hot card trips with count 4",

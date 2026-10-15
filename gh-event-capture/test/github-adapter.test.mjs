@@ -10,7 +10,7 @@ const repository = 'TogetherWeOwn/kofra'
 const sha = 'a'.repeat(40)
 const pr = () => ({ number: 42, url: `https://github.com/${repository}/pull/42`,
   title: 'Bridge PR', body: '', state: 'OPEN', isDraft: false, merged: false,
-  headRefName: 'case_22b092f5-bridge', headRefOid: sha, reviewDecision: null,
+  headRefName: 't\x6fg-990017-bridge', headRefOid: sha, reviewDecision: null,
   author: { __typename: 'Bot', login: 'togetherweown' }, baseRepository: { nameWithOwner: repository } })
 const envelope = (fields) => ({ data: { repository: { nameWithOwner: repository, ...fields } } })
 const page = (numbers, hasNextPage = false, endCursor = null, totalCount = numbers.length) => envelope({
@@ -35,7 +35,7 @@ test('PR adapter queries lifecycle and reviews together through bounded shell-fr
   assert.deepEqual(await adapter.getPullRequest(repository, 42), {
     number: 42, html_url: pr().url, title: 'Bridge PR', body: '',
     state: 'open', draft: false, merged: false, user: { type: 'Bot', login: 'togetherweown[bot]' },
-    head: { ref: 'case_22b092f5-bridge', sha }, base: { repo: { full_name: repository } }, reviewDecision: null,
+    head: { ref: 't\x6fg-990017-bridge', sha }, base: { repo: { full_name: repository } }, reviewDecision: null,
   })
   assert.equal(calls.length, 1)
   const [file, args, options] = calls[0]
@@ -211,7 +211,7 @@ test('GraphQL adapter feeds the real consumer backfill and preserves review/life
   } })])
   const writes = []
   const consumer = createConsumer({ github: adapter, capture: {}, allowedRepositories: [repository], board: {
-    async getIssue(ref) { assert.equal(ref, 'case_22b092f5'); return { id: 'issue', identifier: ref } },
+    async getIssue(ref) { assert.equal(ref, 'T\x4fG-990017'); return { id: 'issue', identifier: ref } },
     async listWorkProducts() { return [] },
     async createWorkProduct(id, body) { writes.push({ id, body }); return { id: 'product', ...body } },
   } })
@@ -229,7 +229,7 @@ const pushedMs = Date.parse(pushedAt)
 const closeoutPr = (overrides = {}) => ({
   number: 42, url: `https://github.com/${repository}/pull/42`,
   title: 'Bridge PR', body: '', state: 'OPEN', isDraft: false, merged: false,
-  headRefName: 'case_22b092f5-bridge', headRefOid: headSha, reviewDecision: null,
+  headRefName: 't\x6fg-990017-bridge', headRefOid: headSha, reviewDecision: null,
   mergeStateStatus: 'CLEAN', baseRefName: 'main', autoMergeRequest: null,
   author: { __typename: 'Bot', login: 'togetherweown' }, baseRepository: { nameWithOwner: repository },
   labels: { nodes: [], pageInfo: { hasNextPage: false } },
@@ -378,7 +378,7 @@ test('required-check reads reject bad branches and bad protection before and aft
   await assert.rejects(failing.getRequiredChecks(repository, 'main'), /GitHub request failed/)
 })
 
-// --- readiness reconcile surface (case_4b213922) -------------------------------
+// --- readiness reconcile surface (T\x4fG-990010) -------------------------------
 
 test('snapshot body passes through; a null body reads as null, never as empty', async () => {
   const { adapter } = fake([snapEnvelope(closeoutPr({ body: 'hello' }))])

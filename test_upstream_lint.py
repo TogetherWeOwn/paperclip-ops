@@ -199,7 +199,7 @@ class TitleAndCommits(Base):
         self.assertRed(self.run_lint(), "title")
 
     def test_title_with_internal_id(self):
-        self.title = "fix(scheduler): case_1cab5f7f keep sessions"
+        self.title = "fix(scheduler): TOG-" "999001 keep sessions"
         self.assertRed(self.run_lint(), "title")
 
     def test_scope_less_title_and_commit_pass(self):
@@ -266,9 +266,11 @@ class Branch(Base):
         self.assertRed(self.run_lint(), "branch")
 
     def test_internal_id_branch(self):
-        self.branch = "fix/case_1cab5f7f-sessions"
+        self.branch = "fix/tog-" "999001-sessions"
+        # Isolate ID detection: uppercase would fail the independent format rule.
+        self.assertIsNotNone(ul.BRANCH_OK.match(self.branch))
         self.assertRed(self.run_lint(), "branch")  # case-insensitive on purpose
-        self.branch = "case_1cab5f7f-sessions"
+        self.branch = "TOG-" "999001-sessions"
         rep = self.run_lint()
         self.assertRed(rep, "branch")
         self.assertRed(rep, "internal")
@@ -348,19 +350,19 @@ class Internal(Base):
         self.assertRed(rep, "internal")
 
     def test_ticket_id_in_body(self):
-        self.body += "\nRefs: case_214e61d3\n"
+        self.body += "\nRefs: tOg-" "999002\n"
         self.assertLeak(self.run_lint())
 
     def test_ticket_id_in_commit(self):
-        self.commits[0]["commit"]["message"] += "\n\nCard case_0dd2d987"
+        self.commits[0]["commit"]["message"] += "\n\nCard TOG-" "999003"
         self.assertLeak(self.run_lint())
 
     def test_pap_id_in_added_line(self):
-        self.files[0]["patch"] += "+// see case_cdc74e44\n"
+        self.files[0]["patch"] += "+// see PAP-" "999004\n"
         self.assertLeak(self.run_lint())
 
     def test_added_source_line_starting_with_two_plus_signs_is_scanned(self):
-        self.files[0]["patch"] = "@@ -1 +1,2 @@\n+++// see case_1cab5f7f\n"
+        self.files[0]["patch"] = "@@ -1 +1,2 @@\n+++// see TOG-" "999001\n"
         self.assertLeak(self.run_lint())
 
     def test_internal_path_in_added_line(self):
@@ -368,7 +370,7 @@ class Internal(Base):
         self.assertLeak(self.run_lint())
 
     def test_tailnet_host_in_body(self):
-        self.body += "\nSee host-408af3e7.example.invalid for the repro.\n"
+        self.body += "\nSee synthetic-host" ".ts.net for the repro.\n"
         self.assertLeak(self.run_lint())
 
     def test_deploymentexample_in_body(self):
@@ -376,11 +378,11 @@ class Internal(Base):
         self.assertLeak(self.run_lint())
 
     def test_case_insensitive_internal_id_in_pr_text(self):
-        self.body += "\nRefs: case_214e61d3\n"
+        self.body += "\nRefs: tOg-" "999002\n"
         self.assertLeak(self.run_lint())
 
     def test_case_insensitive_internal_host_in_added_line(self):
-        self.files[0]["patch"] += "+const endpoint = 'https://host-caa6fee6.example.invalid';\n"
+        self.files[0]["patch"] += "+const endpoint = 'https://SYNTHETIC-HOST" ".TS.NET';\n"
         self.assertLeak(self.run_lint())
 
     def test_localhost_in_body_is_leak_but_not_in_code(self):
@@ -423,7 +425,7 @@ class Internal(Base):
         self.assertClean(self.run_lint())
 
     def test_path_with_internal_id(self):
-        self.files.append({"filename": "docs/case_214e61d3-notes.md", "status": "added", "additions": 1,
+        self.files.append({"filename": "docs/TOG-" "999002-notes.md", "status": "added", "additions": 1,
                            "deletions": 0, "changes": 1, "patch": "@@ -0,0 +1 @@\n+hello\n"})
         self.assertLeak(self.run_lint())
 
@@ -431,8 +433,8 @@ class Internal(Base):
         # Content is clean and the file is gone from the net diff, yet the path
         # stays in the published commit history.
         self.commits[0]["added_files"] = [
-            {"filename": "docs/case_1cab5f7f.txt", "patch": "@@ -0,0 +1 @@\n+hello\n", "changes": 1},
-            {"filename": "docs/case_1cab5f7f.txt", "patch": "@@ -1 +0,0 @@\n-hello\n", "changes": 1}]
+            {"filename": "docs/TOG-" "999001.txt", "patch": "@@ -0,0 +1 @@\n+hello\n", "changes": 1},
+            {"filename": "docs/TOG-" "999001.txt", "patch": "@@ -1 +0,0 @@\n-hello\n", "changes": 1}]
         self.assertLeak(self.run_lint())
 
     def test_historical_ordinary_path_is_clean(self):
@@ -467,7 +469,7 @@ class Internal(Base):
         self.assertNotIn("REFUSED", self.status(rep, "internal"))
 
     def test_nobody_mode_still_scans_commits_and_diff(self):
-        self.files[0]["patch"] += "+// case_f052904a\n"
+        self.files[0]["patch"] += "+// TOG-" "999005\n"
         rep = self.run_lint(nobody=True)
         self.assertRed(rep, "internal")
 
@@ -1043,7 +1045,7 @@ class GitMode(Base):
 
         path = os.path.join(self.repo_dir, "server/src/services/session.ts")
         with open(path, "a") as fh:
-            fh.write("// see case_1cab5f7f\n")
+            fh.write("// see TOG-" "999001\n")
         git(self.repo_dir, "commit", "-q", "-am", "fix(scheduler): scan raw source change")
 
         real_git = ul.git
@@ -1060,10 +1062,10 @@ class GitMode(Base):
 
         self.assertEqual(len(numstat_calls), 2)
         source = next(f for f in lay["files"] if f["filename"] == "server/src/services/session.ts")
-        self.assertIn("+// see case_1cab5f7f", source["patch"])
+        self.assertIn("+// see TOG-" "999001", source["patch"])
         commit_patches = [f["patch"] for c in lay["commits"] for f in c["added_files"]
                           if f["filename"] == "server/src/services/session.ts"]
-        self.assertTrue(any("+// see case_1cab5f7f" in patch for patch in commit_patches))
+        self.assertTrue(any("+// see TOG-" "999001" in patch for patch in commit_patches))
         rep = ul.lint(REPO, self.title, self.body, "fix/control-separator", lay["commits"],
                       lay["files"], "first-push", self.mdir)
         self.assertRed(rep, "internal")
@@ -1074,7 +1076,7 @@ class GitMode(Base):
         git(self.repo_dir, "config", "diff.dstPrefix", "custom-destination/")
         path = os.path.join(self.repo_dir, "server/src/services/session.ts")
         with open(path, "a") as fh:
-            fh.write("// see case_1cab5f7f\n")
+            fh.write("// see TOG-" "999001\n")
         git(self.repo_dir, "commit", "-q", "-am", "fix(scheduler): add internal reference")
 
         lay = ul.layout_from_git(self.repo_dir, "main", "HEAD", self.title, self.body)
@@ -1085,7 +1087,7 @@ class GitMode(Base):
         name = "server/src/services/quoted\nname.ts"
         path = os.path.join(self.repo_dir, name)
         with open(path, "w", newline="") as fh:
-            fh.write("const value = 1;\n// see case_1cab5f7f\n")
+            fh.write("const value = 1;\n// see TOG-" "999001\n")
         git(self.repo_dir, "add", "-A")
         git(self.repo_dir, "commit", "-q", "-m", "fix(scheduler): add quoted path")
 
@@ -1125,7 +1127,7 @@ class GitMode(Base):
                 rep = ul.lint(REPO, self.title, self.body, "fix/notes", lay["commits"], lay["files"], "first-push", self.mdir)
                 self.assertClean(rep)
                 with open(path, "a") as fh:
-                    fh.write("// see case_1cab5f7f\n")
+                    fh.write("// see TOG-" "999001\n")
                 git(self.repo_dir, "commit", "-q", "-am", "docs(notes): extend the note")
                 lay = ul.layout_from_git(self.repo_dir, "main", "HEAD", self.title, self.body)
                 self.assertRed(ul.lint(REPO, self.title, self.body, "fix/notes", lay["commits"], lay["files"],
@@ -1162,7 +1164,7 @@ class GitMode(Base):
 
     def test_git_mode_catches_an_internal_id_in_an_added_line(self):
         with open(os.path.join(self.repo_dir, "server/src/services/session.ts"), "a") as fh:
-            fh.write("// see case_1cab5f7f\n")
+            fh.write("// see TOG-" "999001\n")
         git(self.repo_dir, "commit", "-q", "-am", "fix(scheduler): more")
         lay = ul.layout_from_git(self.repo_dir, "main", "HEAD", self.title, self.body)
         rep = ul.lint(REPO, self.title, self.body, "fix/control-separator", lay["commits"], lay["files"], "first-push", self.mdir)
@@ -1171,19 +1173,19 @@ class GitMode(Base):
     def test_git_mode_scans_added_lines_from_every_commit_with_commit_delimiter_text(self):
         path = os.path.join(self.repo_dir, "server/src/services/session.ts")
         with open(path, "a") as fh:
-            fh.write("// commit:case_1cab5f7f\n")
+            fh.write("// commit:TOG-" "999001\n")
         git(self.repo_dir, "commit", "-q", "-am", "fix(scheduler): add temporary note")
         with open(path) as fh:
             contents = fh.read()
         with open(path, "w") as fh:
-            fh.write(contents.replace("// commit:case_1cab5f7f\n", ""))
+            fh.write(contents.replace("// commit:TOG-" "999001\n", ""))
         git(self.repo_dir, "commit", "-q", "-am", "fix(scheduler): remove temporary note")
         lay = ul.layout_from_git(self.repo_dir, "main", "HEAD", self.title, self.body)
         rep = ul.lint(REPO, self.title, self.body, "fix/control-separator", lay["commits"], lay["files"], "first-push", self.mdir)
         self.assertRed(rep, "internal")
 
     def test_git_mode_scans_a_path_added_then_deleted_before_head(self):
-        path = os.path.join(self.repo_dir, "docs", "case_1cab5f7f.txt")
+        path = os.path.join(self.repo_dir, "docs", "TOG-" "999001.txt")
         os.makedirs(os.path.dirname(path))
         with open(path, "w") as fh:
             fh.write("hello\n")
@@ -1193,7 +1195,7 @@ class GitMode(Base):
         git(self.repo_dir, "add", "-A")
         git(self.repo_dir, "commit", "-q", "-m", "docs(notes): drop the note")
         lay = ul.layout_from_git(self.repo_dir, "main", "HEAD", self.title, self.body)
-        self.assertNotIn("docs/case_1cab5f7f.txt", {f["filename"] for f in lay["files"]})
+        self.assertNotIn("docs/TOG-" "999001.txt", {f["filename"] for f in lay["files"]})
         rep = ul.lint(REPO, self.title, self.body, "fix/note", lay["commits"], lay["files"], "first-push", self.mdir)
         self.assertRed(rep, "internal")
 
@@ -1648,14 +1650,16 @@ class Hook(Base):
             fh.write(body or self.body)
 
     def test_own_org_passes_through_without_any_text(self):
-        for url in ("https://github.com/TogetherWeOwn/paperclip.git", "person-dd677eb8@example.invalid:togetherweown/x.git"):
+        for url in ("https://github.com/TogetherWeOwn/paperclip.git",
+                    "git@github.com:togetherweown/x.git",
+                    "ssh://git@github.com/togetherweown/x.git"):
             self.assertEqual(self.push(url).returncode, 0, url)
 
     def test_non_github_remote_is_blocked(self):
         self.assertEqual(self.push("https://gitlab.com/acme/widget.git").returncode, 1)
 
     def test_non_github_url_userinfo_is_not_echoed(self):
-        url = "https://user:person-6325cb2e@example.invalid/acme/widget.git"
+        url = "https://user:dummy-marker@gitlab.com/acme/widget.git"
         r = self.push(url)
         self.assertEqual(r.returncode, 1)
         self.assertNotIn(url, r.stderr)
@@ -1663,8 +1667,8 @@ class Hook(Base):
 
     def test_url_used_as_the_remote_name_does_not_echo_userinfo(self):
         # `git push <url>` passes the URL as both hook arguments.
-        for url in ("https://user:person-6325cb2e@example.invalid/acme/widget.git",
-                    "https://user:person-09ae8172@example.invalid/acme/widget.git"):
+        for url in ("https://user:dummy-marker@gitlab.com/acme/widget.git",
+                    "https://user:dummy-marker@github.com/acme/widget.git"):
             with self.subTest(url=url):
                 self.write_text()
                 r = self.push(url, remote=url)
@@ -1681,16 +1685,20 @@ class Hook(Base):
 
     def test_ssh_url_form_is_parsed(self):
         self.write_text()
-        r = self.push("person-dd677eb8@example.invalid:acme/widget.git")
-        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        for url in ("git@github.com:acme/widget.git", "ssh://git@github.com/acme/widget.git"):
+            with self.subTest(url=url):
+                r = self.push(url)
+                self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        # The sanitizer placeholder is not GitHub and must never bypass lint.
+        self.assertEqual(self.push("git@example.invalid:acme/widget.git").returncode, 1)
 
     def test_failing_lint_blocks_the_push(self):
         self.write_text(title="not conventional")
         self.assertEqual(self.push("https://github.com/acme/widget.git").returncode, 1)
 
     def test_internal_branch_name_on_the_remote_blocks(self):
-        self.write_text(branch="case_1cab5f7f-fix")
-        line = "refs/heads/local %s refs/heads/case_1cab5f7f-fix %s\n" % (self.head, "0" * 40)
+        self.write_text(branch="TOG-" "999001-fix")
+        line = "refs/heads/local %s refs/heads/TOG-" "999001-fix %s\n" % (self.head, "0" * 40)
         self.assertEqual(self.push("https://github.com/acme/widget.git", line).returncode, 1)
 
     def test_unknown_memory_blocks(self):
@@ -1731,7 +1739,7 @@ class Hook(Base):
         self.write_text()
         git(self.repo_dir, "reset", "--soft", "main")
         with open(os.path.join(self.repo_dir, "server/src/services/session.ts"), "a") as fh:
-            fh.write("// see case_1cab5f7f\n")
+            fh.write("// see TOG-" "999001\n")
         git(self.repo_dir, "add", "-A")
         git(self.repo_dir, "commit", "-q", "-m", "fix(scheduler): keep task sessions across project row updates")
         first = git(self.repo_dir, "rev-parse", "HEAD").strip()

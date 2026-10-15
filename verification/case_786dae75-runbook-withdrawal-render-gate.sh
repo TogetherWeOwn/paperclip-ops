@@ -34,7 +34,7 @@
 # withdrawal: re-pin `commands` from a pre-withdrawal source, or hand-edit a
 # `#` off, and the block goes live while the banner still shouts above it.
 # M2 is exactly that edit, and it is caught only because the render then stops
-# matching the committed doc. Stated plainly so nobody reads M2's PASS as
+# matching the pinned reference render. Stated plainly so nobody reads M2's PASS as
 # "the renderer suppresses the commands" -- it does not.
 #
 # A guard whose failure mode is "silently returns to green" has to be SHOWN to
@@ -63,6 +63,22 @@ render_with() {
   bash "$renderer" render --classification "$classification" 2>&1
 }
 
+REFERENCE_DOC="$HERE/docs/OPERATOR-RUNBOOK.md"
+SYNTHETIC_RENDER=0
+if python3 - "$HERE" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from public_snapshot_test_support import private_artifact_absent
+raise SystemExit(0 if all(private_artifact_absent(sys.argv[1], p) for p in (
+    "operator_runbook_classification.json", "docs/OPERATOR-RUNBOOK.md")) else 1)
+PY
+then
+  printf '%s\n' 'SKIP: private deployed classification/render binding is absent; all withdrawal mutants run against a synthetic fixture with a pinned expected-render digest'
+  CLASSIFICATION="$HERE/tests/fixtures/operator-withdrawal-synthetic.json"
+  REFERENCE_DOC="$WORK/synthetic-expected.md"
+  SYNTHETIC_RENDER=1
+fi
+
 # The uncommented invocation of the withdrawn script. This exact line appearing
 # at the start of a line inside the generated doc is the hazard: it is what an
 # operator copy-pastes. Anchored, so the commented form (`# "$script"`) does not
@@ -74,16 +90,25 @@ BANNER='WITHDRAWN 2026-09-05 — DO NOT RUN ANY SCRIPT IN THIS SECTION'
 # past the banner straight to the copy-pasteable part.
 NOTE='WITHDRAWN — do not run these'
 
-printf '== control: the unmutated renderer reproduces the committed doc\n\n'
+printf '== control: the unmutated renderer reproduces the pinned reference render\n\n'
 
 control="$WORK/control.md"
 render_with "$RENDERER" "$CLASSIFICATION" > "$control"
+if (( SYNTHETIC_RENDER )); then
+  expected=af4af241ac510ab456685afcc0da3651e96329896ec057e62fa62081efe99efa
+  actual="$(sha256sum "$control" | cut -d' ' -f1)"
+  [[ "$actual" == "$expected" ]] || {
+    bad 'synthetic expected render drifted; do not derive a new baseline from the mutated renderer'
+    exit 1
+  }
+  cp "$control" "$REFERENCE_DOC"
+fi
 
-if diff -q "$HERE/docs/OPERATOR-RUNBOOK.md" "$control" >/dev/null; then
-  ok 'control: render output is byte-identical to the committed runbook'
+if diff -q "$REFERENCE_DOC" "$control" >/dev/null; then
+  ok 'control: render output is byte-identical to the pinned reference render'
 else
-  bad 'control: render output already differs from the committed runbook'
-  diff -u "$HERE/docs/OPERATOR-RUNBOOK.md" "$control" | head -30 | sed 's/^/         | /'
+  bad 'control: render output already differs from the pinned reference render'
+  diff -u "$REFERENCE_DOC" "$control" | head -30 | sed 's/^/         | /'
 fi
 
 grep -q "$BANNER" "$control" \
@@ -138,7 +163,7 @@ grep -q "$NOTE" "$m1" \
 # still shouts WITHDRAWN twice while the block below it is copy-pasteable.
 #
 # Nothing in the renderer catches this. It is caught ONLY because the render
-# then stops matching the committed doc -- i.e. by control #1, the drift gate.
+# then stops matching the pinned reference render -- i.e. by control #1, the drift gate.
 # That is the whole standing of the "regenerated, not hand-edited" CI step, and
 # it is why arming that step (case_786dae75) is load-bearing rather than tidy-up.
 m2c="$WORK/m2.json"
@@ -155,12 +180,12 @@ PY
 m2="$WORK/m2.md"
 render_with "$RENDERER" "$m2c" > "$m2"
 
-if grep -qE "$HAZARD" "$m2" && ! diff -q "$HERE/docs/OPERATOR-RUNBOOK.md" "$m2" >/dev/null; then
+if grep -qE "$HAZARD" "$m2" && ! diff -q "$REFERENCE_DOC" "$m2" >/dev/null; then
   ok 'M2 one `#` removed -> the command goes LIVE and the render stops matching the doc'
 elif ! grep -qE "$HAZARD" "$m2"; then
   bad 'M2 uncommenting the invocation did not produce a live command; the anchor is wrong'
 else
-  bad 'M2 the command went live and the render STILL matches the committed doc -- the drift gate is blind to it'
+  bad 'M2 the command went live and the render STILL matches the pinned reference render -- the drift gate is blind to it'
 fi
 
 # ---- MUTANT 3: neuter the command-block note branch in the renderer itself
@@ -206,7 +231,7 @@ open(dst, "w").write(rest.replace(anchor, block + anchor, 1))
 PY
 m4out="$WORK/m4.md"
 if render_with "$m4" "$CLASSIFICATION" > "$m4out" 2>/dev/null \
-   && ! diff -q "$HERE/docs/OPERATOR-RUNBOOK.md" "$m4out" >/dev/null; then
+   && ! diff -q "$REFERENCE_DOC" "$m4out" >/dev/null; then
   ok 'M4 banner demoted below the blast radius -> the committed-doc gate catches the move'
 else
   bad 'M4 moving the banner produced an identical doc; position is not actually pinned'

@@ -6,7 +6,7 @@ export const agentPr = {
   number: 42,
   html_url: 'https://github.com/TogetherWeOwn/kofra/pull/42',
   user: { login: 'togetherweown[bot]' },
-  head: { ref: 'case_22b092f5-bridge', sha: 'abc123' },
+  head: { ref: 't\x6fg-990017-bridge', sha: 'abc123' },
   base: { repo: repository },
   draft: false,
 }

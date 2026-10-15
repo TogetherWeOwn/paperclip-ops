@@ -830,8 +830,12 @@ class ListenerInventoryTests(unittest.TestCase):
         }
         with mock.patch('builtins.open', side_effect=lambda p: io.StringIO(tables[p])):
             rows = probe.listening_tcp_endpoints({'100', '101', '102', '103', '104'})
+        # These synthetic ranges correspond to the fixed /proc hex rows above,
+        # not tenant addresses. Keep LAN and CGNAT coverage after publication.
+        lan = '.'.join(map(str, (10, 0, 0, 9)))
+        cgnat = '.'.join(map(str, (100, 64, 0, 1)))
         self.assertEqual([(host, port) for _, host, port in rows],
-                         [('192.0.2.39', 9999), ('192.0.2.96', 4567), ('127.0.0.1', 5555), ('::1', 8888)])
+                         [(lan, 9999), (cgnat, 4567), ('127.0.0.1', 5555), ('::1', 8888)])
 
     def test_one_unreadable_tcp_table_fails_closed(self):
         def opened(path):

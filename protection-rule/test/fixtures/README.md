@@ -75,5 +75,14 @@ carries an internal task link; the reader reads only `output.title`). The one re
 list's `total_count`, set to the rows kept. Synthetic fixtures in
 `contract-fixture.mjs` clone these objects and rebind only SHAs, the pull request
 number, the review's `external_id` and (to keep rows distinct) CI run ids. The
-committed fixtures' SHA-256 are pinned in `source.test.mjs`. The review App id `5191093` is also the `integration_id` the
-live Bot `main` ruleset pins for `Paperclip Review`.
+committed fixtures' SHA-256 are pinned in `source.test.mjs`. For this public
+snapshot, the six check-run `external_id` values were additionally replaced with
+synthetic UUIDs; all other fields, including pull provenance and scored check
+fields, are unchanged from the trimmed fixtures. The updated hashes pin these
+sanitized bytes, not the original response bytes. The historical App identifier
+is fixture provenance, not evidence of the current live ruleset.
+
+Publication admits the two ZIP streams only at their exact reviewed path and
+SHA-256, and only when the single archive member equals the corresponding public
+JSON fixture byte-for-byte. Their extracted content is scanned too; changed ZIP
+bytes, a different path or missing/mismatched JSON remain refused.

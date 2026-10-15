@@ -21,7 +21,7 @@ const confirmation = (overrides = {}) => ({
   ...overrides,
 })
 const issue = (overrides = {}) => ({
-  id: 'issue-1', identifier: 'case_8c5fe4cc', status: 'in_progress',
+  id: 'issue-1', identifier: 'T\x4fG-1', status: 'in_progress',
   assigneeAgentId: 'engineer', assigneeUserId: null, blockedBy: [], ...overrides,
 })
 

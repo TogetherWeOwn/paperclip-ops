@@ -250,7 +250,7 @@ class TimeoutPass(unittest.TestCase):
         bodies = self.bodies(calls)
         self.assertEqual(len(bodies), 1)
         self.assertEqual(bodies[0]['title'], f'{REPO}#7')
-        self.assertIn('case_ae44b2f7', log)
+        self.assertIn(cards[7][1], log)
 
     def test_backfill_caps_writes_at_max_new(self):
         prs = {REPO: [pr(number=n) for n in range(1, 8)]}

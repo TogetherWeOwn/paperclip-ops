@@ -19,7 +19,8 @@ run_suite() { # dir suite
   local d="$1" suite="$2"
   "$FIXTURE" >/dev/null || return $?
   rm -f "$d/grants.jsonl" "$d/queue.jsonl" "$d/disabled" || return $?
-  (cd "$d" && COMPANY_ID=00000000-0000-4000-8000-000000000001 \
+  # Synthetic identifiers must match the pinned public org.sql fixture.
+  (cd "$d" && COMPANY_ID=00000000-0000-4000-8000-000000000480 \
     PAPERCLIP_SQL_BACKEND=psql PAPERCLIP_API_URL=http://stub.invalid \
     PAPERCLIP_CLI="$d/test/fixtures/orgdb/paperclipai" \
     PAPERCLIP_STUB_LOG="$d/calls.jsonl" GRANT_LOG="$d/grants.jsonl" \
@@ -70,7 +71,7 @@ NODE
   node - "$d/test_privilege_ceilings.sh" <<'NODE'
 const fs=require('fs'), p=process.argv[2]; let s=fs.readFileSync(p,'utf8');
 const a='create --caller T0 --template C1_DIRECTOR_BUILDER --title "TEST Director AI Engineering"';
-const r='create --caller T0 --template C1_DIRECTOR_BUILDER --title "TEST Director AI Engineering" --reports-to 00000000-0000-4000-8000-000000000207';
+const r='create --caller T0 --template C1_DIRECTOR_BUILDER --title "TEST Director AI Engineering" --reports-to 00000000-0000-4000-8000-000000000003';
 if (!s.includes(a)) { console.error('caller-placement invocation anchor missing'); process.exit(2) }
 fs.writeFileSync(p,s.replace(a,r))
 NODE
@@ -158,7 +159,7 @@ mutant exact-grant-replacement test_request_queue.sh org_provisioner.sh \
   'company-wide organizational grant survived' seed_server_default_grant || rc=1
 mutant self-scope-foreign test_privilege_ceilings.sh org_provisioner.sh \
   'scope: (if .self then {subtreeRootAgentId:$id} else null end)' \
-  'scope: (if .self then {subtreeRootAgentId:"00000000-0000-4000-8000-000000000203"} else null end)' \
+  'scope: (if .self then {subtreeRootAgentId:"00000000-0000-4000-8000-000000000006"} else null end)' \
   'DIRECTOR SELF scope mismatch' || rc=1
 mutant self-scope-null test_request_queue.sh org_provisioner.sh \
   'scope: (if .self then {subtreeRootAgentId:$id} else null end)' \

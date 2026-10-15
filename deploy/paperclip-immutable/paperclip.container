@@ -1,0 +1,38 @@
+# Immutable carrier template. REVIEW ONLY: do not install directly from an agent checkout.
+[Unit]
+Description=Paperclip AI Agent Orchestrator (immutable application tree)
+Requires=paperclip-db.service
+After=paperclip-db.service
+
+[Container]
+# The operator must replace this placeholder with the already-approved immutable image digest.
+Image=paperclip-local@sha256:REPLACE_WITH_APPROVED_IMAGE_DIGEST
+ContainerName=paperclip
+# Database and model-gateway networks are declared in the UNIT namespace.
+# Quadlet renders X.network as --network=systemd-X and adds service ordering.
+# Network declarations are a source contract, not evidence of a deployment.
+Network=paperclip.network
+Network=omniroute.network
+ReadOnly=true
+ReadOnlyTmpfs=false
+Volume=%h/.local/share/paperclip:/paperclip:Z
+# Source-template allocation only; review capacity separately before deployment.
+Tmpfs=/tmp:rw,nosuid,nodev,noexec,size=24g,mode=1777
+Tmpfs=/run:rw,nosuid,nodev,noexec,size=64m,mode=0755
+Environment=HOST=0.0.0.0
+Environment=PAPERCLIP_HOME=/paperclip
+Environment=PAPERCLIP_DEPLOYMENT_MODE=authenticated
+Environment=PAPERCLIP_DEPLOYMENT_EXPOSURE=private
+Environment=PAPERCLIP_PUBLIC_URL=http://localhost:3100
+Environment=TMPDIR=/tmp
+Environment=XDG_CACHE_HOME=/paperclip/server-cache
+EnvironmentFile=%h/.config/containers/systemd/paperclip.env
+NoNewPrivileges=true
+DropCapability=all
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

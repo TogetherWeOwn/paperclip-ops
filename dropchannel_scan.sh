@@ -39,7 +39,7 @@
 #   Measured 2026-08-23, not assumed:
 #
 #     /paperclip/operator-handoff  ->  drwxrwxrwx root:root  (0777, NO sticky bit)
-#     case_2963068b-omniroute_combo_cli.sh -> -rwxr-xr-x node:node
+#     example-999-omniroute_combo_cli.sh -> -rwxr-xr-x node:node
 #     every agent on this instance runs as uid 1000(node)
 #
 #   Two consequences, both demonstrated rather than reasoned:
@@ -460,7 +460,7 @@ def is_identifier(tok: str) -> bool:
     The discriminator is that random blobs mix letters and digits WITHIN a segment,
     while names keep them apart:
         OMNIROUTE_MANAGEMENT_KEY        -> alpha|alpha|alpha        identifier
-        case_2963068b-omniroute_combo_cli     -> alpha|num|alpha|alpha|alpha  identifier
+        example-999-omniroute_combo_cli     -> alpha|num|alpha|alpha|alpha  identifier
         Xk92Lm4QzR7vB1nT8y(...)          -> one mixed segment    NOT exempt
         sk-<26 alnum>                   -> alpha|mixed             NOT exempt
 
@@ -1076,8 +1076,8 @@ cmd_selftest() {
         "prefix_${SK}${A26}${D10:0:6}"
 
   echo "=== case_bb2ac7f4: value shape, not just key name — the false positive ==="
-  # The literal line from case_d06b6dba-teamclaude-omniroute-findings.md:102 that made the
-  # channel cron permanently red. A probe RESULT table, not an assignment.
+  # A probe result-table row, not an assignment. Keep this benign shape as a
+  # regression control without embedding a historical report filename.
   _clean "probe result table: x-api-key : http=200" \
          "cc-headers + x-api-key            : http=200"
   _clean "k=v value with a word payload"    "api_key: status=notfound"
@@ -1107,7 +1107,7 @@ cmd_selftest() {
   _rule "URL carrying a token query parameter"       secret-assignment \
         "${APIK}: https://h.example/cb?${STOK}=correcthorsebattery"
   _rule "URL with userinfo is a credential in a URL" secret-assignment \
-        "${APIK}: https://user:person-59576af4@example.invalid/v1"
+        "${APIK}: https://user:correcthorse""battery@h.example/v1"
   _rule "URL carrying an opaque query parameter"     secret-assignment \
         "${XAK} : https://h.example/cb?t=hunter2-correct"
   _rule "nesting past the depth cap fails CLOSED"    secret-assignment \

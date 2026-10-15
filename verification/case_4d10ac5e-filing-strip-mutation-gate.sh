@@ -54,6 +54,18 @@ kill_ok() { printf '  \033[32mKILLED\033[0m   %s\n' "$1"; PASS=$((PASS+1)); }
 survived() { printf '  \033[31mSURVIVED\033[0m %s\n' "$1"; FAIL=$((FAIL+1)); }
 note()    { printf '           %s\n' "$1"; }
 
+PUBLIC_BUNDLE_ABSENT=0
+if python3 - "$REPO_ROOT" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from public_snapshot_test_support import private_artifact_absent
+raise SystemExit(0 if private_artifact_absent(sys.argv[1], "docs/upstream") else 1)
+PY
+then
+  PUBLIC_BUNDLE_ABSENT=1
+  printf '%s\n' 'SKIP: private disclosure packet integration is excluded; all nine mutation controls use explicit synthetic report/rule fixtures'
+fi
+
 # Build a pristine sandbox: the gate plus the docs it reads. The gate resolves
 # REPO_ROOT from its own location, so a copied tree is a complete fixture.
 # The filing gate rides along too: assertion C reads its SENDABLE as the
@@ -63,7 +75,11 @@ mkscene() {
   local dir="$1"
   rm -rf "$dir"; mkdir -p "$dir/verification" "$dir/docs/upstream"
   cp "$GATE_SRC" "$REPO_ROOT/verification/upstream-bundle-filing-gate.sh" "$dir/verification/"
-  cp "$REPO_ROOT"/docs/upstream/*.md "$dir/docs/upstream/"
+  if (( PUBLIC_BUNDLE_ABSENT )); then
+    python3 "$REPO_ROOT/verification/test_filing_strip.py" --stage "$dir" || return 2
+  else
+    cp "$REPO_ROOT"/docs/upstream/*.md "$dir/docs/upstream/" || return 2
+  fi
   chmod +x "$dir/verification/$(basename "$GATE_REL")"
 }
 
@@ -112,7 +128,16 @@ fi
 S="$WORK/control_neg"; mkscene "$S"
 FIXTURE="$REPO_ROOT/verification/fixtures/case_4d10ac5e-prefix-readme.md"
 FIXTURE_SHA=00386607117ed737c826a484f0e818e2b065fc01c74cda8ac5681fe493fae1af
-if [ ! -f "$FIXTURE" ]; then
+if python3 - "$REPO_ROOT" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from public_snapshot_test_support import private_artifact_absent
+raise SystemExit(0 if private_artifact_absent(sys.argv[1],
+    "verification/fixtures/case_4d10ac5e-prefix-readme.md") else 1)
+PY
+then
+  printf '%s\n' 'SKIP: historical private pre-fix README integration is excluded; synthetic superseded-instruction and missing-rule controls remain enabled'
+elif [ ! -f "$FIXTURE" ]; then
   survived "CONTROL-  pinned pre-fix fixture missing at verification/fixtures/case_4d10ac5e-prefix-readme.md"
 else
   got="$(sha256sum "$FIXTURE" | cut -d' ' -f1)"

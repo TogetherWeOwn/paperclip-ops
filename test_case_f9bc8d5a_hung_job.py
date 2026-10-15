@@ -37,6 +37,7 @@ import sys
 import tempfile
 import unittest
 import urllib.parse
+from public_snapshot_test_support import is_public_snapshot
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.environ.get("HUNG_TEST_ROOT") or HERE
@@ -703,8 +704,13 @@ class Behaviour(Harness):
         with open(THRESHOLDS, encoding="utf-8") as fh:
             rows = json.load(fh)["jobs"]
         self.assertEqual(conflicts, [], "one check-run name, two different timeouts")
-        self.assertGreaterEqual(len(jobs), 18, "workflow parse found suspiciously few jobs")  # 2026-10-10: two repo-split guard jobs folded into secret-scan
+        # The public snapshot excludes live-host workflows, not timeout checks.
+        # Keep the private-source floor and require every remaining public job.
+        minimum_jobs = 11 if is_public_snapshot(HERE) else 18
+        self.assertGreaterEqual(len(jobs), minimum_jobs, "workflow parse found suspiciously few jobs")
         self.assertIn("pr-lint", jobs, "pr-lint.yml was not read: the coverage test only sees ci.yml")
+        if is_public_snapshot(HERE):
+            self.assertIn("public-safety", jobs, "public-safety.yml was not read")
         for name, minutes in sorted(jobs.items()):
             self.assertIn(name, rows,
                           f'a workflow job {name!r} has timeout-minutes {minutes} but no row: add '
@@ -899,7 +905,8 @@ MUTANTS = [
     ("ci-job-row-deleted", T, '    "dispatch suite": 20,\n', ""),
     ("ci-job-row-disagrees", T, '"Offline suites": 150', '"Offline suites": 151'),
     ("pr-lint-row-deleted", T, '    "pr-lint": 5,\n', ""),
-    ("other-workflow-row-deleted", T, '    "first-pickup": 30,\n', ""),
+    ("other-workflow-row-deleted", T,
+     '    "public-safety": 5,\n' if is_public_snapshot(HERE) else '    "first-pickup": 30,\n', ""),
     ("other-workflow-row-disagrees", T, '"docs-verdict": 5', '"docs-verdict": 6'),
     ("cron-payload-drops-export", O, "root set -a; . ", "root . "),
     ("cron-payload-runs-after-failed-source", O, "&& exec ", "; "),

@@ -70,7 +70,11 @@ for f in "${FILES[@]}"; do
     || { fail "$f: file name must be NNNN_slug.sql"; continue; }
 
   # Phase header: within the first 15 lines, a comment declaring the phase.
-  if ! head -n 15 "$f" | grep -qiE '^[[:space:]]*--[[:space:]]*phase[[:space:]]*:'; then
+  # Capture-first (no head | grep -q pipeline): piping into an early-exiting
+  # grep under pipefail can report a match as a miss (see
+  # verification/case_c25c4d3f-sigpipe-verdict-gate.sh).
+  header="$(head -n 15 "$f")"
+  if ! grep -qiE '^[[:space:]]*--[[:space:]]*phase[[:space:]]*:' <<<"$header"; then
     fail "$f: missing expand/contract phase header (e.g. '-- phase: expand')"
   fi
 

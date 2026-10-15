@@ -48,7 +48,11 @@ fi
 
 # 4. inject prepends once and is idempotent.
 "$GATE" inject "$WORK/bare.sql" > "$WORK/wrapped.sql"
-head -n 1 "$WORK/wrapped.sql" | grep -q "SET lock_timeout" \
+# Capture-first (no head | grep -q pipeline): piping into an early-exiting
+# grep under pipefail can report a match as a miss (see
+# verification/case_c25c4d3f-sigpipe-verdict-gate.sh).
+wrapped_first_line="$(head -n 1 "$WORK/wrapped.sql")"
+grep -q "SET lock_timeout" <<<"$wrapped_first_line" \
   && grep -q "SELECT 1;" "$WORK/wrapped.sql" \
   && ok "inject prepends the preamble ahead of the body" \
   || bad "inject prepends the preamble ahead of the body"

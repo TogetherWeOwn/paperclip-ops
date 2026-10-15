@@ -826,7 +826,7 @@ jobs:
           # node7b1ff338 isolated VM fleet and (owner 2026-10-04) the ephemeral GARM
           # pools that replace both. Accept all three runner-name prefixes;
           # narrowing to any one fleet fails the gate below.
-          [[ "${RUNNER_NAME:-}" == coolify-vps-* || "${RUNNER_NAME:-}" == ci-node7b1ff338-iso-* || "${RUNNER_NAME:-}" == garm-* || "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || { echo "::error::refused runner '${RUNNER_NAME:-unset}': not a private isolated runner"; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || { echo "::error::public CI requires a GitHub-hosted runner"; exit 1; }
           [[ "${RUNNER_OS:-}" == Linux ]]
           [[ "${RUNNER_ARCH:-}" == X64 ]]
           printf 'private runner: name=%s os=%s arch=%s\n' "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
@@ -5896,6 +5896,9 @@ jobs:
       # needs:, no if:), so they still gate every PR through ci-ok.
       # C6: plugins/model-selection/ lives in paperclip-operator-toolkit.
       - name: Fail if the moved plugin path is touched
+        # This split guard applies only to the old private source repository.
+        # The canonical public repository must be able to own toolkit code.
+        if: github.event.repository.private
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" != "pull_request" ]]; then
@@ -5924,6 +5927,7 @@ jobs:
       # C4: paths in public-owned-paths.txt live in the toolkit
       # (vendor/toolkit-files.txt); deletions are exempt.
       - name: Fail if the freeze list drifted from its generator
+        if: github.event.repository.private
         run: |
           set -euo pipefail
           # public-owned-paths.txt is generated, never hand-edited (see its
@@ -5953,6 +5957,7 @@ jobs:
           fi
           echo "freeze list matches its generator"
       - name: Fail if a toolkit-owned path is touched
+        if: github.event.repository.private
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" != "pull_request" ]]; then
@@ -6068,7 +6073,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "${RUNNER_NAME:-}" == coolify-vps-* || "${RUNNER_NAME:-}" == ci-node7b1ff338-iso-* || "${RUNNER_NAME:-}" == garm-* || "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || { echo "::error::refused runner '${RUNNER_NAME:-unset}': not a private isolated runner"; exit 1; }
+          [[ "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || { echo "::error::public CI requires a GitHub-hosted runner"; exit 1; }
           [[ "${RUNNER_OS:-}" == Linux ]]
           [[ "${RUNNER_ARCH:-}" == X64 ]]
           printf 'private runner: name=%s os=%s arch=%s\n' "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"

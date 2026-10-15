@@ -28,6 +28,21 @@ class PublicCI(unittest.TestCase):
         self.assertIn('"${RUNNER_ENVIRONMENT:-}" == github-hosted', text)
         self.assertNotIn('case "${RUNNER_NAME:-}"', text)
 
+    def test_obsolete_split_guards_apply_only_to_private_source(self):
+        text = (ROOT / ".github/workflows/ci.yml").read_text()
+        for name in ("Fail if the moved plugin path is touched",
+                     "Fail if the freeze list drifted from its generator",
+                     "Fail if a toolkit-owned path is touched"):
+            step = text.split("      - name: " + name + "\n", 1)[1].split("      - ", 1)[0]
+            self.assertIn("        if: github.event.repository.private\n", step)
+        # Public publication still runs both secret and privacy scanners.
+        scan = text.split("      - name: Scan tracked files for committed secrets\n", 1)[1].split("      - ", 1)[0]
+        self.assertIn("./verification/secret-scan.sh", scan)
+        self.assertNotRegex(scan, r"(?m)^\s*if:")
+        safety = (ROOT / ".github/workflows/public-safety.yml").read_text()
+        self.assertIn("gitleaks", safety)
+        self.assertIn("public_safety.py", safety)
+
     def test_renamed_archive_sources_use_public_paths(self):
         manifest = (ROOT / "vendor/toolkit-files.txt").read_text().splitlines()
         expected = {

@@ -31,4 +31,16 @@ jobs:
         run: |
           docker pull "$SCANNER"
           docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" dir /repo --config /repo/.gitleaks.toml --redact=100 --no-banner
-          docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts=--all --config /repo/.gitleaks.toml --redact=100 --no-banner
+          # Scope the history scan to commits introduced here. actions/checkout
+          # with fetch-depth 0 fetches every branch, so --all scans unrelated
+          # branches (e.g. vendor/offline-ci-contract.json churn elsewhere)
+          # against this commit's allowlist and reds every PR for another
+          # branch's fixtures. The dir scan above already covers the tree.
+          BASE="origin/main"
+          RANGE="$BASE..HEAD"
+          if ! git rev-parse --verify "$BASE" >/dev/null 2>&1 || \
+             ! git merge-base --is-ancestor "$BASE" HEAD 2>/dev/null || \
+             [ "$(git rev-list "$RANGE" --count 2>/dev/null || echo 0)" = "0" ]; then
+            RANGE="-1 HEAD"
+          fi
+          docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts="$RANGE" --config /repo/.gitleaks.toml --redact=100 --no-banner

@@ -1,0 +1,13 @@
+[Unit]
+Description=Send gated bridge check-in every 60 seconds
+
+[Timer]
+OnBootSec=45s
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=gh-product-bridge-checkin.service
+
+[Install]
+WantedBy=timers.target

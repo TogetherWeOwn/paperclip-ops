@@ -1,0 +1,33 @@
+# ops/case_e1e23b50/gatus-endpoints.yaml — case_703e1a90 (spec case_e1e23b50)
+#
+# MERGE: append the one entry below under the host Gatus config's
+# `external-endpoints:` list (ops/case_658bf6b9/gatus-config.yaml carries the
+# discord + Akmatori custom alerting providers it reuses). Values arrive from
+# push-ci-hung-job.sh on cron; a missed 10m heartbeat fails closed (UNKNOWN,
+# never healthy). The cron install is a separate Operator card (OPERATOR.md).
+#
+# The alert description says what breached, who owns the next step and where
+# the runbook is, so the page itself carries OWNER and RUNBOOK (the case_9b48cd0a
+# convention). No secret lives here: the only variable is the shared external
+# token, resolved from the root-only 0600 env file on the host.
+#
+# Push key derivation (same as case_658bf6b9): <group>_<name> with separators
+# mapped to '-': platform_ci-hung-job. It collides with no other endpoint
+# (checked against ci-queue-age, garm-pool, ci_main-*, ci_runtime-*,
+# ci_runner-units and the cliproxy lanes).
+#
+# Gatus stores a pushed `error` text only for success=false, so WARN-only
+# findings are named on the script's stdout (cron log); the page shows the
+# text of a HUNG or fail-closed push.
+
+external-endpoints:
+  - name: ci-hung-job
+    group: platform
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "started CI job with no completion past timeout + 15m. THRESHOLD in_progress age above its hung_job_thresholds.json timeout + 15m, or the check could not be read. OWNER devops. RUNBOOK ops/case_e1e23b50/OPERATOR.md#hung-job-runbook"
+      - type: custom
+        description: "started CI job with no completion past timeout + 15m. THRESHOLD in_progress age above its hung_job_thresholds.json timeout + 15m, or the check could not be read. OWNER devops. RUNBOOK ops/case_e1e23b50/OPERATOR.md#hung-job-runbook"

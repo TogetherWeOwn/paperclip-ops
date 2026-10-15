@@ -1,0 +1,18 @@
+[
+  {
+    "name": "node7b1ff338",
+    "disk_used_percent": 70.0,
+    "inode_used_percent": 12.0,
+    "cpu_used_percent": 25.0,
+    "mem_used_percent": 60.0,
+    "load15_per_cpu": 0.8,
+    "failed_units": 0,
+    "container_restarts_24h": 0,
+    "disk_total_bytes": 100000000000,
+    "disk_history": [
+      {"t": 1759400000, "used_bytes": 50000000000},
+      {"t": 1759486400, "used_bytes": 60000000000},
+      {"t": 1759572800, "used_bytes": 70000000000}
+    ]
+  }
+]

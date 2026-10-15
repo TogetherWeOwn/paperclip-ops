@@ -1,0 +1,34 @@
+[Unit]
+Description=Prune dangling Docker images and build cache older than 7d, bounded (case_b0e822f6)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+# Volume knob only: the operator's env file may change the age bar, never the
+# mode. Whether a run may prune is decided by --apply on the ExecStart line
+# below, which lives in these reviewed bytes (the sweep-auto drift precedent:
+# a unit labelled dry-run whose mode came from an EnvironmentFile). First live
+# runs are a manual dry-run by hand (runbook); the timer is enabled after.
+Environment=DOCKER_HYGIENE_AGE_HOURS=168
+EnvironmentFile=/etc/paperclip/docker-hygiene.env
+# The installer renders @SOURCE_REF@ from the independently reviewed 40-hex
+# commit and installs these bytes outside the mutable checkout.
+# The SHA256SUMS manifest holds release-relative names, so the check below
+# only passes with the release dir as the working directory (systemd starts
+# system services in / otherwise).
+WorkingDirectory=/usr/local/libexec/paperclip-docker-hygiene/@SOURCE_REF@
+ExecStartPre=/usr/bin/test -x /usr/local/libexec/paperclip-docker-hygiene/@SOURCE_REF@/docker_hygiene.sh
+ExecStartPre=/usr/bin/test -x /usr/bin/timeout
+ExecStartPre=/usr/bin/sha256sum --check --strict /usr/local/libexec/paperclip-docker-hygiene/@SOURCE_REF@/SHA256SUMS
+# The prune talks to the daemon over its socket; the daemon does the deleting,
+# so ProtectSystem=strict (host /var read-only for THIS process) still holds.
+ExecStart=/usr/bin/timeout --signal=TERM --kill-after=15s 25m /usr/local/libexec/paperclip-docker-hygiene/@SOURCE_REF@/docker_hygiene.sh --apply
+TimeoutStartSec=28m
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+UMask=0077

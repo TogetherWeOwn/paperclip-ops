@@ -1,0 +1,101 @@
+# ops/case_c542accd/gatus-endpoints.yaml — case_c542accd
+#
+# MERGE: append the seven entries below under the host Gatus config's
+# `external-endpoints:` list (see ops/case_658bf6b9/gatus-config.yaml for the
+# alerting providers they reuse: discord + the Akmatori Alertmanager feed).
+# Values arrive via push-ci-main.sh on cron; a missed 10m heartbeat fails
+# closed (UNKNOWN, never healthy). Cron install is a separate CEO Operator
+# card, same as the case_658bf6b9 push scripts.
+#
+# Every entry carries its threshold, its owner, and its runbook pointer in
+# the alert description, so the page itself says what breached and who owns
+# the next step. No secret lives here: the only variable is the shared
+# external token, resolved from the root-only 0600 env file on the host.
+#
+# Push key derivation (same as case_658bf6b9): <group>_<name> with separators
+# mapped to '-': ci_main-togetherweown-two-bot-next,
+# ci_main-togetherweown-two-web-next,
+# ci_main-togetherweown-paperclip-ops,
+# ci_runtime-togetherweown-two-bot-next,
+# ci_runtime-togetherweown-two-web-next,
+# ci_runtime-togetherweown-paperclip-ops, ci_runner-units.
+# Slugs are lowercased owner-repo; GH_REPOS entries are already lowercase,
+# so keys are stable.
+
+external-endpoints:
+  - name: main-togetherweown-two-bot-next
+    group: ci
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD any completed check on main with conclusion failure|timed_out|cancelled|action_required|startup_failure (one alert per red main). OWNER on-call (case_a97273bd). RUNBOOK ops/case_c542accd/OPERATOR.md#main-conclusion"
+      - type: custom
+        description: "THRESHOLD any completed check on main with conclusion failure|timed_out|cancelled|action_required|startup_failure (one alert per red main). OWNER on-call (case_a97273bd). RUNBOOK ops/case_c542accd/OPERATOR.md#main-conclusion"
+
+  - name: main-togetherweown-two-web-next
+    group: ci
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD any completed check on main with conclusion failure|timed_out|cancelled|action_required|startup_failure (one alert per red main). OWNER on-call (case_a97273bd). RUNBOOK ops/case_c542accd/OPERATOR.md#main-conclusion"
+      - type: custom
+        description: "THRESHOLD any completed check on main with conclusion failure|timed_out|cancelled|action_required|startup_failure (one alert per red main). OWNER on-call (case_a97273bd). RUNBOOK ops/case_c542accd/OPERATOR.md#main-conclusion"
+
+  - name: main-togetherweown-paperclip-ops
+    group: ci
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD any completed check on main with conclusion failure|timed_out|cancelled|action_required|startup_failure (one alert per red main). OWNER on-call (case_a97273bd). RUNBOOK ops/case_c542accd/OPERATOR.md#main-conclusion"
+      - type: custom
+        description: "THRESHOLD any completed check on main with conclusion failure|timed_out|cancelled|action_required|startup_failure (one alert per red main). OWNER on-call (case_a97273bd). RUNBOOK ops/case_c542accd/OPERATOR.md#main-conclusion"
+
+  - name: runtime-togetherweown-two-bot-next
+    group: ci
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD any completed duration or in-flight age STRICTLY greater than 2x its job_baselines.json entry (unlisted: 2x fallback 3600s). OWNER on-call (case_a97273bd). RUNBOOK ops/case_c542accd/OPERATOR.md#job-runtime"
+      - type: custom
+        description: "THRESHOLD any completed duration or in-flight age STRICTLY greater than 2x its job_baselines.json entry (unlisted: 2x fallback 3600s). OWNER on-call (case_a97273bd). RUNBOOK ops/case_c542accd/OPERATOR.md#job-runtime"
+
+  - name: runtime-togetherweown-two-web-next
+    group: ci
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD any completed duration or in-flight age STRICTLY greater than 2x its job_baselines.json entry (unlisted: 2x fallback 3600s). OWNER on-call (case_a97273bd). RUNBOOK ops/case_c542accd/OPERATOR.md#job-runtime"
+      - type: custom
+        description: "THRESHOLD any completed duration or in-flight age STRICTLY greater than 2x its job_baselines.json entry (unlisted: 2x fallback 3600s). OWNER on-call (case_a97273bd). RUNBOOK ops/case_c542accd/OPERATOR.md#job-runtime"
+
+  - name: runtime-togetherweown-paperclip-ops
+    group: ci
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD any completed duration or in-flight age STRICTLY greater than 2x its job_baselines.json entry (unlisted: 2x fallback 3600s). OWNER on-call (case_a97273bd). RUNBOOK ops/case_c542accd/OPERATOR.md#job-runtime"
+      - type: custom
+        description: "THRESHOLD any completed duration or in-flight age STRICTLY greater than 2x its job_baselines.json entry (unlisted: 2x fallback 3600s). OWNER on-call (case_a97273bd). RUNBOOK ops/case_c542accd/OPERATOR.md#job-runtime"
+
+  - name: runner-units
+    group: ci
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD any coolify-vps-N listener unit not active via systemctl is-active (default units 1-7). OWNER devops. RUNBOOK ops/case_c542accd/OPERATOR.md#runner-units"
+      - type: custom
+        description: "THRESHOLD any coolify-vps-N listener unit not active via systemctl is-active (default units 1-7). OWNER devops. RUNBOOK ops/case_c542accd/OPERATOR.md#runner-units"

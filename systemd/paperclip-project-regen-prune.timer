@@ -1,0 +1,15 @@
+[Unit]
+Description=Strip regenerable build output from stale project worktrees hourly (case_60e07cc2)
+
+[Timer]
+# Hourly at :37, the exact slot of the host user timer this bundle replaces
+# (project-worktree-prune.timer, captured in case_2c93d621): same cadence the
+# fleet already observes, so dashboards and the Operator runbook keep working.
+# Persistent=false, also matching the old timer: a missed firing is skipped,
+# and the 24h-stale / 6h-idle bars make catch-up runs unnecessary.
+OnCalendar=*:37
+Persistent=false
+Unit=paperclip-project-regen-prune.service
+
+[Install]
+WantedBy=timers.target

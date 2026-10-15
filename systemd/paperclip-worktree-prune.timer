@@ -1,0 +1,12 @@
+[Unit]
+Description=Prune idle worktrees of closed cards once a day (case_b1d141af)
+
+[Timer]
+OnCalendar=*-*-* 04:20:00
+RandomizedDelaySec=10m
+AccuracySec=1m
+Persistent=true
+Unit=paperclip-worktree-prune.service
+
+[Install]
+WantedBy=timers.target

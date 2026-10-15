@@ -1,0 +1,277 @@
+title = "Reviewed synthetic fixtures and integrity hashes only"
+minVersion = "8.25.0"
+[extend]
+useDefault = true
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Synthetic email body sentinel in in-memory KV redaction test; not an external credential."
+condition = "AND"
+paths = ['''(^|/)distribution\-kit/worker/test/email\-storage\.test\.mjs$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ const\ secret\ =\ "secret\-body\-xyz\-123";$''']
+
+[[allowlists]]
+targetRules = ["curl-auth-header"]
+description = "Deliberately wrong authorization header in negative authentication acceptance test."
+condition = "AND"
+paths = ['''(^|/)acceptance_transport\.sh$''']
+regexTarget = "line"
+regexes = ['''(?m)^CODE="\$\(curl\ \-s\ \-o\ /dev/null\ \-w\ '%\{http_code\}'\ \-X\ POST\ \-H\ 'Content\-Type:\ application/json'\ \\\n\ \ \ \ \ \ \ \ \-H\ 'Authorization:\ Bearer\ wrong\-bearer'\ \-d\ '\{"jsonrpc":"2\.0","id":1,"method":"tools/list"\}'\ "\$URL"\)"$''']
+
+[[allowlists]]
+targetRules = ["gcp-api-key"]
+description = "Deliberately planted Google credential-shape sample in redaction self-test."
+condition = "AND"
+paths = ['''(^|/)omniroute/case_30ade3fb\-snapshot\-sections\.py$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ \ \ \ \ \("google",\ "AIzaSyD\-9tSrke72PouQMnMX\-a7eZSW0jkFMBWY"\),$''']
+
+[[allowlists]]
+targetRules = ["jwt", "generic-api-key"]
+description = "Deliberately planted JWT sample in redaction self-test, not a live session."
+condition = "AND"
+paths = ['''(^|/)omniroute/case_30ade3fb\-snapshot\-sections\.py$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ "access_token":\ "eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.abcdefghij",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Deliberately planted repeated hexadecimal refresh-token sample in redaction self-test."
+condition = "AND"
+paths = ['''(^|/)omniroute/case_30ade3fb\-snapshot\-sections\.py$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ "deeply":\ \{"nested":\ \{"refresh_token":\ "0123456789abcdef0123456789abcdef01234567"\}\},$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Synthetic collision fixture in historical patch; patch quarantined with private history artifacts."
+condition = "AND"
+paths = ['''(^|/)patches/case_f17dd2a7\-truncated\-secret\-redaction\.patch$''']
+regexTarget = "line"
+regexes = ['''(?m)^\+\ \ \ \ const\ keyWindow\ =\ "AZyLk9WvIh6TsFe3";$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Short sk-live-abc123 negative secret-reference validator fixture."
+condition = "AND"
+paths = ['''(^|/)plugins/cliproxy\-insight/tests/config\.spec\.ts$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ expect\(validate\(\{\ laneApiKeySecretRef:\ "sk\-live\-abc123"\ \}\)\)\.toBe\(false\);$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Same negative secret-reference validator fixture, error-message assertion."
+condition = "AND"
+paths = ['''(^|/)plugins/cliproxy\-insight/tests/config\.spec\.ts$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ const\ error\ =\ validateSecretRefShape\(\{\ apiKey:\ "sk\-live\-abc123"\ \},\ "laneApiKeySecretRef"\);$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Source SHA-256 digest, not credential; operational evidence file remains private."
+condition = "AND"
+paths = ['''(^|/)ops/case_6344ea34/profile\-readonly\-evidence\-2026\-09\-23\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "server/src/services/tool\-access\.ts":\ "f7e23f80702cf4a79c75edf5e76f05cbbdbf9bebb9af959cfa13298c4f61fb2d",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Source SHA-256 digest, not credential; operational evidence file remains private."
+condition = "AND"
+paths = ['''(^|/)ops/case_6344ea34/profile\-readonly\-evidence\-2026\-09\-23\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "server/src/services/tool\-access\-policy\.ts":\ "5732ca84adba342ead0533b0bd78845152ac9a623ee6c3537271fdb9c6beb036",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Source SHA-256 digest, not credential; operational evidence file remains private."
+condition = "AND"
+paths = ['''(^|/)ops/case_6344ea34/profile\-readonly\-evidence\-2026\-09\-23\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "server/src/routes/tool\-access\.ts":\ "336d1584fca9a14d7dcfd0f9f5333057d19800126d6efc4a71a0d5efeb5d185e",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Source SHA-256 digest, not credential; operational evidence file remains private."
+condition = "AND"
+paths = ['''(^|/)ops/case_6344ea34/profile\-readonly\-evidence\-2026\-09\-23\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "packages/shared/src/validators/tool\-access\.ts":\ "e0949631325480b304f4bf1e811f7b7cfc89bb8cb0e5567e25ec1ae08a103867"$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Reservation idempotency key boundary-attempt identifier, not authentication."
+condition = "AND"
+paths = ['''(^|/)plugins/model\-selection/tests/case_e39643d6\-expiry\-week\.spec\.ts$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ \ \ idempotencyKey:\ 'boundary\-attempt\-1',$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Synthetic generated-env canary for output redaction refusal."
+condition = "AND"
+paths = ['''(^|/)test_capture_host_render\.sh$''']
+regexTarget = "line"
+regexes = ['''(?m)^d="\$\(new_case\)";\ make_host\ "\$d"\ \-\-extra\-server\ '\ \-\-env\ OMNIROUTE_KEY=sk\-live\-abc123'$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Same synthetic canary used by mutation test of output redaction refusal."
+condition = "AND"
+paths = ['''(^|/)test_capture_host_render\.sh$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ \ \ \ 'refuse\ credential_bearing_render'\ \-\-extra\-server\ '\ \-\-env\ OMNIROUTE_KEY=sk\-live\-abc123'$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Synthetic canary key used only against localhost argv-recording test stub."
+condition = "AND"
+paths = ['''(^|/)test_agent_endpoint_preflight\.sh$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ SPY_ARGV="\$SPY_ARGV"\ PATH="\$SPY:\$PATH"\ PREFLIGHT_API_KEY="canary\-key\-9f3a2b"\ \\$''']
+
+[[allowlists]]
+targetRules = ["curl-auth-header"]
+description = "Synthetic bearer for localhost test stub and pagination positive control."
+condition = "AND"
+paths = ['''(^|/)test_red_main_poll\.sh$''']
+regexTarget = "line"
+regexes = ['''(?m)^CTRL_N="\$\(curl\ \-s\ \-H\ 'Authorization:\ Bearer\ canary\-board\-key\-000'\ "\$STUB_BASE/api/companies/co\-window/issues\?per_page=100"\ \|\ jq\ 'length'\)"$''']
+
+[[allowlists]]
+targetRules = ["curl-auth-header"]
+description = "Same synthetic bearer for localhost test stub and pagination positive control."
+condition = "AND"
+paths = ['''(^|/)test_red_main_poll\.sh$''']
+regexTarget = "line"
+regexes = ['''(?m)^CTRL_HIT="\$\(curl\ \-s\ \-H\ 'Authorization:\ Bearer\ canary\-board\-key\-000'\ "\$STUB_BASE/api/companies/co\-window/issues\?per_page=100"\ \|\ jq\ '\[\.\[\]\ \|\ select\(\.title\ \|\ startswith\("\[red\-main:v1:"\)\)\]\ \|\ length'\)"$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Synthetic credential-shape sentinel in credential write-boundary test."
+condition = "AND"
+paths = ['''(^|/)verification/case_6d00f2c0/verify_write_boundary\.mjs$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ OMNIROUTE_API_KEY:\ "sk\-1b0033d7ecfa83d4\-ebc99a\-bbbbbbbb",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Explicit test-only tool-action signing secret in fake gateway identity setup."
+condition = "AND"
+paths = ['''(^|/)verification/tool\-gateway\-identity/case_8e88152b\-identity\.test\.ts$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ toolActionSigningSecret:\ "case_8e88152b\-test\-signing\-secret",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Deliberately short ghp_12345678 negative configuration fixture."
+condition = "AND"
+paths = ['''(^|/)test_two_bot_staging_precheck\.py$''']
+regexTarget = "secret"
+regexes = ['''^ghp_12345678$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Verified 64-character hexadecimal SHA-256 file-integrity digest in restored_files_sha256; not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "gh_embedded_token_remediate\.py":\ "6693d6324a1e86821a0e44e243078ee61722ee96f8f6e82400e6f1644bc6877d",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Verified 64-character hexadecimal SHA-256 file-integrity digest in restored_files_sha256; not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "git_remote_credential_scan\.sh":\ "0689ae05cd1f7fd8fcff0c10ff5a0eae68603b5d5e33c6212bd5083b6c27e380",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Verified 64-character hexadecimal SHA-256 file-integrity digest in restored_files_sha256; not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "org_access_review\.sh":\ "e3c61e43d7fea3faf0bb355d9384de5be9b5a730189999c98645c80782a49d0d",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Verified 64-character hexadecimal SHA-256 file-integrity digest in restored_files_sha256; not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "plugins/cliproxy\-insight/docs/adr/0004\-reuse\-router\-secret\-ref\-guard\.md":\ "edb869a090830d96dccff51311935e1a113fd6e770908a2365871356b8dfa27c",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Verified 64-character hexadecimal SHA-256 file-integrity digest in restored_files_sha256; not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "plugins/cliproxy\-insight/src/config/secret\-ref\.ts":\ "515f06709dd69c16b303a7fe72cd8a4f67ec654783678756bf702e14c9793e22",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Verified 64-character hexadecimal SHA-256 file-integrity digest in restored_files_sha256; not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "plugins/model\-selection/src/config/secret\-ref\.ts":\ "b24ea2524eda69e2832a03733552e0e9b563c1e6e1d0c6775a381e5224af8a4c",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Verified 64-character hexadecimal SHA-256 file-integrity digest in restored_files_sha256; not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "secret_exposure_audit\.sh":\ "67cc775efb5619ff808a6bfe6ace6aded91113237d25635d8314b26e41771539",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Verified 64-character hexadecimal SHA-256 file-integrity digest in restored_files_sha256; not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "test_credential_chain_audit\.sh":\ "fef7398b0ff2ef3d45b1be944a7c2289ec6565de610f52bca6001db9ebf73907",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Verified 64-character hexadecimal SHA-256 file-integrity digest in restored_files_sha256; not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "test_credential_chain_pin_gate\.sh":\ "d3259a3a01ae32c5048e0a4721319744f82c9fe15ce37c55e186765a645b4728",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Verified 64-character hexadecimal SHA-256 file-integrity digest in restored_files_sha256; not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "test_gh_token_api_body\.sh":\ "bdffa8b9c2b87ef411b7eb45f0d3a12786f909a0f0f0f8dc07cfef292e17ee10",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Verified 64-character hexadecimal SHA-256 file-integrity digest in restored_files_sha256; not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "test_gh_token_dispatch\.sh":\ "4dcfdb0755aabb943243319185174737a2bbb0733b21370f22b2a2ab66c7c635",$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Verified 64-character hexadecimal SHA-256 file-integrity digest in restored_files_sha256; not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "test_secret_exposure_audit\.sh":\ "399703e781a26a6c2555f16da37c9968c386eeb7b91f938bef53208db04601cc",$''']
+
+[[allowlists]]
+targetRules = ["discord-api-token"]
+description = "Verified 64-character hexadecimal SHA-256 file-integrity digest in restored_files_sha256; not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "scripts/discord_job_health\.js":\ "2c255bb856e28f17201491179c11f635a25bf306ad6cf24c276aafbaeabae2cd",$''']
+

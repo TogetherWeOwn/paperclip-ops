@@ -1,0 +1,15 @@
+# Fixed host runtime manifest. Format: <installed-mode> <repository-path>
+0555 capability_gate.sh
+0555 lib/durable_queue.py
+0555 lib/notify_exec.py
+0444 lib/pcsql.sh
+0444 lib/provisioning_policy.sh
+0444 lib/reqrecord.sh
+0555 org_provisioner.sh
+0555 org_request_queue.sh
+0444 pacing_verdict.py
+0444 pr_closeout_ledger.py
+0555 queue_liveness.sh
+0555 quota_brake.sh
+0444 quota_brake_exempt.txt
+0555 tool_drift.sh

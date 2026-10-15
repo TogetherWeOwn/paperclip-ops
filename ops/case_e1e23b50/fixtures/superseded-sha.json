@@ -1,0 +1,19 @@
+{
+  "description": "the PR head moved: the old SHA is never read, and a stale run reporting it is ignored",
+  "now": "2026-10-04T12:00:00Z",
+  "repos": "o/r",
+  "expect": {"success": true, "verdict": "HEALTHY", "text_empty": true, "never_called": ["c7e3a1f95b2d40688a1c3e5f7092b4d6e8f0a1b3"]},
+  "routes": {
+    "repos/o/r/commits/main/check-runs?per_page=100": {"rc": 0, "body": {"total_count": 1, "check_runs": [
+        {"id":900,"name":"Offline suites","node_id":"CR_900","head_sha":"9d1c4e7a2b6f0835c4d1e9a7b3f2068c5e4d7a10","external_id":"905","status":"completed","conclusion":"success","started_at":"2026-10-04T10:30:00Z","completed_at":"2026-10-04T10:50:00Z","url":"https://api.github.com/repos/o/r/check-runs/900","html_url":"https://github.com/o/r/runs/900","details_url":"https://github.com/o/r/actions/runs/899/job/900","output":{"title":null,"summary":null,"text":null,"annotations_count":0},"check_suite":{"id":898},"app":{"id":15368,"slug":"github-actions"},"pull_requests":[]}
+      ]}},
+    "repos/o/r/pulls?state=open&sort=created&direction=desc&per_page=31": {"rc": 0, "body": [{"number":12,"state":"open","title":"change 12","head":{"ref":"b12","sha":"4b2f9c0e6a1d83754c9e0b2a6f1d8e3c7a5b9042"},"base":{"ref":"main"}}]},
+    "repos/o/r/commits/4b2f9c0e6a1d83754c9e0b2a6f1d8e3c7a5b9042/check-runs?per_page=100": {"rc": 0, "body": {"total_count": 2, "check_runs": [
+        {"id":1081,"name":"Offline suites","node_id":"CR_1081","head_sha":"c7e3a1f95b2d40688a1c3e5f7092b4d6e8f0a1b3","external_id":"1086","status":"in_progress","conclusion":null,"started_at":"2026-10-04T07:00:00Z","completed_at":null,"url":"https://api.github.com/repos/o/r/check-runs/1081","html_url":"https://github.com/o/r/runs/1081","details_url":"https://github.com/o/r/actions/runs/1080/job/1081","output":{"title":null,"summary":null,"text":null,"annotations_count":0},"check_suite":{"id":1079},"app":{"id":15368,"slug":"github-actions"},"pull_requests":[]},
+        {"id":1082,"name":"Operator runbook gates","node_id":"CR_1082","head_sha":"4b2f9c0e6a1d83754c9e0b2a6f1d8e3c7a5b9042","external_id":"1087","status":"completed","conclusion":"success","started_at":"2026-10-04T11:40:00Z","completed_at":"2026-10-04T11:41:00Z","url":"https://api.github.com/repos/o/r/check-runs/1082","html_url":"https://github.com/o/r/runs/1082","details_url":"https://github.com/o/r/actions/runs/1081/job/1082","output":{"title":null,"summary":null,"text":null,"annotations_count":0},"check_suite":{"id":1080},"app":{"id":15368,"slug":"github-actions"},"pull_requests":[]}
+      ]}},
+    "repos/o/r/commits/c7e3a1f95b2d40688a1c3e5f7092b4d6e8f0a1b3/check-runs?per_page=100": {"rc": 0, "body": {"total_count": 1, "check_runs": [
+        {"id":1083,"name":"Offline suites","node_id":"CR_1083","head_sha":"c7e3a1f95b2d40688a1c3e5f7092b4d6e8f0a1b3","external_id":"1088","status":"in_progress","conclusion":null,"started_at":"2026-10-04T07:00:00Z","completed_at":null,"url":"https://api.github.com/repos/o/r/check-runs/1083","html_url":"https://github.com/o/r/runs/1083","details_url":"https://github.com/o/r/actions/runs/1082/job/1083","output":{"title":null,"summary":null,"text":null,"annotations_count":0},"check_suite":{"id":1081},"app":{"id":15368,"slug":"github-actions"},"pull_requests":[]}
+      ]}}
+  }
+}

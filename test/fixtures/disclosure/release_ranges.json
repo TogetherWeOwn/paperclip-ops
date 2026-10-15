@@ -1,0 +1,22 @@
+[
+  {
+    "ref": "refs/heads/master",
+    "checkpoint": "2ff804e873462c44b45532e85e694b9b198e55d0",
+    "transitions": [
+      {"pr": 30, "head": "361ff65458527e53894366c8d43e87547f0d59e8", "base": "2ff804e873462c44b45532e85e694b9b198e55d0", "merge": "bc28101e41efc28b6e0ab96afdc2a28585662171"},
+      {"pr": 33, "head": "a44a1d3a74bfd8eb89bbeb8e0ab723047bcf8e96", "base": "bc28101e41efc28b6e0ab96afdc2a28585662171", "merge": "e60553d3851528d0a14dfc1a6adff5c639721f51", "findingSurface": "message"},
+      {"pr": 34, "head": "7c102436f71dc4e29fc390700f5a4996b7f00fee", "base": "e60553d3851528d0a14dfc1a6adff5c639721f51", "merge": "9df2fb2b4a72f3ea5d9d6e77dc869c28cc4ab85a"},
+      {"pr": 31, "head": "b25c52ec7b88b07d482534f30b8c93c85c34e6be", "base": "bc28101e41efc28b6e0ab96afdc2a28585662171", "merge": "54801af8f4c2bd82cba725747eaa189bfdf762c5"},
+      {"pr": 35, "head": "f1d82b690e8775a001025e0030d4f23a149662eb", "base": "54801af8f4c2bd82cba725747eaa189bfdf762c5", "merge": "829a7c79fc02846bedf9c7dbebb82d8a993891a9"},
+      {"pr": 37, "head": "d5bb15f95ef7b9dd6005ed59cd6c4b426fcf98e9", "base": "829a7c79fc02846bedf9c7dbebb82d8a993891a9", "merge": "cc26e5e01cc47601107955fb74aaa4a277636556"}
+    ]
+  },
+  {
+    "ref": "refs/heads/release/v2026.1001.0",
+    "checkpoint": "14f66a7cf6422b43fe87d1d747ceabdf9f23b583",
+    "transitions": [
+      {"pr": 32, "head": "5b172fd68f611a5b4c0a4bc13e0ef874a1ca2c73", "base": "14f66a7cf6422b43fe87d1d747ceabdf9f23b583", "merge": "5eba999221a5115d43d6e5f85f8fd02272055e4d", "findingSurface": "added-lines"},
+      {"pr": 36, "head": "8d81773afacb6dc8ef32827c322c66605a2880d1", "base": "5eba999221a5115d43d6e5f85f8fd02272055e4d", "merge": "112a2f03a2a64ae550ed3f5cada71fe473490213"}
+    ]
+  }
+]

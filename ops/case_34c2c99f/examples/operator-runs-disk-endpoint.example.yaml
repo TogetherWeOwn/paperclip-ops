@@ -1,0 +1,30 @@
+# operator-runs-disk-endpoint.example.yaml — case_34c2c99f Gatus fragment.
+#
+# OPERATOR: append this block under `external-endpoints:` in
+# ops/case_658bf6b9/gatus-config.yaml (it extends the pushed-endpoint series;
+# see the key-derivation comment there), then `gatus --validate` per
+# OPERATOR.md §4. Every secret stays a ${VAR} reference resolved from the
+# root-only 0600 env file — nothing secret is committed here.
+#
+# Pushed by ops/case_34c2c99f/push-operator-runs-disk.sh (cron */15,
+# operator-installed; the 30m heartbeat below leaves one missed run of
+# slack, same as garm-reaper): POST
+# /api/v1/endpoints/platform_operator-runs-disk/external?success=<bool>&error=<msg>
+# with Authorization: Bearer ${GATUS_EXTERNAL_TOKEN}.
+# success=true when the WHOLE Operator SSH run-folder footprint
+# (runs_total_gib from the dry-run pruner summary: kept folders included, not
+# only reclaimable bytes) is below warn (20 GiB); success=false naming the
+# figure otherwise. A missed 30m heartbeat fails closed (UNKNOWN, never
+# healthy).
+
+external-endpoints:
+  - name: operator-runs-disk
+    group: platform
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 30m
+    alerts:
+      - type: discord
+        description: "Operator SSH run folders above warn footprint or no push in 30m (see push-operator-runs-disk log). OWNER devops. RUNBOOK ops/case_34c2c99f/RUNBOOK.md"
+      - type: custom
+        description: "Operator SSH run folders above warn footprint or no push in 30m (see push-operator-runs-disk log). OWNER devops. RUNBOOK ops/case_34c2c99f/RUNBOOK.md"

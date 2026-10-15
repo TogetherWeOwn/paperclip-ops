@@ -1,0 +1,89 @@
+# case_f3715a38 — Router shadow-log freshness + window-landing gauge Gatus module.
+#
+# DEPLOYMENT (source-only slice): this file is a FRAGMENT, not the live
+# config. The operator concatenates it into gatus-config.yaml at deploy time
+# (see MODULES.md "wiring"). Nothing here runs until the operator deploys it —
+# there is no host deploy in this slice, and no live monitor enrollment.
+# No alert route is created or changed by this slice: the `alerts:` entries
+# below are the standard discord+custom pair every module declares so the
+# endpoints are pageable once wired; the wiring itself is an operator step.
+#
+# WHAT IT COVERS (parent case_66436e78): two pushed external endpoints, fed by
+# push-shadow-window.sh every 5 min from read-only inputs:
+#   router/shadow-freshness — age of the newest plugin-shadow decision-log
+#     record (writer == "plugin-shadow", schema case_577a5ee0-decision-v1) across
+#     the retained 48 hourly SHADOW_DECISIONS shards named
+#     decisions-YYYY-MM-DD-HHZ.jsonl. DOWN when the source
+#     is missing/unreadable, a record is malformed, or the newest shadow
+#     record is older than SHADOW_STALE_AFTER_SEC (default 3600). Lines are
+#     streamed and capped at 1,048,576 characters; longer lines fail closed.
+#     A malformed unterminated final line in the newest shard is ignored only
+#     after an earlier complete record parsed in that same shard (reported as
+#     tornTail); a lone malformed tail or concatenated records remain DOWN.
+#     With no shadow record, warm-up is UP through SHADOW_WARMUP_MAX_SEC
+#     (default 600) after the first valid record or empty-file mtime, then DOWN.
+#   router/window-landing — the joint weekly-window landing projection from a
+#     live case_6572bf23 gauge readout (schema case_e8e340c1-window-landing-gauge-v1)
+#     at WINDOW_GAUGE. UP only when evaluatedAt is no older than
+#     WINDOW_GAUGE_MAX_AGE_SEC (default 600), the gauge is not marked as a
+#     fixture, and joint.onTrack98_100 is true. Stale, future, missing, or
+#     non-numeric evaluatedAt pushes DOWN with state stale-gauge; a marked
+#     fixture pushes DOWN with state fixture-refused. Malformed/wrong-schema
+#     input, null projection, or an off-band result is also DOWN.
+#
+# COMPLEMENTS, DOES NOT DUPLICATE, the case_3419ac9d watchdog shadow-gap
+# detector (which owns the absence alert and the write path): this module is
+# the status-page surface for the same freshness fact. It implements no
+# detector of its own beyond the freshness age, and changes no alert route.
+# Other non-goals live elsewhere: proposal-delivery metric (case_07aa689b),
+# queue wait-time SLO (case_1555b1d1), staging alert drill (case_93aed7ff), Keeper
+# freshness (case_5605c29e).
+#
+# FAIL-CLOSED: an unreadable, corrupt, stale, future, or fixture input pushes
+# success=false for the affected endpoint, never a silent skip. Missing
+# SHADOW_DECISIONS / WINDOW_GAUGE / GATUS_URL / GATUS_EXTERNAL_TOKEN refuses
+# (exit 2) before touching the network. The checked-in example fixture
+# fixtures/window-landing-gauge.example.json is tests-only and cannot be used
+# as live telemetry.
+#
+# READ-ONLY / NO SECRETS: the push script reads local JSON log/gauge inputs
+# and POSTs booleans to Gatus — no fetches, no ledger writes, no admission, no
+# pacing or enforcement change. Every token is a ${ENV} reference resolved
+# from the root-only 0600 env file on the host. The offline suite
+# (test_case_60330d6f_shadow_window.sh) fails the build on any secret-shaped
+# string in this file.
+#
+# Pushed by push-shadow-window.sh cron (every 5 min). External keys:
+#   router_shadow-freshness
+#   router_window-landing
+# (per-source fan-out via SHADOW_KEY_SUFFIX, e.g.
+# router_shadow-freshness-canary — each extra key needs its own
+# external-endpoint entry here at wiring time).
+# Push: POST /api/v1/endpoints/<key>/external?success=<bool>&error=<msg>
+# with Authorization: Bearer ${GATUS_EXTERNAL_TOKEN} (curl config file,
+# never argv — see _gatus_push.sh). Heartbeat 10m = 2x cron cadence.
+# The push script also prints a one-line case_e0da19dc-shadow-window-v1 JSON
+# verdict to the cron log, so the module returns JSON on fixtures.
+
+external-endpoints:
+  - name: shadow-freshness
+    group: router
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "Router shadow decision log stale or unreadable (fail-closed DOWN)"
+      - type: custom
+        description: "Router shadow decision log stale or unreadable (fail-closed DOWN)"
+
+  - name: window-landing
+    group: router
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "Router joint window landing off the 98-100% band or gauge unreadable"
+      - type: custom
+        description: "Router joint window landing off the 98-100% band or gauge unreadable"

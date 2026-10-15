@@ -1,0 +1,49 @@
+[Unit]
+Description=Strip regenerable build output from stale project worktrees, per-worktree liveness (case_60e07cc2)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+# Default the removal cap to the safe end: an unset or empty
+# PROJECT_REGEN_PRUNE_MAX_REMOVE is read as 0 by the tool (observe-only),
+# and this line keeps the default visible. It sits above EnvironmentFile= so
+# the operator's env file takes precedence (EnvironmentFile= overrides
+# Environment= regardless of order).
+#
+# The env file carries the API credential, the removal CAP, and optional
+# path overrides only. Whether a run may write is decided by the --apply
+# bit below, which lives literally in these reviewed unit bytes — no
+# EnvironmentFile can supply that bit. First live runs use cap 0 (decide
+# and report, provably incapable of a removal); the operator raises the cap
+# after reading the report.
+Environment=PROJECT_REGEN_PRUNE_MAX_REMOVE=0
+EnvironmentFile=/etc/paperclip/project-regen-prune.env
+# The installer renders @SOURCE_REF@ from the independently reviewed 40-hex
+# commit and installs these bytes outside the mutable checkout.
+WorkingDirectory=/usr/local/libexec/paperclip-project-regen-prune/@SOURCE_REF@
+ExecStartPre=/usr/bin/test -x /usr/bin/python3
+ExecStartPre=/usr/bin/test -x /usr/bin/timeout
+ExecStartPre=/usr/bin/test -d /var/lib/paperclip/project-regen-prune
+ExecStartPre=/usr/bin/sha256sum --check --strict /usr/local/libexec/paperclip-project-regen-prune/@SOURCE_REF@/SHA256SUMS
+# 30 min tool bound < 35 min unit bound. --apply is literal here (reviewed
+# bytes); the volume knob comes from the environment above.
+ExecStart=/usr/bin/timeout --signal=TERM --kill-after=15s 30m /usr/bin/python3 /usr/local/libexec/paperclip-project-regen-prune/@SOURCE_REF@/ops/case_60e07cc2/project_worktree_regen_prune.py --apply --max-remove ${PROJECT_REGEN_PRUNE_MAX_REMOVE}
+TimeoutStartSec=35m
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# Unlike the worktree pruner (which acts inside the container and writes no
+# host path), this tool removes regen dirs under the projects root and
+# writes manifests under /var/lib: both paths are allowlisted below (without
+# ReadWritePaths the whole filesystem is read-only at start and even the
+# first cap-0 run fails on the manifest write). Everything else stays
+# read-only under ProtectSystem=strict. A non-default projects root
+# (PROJECT_REGEN_PRUNE_PROJECTS_ROOT) needs a drop-in unit override adding
+# that prefix here. The tool runs as ubuntu (never root): root running git
+# inside agent-writable repos is a code-execution path.
+ReadWritePaths=/var/lib/paperclip/project-regen-prune
+ReadWritePaths=/home/ubuntu/stacks/paperclip/data/instances/default/projects
+UMask=0077

@@ -1,0 +1,58 @@
+{
+  "//": [
+    "case_16723128 tool_connection registration payload. Substitute MCP_HOSTNAME and",
+    "the secretId of the bearer, then create the connection with this config.",
+    "",
+    "THE FIELDS THAT SILENTLY VOID THE TRANSPORT",
+    "  config.headerPolicy.metadata.forward. The gateway derives its metadata",
+    "  headers from this list and THE DEFAULT IS THE EMPTY LIST. A connection",
+    "  registered the obvious way — url and nothing else — sends NO identity",
+    "  header, with no error, no warning, and no degraded health status. This",
+    "  transport fails closed on the first tools/call rather than acting",
+    "  anonymously, but that is a backstop, not a reason to omit this list.",
+    "",
+    "  The list MUST contain all four of agent_id, company_id, run_id AND",
+    "  issue_id. The first three authenticate the caller; issue_id attributes",
+    "  the host read to the calling card in the broker's audit chain. Without",
+    "  it every call fails closed on the missing x-paperclip-issue-id.",
+    "",
+    "  It must sit under `config`, not `transport_config`. readHeaderPolicy",
+    "  checks config first and falls back to transportConfig; put it in config",
+    "  and do not rely on the fallback.",
+    "",
+    "NO SECRET IN THE URL",
+    "  The bearer is a Paperclip secret, injected as an Authorization header",
+    "  per call by resolveCredentialHeaders, and must never land in",
+    "  transport_config.url, activity, invocation or audit logs.",
+    "",
+    "VERSION SELECTOR",
+    "  Left unset, which resolves to `latest`. Do not pin it: a pinned",
+    "  versionSelector silently keeps serving the old value through a rotation,",
+    "  so a rotated-because-leaked bearer would go on working."
+  ],
+
+  "name": "Host operations broker (Phase-0 reads)",
+  "description": "Fixed-verb host reads through the host-ops broker: service state, health, tooling location. Identity is taken from the Paperclip tool gateway and is never a tool argument. Phase-0 read verbs only — no writes, deploys or restarts exist on this transport.",
+  "transport": "mcp_remote",
+
+  "config": {
+    "url": "https://MCP_HOSTNAME/mcp",
+    "headerPolicy": {
+      "metadata": {
+        "forward": ["agent_id", "company_id", "run_id", "issue_id", "correlation_id"]
+      }
+    }
+  },
+
+  "credentialRefs": [
+    {
+      "name": "host_ops_mcp_bearer",
+      "secretId": "REPLACE_WITH_SECRET_ID",
+      "placement": "header",
+      "key": "authorization",
+      "prefix": "Bearer "
+    }
+  ],
+
+  "quarantineNewEntries": true
+}

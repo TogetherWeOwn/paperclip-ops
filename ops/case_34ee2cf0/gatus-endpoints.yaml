@@ -1,0 +1,53 @@
+# ops/case_34ee2cf0/gatus-endpoints.yaml — case_34ee2cf0 Hindsight recall canary.
+#
+# MERGE: append the two entries below under the host Gatus config's
+# `external-endpoints:` list (see ops/case_658bf6b9/gatus-config.yaml for the
+# alerting providers they reuse: discord + the Akmatori Alertmanager feed).
+# Values arrive via push-hindsight-recall.sh on cron; a missed 10m
+# heartbeat fails closed (UNKNOWN, never healthy). Cron install is a
+# separate CEO Operator card, same as the case_658bf6b9 push scripts.
+#
+# WHAT IT COVERS (parent case_66436e78 item 5, dependencies): a real Hindsight
+# recall query on a fixed canary key. The push script POSTs the constant
+# canary query, asserts HTTP 200 with a non-empty result inside the latency
+# threshold, and pushes pass/fail (recall-canary) plus the latency verdict
+# (recall-latency). Any 500, timeout, malformed or empty reply is DOWN.
+#
+# FAIL-CLOSED: a probe failure pages; a silent cron pages via the heartbeat.
+# There is no "assume healthy" path.
+#
+# READ-ONLY / NO SECRETS: the probe only recalls; it never retains, and it
+# carries no memory content back — push messages hold counts + latency, never
+# recalled text. The recall URL and bearer are ${ENV} references resolved
+# from the root-only 0600 env file on the host. The offline suite
+# (test_case_79158b71_hindsight_recall.sh) fails the build on any secret-shaped
+# string or Bearer literal in this file.
+#
+# Push key derivation (same as case_658bf6b9): <group>_<name> with separators
+# mapped to '-': hindsight_recall-canary, hindsight_recall-latency.
+# Push: POST /api/v1/endpoints/<key>/external?success=<bool>&error=<msg>
+# with Authorization: Bearer ${GATUS_EXTERNAL_TOKEN} (curl config file,
+# never argv — see ops/case_658bf6b9/_gatus_push.sh).
+
+external-endpoints:
+  - name: recall-canary
+    group: hindsight
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD recall HTTP!=200 or empty/malformed result on the fixed canary query. OWNER on-call (case_a97273bd). RUNBOOK ops/case_34ee2cf0/OPERATOR.md#recall-canary"
+      - type: custom
+        description: "THRESHOLD recall HTTP!=200 or empty/malformed result on the fixed canary query. OWNER on-call (case_a97273bd). RUNBOOK ops/case_34ee2cf0/OPERATOR.md#recall-canary"
+
+  - name: recall-latency
+    group: hindsight
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD recall latency over 45000ms or probe timeout. OWNER on-call (case_a97273bd). RUNBOOK ops/case_34ee2cf0/OPERATOR.md#recall-latency"
+      - type: custom
+        description: "THRESHOLD recall latency over 45000ms or probe timeout. OWNER on-call (case_a97273bd). RUNBOOK ops/case_34ee2cf0/OPERATOR.md#recall-latency"

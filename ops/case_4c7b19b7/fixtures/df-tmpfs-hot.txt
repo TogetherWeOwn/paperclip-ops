@@ -1,0 +1,3 @@
+Filesystem     Type     1K-blocks      Used Available Use% Mounted on
+/dev/sda1      ext4     20511356   2000000  17500000  10% /
+tmpfs          tmpfs       4024544   3980000      4000  99% /dev/shm

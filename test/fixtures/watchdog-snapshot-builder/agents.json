@@ -1,0 +1,5 @@
+[
+  {"id":"lead","status":"idle","reportsTo":null,"urlKey":"cto"},
+  {"id":"agent-a","status":"idle","reportsTo":"lead","urlKey":"agent-a"},
+  {"id":"agent-b","status":"idle","reportsTo":"lead","urlKey":"agent-b"}
+]

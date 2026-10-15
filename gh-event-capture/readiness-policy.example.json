@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "ghExecutable": "/usr/bin/gh",
+  "enabledRepositories": [],
+  "scanRepositories": [],
+  "holdLabels": ["hold"]
+}

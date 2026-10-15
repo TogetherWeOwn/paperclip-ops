@@ -1,0 +1,20 @@
+# Probe Worker manifest — DRAFT, NOT DEPLOYED.
+# No deployment happens in this slice. When DevOps deploys a reviewed,
+# merged revision, they copy this file, set `name` per probe, bind one KV
+# namespace, and attach the probe's routes. See ../DOMAIN-SETUP.md.
+name = "probe-fixture-NOT-DEPLOYED"
+main = "src/worker.js"
+compatibility_date = "2026-10-01"
+
+# One KV namespace holds signups + aggregate view counters + bounded inbox.
+# [[kv_namespaces]]
+# binding = "PROBE_KV"
+# id = "<kv-namespace-id>"
+
+# Email ingress (NOT DEPLOYED): Cloudflare Email Routing rule sends the exact
+# inbox address to this Worker's `email()` handler. Configure in the
+# Cloudflare dashboard per isolated probe — never a catch-all:
+#   exact address replies+<probeId>@<test-subdomain> -> Send to Worker <name>
+# See ../INBOX-RUNBOOK.md for the isolated controlled-domain check. The
+# handler runs only when that probe's `inbox.enabled` is true; disabled inbox
+# rejects safely even when deployed. No auto-reply/forward is configured.

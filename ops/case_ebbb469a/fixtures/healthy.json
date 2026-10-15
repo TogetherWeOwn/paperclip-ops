@@ -1,0 +1,24 @@
+{
+  "description": "7 isolated online (3 busy), 2 selfhosted idle, node93f4bccf offline; one fresh isolated job, plus a GitHub-hosted job, an in_progress job and the needs-blocked drain job that must all be ignored",
+  "now": "2026-10-04T12:00:00Z",
+  "runners_pages": [
+    {"total_count": 10, "runners": [
+      {"id":4,"name":"coolify-vps-1","os":"Linux","status":"online","busy":true,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":5,"name":"coolify-vps-2","os":"Linux","status":"online","busy":true,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":6,"name":"coolify-vps-3","os":"Linux","status":"online","busy":true,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":7,"name":"coolify-vps-4","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":8,"name":"coolify-vps-5","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":9,"name":"coolify-vps-6","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":10,"name":"coolify-vps-7","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":1,"name":"node7b1ff338-docker-1","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-selfhosted","type":"custom"}]},
+      {"id":2,"name":"node7b1ff338-docker-2","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-selfhosted","type":"custom"}]},
+      {"id":3,"name":"node93f4bccf-r1","os":"Linux","status":"offline","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-node93f4bccf","type":"custom"}]}
+    ]}
+  ],
+  "queued": [
+    {"name":"Offline suites","status":"queued","created_at":"2026-10-04T11:57:00Z","labels":["self-hosted","two-isolated"]},
+    {"name":"lint","status":"queued","created_at":"2026-10-04T10:00:00Z","labels":["ubuntu-latest"]},
+    {"name":"Privilege ceiling suites","status":"in_progress","created_at":"2026-10-04T10:00:00Z","labels":["self-hosted","two-isolated"]},
+    {"name":"Failure log drain","status":"queued","created_at":"2026-10-04T08:40:00Z","labels":["self-hosted","two-isolated"]}
+  ]
+}

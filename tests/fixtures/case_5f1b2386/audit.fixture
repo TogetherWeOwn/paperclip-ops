@@ -1,0 +1,4 @@
+{"v":1,"decision":"deny","lane":"claude-lane-2","ts":"2026-10-04T11:45:00Z","mode":"shadow","reason":"synthetic exhausted fixture","headroom":0}
+{"v":1,"decision":"allow","lane":"codex-lane-9","ts":"2026-10-04T09:55:00Z","mode":"shadow","reason":"synthetic allowed fixture","headroom":1}
+not-json-fixture
+{"v":1,"decision":"deny","lane":"codex-lane-9","ts":"2026-10-01T09:55:00Z","mode":"shadow","reason":"synthetic stale fixture","headroom":0}

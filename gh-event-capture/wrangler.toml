@@ -1,0 +1,40 @@
+name = "gh-event-capture"
+main = "src/worker.js"
+compatibility_date = "2025-01-01"
+
+# Public account id (not a secret) — same account the routeware-shadow-api
+# Worker already deploys to, so CI/CD needs only a scoped API token. Copied
+# from that repo's wrangler.toml deliberately: one account, one place to revoke.
+account_id = "209cf7dd678adfb683947dd7874d05af"
+
+[observability]
+enabled = true
+
+# NO [vars] BLOCK, AND DO NOT ADD ONE FOR THESE TWO.
+#
+# WEBHOOK_SECRET and QUERY_TOKEN are Wrangler *secrets*:
+#
+#   "$WRANGLER" secret put WEBHOOK_SECRET   # must equal the App's webhook secret
+#   "$WRANGLER" secret put QUERY_TOKEN      # bearer token for GET /events, /stats
+#
+# WRANGLER is the approved pinned executable; supply secrets from private-file
+# stdin as in README § Deploy, never print values or put them in argv.
+# This file is committed. A committed placeholder is the failure mode where a
+# deploy looks configured and is not — the Worker fails closed (503) with the
+# secrets unset, which is loud and recoverable, whereas a placeholder that
+# happens to match nothing is silent. See README § Deploy.
+
+[[d1_databases]]
+binding = "EVENTS_DB"
+database_name = "gh-event-capture"
+# Filled in by the operator after `"$WRANGLER" d1 create gh-event-capture`.
+# Left obviously empty rather than as a plausible-looking UUID: a wrong id
+# deploys cleanly and then writes to the wrong database.
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations/d1"
+
+# No [triggers]/crons. Nothing here runs on a schedule — the store is written
+# only by GitHub's deliveries. Subscription drift is checked by
+# `scripts/check-subscription.sh`, which runs on the VPS from the operator's
+# cron and not inside this Worker, because it needs the App private key and
+# that key must not be deployed to a public endpoint.

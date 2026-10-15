@@ -1,0 +1,54 @@
+[Unit]
+Description=Paperclip fixed-verb host operations pull broker
+Documentation=file:/usr/local/share/doc/paperclip-host-ops/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=paperclip-host-reader
+Group=paperclip-host-reader
+# sudo requires its deployed grant to remain root:root 0440, so the service user
+# cannot read it directly. Root only compares it with the readable install-time
+# mirror; the second check remains unprivileged and exercises the real sudo grant.
+ExecStartPre=+/usr/bin/cmp --silent /etc/sudoers.d/paperclip-host-ops-broker /etc/paperclip-host-ops/sudoers.rendered
+# Compare the running container, not just config/sudoers strings. This stays
+# unprivileged and uses only fixed read-only sudo commands.
+ExecStartPre=/usr/bin/python3 /usr/local/libexec/paperclip-host-ops/image_binding.py check --config /etc/paperclip-host-ops/config.json
+ExecStartPre=/usr/local/libexec/paperclip-host-ops/broker.py acceptance-check --config /etc/paperclip-host-ops/config.json
+ExecStart=/usr/local/libexec/paperclip-host-ops/broker.py run --config /etc/paperclip-host-ops/config.json
+Restart=on-failure
+RestartSec=5s
+# This service uses an exact-command root-bound sudoers allowlist to read fixed
+# node7b1ff338 Docker state (`docker logs/inspect/image inspect`). NoNewPrivileges
+# would disable that narrow transition and make the fixed verbs fail.
+NoNewPrivileges=no
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+MemoryMax=256M
+TasksMax=32
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+# RestrictNamespaces is intentionally omitted: the rootful Docker client must
+# retain full namespace access, and systemd's namespace seccomp filter rejects
+# namespace entry unless every type is allowed, which is equivalent to no
+# filter. ExecStartPre exercises the exact sudo-backed reads on the live host.
+SystemCallArchitectures=native
+UMask=0027
+# `docker image inspect` dials the rootful daemon socket; `docker logs` and
+# `docker inspect` read daemon-side state. All three fixed commands run as root
+# through sudo OUTSIDE this unit's mount namespace restrictions (sudo -u root),
+# so no per-user runtime or storage path needs to stay writable here.
+ReadWritePaths=/var/lib/paperclip-host-ops /var/log/paperclip-host-ops /var/spool/paperclip-host-ops
+ReadOnlyPaths=/etc/paperclip-host-ops /usr/local/libexec/paperclip-host-ops /home/ubuntu/stacks/paperclip/data
+
+[Install]
+WantedBy=multi-user.target

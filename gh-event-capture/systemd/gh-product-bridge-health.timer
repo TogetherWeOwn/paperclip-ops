@@ -1,0 +1,13 @@
+[Unit]
+Description=Check bridge health independently every 30 seconds
+
+[Timer]
+OnBootSec=30s
+OnCalendar=*-*-* *:*:00,30
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=gh-product-bridge-health.service
+
+[Install]
+WantedBy=timers.target

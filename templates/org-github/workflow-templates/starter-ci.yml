@@ -1,0 +1,137 @@
+# Starter CI for a new TogetherWeOwn repo (org CI standard, case_6b39c80f).
+#
+# Lives in the org `.github` repo as a `workflow-templates/starter-ci.yml`
+# choice, copied to `.github/workflows/ci.yml` in the new repo.
+# Replace `<PINNED_SHA>` with the pinned SHA of the org `.github` repo's
+# `changes.yml` reusable workflow before merging.
+#
+# What this wires in:
+#   * `changes` job (reusable workflow): per-area booleans, full-run flag.
+#   * Job-level `if:` gating: heavy jobs run only when their area changed
+#     or when `full_run` is true. NEVER add workflow-level `on: pull_request:
+#     paths:` to this file: it would suppress the required `ci-ok` check.
+#   * One required aggregator `ci-ok` (`if: always()` over every gated job).
+#     Branch protection requires only `ci-ok` (plus pr-lint, secret scan).
+#   * Full suite on `push` to `main` and on the nightly schedule.
+#   * Cheap/security jobs (lint, secrets, ci-ok) always run.
+#   * Concurrency cancels superseded PR runs only; timeouts on every job;
+#     drafts skip heavy jobs on PR events only (force/full-run first) while
+#     `ci-ok` still reports (rules 9-10).
+#   * Stack caches, sharding, flake quarantine, mutation/E2E/security
+#     cadences and governance budgets live in CI-STANDARD.md rules 12-20;
+#     wire them via the org reusable stack workflows, not inline here.
+
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group: {}
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *" # nightly full run (safety net)
+  workflow_dispatch: {}
+
+# A shared non-PR group would still cancel older PENDING runs, even with
+# cancel-in-progress: false. Unique run IDs preserve main/nightly/queue runs.
+# Source: https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+# Adjust the `changes` inputs to the repo's layout. These use fnmatchcase,
+# not recursive globstar: **/package.json cannot match root package.json.
+# Keep explicit root + nested dependency manifests and lockfiles for each stack.
+# npm-shrinkwrap.json supersedes package-lock.json; both must force a full run.
+# Shared workspace/build config forces full CI even inside a matched code area.
+# Any unclassified path also forces full CI; extend the area map deliberately.
+# Source: https://docs.npmjs.com/cli/v11/configuring-npm/npm-shrinkwrap-json
+
+jobs:
+  changes:
+    name: changes
+    uses: TogetherWeOwn/.github/.github/workflows/changes.yml@<PINNED_SHA>
+    with:
+      areas-json: '{"web":["web/**"],"bot":["bot/**"],"docs":["**.md","docs/**"]}'
+      full-run-globs-json: '["package.json","**/package.json","package-lock.json","**/package-lock.json","npm-shrinkwrap.json","**/npm-shrinkwrap.json","pnpm-lock.yaml","**/pnpm-lock.yaml","yarn.lock","**/yarn.lock","Gemfile","**/Gemfile","Gemfile.lock","**/Gemfile.lock","Cargo.toml","**/Cargo.toml","Cargo.lock","**/Cargo.lock","go.mod","**/go.mod","go.sum","**/go.sum","pyproject.toml","**/pyproject.toml","poetry.lock","**/poetry.lock","uv.lock","**/uv.lock","requirements*.txt","**/requirements*.txt","requirements*.in","**/requirements*.in","setup.py","**/setup.py","setup.cfg","**/setup.cfg","Pipfile","**/Pipfile","Pipfile.lock","**/Pipfile.lock","composer.json","**/composer.json","composer.lock","**/composer.lock","pnpm-workspace.yaml","**/pnpm-workspace.yaml","go.work","**/go.work","go.work.sum","**/go.work.sum","tsconfig*.json","**/tsconfig*.json","jsconfig*.json","**/jsconfig*.json",".cargo/**","**/.cargo/**","rust-toolchain*","**/rust-toolchain*",".npmrc","**/.npmrc",".yarnrc*","**/.yarnrc*","Makefile*","**/Makefile*","CMakeLists.txt","**/CMakeLists.txt",".github/**","shared/**","common/**","build/**","Dockerfile*","**/Dockerfile*","docker-compose*.yml","**/docker-compose*.yml"]'
+      docs-areas-json: '["docs"]'
+
+  # Full suite on main pushes and the nightly schedule, even if the diff
+  # looks small. PRs rely on gating; main never skips.
+  full_run:
+    name: full run context
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      force: ${{ steps.ctx.outputs.force }}
+    steps:
+      - id: ctx
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "force=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "force=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  lint:
+    name: lint
+    needs: [changes]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: echo "lint goes here (always runs)"
+
+  test-web:
+    name: test web
+    needs: [changes, full_run]
+    if: needs.full_run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || (fromJSON(needs.changes.outputs.areas).web && (github.event_name != 'pull_request' || github.event.pull_request.draft == false))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: echo "web tests go here"
+
+  test-bot:
+    name: test bot
+    needs: [changes, full_run]
+    if: needs.full_run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || (fromJSON(needs.changes.outputs.areas).bot && (github.event_name != 'pull_request' || github.event.pull_request.draft == false))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: echo "bot tests go here"
+
+  secret-scan:
+    name: secret scan
+    needs: [changes]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: echo "secret scan goes here (always runs)"
+
+  ci-ok:
+    name: ci-ok
+    needs: [changes, full_run, lint, test-web, test-bot, secret-scan]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          python3 -I - "$NEEDS_JSON" <<'EOF'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          bad = {k: v.get("result") for k, v in needs.items()
+                 if v.get("result") not in ("success", "skipped")}
+          if bad:
+              print(f"failing jobs: {bad}")
+              sys.exit(1)
+          print("ci-ok: every needed job succeeded or was skipped")
+          EOF
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}

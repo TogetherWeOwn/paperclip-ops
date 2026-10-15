@@ -1,0 +1,18 @@
+# Pinned toolkit releases: tag -> commit -> tarball sha256.
+# scripts/sync-toolkit.sh downloads archive/<commit>.tar.gz and verifies the
+# checksum before extracting, so re-pushing a tag cannot change what CI
+# restores. Add a row per release; the third column is
+# `sha256sum <tag-commit>.tar.gz`.
+# Refs: case_4e3907f1
+v0.2.0 51ffe63955f5f1cefa9352c540648ab8ed0775df 67eae6ca25f97e9b179efe3fb5a1e0aa91c0d6e2e5d83b61192009af52ed630e
+v0.2.1 ec9a121f1a8a99d7484e3ffc6e17725ab7d9b8c1 5528d5296fa390039eaa8901fd16f6bde5b20f1c348b91f3cf40f94f9acc1bb6
+v0.2.2 7c4b39a2157ceb122ae50c7f554cc43c6891c829 6c42bf0ed35fe28a76e5dca13a2b6c90c8c453c7dc086406c4169159daa412d6
+v0.5.1 fe5a8b58b546f357e94e25a61b2d749174244f9d afc4a12e3912a5a36c097ad0e82a764d887752735c00f15d977f1e99449b8a59
+v0.6.0 b9bc57df25fd4e937096b99da9794a974b689d81 4e84cab1350f4c202982f2be126e06a8e6f0558628e0f9d13fee7b3973024405
+v0.6.2 273b6baa36ed8e334ecdf246622cffbab2082b2e eea472457b8fcb7cb2179f9c68b1ab7ad37a1a77eb529fc6563adeaea64b9684
+v0.6.3 637aff8ead6766016ca830fc726a0c91a58df02a e857f31a76f4f4b88a1de514a1b849185e2cf442f4baea2206f02474e7677052
+# main-533c7ae2 is not a release tag: no tag contains the body-attribution
+# fix (toolkit PR #78, merged as 533c7ae2), so this row pins the verified
+# full HEAD SHA directly (case_be414e82 fallback). Replace with the release tag
+# once one contains the fix.
+main-533c7ae2 533c7ae2b013340bfae20cfcc711220048295855 3f88a7325590b81250ed6779d87ee13def109ea3e64ca1afa80f539ada215092

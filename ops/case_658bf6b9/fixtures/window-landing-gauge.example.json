@@ -1,0 +1,43 @@
+{
+  "_comment": "case_f3715a38 EXAMPLE FIXTURE — not live telemetry. Operator reference for WINDOW_GAUGE until the live case_6572bf23 producer lands; push-shadow-window.sh always refuses this fixture marker on the live landing key, regardless of environment or gauge values. evaluatedAt is frozen, never refreshed. A normal mid-week readout: two lanes on pace, joint projecting 98 (bottom of the 98-100% band). Shape: case_e8e340c1-window-landing-gauge-v1.",
+  "fixture": true,
+  "schema": "case_e8e340c1-window-landing-gauge-v1",
+  "mode": "gauge-only",
+  "admitsWork": false,
+  "changesPacing": false,
+  "changesEnforcement": false,
+  "productionEvidenceCertified": false,
+  "evaluatedAt": 1759468800000,
+  "lanes": [
+    {
+      "lane": "claude-weekly",
+      "consumedPct": 49.0,
+      "elapsedPct": 50.0,
+      "deviationPct": -1.0,
+      "projectedLandingPct": 98.0,
+      "status": "on-track",
+      "onTrack98_100": true,
+      "resetsAt": 1759718400000
+    },
+    {
+      "lane": "codex-weekly",
+      "consumedPct": 49.0,
+      "elapsedPct": 50.0,
+      "deviationPct": -1.0,
+      "projectedLandingPct": 98.0,
+      "status": "on-track",
+      "onTrack98_100": true,
+      "resetsAt": 1759718400000
+    }
+  ],
+  "joint": {
+    "totalQuota": 200,
+    "totalConsumed": 98,
+    "consumedPct": 49.0,
+    "elapsedPct": 50.0,
+    "projectedLandingPct": 98.0,
+    "status": "on-track",
+    "onTrack98_100": true
+  },
+  "reasons": ["example fixture: normal mid-week, both lanes on pace"]
+}

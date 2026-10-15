@@ -1,0 +1,86 @@
+name: docs-fast-path
+
+# Docs-only fast path (case_085c458c). A PR that only touches prose gets a verdict
+# in under 2 minutes; code PRs are unaffected (the full CI suite owns
+# correctness).
+#
+# ci-policy: non-required -- owns no required check, so a workflow-level `paths:`
+# filter cannot leave a required check pending (the case_0649a4e4 failure mode).
+#
+# Why this is ONE job behind a `paths:` filter (case_a97273bd): every job here is a
+# full GARM ephemeral VM lifecycle on the same `two-ephemeral` pool that serves
+# the REQUIRED `pr-lint` check. The first version ran `scope` and `docs-verdict`
+# on every push, so each push cost three VM lifecycles for one required check,
+# and code PRs got two of them for a trivial pass. The oldest waiters on the
+# 2026-10-04 22:54Z page were `pr-lint` and `scope` jobs, 70-86 minutes in queue.
+# Now code-only PRs start no job here, and a prose PR costs one.
+#
+# The `paths:` list MUST stay a superset of what `docs_scope.py` calls prose
+# (root *.md/*.rst/*.txt, docs/**, bare LICENSE names); `test_docs_fast_path.py`
+# enforces that. A mixed docs+code PR still starts the workflow and the
+# classifier reads it as not docs-only.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '*.md'
+      - '*.rst'
+      - '*.txt'
+      - 'docs/**'
+      - 'LICENSE*'
+      - 'LICENCE*'
+  push:
+    branches: [main]
+    paths:
+      - '*.md'
+      - '*.rst'
+      - '*.txt'
+      - 'docs/**'
+      - 'LICENSE*'
+      - 'LICENCE*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-fast-path-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  docs-verdict:
+    name: docs-verdict
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Classify the change scope
+        id: scope
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != pull_request ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-status "origin/${{ github.base_ref }}...HEAD" \
+            | python3 .github/scripts/docs_scope.py >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+      - name: Fast prose checks (docs-only PRs)
+        if: steps.scope.outputs.docs_only == 'true'
+        run: |
+          set -euo pipefail
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- '*.md' 'docs/**' > "$RUNNER_TEMP/docs-files.txt"
+          test -s "$RUNNER_TEMP/docs-files.txt"
+          while IFS= read -r f; do
+            test -s "$f"
+            # Balanced fenced code blocks: an odd count means a broken doc.
+            n=$(grep -c '^```' "$f" || true)
+            test $((n % 2)) -eq 0
+          done < "$RUNNER_TEMP/docs-files.txt"
+          echo "docs-only fast path: prose checks passed"
+      - name: Code PR (full CI owns correctness)
+        if: steps.scope.outputs.docs_only != 'true'
+        run: echo 'code change - docs-verdict passes trivially; see CI for the real verdict'

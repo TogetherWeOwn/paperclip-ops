@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the product-only bridge every 60 seconds
+
+[Timer]
+OnBootSec=15s
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=gh-product-bridge.service
+
+[Install]
+WantedBy=timers.target

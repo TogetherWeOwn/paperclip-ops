@@ -1,0 +1,29 @@
+# ops/case_a2ab2937/gatus-endpoints.yaml — case_a2ab2937/case_3d2bbfac
+#
+# MERGE: append the entry below under the host Gatus config's
+# `external-endpoints:` list (see ops/case_658bf6b9/gatus-config.yaml for the
+# alerting providers it reuses: discord + the Akmatori Alertmanager feed).
+# The value arrives via push-staging-login-smoke.sh on a 10m cron; a missed
+# 10m heartbeat fails closed (UNKNOWN, never healthy). Cron install rides the
+# OPERATOR.md on this card, same as the case_658bf6b9 push scripts.
+#
+# The alert description carries the threshold, the owner, and the runbook
+# pointer, so the page itself says what breached and who owns the next step.
+# Failure/success thresholds and send-on-resolved come from the host config's
+# default-alert (3 / 2 / true). No secret lives here: the only variable is
+# the shared external token, resolved from the root-only 0600 env file.
+#
+# Push key derivation (same as case_658bf6b9): <group>_<name> with separators
+# mapped to '-': two_staging-login-smoke.
+
+external-endpoints:
+  - name: staging-login-smoke
+    group: two
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD 3 consecutive probe failures. OWNER on-call web. RUNBOOK ops/case_a2ab2937/OPERATOR.md#staging-login-smoke"
+      - type: custom
+        description: "THRESHOLD 3 consecutive probe failures. OWNER on-call web. RUNBOOK ops/case_a2ab2937/OPERATOR.md#staging-login-smoke"

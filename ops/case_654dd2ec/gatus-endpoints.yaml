@@ -1,0 +1,85 @@
+# ops/case_654dd2ec/gatus-endpoints.yaml — case_654dd2ec
+#
+# MERGE: append the six entries below under the host Gatus config's
+# `external-endpoints:` list (see ops/case_658bf6b9/gatus-config.yaml for the
+# alerting providers they reuse: discord + the Akmatori Alertmanager feed).
+# Values arrive via push-paperclip-invariants.sh on cron; a missed 10m
+# heartbeat fails closed (UNKNOWN, never healthy). Cron install is a
+# separate CEO Operator card, same as the case_658bf6b9 push scripts.
+#
+# Every entry carries its threshold, its owner, and its runbook pointer in
+# the alert description, so the page itself says what breached and who owns
+# the next step. No secret lives here: the only variable is the shared
+# external token, resolved from the root-only 0600 env file on the host.
+#
+# Push key derivation (same as case_658bf6b9): <group>_<name> with separators
+# mapped to '-': paperclip_agents-error-10m, paperclip_failed-subtype-success,
+# paperclip_cards-rewoken-6h, paperclip_missing-disposition-reparks,
+# paperclip_unassigned-infocus-cards, paperclip_db-pool-waiters.
+
+external-endpoints:
+  - name: agents-error-10m
+    group: paperclip
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD rows>0 in paperclip_inv_agents_error_10m. OWNER director. RUNBOOK ops/case_654dd2ec/OPERATOR.md#agents-error-10m"
+      - type: custom
+        description: "THRESHOLD rows>0 in paperclip_inv_agents_error_10m. OWNER director. RUNBOOK ops/case_654dd2ec/OPERATOR.md#agents-error-10m"
+
+  - name: failed-subtype-success
+    group: paperclip
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD rows>0 in paperclip_inv_failed_subtype_success (1h window). OWNER director. RUNBOOK ops/case_654dd2ec/OPERATOR.md#failed-subtype-success"
+      - type: custom
+        description: "THRESHOLD rows>0 in paperclip_inv_failed_subtype_success (1h window). OWNER director. RUNBOOK ops/case_654dd2ec/OPERATOR.md#failed-subtype-success"
+
+  - name: cards-rewoken-6h
+    group: paperclip
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD rows>0 in paperclip_inv_cards_rewoken_6h (>3 stall-wakes per card). OWNER director. RUNBOOK ops/case_654dd2ec/OPERATOR.md#cards-rewoken-6h"
+      - type: custom
+        description: "THRESHOLD rows>0 in paperclip_inv_cards_rewoken_6h (>3 stall-wakes per card). OWNER director. RUNBOOK ops/case_654dd2ec/OPERATOR.md#cards-rewoken-6h"
+
+  - name: missing-disposition-reparks
+    group: paperclip
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD rows>2 in paperclip_inv_missing_disposition_reparks (1h window). OWNER director. RUNBOOK ops/case_654dd2ec/OPERATOR.md#missing-disposition-reparks"
+      - type: custom
+        description: "THRESHOLD rows>2 in paperclip_inv_missing_disposition_reparks (1h window). OWNER director. RUNBOOK ops/case_654dd2ec/OPERATOR.md#missing-disposition-reparks"
+
+  - name: unassigned-infocus-cards
+    group: paperclip
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD rows>0 in paperclip_inv_unassigned_infocus_cards. OWNER director. RUNBOOK ops/case_654dd2ec/OPERATOR.md#unassigned-infocus-cards"
+      - type: custom
+        description: "THRESHOLD rows>0 in paperclip_inv_unassigned_infocus_cards. OWNER director. RUNBOOK ops/case_654dd2ec/OPERATOR.md#unassigned-infocus-cards"
+
+  - name: db-pool-waiters
+    group: paperclip
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD rows>5 in paperclip_inv_db_pool_waiters. OWNER director. RUNBOOK ops/case_654dd2ec/OPERATOR.md#db-pool-waiters"
+      - type: custom
+        description: "THRESHOLD rows>5 in paperclip_inv_db_pool_waiters. OWNER director. RUNBOOK ops/case_654dd2ec/OPERATOR.md#db-pool-waiters"

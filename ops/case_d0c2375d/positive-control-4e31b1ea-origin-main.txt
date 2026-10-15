@@ -1,0 +1,5 @@
+   × case_d0c2375d POSITIVE CONTROL on origin/main: the repin write strands all six env surfaces (expected RED) > THE PREDICATE (must FAIL on this commit): all seven surfaces land on a healthy lane 13ms
+     → surface PAPERCLIP_ASSIGNED_MODEL: expected 'cliproxy-codex' to be 'cliproxy-claude' // Object.is equality
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+ Test Files  1 failed (1)
+      Tests  1 failed (1)

@@ -1,0 +1,17 @@
+ARG_MAX=2097152  MAX_ARG_STRLEN=131072  (per-var linux limit)
+Node v24.21.0  threshold=100000 bytes
+
+--- 1) Direct env var (pre-patch behavior) ---
+310KB env: E2BIG spawnSync true E2BIG  <- expected for 310KB
+10KB env (should succeed): ok status 0
+
+--- 2) File relay (post-patch behavior) ---
+310KB via PAPERCLIP_WAKE_PAYLOAD_FILE: ok status 0 bytes 317440 expected 317440 PASS
+10KB via file (also works): ok status 0 bytes 10240 expected 10240 PASS
+
+--- 3) Threshold check ---
+310KB byteLength=317440 > 100000 ? true (should relay)
+10KB byteLength=10240 > 100000 ? false (should stay in env)
+
+--- Verdict ---
+PASS: E2BIG reproduced on 310KB env var; file relay avoids it. Threshold 100KB validated.

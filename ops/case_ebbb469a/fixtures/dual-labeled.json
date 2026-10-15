@@ -1,0 +1,19 @@
+{
+  "description": "coolify-vps-3 carries both two-isolated and two-selfhosted; everything is otherwise online with no demand",
+  "now": "2026-10-04T12:00:00Z",
+  "runners_pages": [
+    {"total_count": 9, "runners": [
+      {"id":125,"name":"coolify-vps-1","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":126,"name":"coolify-vps-2","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":127,"name":"coolify-vps-3","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"},{"id":5,"name":"two-selfhosted","type":"custom"}]},
+      {"id":128,"name":"coolify-vps-4","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":129,"name":"coolify-vps-5","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":130,"name":"coolify-vps-6","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":131,"name":"coolify-vps-7","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":1,"name":"node7b1ff338-docker-1","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-selfhosted","type":"custom"}]},
+      {"id":2,"name":"node7b1ff338-docker-2","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-selfhosted","type":"custom"}]}
+    ]}
+  ],
+  "queued": [
+  ]
+}

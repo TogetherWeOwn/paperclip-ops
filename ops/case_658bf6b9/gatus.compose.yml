@@ -1,0 +1,25 @@
+# gatus.compose.yml — case_658bf6b9 phase-1 Gatus service (pinned, localhost-only).
+#
+# Image pinned by digest. Config is the git-controlled gatus-config.yaml
+# mounted read-only from the release `current` pointer; secrets resolve from
+# the root-only 0600 env file. Publishes 127.0.0.1:8080 only — Cloudflare
+# Access sits in front; there is no public-anonymous route.
+#
+# Operator: copy to /opt/gatus/compose.yml, then `docker compose up -d`.
+# Validate the config first (OPERATOR.md §4). Verify the digest after pull:
+#   docker image inspect twinproduction/gatus:v5.37.0 --format '{{.RepoDigests}}'
+# must list twinproduction/gatus@sha256:094eb186e55235db367e90e9d56140e5897b7044c41de23cde4cc18e6da1242e
+name: case_60330d6f-gatus
+
+services:
+  gatus:
+    image: twinproduction/gatus:v5.37.0@sha256:094eb186e55235db367e90e9d56140e5897b7044c41de23cde4cc18e6da1242e
+    container_name: case_60330d6f-gatus
+    restart: unless-stopped
+    env_file:
+      - /root/.config/paperclip/case_60330d6f.env
+    volumes:
+      - /opt/status-page/current/ops/case_658bf6b9/gatus-config.yaml:/config/config.yaml:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    command: ["--config", "/config/config.yaml"]

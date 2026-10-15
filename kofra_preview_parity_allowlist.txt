@@ -1,0 +1,20 @@
+# Kofra staging-vs-prod parity allowlist. case_db6cb3f2.
+#
+# Format:  <surface-path><TAB><reason>
+#
+# A reason is MANDATORY and kofra_preview_parity.py REFUSES (exit 2) on an
+# entry without one. An unreasoned exemption is indistinguishable from
+# someone silencing the detector, and a detector that can be silenced
+# quietly is already deleted.
+#
+# `check` REFUSES while any entry here matches no live surface path, so a
+# fixed divergence leaves a stale hole behind rather than a standing one.
+#
+# worker.name can NEVER be allowlisted: equal names mean a staging deploy
+# lands on the prod worker, and the script treats that as drift by
+# construction no matter what this file says.
+#
+# This file is deliberately EMPTY of entries. staging and prod currently
+# agree on every deployment-bearing path except the worker name (which is
+# the required difference, not drift). Add an entry only for a reviewed
+# intentional divergence, with the slice that owns converging it named here.

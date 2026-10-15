@@ -1,0 +1,22 @@
+{
+  "description": "every isolated runner offline; three isolated jobs queued 47m/12m/5m; selfhosted pool healthy",
+  "now": "2026-10-04T12:00:00Z",
+  "runners_pages": [
+    {"total_count": 9, "runners": [
+      {"id":11,"name":"coolify-vps-1","os":"Linux","status":"offline","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":12,"name":"coolify-vps-2","os":"Linux","status":"offline","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":13,"name":"coolify-vps-3","os":"Linux","status":"offline","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":14,"name":"coolify-vps-4","os":"Linux","status":"offline","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":15,"name":"coolify-vps-5","os":"Linux","status":"offline","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":16,"name":"coolify-vps-6","os":"Linux","status":"offline","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":17,"name":"coolify-vps-7","os":"Linux","status":"offline","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-isolated","type":"custom"}]},
+      {"id":1,"name":"node7b1ff338-docker-1","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-selfhosted","type":"custom"}]},
+      {"id":2,"name":"node7b1ff338-docker-2","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-selfhosted","type":"custom"}]}
+    ]}
+  ],
+  "queued": [
+    {"name":"Offline suites","status":"queued","created_at":"2026-10-04T11:13:00Z","labels":["self-hosted","two-isolated"]},
+    {"name":"Privilege ceiling suites","status":"queued","created_at":"2026-10-04T11:48:00Z","labels":["self-hosted","two-isolated"]},
+    {"name":"Long mutation gates","status":"queued","created_at":"2026-10-04T11:55:00Z","labels":["self-hosted","two-isolated"]}
+  ]
+}

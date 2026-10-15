@@ -1,0 +1,80 @@
+# ===========================================================================
+# systemd unit for host-ops-mcp (case_16723128).
+#
+# Install to /etc/systemd/system/host-ops-mcp.service and substitute
+# OPERATOR_USER / OPERATOR_GROUP and the two paths.
+#
+# The unit runs as the OPERATOR user, not root: it fronts broker.py's
+# `request`/`verify` subcommands, which need to write the spool's requests
+# directory (group paperclip-host-requests) and read the published response
+# bundles. That is the entire reason this server lives on the host instead
+# of in the container.
+# ===========================================================================
+
+[Unit]
+Description=host-ops-mcp — host-side MCP transport for host-ops/broker.py
+Documentation=https://github.com/TogetherWeOwn/paperclip-ops/blob/main/mcp/deploy/host-ops-install-runbook.md
+After=network-online.target paperclip-host-ops-broker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=OPERATOR_USER
+Group=OPERATOR_GROUP
+
+# The config PATH is an argument; the config CONTENTS are not, and the file
+# holds sha256 digests rather than the bearer itself. /proc/*/cmdline stays
+# boring, which matters because it is world-readable and every company on this
+# box shares the host.
+ExecStart=/usr/bin/node /opt/host-ops-mcp/host-ops-mcp.mjs /etc/host-ops-mcp/config.json
+
+Restart=on-failure
+RestartSec=5s
+
+# Structured JSON lines on stdout; journald keeps them.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=host-ops-mcp
+
+# --- Hardening ------------------------------------------------------------
+# Deliberately NOT PrivateNetwork or NetworkNamespacePath: the process must
+# reach the container-engine socket (Docker on node7b1ff338) and bind host loopback.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=no
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+
+# ProtectSystem=strict makes everything read-only; name the exceptions.
+# requests/ must stay writable (submit); previews/ and responses/ readable
+# (wait + verify). The broker owns everything else.
+ReadWritePaths=/var/spool/paperclip-host-ops/requests
+ReadOnlyPaths=/var/spool/paperclip-host-ops/previews /var/spool/paperclip-host-ops/responses
+ReadOnlyPaths=/etc/host-ops-mcp /opt/host-ops-mcp
+
+# systemd creates and chowns this; do not hand-make it.
+LogsDirectory=host-ops-mcp
+LogsDirectoryMode=0750
+
+# The only address it may listen on. The server hard-codes 127.0.0.1 in
+# source, and this is the second, independent statement of the same
+# non-negotiable — belt and braces on the constraint that matters most.
+#
+# These filters apply to AF_INET/AF_INET6 only, so container-exec over the
+# engine UNIX socket is unaffected. VERIFY THAT ON THIS BOX ANYWAY: if the
+# engine is configured to reach a remote or TCP endpoint here, run
+# corroboration will start returning 503 run_check_unavailable — which is the
+# correct fail-closed behaviour, but for the wrong reason and it will look
+# like a database outage.
+IPAddressAllow=localhost
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target

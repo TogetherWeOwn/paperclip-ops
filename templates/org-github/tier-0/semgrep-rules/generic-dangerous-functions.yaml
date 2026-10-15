@@ -1,0 +1,41 @@
+rules:
+  - id: tier0-no-eval
+    languages: [javascript, typescript, python]
+    severity: WARNING
+    message: "Avoid eval()/exec() on dynamic input — it is invisible to static review and a standing injection sink."
+    metadata:
+      tier0: "live"
+      false-positive-budget: "under 5% over the last 20 PRs per case_5789b2d5 rollout rule"
+    patterns:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: exec(...)
+          - pattern: new Function(...)
+      - pattern-not: eval("...")
+      - pattern-not: exec("...")
+    paths:
+      exclude:
+        - "*.test.*"
+        - test/*
+        - tests/*
+        - vendor/*
+
+  - id: tier0-no-shell-exec-interpolation
+    languages: [javascript, typescript, python]
+    severity: WARNING
+    message: "Shell execution with interpolated input — prefer argv arrays / shlex.join over string commands."
+    metadata:
+      tier0: "live"
+    patterns:
+      - pattern-either:
+          - pattern: child_process.exec(`...${...}...`)
+          - pattern: child_process.execSync(`...${...}...`)
+          - pattern: os.system(...)
+          - pattern: subprocess.call(..., shell=True, ...)
+          - pattern: subprocess.Popen(..., shell=True, ...)
+    paths:
+      exclude:
+        - "*.test.*"
+        - test/*
+        - tests/*
+        - vendor/*

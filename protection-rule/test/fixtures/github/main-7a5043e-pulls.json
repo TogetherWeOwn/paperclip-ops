@@ -1,0 +1,24 @@
+[
+  {
+    "id": 4766397733,
+    "number": 626,
+    "state": "closed",
+    "title": "ci(release): fail when release-please cannot parse a squash commit",
+    "merged_at": "2026-10-07T06:09:13Z",
+    "merge_commit_sha": "7a5043e4b378e2648c9287ea00d916a16dacdb08",
+    "head": {
+      "ref": "ci/release-parse-guard",
+      "sha": "a4da131e368e086b9c271f164226ac7387a41996",
+      "repo": {
+        "full_name": "TogetherWeOwn/two-bot-next"
+      }
+    },
+    "base": {
+      "ref": "main",
+      "sha": "43425be078c661459fa05bf9d1a935b533616983",
+      "repo": {
+        "full_name": "TogetherWeOwn/two-bot-next"
+      }
+    }
+  }
+]

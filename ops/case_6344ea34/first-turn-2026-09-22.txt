@@ -1,0 +1,31 @@
+# case_6344ea34 post-apply first-turn measurement, 2026-09-22
+# cmd: python3 ops/case_f38b5e34/measure-first-turn.py 25
+# total = input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+# Percentiles: nearest-rank, sorted totals[ceil(p*n)-1]; p90 is rank 23 of 25.
+# Linear-interpolated p90 would be 135629.6; this report consistently uses nearest-rank.
+7b2666dc ag=8b87f690 total=132917 (in=132917 mk=0 rd=0) tools=112 skills=24 slash=53
+a5d31428 ag=8b87f690 total=120025 (in=120025 mk=0 rd=0) tools=112 skills=24 slash=53
+656c7593 ag=974632dd total=75685 (in=2 mk=26383 rd=49300) tools=78 skills=24 slash=53
+11822756 ag=69c12a25 total=78628 (in=78628 mk=0 rd=0) tools=80 skills=34 slash=63
+dfbfbd30 ag=69c12a25 total=48258 (in=48258 mk=0 rd=0) tools=80 skills=34 slash=63
+5ac25e01 ag=8b87f690 total=125335 (in=125335 mk=0 rd=0) tools=112 skills=24 slash=53
+f8477248 ag=2582c528 total=44358 (in=44358 mk=0 rd=0) tools=80 skills=24 slash=53
+e126b5a5 ag=7179efed total=168788 (in=2 mk=168786 rd=0) tools=80 skills=25 slash=54
+b84d76c8 ag=8b87f690 total=77213 (in=2 mk=77211 rd=0) tools=112 skills=24 slash=53
+60328561 ag=0881f244 total=137438 (in=137438 mk=0 rd=0) tools=80 skills=25 slash=54
+c336a02c ag=974632dd total=69189 (in=69189 mk=0 rd=0) tools=80 skills=24 slash=53
+aacfae17 ag=7179efed total=68942 (in=2 mk=68940 rd=0) tools=78 skills=25 slash=54
+25ea20f2 ag=2582c528 total=100461 (in=100461 mk=0 rd=0) tools=80 skills=24 slash=53
+69944ac7 ag=8b87f690 total=57771 (in=57771 mk=0 rd=0) tools=112 skills=24 slash=53
+a889cd7d ag=974632dd total=42794 (in=42794 mk=0 rd=0) tools=80 skills=24 slash=53
+b314537a ag=8b87f690 total=176313 (in=2 mk=176311 rd=0) tools=110 skills=24 slash=53
+0301ef80 ag=69f42350 total=49076 (in=49076 mk=0 rd=0) tools=80 skills=24 slash=53
+f9e8e763 ag=0ffb806a total=79541 (in=2 mk=79539 rd=0) tools=80 skills=24 slash=53
+dfa0b719 ag=8b87f690 total=117402 (in=117402 mk=0 rd=0) tools=112 skills=24 slash=53
+b2fad4c8 ag=2fe4d7f9 total=69772 (in=69772 mk=0 rd=0) tools=80 skills=41 slash=70
+9f1c7799 ag=974632dd total=107757 (in=107757 mk=0 rd=0) tools=80 skills=24 slash=53
+5fc898fb ag=69f42350 total=128437 (in=128437 mk=0 rd=0) tools=80 skills=24 slash=53
+bc3f3a3f ag=69f42350 total=50712 (in=50712 mk=0 rd=0) tools=80 skills=24 slash=53
+eeb19adb ag=69f42350 total=47687 (in=47687 mk=0 rd=0) tools=80 skills=24 slash=53
+0957ed15 ag=7179efed total=56985 (in=56985 mk=0 rd=0) tools=80 skills=26 slash=55
+n=25 min=42794 p50=77213 p90=137438 max=176313 tools_p50=80

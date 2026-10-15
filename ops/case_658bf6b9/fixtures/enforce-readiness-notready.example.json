@@ -1,0 +1,66 @@
+{
+  "_comment": "case_96fed9da EXAMPLE FIXTURE — not live telemetry. Operator fallback for ENFORCE_READINESS until the live case_3d05301b producer lands. A not-ready readout: T2 has zero enabled rows, so the blocking no-empty-tier gate fails. Shape: case_1320d1f5-enforce-readiness-v1. NOTE: evaluatedAt is fixed, so under a live clock this fixture reads stale-by-design; it validates the DEGRADED mapping with a pinned clock.",
+  "schema": "case_1320d1f5-enforce-readiness-v1",
+  "mode": "propose-only",
+  "flipsSelectionMode": false,
+  "flipsPacingMode": false,
+  "writesPins": false,
+  "cleansStalePins": false,
+  "evaluatedAt": 1759468800000,
+  "selectionModeObserved": "enforce",
+  "gaps": [
+    {
+      "tier": "T1",
+      "enabledCount": 1,
+      "totalCount": 1,
+      "gap": false,
+      "enabledModelIds": ["t1-model"],
+      "truncated": false
+    },
+    {
+      "tier": "T2",
+      "enabledCount": 0,
+      "totalCount": 1,
+      "gap": true,
+      "enabledModelIds": [],
+      "truncated": false
+    },
+    {
+      "tier": "T3",
+      "enabledCount": 1,
+      "totalCount": 1,
+      "gap": false,
+      "enabledModelIds": ["t3-model"],
+      "truncated": false
+    }
+  ],
+  "emptyTiers": ["T2"],
+  "gates": [
+    {
+      "gate": "roster-has-enabled-models",
+      "pass": true,
+      "blocking": true,
+      "reason": "roster-has-enabled-models"
+    },
+    {
+      "gate": "no-empty-tier",
+      "pass": false,
+      "blocking": true,
+      "reason": "tier-T2-has-no-enabled-models-enforce-cannot-pin-onto-an-unserved-tier"
+    }
+  ],
+  "verdict": "not-ready",
+  "enforceAllowed": false,
+  "proposal": {
+    "action": "propose-remediation",
+    "reason": "enforce-active-with-empty-tier",
+    "emptyTiers": ["T2"],
+    "selectionModeChanged": false,
+    "pacingModeChanged": false,
+    "pinsWritten": false,
+    "stalePinsCleaned": false
+  },
+  "reasons": ["tier-T1-served", "gap:tier-T2-empty", "tier-T3-served", "no-empty-tier-fail-blocking", "enforce-would-refuse-shadow-only"],
+  "rollbackNotes": ["Readout mutates nothing: rollback is discarding this object."],
+  "limitations": ["Caller-declared roster rows are not certified production evidence."]
+}

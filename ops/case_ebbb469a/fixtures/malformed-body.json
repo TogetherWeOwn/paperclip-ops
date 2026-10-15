@@ -1,0 +1,7 @@
+{
+  "description": "org runner list answers 200 with a non-JSON body",
+  "now": "2026-10-04T12:00:00Z",
+  "runners_raw": "<html>502 Bad Gateway</html>",
+  "queued": [
+  ]
+}

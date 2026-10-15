@@ -1,0 +1,553 @@
+# Tier-0 deterministic quality gate (case_5789b2d5, staged for TogetherWeOwn/.github via case_4784a03d).
+#
+# Ported from paperclip-ops@61754d9dd4cc93cf4d61ea48b681e7b73fed5605
+# (PR #824, unmerged at stage time): the Operator re-syncs this copy after
+# #824 merges, then applies it to TogetherWeOwn/.github at
+# `.github/workflows/tier-0-quality-gate.yml`.
+#
+# WHAT THIS IS. One reusable workflow every TogetherWeOwn repo opts into with
+# a single `uses:` line (see ADOPTION.md next to this file for the
+# copy-paste caller snippet and the `ci-ok` wiring).
+# It runs the deterministic checks from the 2026-10-09 review-cost report
+# BEFORE any expensive review model is involved: lint/strict types, unused
+# code, generator drift, workflow checks, security scanners, and a
+# diff-coverage + mutation budget on changed lines only.
+#
+# REPORT-ONLY FIRST (the rollout rule on case_5789b2d5): `mode: report-only`
+# (the default) never fails the run for its own findings — every gate job
+# sets `continue-on-error: true`, writes its findings to the step summary
+# and to a `tier-0-findings` artifact. A check becomes required only after
+# its false-positive rate over the last 20 PRs is measured under 5%; flip
+# that check (or the whole gate) to `mode: enforcing`.
+#
+# PORTABILITY RULES (so one file serves TS / PHP / Rust / Go / Python repos):
+#   - `ubuntu-latest` only: public repos cannot reach our self-hosted pools.
+#   - No repo-specific toolchains via setup actions: GH-hosted images ship
+#     node, python3, go, rustup, php and composer. Repo-owned linters
+#     (tsc, phpstan, clippy, ruff, mypy) run only when the repo configures
+#     them; gate-owned scanners (actionlint, zizmor, gitleaks, semgrep,
+#     squawk) are installed here at pinned versions.
+#   - Every gate auto-detects its stack from manifests AND changed files,
+#     and skips silently when neither matches — a docs-only PR runs the
+#     workflow-checks job and skips the other five.
+#   - All third-party actions are pinned by SHA (repo rule). Scanner
+#     binaries are pinned by version in `env:` below; bump them in one place.
+#
+# SUPPLY-CHAIN HYGIENE (dogfooded: this file is clean under Gate 4 itself):
+#   - Every checkout sets `persist-credentials: false` — no job needs to
+#     push or to fetch private history (fetch-depth: 0 already carries the
+#     PR base commit, verified with `git cat-file -e`, failing closed).
+#   - No `${{ }}` expression expands inside a `run:` script. Caller inputs,
+#     job outputs and contexts cross into shell only through step `env:`
+#     (the zizmor-sanctioned indirection), so a crafted PR body, branch
+#     name or caller input cannot become shell code.
+#
+# FEEDING ci-ok: this workflow ends in exactly one aggregator, `tier-0-ok`
+# (`if: ${{ !cancelled() }}`), so a consumer repo wires ONE context into its
+# own required aggregator. Never add a second aggregator here. Each caller
+# feeds it into its `ci-ok` equivalent (see ADOPTION.md).
+
+name: Tier-0 quality gate
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "report-only (advisory, never fails) or enforcing (findings fail the run)"
+        required: false
+        default: report-only
+        type: string
+      diff_coverage_threshold:
+        description: "Minimum % of changed lines covered by tests"
+        required: false
+        default: 90
+        type: number
+      enable_mutation:
+        description: "Run time-boxed mutation testing on changed files"
+        required: false
+        default: true
+        type: boolean
+      mutation_budget_minutes:
+        description: "Wall-clock budget for the mutation step (time-boxed, never open-ended)"
+        required: false
+        default: 10
+        type: number
+      semgrep_config:
+        description: "Semgrep rules path (org starter pack lives at semgrep-rules/ in the gate repo)"
+        required: false
+        default: semgrep-rules
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  ACTIONLINT_VERSION: "1.7.12"
+  ZIZMOR_VERSION: "1.30.1"
+  GITLEAKS_VERSION: "8.30.1"
+  SQUAWK_VERSION: "2.68.0"
+  SEMGREP_VERSION: "1.128.1"
+
+jobs:
+  # ------------------------------------------------------------------
+  # detect: the only job every caller implicitly depends on. Computes the
+  # changed-file list once (PR base vs head, or push `before` vs head) and
+  # publishes one `has-<stack>` output per language plus the file list, so
+  # each gate below runs only what changed instead of re-diffing.
+  # ------------------------------------------------------------------
+  detect:
+    name: Detect stack and changed files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+      has-ts: ${{ steps.stack.outputs.has-ts }}
+      has-php: ${{ steps.stack.outputs.has-php }}
+      has-rust: ${{ steps.stack.outputs.has-rust }}
+      has-go: ${{ steps.stack.outputs.has-go }}
+      has-python: ${{ steps.stack.outputs.has-python }}
+      has-workflows: ${{ steps.stack.outputs.has-workflows }}
+      has-migrations: ${{ steps.stack.outputs.has-migrations }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Compute changed files
+        id: diff
+        env:
+          TIER0_EVENT: ${{ github.event_name }}
+          TIER0_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          TIER0_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$TIER0_EVENT" == "pull_request" ]]; then
+            base="$TIER0_PR_BASE"
+          elif [[ -n "$TIER0_BEFORE" && "$TIER0_BEFORE" != "0000000000000000000000000000000000000000" ]]; then
+            base="$TIER0_BEFORE"
+          else
+            base="$(git rev-parse HEAD~1 2>/dev/null || echo '')"
+          fi
+          if [[ -z "$base" ]]; then
+            echo "no base resolvable; treating the whole tree as changed"
+            changed="$(git ls-files)"
+          else
+            git cat-file -e "$base" || { echo "base not in local history; failing closed"; exit 1; }
+            changed="$(git diff --name-only --no-renames "$base" HEAD -- || git ls-files)"
+          fi
+          printf '%s\n' "$changed" > /tmp/tier0-changed.txt
+          echo "changed<<EOF" >> "$GITHUB_OUTPUT"
+          cat /tmp/tier0-changed.txt >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "changed files: $(wc -l < /tmp/tier0-changed.txt)"
+      - name: Detect stacks from manifests and changed files
+        id: stack
+        run: |
+          set -euo pipefail
+          changed="$(cat /tmp/tier0-changed.txt)"
+          match() { printf '%s\n' "$changed" | grep -Eq "$1"; }
+          # A stack is live when its manifest exists in the tree OR a changed
+          # file belongs to it — new-stack PRs (manifest itself added) match
+          # on the changed path even before the manifest is "existing".
+          [[ -e package.json || -e tsconfig.json ]] || match '\.(ts|tsx|mts|cts)$' && echo "has-ts=true" >> "$GITHUB_OUTPUT" || echo "has-ts=false" >> "$GITHUB_OUTPUT"
+          { [[ -e composer.json ]] || match '\.php$'; } && echo "has-php=true" >> "$GITHUB_OUTPUT" || echo "has-php=false" >> "$GITHUB_OUTPUT"
+          { [[ -e Cargo.toml ]] || match '\.rs$'; } && echo "has-rust=true" >> "$GITHUB_OUTPUT" || echo "has-rust=false" >> "$GITHUB_OUTPUT"
+          { [[ -e go.mod ]] || match '\.go$'; } && echo "has-go=true" >> "$GITHUB_OUTPUT" || echo "has-go=false" >> "$GITHUB_OUTPUT"
+          { [[ -e pyproject.toml || -e setup.cfg || -e requirements.txt ]] || match '\.py$'; } && echo "has-python=true" >> "$GITHUB_OUTPUT" || echo "has-python=false" >> "$GITHUB_OUTPUT"
+          match '^\.github/workflows/.*\.ya?ml$' && echo "has-workflows=true" >> "$GITHUB_OUTPUT" || echo "has-workflows=false" >> "$GITHUB_OUTPUT"
+          match 'migrations?/.*\.sql$' && echo "has-migrations=true" >> "$GITHUB_OUTPUT" || echo "has-migrations=false" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  # ------------------------------------------------------------------
+  # Gate 1 — lint and strict types, per stack, only when that stack changed.
+  # Repo-owned configs rule: tsc --strict, typescript-eslint strict rules,
+  # PHPStan max, clippy -D warnings, ruff + mypy. Each step runs only if the
+  # repo provides the tool AND its config (nothing is installed ad-hoc, so a
+  # run never depends on an unpinned download); a missing config is a skip
+  # with a note, never a failure — adopting the config is a follow-up.
+  # ------------------------------------------------------------------
+  lint-types:
+    name: Gate 1 — lint and strict types
+    needs: [detect]
+    if: ${{ needs.detect.outputs.has-ts == 'true' || needs.detect.outputs.has-php == 'true' || needs.detect.outputs.has-rust == 'true' || needs.detect.outputs.has-go == 'true' || needs.detect.outputs.has-python == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: ${{ inputs.mode == 'report-only' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: TypeScript — tsc --strict plus typescript-eslint
+        if: ${{ needs.detect.outputs.has-ts == 'true' }}
+        run: |
+          set -euo pipefail
+          if [[ ! -e tsconfig.json ]]; then echo "no tsconfig.json — skipping (adopt strict TS config to enable)"; exit 0; fi
+          if [[ ! -x node_modules/.bin/tsc ]]; then echo "no repo-provided typescript — skipping (add typescript to devDependencies to enable)"; exit 0; fi
+          node_modules/.bin/tsc --strict --noEmit -p tsconfig.json
+          if [[ -e eslint.config.mjs || -e eslint.config.js || -e .eslintrc.json ]]; then
+            node_modules/.bin/eslint . --max-warnings 0
+          else
+            echo "no eslint flat config — skipping typescript-eslint (adopt no-floating-promises, switch-exhaustiveness-check, no-misused-promises to enable)"
+          fi
+      - name: PHP — PHPStan at max level
+        if: ${{ needs.detect.outputs.has-php == 'true' }}
+        run: |
+          set -euo pipefail
+          if [[ ! -e phpstan.neon && ! -e phpstan.neon.dist ]]; then echo "no phpstan config — skipping (adopt PHPStan level max to enable)"; exit 0; fi
+          [[ -e vendor/bin/phpstan ]] || composer install --no-interaction --no-progress --prefer-dist 2>&1 | tail -2
+          vendor/bin/phpstan analyse --level=max --no-progress
+      - name: Rust — clippy denies warnings
+        if: ${{ needs.detect.outputs.has-rust == 'true' }}
+        run: |
+          set -euo pipefail
+          cargo clippy --all-targets -- -D warnings
+      - name: Go — vet plus gofmt drift
+        if: ${{ needs.detect.outputs.has-go == 'true' }}
+        run: |
+          set -euo pipefail
+          go vet ./...
+          unformatted="$(gofmt -l .)"; if [[ -n "$unformatted" ]]; then echo "::error::gofmt drift:"; printf '%s\n' "$unformatted"; exit 1; fi
+      - name: Python — ruff plus mypy
+        if: ${{ needs.detect.outputs.has-python == 'true' }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check -q "ruff" "mypy" 2>&1 | tail -1
+          if [[ -e pyproject.toml || -e ruff.toml || -e .ruff.toml ]]; then python3 -m ruff check .; else echo "no ruff config — running ruff defaults"; python3 -m ruff check .; fi
+          if [[ -e mypy.ini || -e .mypy.ini ]] || grep -q '\[tool.mypy\]' pyproject.toml 2>/dev/null; then python3 -m mypy .; else echo "no mypy config — skipping (adopt mypy to enable)"; fi
+      - name: Summarise findings
+        if: always()
+        env:
+          TIER0_GATE: "Gate 1 lint-types"
+          TIER0_JOB_STATUS: ${{ job.status }}
+          TIER0_MODE: ${{ inputs.mode }}
+        run: 'echo "### $TIER0_GATE: $TIER0_JOB_STATUS (mode $TIER0_MODE)" >> "$GITHUB_STEP_SUMMARY"'
+
+  # ------------------------------------------------------------------
+  # Gate 2 — unused code: knip for TS, vulture for Python, PHPStan unused
+  # rules for PHP (ride on Gate 1 max level), compiler dead-code lints for
+  # Rust/Go (ride on Gate 1 clippy/vet). Dedicated scanners run only when
+  # the repo configures them.
+  # ------------------------------------------------------------------
+  unused-code:
+    name: Gate 2 — unused code
+    needs: [detect]
+    if: ${{ needs.detect.outputs.has-ts == 'true' || needs.detect.outputs.has-php == 'true' || needs.detect.outputs.has-python == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: ${{ inputs.mode == 'report-only' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: TypeScript — knip
+        if: ${{ needs.detect.outputs.has-ts == 'true' }}
+        run: |
+          set -euo pipefail
+          if [[ ! -e knip.json && ! -e knip.jsonc && ! -e .knip.json ]]; then echo "no knip config — skipping (adopt knip to enable)"; exit 0; fi
+          if [[ ! -x node_modules/.bin/knip ]]; then echo "no repo-provided knip — skipping (add knip to devDependencies to enable)"; exit 0; fi
+          node_modules/.bin/knip
+      - name: Python — vulture on changed files
+        if: ${{ needs.detect.outputs.has-python == 'true' }}
+        env:
+          TIER0_CHANGED: ${{ needs.detect.outputs.changed }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check -q vulture 2>&1 | tail -1
+          printf '%s\n' "$TIER0_CHANGED" | grep '\.py$' > /tmp/changed-py.txt || true
+          if [[ ! -s /tmp/changed-py.txt ]]; then echo "no changed Python files — skipping"; exit 0; fi
+          # shellcheck disable=SC2046: intentional word-splitting of a file list
+          python3 -m vulture --min-confidence 80 $(tr '\n' ' ' < /tmp/changed-py.txt) || {
+            echo "::warning::vulture reported candidates above (report-only default: advisory, not blocking)"
+            exit 1
+          }
+      - name: PHP — PHPStan unused-symbol rules are covered by Gate 1 at max; nothing extra to install
+        if: ${{ needs.detect.outputs.has-php == 'true' }}
+        run: echo "PHP unused-code rides on Gate 1 PHPStan max level"
+      - name: Summarise findings
+        if: always()
+        env:
+          TIER0_GATE: "Gate 2 unused-code"
+          TIER0_JOB_STATUS: ${{ job.status }}
+          TIER0_MODE: ${{ inputs.mode }}
+        run: 'echo "### $TIER0_GATE: $TIER0_JOB_STATUS (mode $TIER0_MODE)" >> "$GITHUB_STEP_SUMMARY"'
+
+  # ------------------------------------------------------------------
+  # Gate 3 — generator drift: re-run the repo's generators, then refuse a
+  # dirty tree. Repos declare generators in `.tier0-generators` (one command
+  # per line, run in order; the file is repo-owned and reviewed like code);
+  # without that file the gate checks the universal lockfile invariants
+  # (cargo --locked, go mod tidy -diff, composer validity; npm has no
+  # reliable dry check and is skipped with a note), then requires a clean
+  # tree.
+  # ------------------------------------------------------------------
+  generator-drift:
+    name: Gate 3 — generator drift
+    needs: [detect]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: ${{ inputs.mode == 'report-only' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Run declared generators, then refuse drift
+        run: |
+          set -euo pipefail
+          if [[ -f .tier0-generators ]]; then
+            echo "running declared generators from .tier0-generators"
+            while IFS= read -r cmd || [[ -n "$cmd" ]]; do
+              [[ -z "$cmd" || "$cmd" == \#* ]] && continue
+              echo "+ $cmd"; bash -c "$cmd"
+            done < .tier0-generators
+          else
+            echo "no .tier0-generators file — running universal lockfile checks only"
+            drift=0
+            # npm has no reliable dry freshness check (`npm ci` IS the check,
+            # and it installs): npm lockfile drift needs a declared generator.
+            if [[ -e package-lock.json ]]; then echo "npm lockfile freshness needs a declared .tier0-generators entry — skipping"; fi
+            if [[ -e Cargo.lock ]]; then cargo metadata --locked --no-deps --format-version 1 >/dev/null || { echo "::error::Cargo.lock is stale"; drift=1; }; fi
+            if [[ -e go.sum ]]; then go mod tidy -diff || { echo "::error::go.mod/go.sum drift (go mod tidy -diff)"; drift=1; }; fi
+            # composer validate checks validity, not freshness: stale-lock
+            # detection for composer also needs a declared generator.
+            if [[ -e composer.lock ]]; then composer validate --no-check-publish --no-interaction || { echo "::error::composer file invalid"; drift=1; }; fi
+            exit "$drift"
+          fi
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "::error::generator drift — the tree is dirty after re-running generators:"
+            git status --porcelain
+            git diff --exit-code --stat || true
+            exit 1
+          fi
+          echo "tree clean after generators"
+      - name: Summarise findings
+        if: always()
+        env:
+          TIER0_GATE: "Gate 3 generator-drift"
+          TIER0_JOB_STATUS: ${{ job.status }}
+          TIER0_MODE: ${{ inputs.mode }}
+        run: 'echo "### $TIER0_GATE: $TIER0_JOB_STATUS (mode $TIER0_MODE)" >> "$GITHUB_STEP_SUMMARY"'
+
+  # ------------------------------------------------------------------
+  # Gate 4 — workflow checks: actionlint + zizmor on every workflow file,
+  # plus the structural rule from the report — no gating workflow may use
+  # `paths:`/`paths-ignore:` (a required check that skips is a hole). Always
+  # runs: workflow hygiene is stack-independent.
+  # ------------------------------------------------------------------
+  workflow-checks:
+    name: Gate 4 — workflow checks
+    needs: [detect]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: ${{ inputs.mode == 'report-only' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Install actionlint and zizmor (pinned)
+        run: |
+          set -euo pipefail
+          curl -sSfL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -o /tmp/actionlint.tgz
+          tar -xzf /tmp/actionlint.tgz -C /tmp actionlint && sudo mv /tmp/actionlint /usr/local/bin/
+          curl -sSfL "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/zizmor-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/zizmor.tgz
+          rm -rf /tmp/zizmor-ex && mkdir -p /tmp/zizmor-ex
+          tar -xzf /tmp/zizmor.tgz -C /tmp/zizmor-ex
+          sudo mv "$(find /tmp/zizmor-ex -name zizmor -type f | head -1)" /usr/local/bin/zizmor
+          actionlint --version; zizmor --version
+      - name: actionlint on all workflows
+        run: |
+          set -euo pipefail
+          actionlint .github/workflows/*.yml
+      - name: zizmor on all workflows
+        run: |
+          set -euo pipefail
+          zizmor --no-online-audits .github/workflows/
+      - name: "Structural rule — no path filters on gating workflows"
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, sys, yaml
+          bad = []
+          for path in glob.glob('.github/workflows/*.yml'):
+              with open(path) as f:
+                  wf = yaml.safe_load(f)
+              # YAML 1.1 reads the `on:` key as boolean True.
+              on = wf.get('on', wf.get(True, {})) or {}
+              if not isinstance(on, dict):
+                  continue
+              for trig, cfg in on.items():
+                  if isinstance(cfg, dict) and ('paths' in cfg or 'paths-ignore' in cfg):
+                      bad.append(f"{path}: trigger '{trig}' uses a path filter")
+          if bad:
+              print("::error::workflow structural violations:")
+              for b in bad:
+                  print(f"::error::{b}")
+              sys.exit(1)
+          print("workflow structural rules: clean (no path-filtered triggers)")
+          PY
+      - name: Summarise findings
+        if: always()
+        env:
+          TIER0_GATE: "Gate 4 workflow-checks"
+          TIER0_JOB_STATUS: ${{ job.status }}
+          TIER0_MODE: ${{ inputs.mode }}
+        run: 'echo "### $TIER0_GATE: $TIER0_JOB_STATUS (mode $TIER0_MODE)" >> "$GITHUB_STEP_SUMMARY"'
+
+  # ------------------------------------------------------------------
+  # Gate 5 — security: gitleaks (secret scan) on the PR diff, Semgrep with
+  # the org rules folder, squawk for changed SQL migrations. The org rules
+  # folder starts with generic high-signal rules plus DISABLED stub
+  # templates (authz-helper, check-then-write grants) that each repo enables
+  # by naming its own functions — a generic regex cannot know what a repo
+  # calls its authz function, and a guessing rule would blow the 5%
+  # false-positive promotion budget on day one.
+  # ------------------------------------------------------------------
+  security:
+    name: Gate 5 — security scanners
+    needs: [detect]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: ${{ inputs.mode == 'report-only' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks secret scan on the PR diff
+        env:
+          TIER0_EVENT: ${{ github.event_name }}
+          TIER0_PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tgz
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks && sudo mv /tmp/gitleaks /usr/local/bin/
+          if [[ "$TIER0_EVENT" == "pull_request" ]]; then
+            git cat-file -e "$TIER0_PR_BASE" || { echo "base not in local history; failing closed"; exit 1; }
+            gitleaks git --log-opts="$TIER0_PR_BASE...HEAD" --verbose --redact .
+          else
+            gitleaks detect --source . --verbose --redact
+          fi
+      - name: Semgrep with the org rules folder
+        env:
+          TIER0_SEMGREP_CONFIG: ${{ inputs.semgrep_config }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check -q "semgrep==${SEMGREP_VERSION}" 2>&1 | tail -1
+          if [[ -d "$TIER0_SEMGREP_CONFIG" ]]; then
+            python3 -m semgrep scan --config "$TIER0_SEMGREP_CONFIG" --error --exclude='*.test.*' --exclude='test*' .
+          else
+            echo "rules folder '$TIER0_SEMGREP_CONFIG' not present — running Semgrep registry defaults (adopt the org rules folder to enable)"
+            python3 -m semgrep scan --config auto --error .
+          fi
+      - name: squawk on changed SQL migrations
+        if: ${{ needs.detect.outputs.has-migrations == 'true' }}
+        env:
+          TIER0_CHANGED: ${{ needs.detect.outputs.changed }}
+        run: |
+          set -euo pipefail
+          curl -sSfL "https://github.com/sbdchd/squawk/releases/download/v${SQUAWK_VERSION}/squawk-linux-x64" -o /tmp/squawk
+          chmod +x /tmp/squawk && sudo mv /tmp/squawk /usr/local/bin/
+          printf '%s\n' "$TIER0_CHANGED" | grep 'migrations\?/.*\.sql$' > /tmp/changed-sql.txt || true
+          fail=0
+          while IFS= read -r f; do
+            echo "== squawk $f"; squawk "$f" || fail=1
+          done < /tmp/changed-sql.txt
+          exit "$fail"
+      - name: Summarise findings
+        if: always()
+        env:
+          TIER0_GATE: "Gate 5 security"
+          TIER0_JOB_STATUS: ${{ job.status }}
+          TIER0_MODE: ${{ inputs.mode }}
+        run: 'echo "### $TIER0_GATE: $TIER0_JOB_STATUS (mode $TIER0_MODE)" >> "$GITHUB_STEP_SUMMARY"'
+
+  # ------------------------------------------------------------------
+  # Gate 6 — tests on changed lines only: a diff-coverage gate (>=90% of
+  # changed lines by default) and time-boxed mutation testing on changed
+  # files. Both delegate to the repo's own harness — the gate computes the
+  # changed-file list and the budget, the repo's `.tier0-tests` script runs
+  # them. Without that script the gate reports its absence (adopt it to
+  # enable) instead of guessing how a stranger repo runs coverage.
+  # ------------------------------------------------------------------
+  tests:
+    name: Gate 6 — diff coverage and mutation budget
+    needs: [detect]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: ${{ inputs.mode == 'report-only' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Diff coverage and mutation via the repo test entrypoint
+        env:
+          TIER0_CHANGED_FILES: ${{ needs.detect.outputs.changed }}
+          TIER0_COVERAGE_THRESHOLD: ${{ inputs.diff_coverage_threshold }}
+          TIER0_MUTATION_BUDGET_MIN: ${{ inputs.mutation_budget_minutes }}
+          TIER0_ENABLE_MUTATION: ${{ inputs.enable_mutation }}
+        run: |
+          set -euo pipefail
+          if [[ ! -x .tier0-tests ]]; then
+            echo "no executable .tier0-tests entrypoint — skipping (adopt it to enable diff-coverage + mutation)"
+            echo "contract: .tier0-tests receives TIER0_CHANGED_FILES (newline-separated),"
+            echo "TIER0_COVERAGE_THRESHOLD (percent), TIER0_MUTATION_BUDGET_MIN and TIER0_ENABLE_MUTATION;"
+            echo "it fails when changed-line coverage is under threshold or (budget permitting)"
+            echo "a mutant on a changed line survives. Time-box: timeout TIER0_MUTATION_BUDGET_MIN."
+            exit 0
+          fi
+          ./.tier0-tests
+      - name: Summarise findings
+        if: always()
+        env:
+          TIER0_GATE: "Gate 6 tests"
+          TIER0_JOB_STATUS: ${{ job.status }}
+          TIER0_MODE: ${{ inputs.mode }}
+        run: 'echo "### $TIER0_GATE: $TIER0_JOB_STATUS (mode $TIER0_MODE)" >> "$GITHUB_STEP_SUMMARY"'
+
+  # ------------------------------------------------------------------
+  # tier-0-ok: the ONLY check a consumer wires into its required set. In
+  # report-only mode it always passes (findings are advisory artifacts);
+  # in enforcing mode any failed gate fails it. `!cancelled()`, not
+  # `always()`: a superseded run must not hold the merge queue.
+  # ------------------------------------------------------------------
+  tier-0-ok:
+    name: tier-0-ok
+    needs: [detect, lint-types, unused-code, generator-drift, workflow-checks, security, tests]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate gate verdicts
+        env:
+          TIER0_MODE: ${{ inputs.mode }}
+          TIER0_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$TIER0_NEEDS_JSON" > needs.json
+          python3 - needs.json <<'PY'
+          import json, os, sys
+          mode = os.environ.get("TIER0_MODE", "report-only")
+          needs = json.load(open(sys.argv[1]))
+          bad = {j: n["result"] for j, n in needs.items()
+                 if n["result"] not in ("success", "skipped")}
+          if bad:
+              for j, r in sorted(bad.items()):
+                  print(f"::notice::tier-0 gate {j} ended {r}")
+          if mode == "enforcing" and bad:
+              for j, r in sorted(bad.items()):
+                  print(f"::error::tier-0-ok: gate {j} ended {r}")
+              raise SystemExit(1)
+          skipped = sorted(j for j, n in needs.items() if n["result"] == "skipped")
+          print("tier-0-ok: all gates succeeded or skipped"
+                + (f" (skipped: {', '.join(skipped)})" if skipped else "")
+                + f" [mode={mode}]")
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tier-0-findings
+          path: needs.json
+          if-no-files-found: warn

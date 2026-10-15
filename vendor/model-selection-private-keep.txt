@@ -1,0 +1,66 @@
+# Private-only paths under plugins/model-selection/ that the repo-split gate
+# never covered: absent from the toolkit at every pinned tag (v0.2.0, v0.5.0,
+# v0.5.1) with no toolkit-main history, or diverged here after the cutover
+# (including the #703 CLIProxy auth-files lane change; toolkit v0.5.1 carries
+# the port plus the routing-weight fix, so the private lane-capacity copies
+# remain diverged and stay listed until their own removal card lands).
+# The model-selection-moved CI guard refuses all other touches under the moved
+# prefix; these stay private until their own card justifies removal (no-data-loss
+# owner rule). Sorted.
+# Refs: case_dec8133c, case_4e3907f1
+plugins/model-selection/config/reviewed-roster.json
+plugins/model-selection/dist/manifest.js
+plugins/model-selection/dist/worker.js
+plugins/model-selection/docs/lane-withdrawal.md
+plugins/model-selection/docs/selector-bridge-parity.md
+plugins/model-selection/scripts/assemble-additive-config.mjs
+plugins/model-selection/scripts/mutation-gate.mjs
+plugins/model-selection/scripts/case_26886922-refresh-evidence.mjs
+plugins/model-selection/src/closeout-ledger.ts
+plugins/model-selection/src/config/resolve.ts
+plugins/model-selection/src/config/schema.ts
+plugins/model-selection/src/constants.ts
+plugins/model-selection/src/engine/benchmark-data.ts
+plugins/model-selection/src/engine/benchmark-prior.ts
+plugins/model-selection/src/engine/types.ts
+plugins/model-selection/src/joint-scale-down-hysteresis.ts
+plugins/model-selection/src/lane-capacity/auth-files.ts
+plugins/model-selection/src/lane-capacity/poll.ts
+plugins/model-selection/src/manifest.ts
+plugins/model-selection/src/pacer-shadow-verdict.ts
+plugins/model-selection/src/worker.ts
+plugins/model-selection/tests/auth-files-lane.spec.ts
+plugins/model-selection/tests/benchmark-prior.spec.ts
+plugins/model-selection/tests/config.spec.ts
+plugins/model-selection/tests/fixtures/withdrawal-replay/t1-other-lanes.json
+plugins/model-selection/tests/live-config.spec.ts
+plugins/model-selection/tests/tier-policy/tier-policy-replay.spec.ts
+plugins/model-selection/tests/case_934da10f-account-lane-rows.spec.ts
+plugins/model-selection/tests/case_125d9804-muse-agreement.spec.ts
+plugins/model-selection/tests/case_5bc69b17-joint-capacity-fixtures.ts
+plugins/model-selection/tests/case_5bc69b17-joint-capacity-snapshot.spec.ts
+plugins/model-selection/tests/case_16406498-decision-log-lag-fixtures.ts
+plugins/model-selection/tests/case_16406498-decision-log-lag.spec.ts
+plugins/model-selection/tests/case_afc9e36b-sonnet-sol-lane-rows.spec.ts
+plugins/model-selection/tests/case_3097ed32-repin-orphan.spec.ts
+plugins/model-selection/tests/case_65e40de2-reviewer-fixer-headroom-fixtures.ts
+plugins/model-selection/tests/case_65e40de2-reviewer-fixer-headroom.spec.ts
+plugins/model-selection/tests/case_421a7671-advisory-pin-writer-audit.spec.ts
+plugins/model-selection/tests/case_e39643d6-expiry-week-fixtures.ts
+plugins/model-selection/tests/case_e39643d6-expiry-week.spec.ts
+plugins/model-selection/tests/case_788d6bbe-pacer-shadow-verdict.spec.ts
+plugins/model-selection/tests/case_8936ffd2-watchdog-lag-readout.spec.ts
+plugins/model-selection/tests/case_0a9d4e51-enforce-unwired-lane.spec.ts
+plugins/model-selection/tests/case_2945082b-closeout-ledger-worker.spec.ts
+plugins/model-selection/tests/case_2945082b-closeout-ledger.spec.ts
+plugins/model-selection/tests/case_9a8d0afb-bridge-no-enabled-rows-fixtures.ts
+plugins/model-selection/tests/case_9a8d0afb-bridge-no-enabled-rows.spec.ts
+plugins/model-selection/tests/case_3ad48fa3-assembled-snapshot-freshness.spec.ts
+plugins/model-selection/tests/case_ec9827b5-withdrawal-replay.spec.ts
+plugins/model-selection/tests/case_bd95ab6f-full-lane-replay.spec.ts
+plugins/model-selection/tests/case_d58c5c9a-scale-down-hysteresis-fixtures.ts
+plugins/model-selection/tests/case_d58c5c9a-scale-down-hysteresis.spec.ts
+plugins/model-selection/tests/case_1590fadd-serviceability-hard-stop.spec.ts
+plugins/model-selection/tests/case_b0d98def.spec.ts
+plugins/model-selection/tests/tool-error-shape-part2.spec.ts
+plugins/model-selection/tests/worker.spec.ts

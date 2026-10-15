@@ -1,0 +1,52 @@
+{
+  "_comment": "case_8bbe9e21 EXAMPLE FIXTURE — not live telemetry. Operator fallback for GH merge-queue reads until the merge-queue rule exists (case_082e9f7b: today every repo 404s). A saturated queue: 6 entries, oldest enqueued 190m ago (the case_a97273bd scale). Shape: the GET merge-queue list response (object with entries[]). NOTE: enqueuedAt values are fixed, so under a live clock this fixture reads stale-by-design (a fixture is not a producer); it validates the DEGRADED mapping with a pinned clock.",
+  "entries": [
+    {
+      "id": "MQE_example_saturated_1",
+      "position": 1,
+      "state": "AWAITING_CHECKS",
+      "enqueuedAt": "2026-10-03T00:50:00.000Z",
+      "headCommit": { "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+      "pullRequest": { "number": 201 }
+    },
+    {
+      "id": "MQE_example_saturated_2",
+      "position": 2,
+      "state": "QUEUED",
+      "enqueuedAt": "2026-10-03T01:50:00.000Z",
+      "headCommit": { "oid": "cccccccccccccccccccccccccccccccccccccccc" },
+      "pullRequest": { "number": 202 }
+    },
+    {
+      "id": "MQE_example_saturated_3",
+      "position": 3,
+      "state": "QUEUED",
+      "enqueuedAt": "2026-10-03T02:50:00.000Z",
+      "headCommit": { "oid": "dddddddddddddddddddddddddddddddddddddddd" },
+      "pullRequest": { "number": 203 }
+    },
+    {
+      "id": "MQE_example_saturated_4",
+      "position": 4,
+      "state": "QUEUED",
+      "enqueuedAt": "2026-10-03T03:10:00.000Z",
+      "headCommit": { "oid": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" },
+      "pullRequest": { "number": 204 }
+    },
+    {
+      "id": "MQE_example_saturated_5",
+      "position": 5,
+      "state": "QUEUED",
+      "headCommit": { "oid": "ffffffffffffffffffffffffffffffffffffffff" },
+      "pullRequest": { "number": 205 }
+    },
+    {
+      "id": "MQE_example_saturated_6",
+      "position": 6,
+      "state": "QUEUED",
+      "enqueuedAt": "2026-10-03T03:40:00.000Z",
+      "headCommit": { "oid": "1111111111111111111111111111111111111111" },
+      "pullRequest": { "number": 206 }
+    }
+  ]
+}

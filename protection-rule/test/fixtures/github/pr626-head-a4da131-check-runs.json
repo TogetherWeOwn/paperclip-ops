@@ -1,0 +1,74 @@
+{
+  "total_count": 3,
+  "check_runs": [
+    {
+      "id": 112623456429,
+      "name": "Paperclip Review",
+      "head_sha": "a4da131e368e086b9c271f164226ac7387a41996",
+      "external_id": "00000000-0000-4000-8000-000000000141:626:a4da131e368e086b9c271f164226ac7387a41996",
+      "html_url": "https://github.com/TogetherWeOwn/two-bot-next/runs/112623456429",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-07T03:56:44Z",
+      "completed_at": "2026-10-07T03:58:06Z",
+      "output": {
+        "title": "5/5",
+        "summary": null
+      },
+      "app": {
+        "id": 5191093,
+        "slug": "togetherweown-reviewer",
+        "name": "TogetherWeOwn Reviewer"
+      },
+      "check_suite": {
+        "id": 101755851372
+      }
+    },
+    {
+      "id": 112606738185,
+      "name": "CodeQL",
+      "head_sha": "a4da131e368e086b9c271f164226ac7387a41996",
+      "external_id": "",
+      "html_url": "https://github.com/TogetherWeOwn/two-bot-next/runs/112606738185",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-07T02:48:50Z",
+      "completed_at": "2026-10-07T02:48:52Z",
+      "output": {
+        "title": "No new alerts in code changed by this pull request",
+        "summary": null
+      },
+      "app": {
+        "id": 57789,
+        "slug": "github-advanced-security",
+        "name": "GitHub Advanced Security"
+      },
+      "check_suite": {
+        "id": 101755968169
+      }
+    },
+    {
+      "id": 112609233714,
+      "name": "ci-ok",
+      "head_sha": "a4da131e368e086b9c271f164226ac7387a41996",
+      "external_id": "00000000-0000-4000-8000-000000000142",
+      "html_url": "https://github.com/TogetherWeOwn/two-bot-next/actions/runs/37563731643/job/112609233714",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-07T02:58:50Z",
+      "completed_at": "2026-10-07T02:58:54Z",
+      "output": {
+        "title": null,
+        "summary": null
+      },
+      "app": {
+        "id": 15368,
+        "slug": "github-actions",
+        "name": "GitHub Actions"
+      },
+      "check_suite": {
+        "id": 101755867118
+      }
+    }
+  ]
+}

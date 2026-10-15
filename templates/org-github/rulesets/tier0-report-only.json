@@ -1,0 +1,38 @@
+{
+  "_comment": "case_4784a03d stage 1: org ruleset, EVALUATE (advisory) for the first 24h. The Operator fills REPO_ID_OF_DOT_GITHUB and PINNED_SHA, creates it with the commands in OPERATOR-RUNBOOK.md, then flips to tier0-required.json. Paperclip Review is deliberately NOT a required check: review is requested only on ready heads after ci-ok green (case_4a48e6a3 trigger), and a required review context would block merges where review is intentionally skipped.",
+  "name": "tier-0-quality-gate",
+  "target": "branch",
+  "enforcement": "evaluate",
+  "conditions": {
+    "ref_name": {
+      "include": ["refs/heads/main"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "required_status_checks": [
+          {
+            "context": "ci-ok",
+            "integration_id": 15368
+          }
+        ],
+        "strict_required_status_checks_policy": false
+      }
+    },
+    {
+      "type": "required_workflows",
+      "parameters": {
+        "workflows": [
+          {
+            "repository_id": "REPO_ID_OF_DOT_GITHUB",
+            "path": ".github/workflows/tier-0-quality-gate.yml",
+            "ref": "PINNED_SHA"
+          }
+        ]
+      }
+    }
+  ]
+}

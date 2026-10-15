@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# pre-push hook (case_a2b959d4): runs the fast tier and refuses the push on failure.
+# Enable with: ./scripts/setup-githooks.sh
+# Bypassing this hook (git push --no-verify) is a bundle violation.
+set -euo pipefail
+# A pre-push hook inherits an absolute GIT_DIR for this repo. Suites that shell
+# `git` in fixture dirs would act on this repo instead (measured: junk `base`
+# commits + false reds). verify-fast.sh unsets it too; belt and suspenders.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+echo "pre-push: running verify-fast..."
+exec ./scripts/verify-fast.sh

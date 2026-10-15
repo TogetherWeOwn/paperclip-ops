@@ -1,0 +1,2382 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "12e71bcb92c484c880b6d457ab4d3ff546dd04ae",
+  "toolkit": {
+    "tag": "main-533c7ae2",
+    "commit": "533c7ae2b013340bfae20cfcc711220048295855",
+    "sha256": "3f88a7325590b81250ed6779d87ee13def109ea3e64ca1afa80f539ada215092"
+  },
+  "baseline_ids": [
+    "Prove the private runner selected this job:1",
+    "Prepare static label parser:1",
+    "Reject newly added static runner labels:1",
+    "static runner label guard red/green proof:1",
+    "runner disk-pressure preflight:1",
+    "self-hosted runner migration contract:1",
+    "coolify decommission capacity suite:1",
+    "required checks all have a producing job:1",
+    "change-gating contract holds:1",
+    "Syntax check every script:1",
+    "Restore toolkit-vendored files:1",
+    "dedicated-UID offline fixture suite:1",
+    "garm image provenance check:1",
+    "garm runner image receipt check:1",
+    "garm first-pickup canary verdict:1",
+    "garm wave-1 window verdict:1",
+    "private mutation harness suite:1",
+    "host operations broker suite:1",
+    "host operations installer contract suite:1",
+    "status-page pilot suite:1",
+    "TLS and Neon dependency probes suite:1",
+    "shadow window gatus module suite:1",
+    "monitoring-of-monitor suite:1",
+    "alert queue suite:1",
+    "keeper ingest freshness suite:1",
+    "enforce readiness gatus module suite:1",
+    "staging app-health suite:1",
+    "Workers and GitHub rate-limit dependency probes suite:1",
+    "merge queue gatus module suite:1",
+    "queue wait-time SLO suite:1",
+    "pool freshness gatus module suite:1",
+    "queue forecast gatus module suite:1",
+    "garm pool-health suite:1",
+    "hindsight recall canary suite:1",
+    "review stack kit suite:1",
+    "reviewer bake-off suite:1",
+    "run-scratch reaper suite:1",
+    "guard state fail-closed suites:1",
+    "review reconciler and ops guard suites:1",
+    "controller /tmp retention suite:1",
+    "controller /tmp disk alarm suite:1",
+    "garm reaper audit suite:1",
+    "runner-disk triage suite:1",
+    "cliproxy lanes gatus module suite:1",
+    "staging login-smoke probe suite:1",
+    "runner-disk gatus module suite:1",
+    "discord-bot gatus pusher suite:1",
+    "gatus module wiring gate:1",
+    "balancer silence gatus module suite:1",
+    "GARM ready-time baseline suite:1",
+    "host-disk detector suite:1",
+    "immutable ops-tooling release installer suite:1",
+    "dispatch_deploy.sh hermetic suite:1",
+    "dispatch_deploy.sh suite is not vacuous (mutation-gated):1",
+    "dispatch_deploy_monitor.sh hermetic suite:1",
+    "dispatch_deploy_monitor.sh suite is not vacuous (mutation-gated):1",
+    "task-specific external-disclosure grant suite:1",
+    "Muse Stop guard hook suite:1",
+    "per-prompt hook spawn guard suite:1",
+    "staging-migrate-apply protection-rule suite:1",
+    "case_d06b6dba operator artifact suite:1",
+    "omniroute containment selftest:1",
+    "omniroute selftest is hermetic w.r.t. COMBO_OWNED_PREFIX:1",
+    "case_30ade3fb snapshot-section redaction suite:1",
+    "case_30ade3fb redaction fixes are load-bearing (mutation-gated):1",
+    "credential-chain audit regression suite:1",
+    "secret-exposure audit regression suite:1",
+    "git remote-URL credential scan regression suite:1",
+    "embedded-token revoke-before-scrub regression suite:1",
+    "provisioner create-policy suite:1",
+    "provisioned agents are born ACP-safe:1",
+    "provisioned Claude transport and persistence verification:1",
+    "grant-attribution resolver suite:1",
+    "provisioner grant-write attribution suite:1",
+    "grant attribution is load-bearing (mutation-gated):1",
+    "provisioner defence gates are load-bearing (mutation-gated):1",
+    "responsible-leader authorization suite:1",
+    "request-record integrity suite:1",
+    "decision-notification suite:1",
+    "leader-notification suite:1",
+    "routing-liveness and stall-alarm suite:1",
+    "notification-transport suite:1",
+    "capability gate suite:1",
+    "interaction routing suite:1",
+    "task liveness reconciler suite:1",
+    "task liveness deployment contract suite:1",
+    "task liveness deployment gates are load-bearing:1",
+    "single recovery writer suite:1",
+    "benign agent-error proposer suite:1",
+    "platform watchdog detectors suite:1",
+    "single recovery writer deployment contract suite:1",
+    "single recovery writer deployment gates are load-bearing:1",
+    "admitted-PR closeout ledger suite:1",
+    "admitted-PR closeout gates are load-bearing:1",
+    "closeout snapshot repair suite:1",
+    "closeout snapshot repair gates are load-bearing:1",
+    "recovery dry-run harness suite:1",
+    "recovery dry-run harness gate:1",
+    "Discord scheduled-job delivery suite:1",
+    "Discord delivery monitor suite:1",
+    "Discord rollout-pin transport suite:1",
+    "Beszel to Gatus bridge suite:1",
+    "CI main and runtime Gatus suite:1",
+    "hung CI job evaluator suite:1",
+    "Runner census Gatus suite:1",
+    "Runner census mutation gate:1",
+    "DB backup freshness suite:1",
+    "quota brake suite:1",
+    "quota pacing verdict hostile suite:1",
+    "pacer admission audit hostile suite:1",
+    "codex countdown readout hostile suite:1",
+    "claude countdown readout hostile suite:1",
+    "muse countdown readout hostile suite:1",
+    "bridge row inventory hostile suite:1",
+    "pacer concurrency hostile suite:1",
+    "pacer apply hostile suite:1",
+    "review bot sandbox canary suite:1",
+    "auth denial discriminator hostile suite:1",
+    "model pin cleanup hostile suite:1",
+    "terminal worktree cache reclaim hostile suite:1",
+    "terminal worktree prune hostile suite:1",
+    "worktree prune wrapper contract suite:1",
+    "worktree prune deployment contract suite:1",
+    "auth denial discriminator mutation gate:1",
+    "process lost probe hostile suite:1",
+    "process lost probe mutation gate:1",
+    "platform watchdog gate:1",
+    "quota burn derivation suite:1",
+    "blocked-issue audit applier suite:1",
+    "interaction envelope lint suite:1",
+    "cold-start detector suite:1",
+    "red-main poll suite:1",
+    "capability-pathway host verifier suite:1",
+    "model lane probe suite:1",
+    "web_search lane passthrough probe suite:1",
+    "opencode shared-budget probe suite:1",
+    "breaker co-tenancy probe suite:1",
+    "platform watchdog offline evidence suite:1",
+    "platform watchdog snapshot-builder suite:1",
+    "platform watchdog snapshot-builder mutations are load-bearing:1",
+    "SQL backend seam suite:1",
+    "suite-precondition and wrong-gate refusal suite:1",
+    "fail-closed CI status suite:1",
+    "dark-step reporter suite:1",
+    "failure-drain suite:1",
+    "Prove the dark-step reporter still detects a silenced report:1",
+    "sibling-run guard suite:1",
+    "running-vs-reviewed drift suite:1",
+    "handoff-channel unversioned-drop suite:1",
+    "bootstrap operating-model guard suite:1",
+    "handoff-channel credential-scanner selftest:1",
+    "dropchannel_scan narrowing is not vacuous (mutation-gated):1",
+    "a matched pattern never reads as a miss (SIGPIPE verdict gate):1",
+    "cold-start detector refusals are not vacuous (mutation-gated):1",
+    "check 9 filters both sides of its join (case_d0a36ded):1",
+    "check 12 measures the two-layer boundary (case_b51dd455):1",
+    "orphan retirement refuses what it must (case_d0a36ded):1",
+    "Discord delivery proof is not vacuous (mutation-gated):1",
+    "Discord delivery monitor is not vacuous (mutation-gated):1",
+    "stale unblock-descriptor sweep suite:1",
+    "parked backlog detector suite:1",
+    "parked backlog detector is not vacuous (isolated mutation gate):1",
+    "database backup stall detector suite:1",
+    "database backup stall monitor wrapper suite:1",
+    "host-side database backup fallback suite:1",
+    "runner disk-pressure detector suite:1",
+    "host-side database backup deployment contract suite:1",
+    "host-side database backup deployment gates are load-bearing:1",
+    "database idle transaction stall detector suite:1",
+    "stale-descriptor sweep is not vacuous (mutation-gated):1",
+    "The case_9e76f76d monitor's recorded command still runs from a clean tree:1",
+    "plugin manifest authority-surface suite:1",
+    "deployed-vs-repo plugin manifest drift suite:1",
+    "deployed-vs-repo drift suite is not vacuous (mutation-gated):1",
+    "upstream gate suite:1",
+    "upstream readiness suite is not vacuous (mutation-gated):1",
+    "pinned upstream blobs are filable, and sendable blobs are pinned (mutation-gated):1",
+    "upstream bundle filing-strip gate:1",
+    "filing-strip gate is not vacuous (mutation-gated):1",
+    "fork-disclosure author classifier + token placement (case_092cd51d gate, offline half):1",
+    "case_35e86d49 host-validation activation gate suite:1",
+    "case_3dd27f43 host-evidence capture suite:1",
+    "case_3dd27f43 host-render capture suite:1",
+    "case_3dd27f43 carrier/render binding normalization:1",
+    "tool-approval deadline enforcement probe suite:1",
+    "model-endpoint preflight suite:1",
+    "CLIProxy release preflight suite:1",
+    "CLIProxy quota controller suite:1",
+    "OmniRoute chain verifier credential suite:1",
+    "OmniRoute registration credential suite:1",
+    "teamclaude rotation watcher suite:1",
+    "interaction triage suite:1",
+    "live-path acceptance self-test (mutation-gated):1",
+    "case_4ea7d92e host-check contracts (mutation-gated):1",
+    "host timer registry (offline, mutation-controlled):1",
+    "home-PC runner guard suite:1",
+    "home-PC guard deployment contract suite:1",
+    "Secret scan:1",
+    "gh_token.sh argv-leak suite:1",
+    "Prove the argv-leak suite still detects a credential on argv:1",
+    "gh_token.sh api request-body suite:1",
+    "Prove the api-body suite still detects a dropped request body:1",
+    "gh_token.sh dispatch-contract suite:1",
+    "Prove the dispatch suite still detects every regression:1",
+    "Prove the SQL backend suite still detects both unsafe shortcuts:1",
+    "Prove the precondition suite still detects each undeserved green:1",
+    "Prove the CI status suite still detects a weakened refusal:1",
+    "Prove the drift suite still detects a weakened detector:1",
+    "Prove the rotation watcher still detects a wrong verdict:1",
+    "Prove the brake still derives its burn rather than reading it:1",
+    "Prove the 120m staleness cutoff is load-bearing (mutation-gated):1",
+    "Prove the channel suite still detects each way to blind it:1",
+    "case_09629d76 immutable carrier / host-render binding:1",
+    "DLQ redrive CLI standalone suite:1",
+    "Restore toolkit-vendored files:2",
+    "operator runbook suite:1",
+    "operator runbook \u2014 a withdrawn line survives regeneration:1",
+    "Restore toolkit-vendored files:3",
+    "Broker security suite:1",
+    "Mapping-guard calibration mutation suite:1",
+    "Prove credential and key-management surfaces stay absent:1",
+    "Restore toolkit-vendored files:4",
+    "Install pinned host packages:1",
+    "Verify the install actually landed:1",
+    "Dispatch suite:1",
+    "Prove the wake action still ships disabled:1",
+    "Prove the capability set is exactly the reviewed one:1",
+    "Prove the plugin never writes an issue:1",
+    "Restore toolkit-vendored files:5",
+    "Install pinned host packages:2",
+    "Verify the install actually landed:2",
+    "Typecheck:1",
+    "cliproxy-insight suite:1",
+    "Verify the plugin builds:1",
+    "Fail if the committed dist/ is stale:1",
+    "Restore toolkit-vendored files:6",
+    "Syntax check:1",
+    "Receiver suite:1",
+    "Shell tool suite:1",
+    "Prove the suite detects a receiver that skips verification:1",
+    "Prove the shell suite needs no credential and leaks no key:1",
+    "Restore toolkit-vendored files:7",
+    "org-request-mcp regression suite:1",
+    "Prove the suite rejects each tempting simplification:1",
+    "Prove the transport cannot reach the provisioner:1",
+    "host-ops-mcp regression suite:1",
+    "Prove the suite rejects each tempting simplification:2",
+    "Prove the transport cannot reach a write verb:1",
+    "Report steps that never ran:1",
+    "upstream lint and reputation suites:1",
+    "upstream pipeline suites are not vacuous (mutation-gated):1",
+    "two-bot staging pre-check suite:1",
+    "operator run dirs hostile suite:1",
+    "operator runs disk push contract suite:1",
+    "project regen prune hostile suite:1",
+    "project regen prune deployment contract suite:1",
+    "operator regen strip suite:1",
+    "review tier-1 checks suite:1",
+    "readme script-index gate:1",
+    "deploy-window wrapper and pin mutation suites:1",
+    "bounded shadow-reader suite:1",
+    "review routing contract holds:1",
+    "dropchannel_scan offline fixture suite:1",
+    "acceptance-transport reply suite:1",
+    "upstream pre-push hook suite:1",
+    "cliproxy mgmt recon argv-leak suite:1",
+    "credential-chain offline fixture suite:1",
+    "reviewer-eval survival atomic-write suite:1",
+    "org-snapshot offline suite:1",
+    "gh_access dispatch and policy purity suite:1",
+    "reviewer-eval observational-collect atomic-write suite:1",
+    "reviewer-eval arm-import atomic-write suite:1",
+    "staged Tier-0 port drift gate:1",
+    "reviewer-eval merge-survival atomic-write suite:1",
+    "credential-chain lockdown fixture suite:1",
+    "balancer silence guard is not vacuous (mutation-gated):1",
+    "red-main poll suite is not vacuous (mutation-gated):1",
+    "fleet-run-stall 20-min window suite:1",
+    "docker hygiene suite:1",
+    "reviewer bake-off unittest suites:1",
+    "cliproxy seam extract suite:1",
+    "garm provider latency baseline suite:1",
+    "kofra preview parity suite:1",
+    "upstream draft pin audit suite:1",
+    "cliproxy config gate suite:1",
+    "garm image lint suite:1",
+    "operator copy-risk gate suite:1",
+    "reviewer-eval corpus atomic-write suite:1",
+    "cliproxy feed-contract suite:1",
+    "public-comment hygiene gate suite:1",
+    "watchdog writer-compat suite:1",
+    "flap guard suite:1",
+    "deploy-window manifest gate suite:1",
+    "Disposition Stop guard hook suite:1",
+    "operator workspace reconciler and sweep suites:1",
+    "invariant views suite:1",
+    "project regen prune manifest atomic suite:1",
+    "sweep-auto node7b1ff338 pressure-gate suite:1",
+    "host regenerable cache reclaim hostile suite:1"
+  ],
+  "retained": [
+    {
+      "name": "Prove the private runner selected this job",
+      "definition_sha256": "a10df79e39f0f03abe5b1c129118cdc6e8833aa226cb8ace06e05f3bbe51a297",
+      "id": "Prove the private runner selected this job:1"
+    },
+    {
+      "name": "Prepare static label parser",
+      "definition_sha256": "682c23a3ad2f490912ffb2b0c064dff7b0be8a7b115511daecaa3881405c3077",
+      "id": "Prepare static label parser:1"
+    },
+    {
+      "name": "Reject newly added static runner labels",
+      "definition_sha256": "aa8038873a351a2b79cc5991a1e6613b09f9c8fae6414964b6a478c1fc3ce52c",
+      "id": "Reject newly added static runner labels:1"
+    },
+    {
+      "name": "static runner label guard red/green proof",
+      "definition_sha256": "b7fcff16ef6c275c33650612cf90e270fb6316f03cec350ac237491f60efcb1d",
+      "id": "static runner label guard red/green proof:1"
+    },
+    {
+      "name": "runner disk-pressure preflight",
+      "definition_sha256": "7be30079bcbff879f237371cc4dd88fb9510f661cf174facfb806cc30a10e526",
+      "id": "runner disk-pressure preflight:1"
+    },
+    {
+      "name": "self-hosted runner migration contract",
+      "definition_sha256": "a115d066001809e212f7df7d71ad79b5a7f81a6c5dfb3a1573626a56af39d7b3",
+      "id": "self-hosted runner migration contract:1"
+    },
+    {
+      "name": "coolify decommission capacity suite",
+      "definition_sha256": "476c64273f9d56acc446cef8aeee955e011f59cf5a9ee8555817ee3148dbc5da",
+      "id": "coolify decommission capacity suite:1"
+    },
+    {
+      "name": "required checks all have a producing job",
+      "definition_sha256": "8bd1a7d11d818588f4405eab15260f3b256d1bdcdb8701448336e4b8ec1ceeba",
+      "id": "required checks all have a producing job:1"
+    },
+    {
+      "name": "change-gating contract holds",
+      "definition_sha256": "9ffe58c2c85d290fd6802ee20b0fc811e2273e31148a82bfc3553f57875f2b87",
+      "id": "change-gating contract holds:1"
+    },
+    {
+      "name": "Syntax check every script",
+      "definition_sha256": "2a91ee68a428afb376e684d26eeeefd9721eea387206847ac198ecb30f2843cd",
+      "id": "Syntax check every script:1"
+    },
+    {
+      "name": "Restore toolkit-vendored files",
+      "definition_sha256": "c03ece6186f7152677cd5e80ba86bb376f4337ee493a44b80b26045f901f29c0",
+      "id": "Restore toolkit-vendored files:1"
+    },
+    {
+      "name": "dedicated-UID offline fixture suite",
+      "definition_sha256": "46233809e9b94f4cb97291f535e89ade944804dea4d9656052cc348f46a6d397",
+      "id": "dedicated-UID offline fixture suite:1"
+    },
+    {
+      "name": "garm image provenance check",
+      "definition_sha256": "a26f771b0f6715214ced9e6f1e21fd5449079f95b6da55b07cf6772439a7a0a0",
+      "id": "garm image provenance check:1"
+    },
+    {
+      "name": "garm runner image receipt check",
+      "definition_sha256": "f6a307c1197e9408c13da58021def0046205bc5eac11ff9255f3314be47b6ae6",
+      "id": "garm runner image receipt check:1"
+    },
+    {
+      "name": "garm first-pickup canary verdict",
+      "definition_sha256": "09de984f27e9089b9b6da9c2d20812407077f223e7062b56801f5f28ed760d54",
+      "id": "garm first-pickup canary verdict:1"
+    },
+    {
+      "name": "garm wave-1 window verdict",
+      "definition_sha256": "ebb0054648af4eb17bcadd81626088a3f79aefe7d7b2178b44b8f14146b6e0e2",
+      "id": "garm wave-1 window verdict:1"
+    },
+    {
+      "name": "private mutation harness suite",
+      "definition_sha256": "fa19302c8a8f2d13f568a3cb2fbe2959692ede2b2d60f81e84e81d5c709e1c6f",
+      "id": "private mutation harness suite:1"
+    },
+    {
+      "name": "host operations broker suite",
+      "definition_sha256": "b41c7b0f797599e97a37f1991e861a5e2333f93f3d2bda56853e435bbea4c4b7",
+      "id": "host operations broker suite:1"
+    },
+    {
+      "name": "host operations installer contract suite",
+      "definition_sha256": "a6f65e65cdac40fdc704733e541dbcdea7118c3c87a827f53b7f018484064769",
+      "id": "host operations installer contract suite:1"
+    },
+    {
+      "name": "status-page pilot suite",
+      "definition_sha256": "01649437c40762e60b1436348f03942a5c3ac26acfccca61b3ede60fc23db529",
+      "id": "status-page pilot suite:1"
+    },
+    {
+      "name": "TLS and Neon dependency probes suite",
+      "definition_sha256": "abb91039f8ae17f17ac656f24df7dcff9936047b7605cb9be8cccb088e5c6873",
+      "id": "TLS and Neon dependency probes suite:1"
+    },
+    {
+      "name": "shadow window gatus module suite",
+      "definition_sha256": "6671e18973688385e3e0218aab4e16498edcf7c37e603ff85549a112c438cfd8",
+      "id": "shadow window gatus module suite:1"
+    },
+    {
+      "name": "monitoring-of-monitor suite",
+      "definition_sha256": "1748ec2cf187e47bcb101abeba20ecca11b39b0b33bec2fa598f4435f9e69bab",
+      "id": "monitoring-of-monitor suite:1"
+    },
+    {
+      "name": "alert queue suite",
+      "definition_sha256": "f9b94978ba83c98e60c40016b1ba0e253d08e4e211f1fb34fecbb86c3deecf01",
+      "id": "alert queue suite:1"
+    },
+    {
+      "name": "keeper ingest freshness suite",
+      "definition_sha256": "c312ab496f226f4140d5fae34ed628a78194e8cd3e0126e95f14ebe0ff364004",
+      "id": "keeper ingest freshness suite:1"
+    },
+    {
+      "name": "enforce readiness gatus module suite",
+      "definition_sha256": "f65e89b0787e28b8ef19b241d6e778490d8b1e059f316f11eef14b93b723a72b",
+      "id": "enforce readiness gatus module suite:1"
+    },
+    {
+      "name": "staging app-health suite",
+      "definition_sha256": "27206b3b772c3421616a26340d1b06b6fb6b34e4063f5b6b3c036ac291304c86",
+      "id": "staging app-health suite:1"
+    },
+    {
+      "name": "Workers and GitHub rate-limit dependency probes suite",
+      "definition_sha256": "a8d0a1b260771f7a895e41ffbc9c59b7dba6dc12676c1ad420601d20b26e2643",
+      "id": "Workers and GitHub rate-limit dependency probes suite:1"
+    },
+    {
+      "name": "merge queue gatus module suite",
+      "definition_sha256": "17f122c974427ab99c17a45f96c069034d8e638e8ac3614f507783cabb64a834",
+      "id": "merge queue gatus module suite:1"
+    },
+    {
+      "name": "queue wait-time SLO suite",
+      "definition_sha256": "8d2f913734b9190a90f9649b0e11d3fa1ebc522fd0ba9b018524ad798834adbe",
+      "id": "queue wait-time SLO suite:1"
+    },
+    {
+      "name": "pool freshness gatus module suite",
+      "definition_sha256": "1708461f56cf0b094848232ed75eefd50f111e23da50a17b56137b69f60ca485",
+      "id": "pool freshness gatus module suite:1"
+    },
+    {
+      "name": "queue forecast gatus module suite",
+      "definition_sha256": "00732f33b855c2531645d16062078cc4a98fa06bd8467c233c85321a4375edc9",
+      "id": "queue forecast gatus module suite:1"
+    },
+    {
+      "name": "garm pool-health suite",
+      "definition_sha256": "fcac1ca06ade0066c067fe4e496f90b6e3bd0046a34c41580f4c227e23615e85",
+      "id": "garm pool-health suite:1"
+    },
+    {
+      "name": "hindsight recall canary suite",
+      "definition_sha256": "9ebfafe6294b32aed27359ba68c45fb9f16689c514ac4653098626cf949df4f5",
+      "id": "hindsight recall canary suite:1"
+    },
+    {
+      "name": "review stack kit suite",
+      "definition_sha256": "480eb2e96525af5a070abf4bbe8c309f19aa4b83d98661e121d1e0f0dce276e6",
+      "id": "review stack kit suite:1"
+    },
+    {
+      "name": "reviewer bake-off suite",
+      "definition_sha256": "e32272901a92277155957ab50d374118731efecaf48334ce13d0b5020a161a7b",
+      "id": "reviewer bake-off suite:1"
+    },
+    {
+      "name": "run-scratch reaper suite",
+      "definition_sha256": "b3943b0d063231f8f340f68bc176232dc00f1ac2e7d97c40d19c1204965a02f9",
+      "id": "run-scratch reaper suite:1"
+    },
+    {
+      "name": "guard state fail-closed suites",
+      "definition_sha256": "e2a9927bc5def107f7280a8d0673f31718926a45a28cff6a4e64790ebecabbc3",
+      "id": "guard state fail-closed suites:1"
+    },
+    {
+      "name": "review reconciler and ops guard suites",
+      "definition_sha256": "ae5b0667c5ad81ec08e4474187ccfe231d86a7e9d871ee4fec58d21f31195ed5",
+      "id": "review reconciler and ops guard suites:1"
+    },
+    {
+      "name": "controller /tmp retention suite",
+      "definition_sha256": "bbbdda84cdf292d57fe513996cb4f1794ca10411c164082125ec0cc4fed33518",
+      "id": "controller /tmp retention suite:1"
+    },
+    {
+      "name": "controller /tmp disk alarm suite",
+      "definition_sha256": "4acc37d7216790f80f04b602017a7afe12f92a66dfea1e0e3c68708545ba72e9",
+      "id": "controller /tmp disk alarm suite:1"
+    },
+    {
+      "name": "garm reaper audit suite",
+      "definition_sha256": "cfe5c530531b0c8fbee8564d07c03b9ae1b9b06ce04b8a350d7882ead734ebd0",
+      "id": "garm reaper audit suite:1"
+    },
+    {
+      "name": "runner-disk triage suite",
+      "definition_sha256": "ad52d642ae08d8c01c64942cc726ee445a694f2e7571f177263ae1fec09e5147",
+      "id": "runner-disk triage suite:1"
+    },
+    {
+      "name": "cliproxy lanes gatus module suite",
+      "definition_sha256": "35f91369e16a196bba4b51f6467b08d78a41e841d22c52aa3216d7858abf40c0",
+      "id": "cliproxy lanes gatus module suite:1"
+    },
+    {
+      "name": "staging login-smoke probe suite",
+      "definition_sha256": "1171ee7baec77b38cc731c36453a9cc001c608229fe38b4aa30b539fc5791bac",
+      "id": "staging login-smoke probe suite:1"
+    },
+    {
+      "name": "runner-disk gatus module suite",
+      "definition_sha256": "880325e9967e614beee459d4244aeeea810dad2e2b0d4292df5ecd12b6ab70d6",
+      "id": "runner-disk gatus module suite:1"
+    },
+    {
+      "name": "discord-bot gatus pusher suite",
+      "definition_sha256": "022170d1f32ac92803e581d02d218e782baf91fe8b7b16d49ae7411548eaa56b",
+      "id": "discord-bot gatus pusher suite:1"
+    },
+    {
+      "name": "gatus module wiring gate",
+      "definition_sha256": "34a13ceeaad639b469b7a30d1aedaec3eb12f9a13edb40b19f49549471c0d06b",
+      "id": "gatus module wiring gate:1"
+    },
+    {
+      "name": "balancer silence gatus module suite",
+      "definition_sha256": "ae9f90e9b00924d900706a01b0d08789ed0e6287df4e950a2e43da29c9edca1f",
+      "id": "balancer silence gatus module suite:1"
+    },
+    {
+      "name": "GARM ready-time baseline suite",
+      "definition_sha256": "3351b8415adb76959ba1f91c822cc4acec4ff4fd00770d6b88753996fece4f01",
+      "id": "GARM ready-time baseline suite:1"
+    },
+    {
+      "name": "host-disk detector suite",
+      "definition_sha256": "46dfd2a2f967d13a9c05b0dab58417aeb02f63069cedc27deb0026bd7728d8a8",
+      "id": "host-disk detector suite:1"
+    },
+    {
+      "name": "immutable ops-tooling release installer suite",
+      "definition_sha256": "b6337f4e99f7285526994a2f67e57d813e461304959f3984cf0ad892f2a616e9",
+      "id": "immutable ops-tooling release installer suite:1"
+    },
+    {
+      "name": "dispatch_deploy.sh hermetic suite",
+      "definition_sha256": "7d99a63849fa6d49e9bc7bdfe46806bb51ef1748bf09b3fa1006fb16b1202540",
+      "id": "dispatch_deploy.sh hermetic suite:1"
+    },
+    {
+      "name": "dispatch_deploy.sh suite is not vacuous (mutation-gated)",
+      "definition_sha256": "84554eef63f04a3794226b515e0b1dd1f84fd34fbdcf3c3c3cb38e774865cc52",
+      "id": "dispatch_deploy.sh suite is not vacuous (mutation-gated):1"
+    },
+    {
+      "name": "dispatch_deploy_monitor.sh hermetic suite",
+      "definition_sha256": "5e54abe2c11a893986dd685b3671f9180f0d295737585ba75ccf3e79c664d4c4",
+      "id": "dispatch_deploy_monitor.sh hermetic suite:1"
+    },
+    {
+      "name": "dispatch_deploy_monitor.sh suite is not vacuous (mutation-gated)",
+      "definition_sha256": "6a42b26c671149dda8f1caa1b833cf62e25d7589f066579653d839312ff4488c",
+      "id": "dispatch_deploy_monitor.sh suite is not vacuous (mutation-gated):1"
+    },
+    {
+      "name": "task-specific external-disclosure grant suite",
+      "definition_sha256": "fd03aaf5060bceabe126f3b90b0de2df904d37b09540f127784905eb7a5db3a1",
+      "id": "task-specific external-disclosure grant suite:1"
+    },
+    {
+      "name": "Muse Stop guard hook suite",
+      "definition_sha256": "d9f8557b2ac2d5a6948283eb93ca095d9630fb86dffe5207702ccb155f745889",
+      "id": "Muse Stop guard hook suite:1"
+    },
+    {
+      "name": "per-prompt hook spawn guard suite",
+      "definition_sha256": "e23e6ab0a09be9a83deb26abb377a7b7f8bf6aed112a259c5dc91ba08800f1aa",
+      "id": "per-prompt hook spawn guard suite:1"
+    },
+    {
+      "name": "staging-migrate-apply protection-rule suite",
+      "definition_sha256": "6c33d62eae99d9be45eeace1425ad59aadc7924ab920b2ae180771964d249323",
+      "id": "staging-migrate-apply protection-rule suite:1"
+    },
+    {
+      "name": "case_d06b6dba operator artifact suite",
+      "definition_sha256": "cf02e2901543d2e3befcb275d26df7322039a73e6745c0d4339b9945b86ab390",
+      "id": "case_d06b6dba operator artifact suite:1"
+    },
+    {
+      "name": "omniroute containment selftest",
+      "definition_sha256": "de89dc9ee60efc77797f569b7a6f31f3a9d52253e8f19b5317429fcca62ecd4d",
+      "id": "omniroute containment selftest:1"
+    },
+    {
+      "name": "omniroute selftest is hermetic w.r.t. COMBO_OWNED_PREFIX",
+      "definition_sha256": "c41dd8036c53ac3844e0a185a4e23471b01b3aeee5af7f27d70b8043ffaf3b9e",
+      "id": "omniroute selftest is hermetic w.r.t. COMBO_OWNED_PREFIX:1"
+    },
+    {
+      "name": "case_30ade3fb snapshot-section redaction suite",
+      "definition_sha256": "e7661a84d59abb56b2ccafe64a31650c4c344ab741d139f51595653e09aed55b",
+      "id": "case_30ade3fb snapshot-section redaction suite:1"
+    },
+    {
+      "name": "case_30ade3fb redaction fixes are load-bearing (mutation-gated)",
+      "definition_sha256": "a55b3937e8e41b86f9e5784e637c6e909ce3aad401c5857a32408c5b9e410634",
+      "id": "case_30ade3fb redaction fixes are load-bearing (mutation-gated):1"
+    },
+    {
+      "name": "credential-chain audit regression suite",
+      "definition_sha256": "caf3978a234dbdad6c6c8b7e3aa830da9ba120db3c8c51cac284b9868483167d",
+      "id": "credential-chain audit regression suite:1"
+    },
+    {
+      "name": "git remote-URL credential scan regression suite",
+      "definition_sha256": "299cf2b49eaf277af80393f4b56585def7873569b5c9f6b61dd4bf171dba0851",
+      "id": "git remote-URL credential scan regression suite:1"
+    },
+    {
+      "name": "embedded-token revoke-before-scrub regression suite",
+      "definition_sha256": "9b9580db6331fc4c4ec1d758cb5cdb3347ef39201e2f16116c058bc57060e651",
+      "id": "embedded-token revoke-before-scrub regression suite:1"
+    },
+    {
+      "name": "provisioner create-policy suite",
+      "definition_sha256": "6a801203302f0a1a9a4c7c958a293d4199de5c239be67db8b6433ff55ef5e80d",
+      "id": "provisioner create-policy suite:1"
+    },
+    {
+      "name": "provisioned agents are born ACP-safe",
+      "definition_sha256": "29f28b7c0f89a093f10f629ef49f6a54e57b1b237539280b3388405c2b5fc65b",
+      "id": "provisioned agents are born ACP-safe:1"
+    },
+    {
+      "name": "provisioned Claude transport and persistence verification",
+      "definition_sha256": "72dda64b0306c3983b3199772c290e6058b44f6a00e644eb6c7ea878b490b224",
+      "id": "provisioned Claude transport and persistence verification:1"
+    },
+    {
+      "name": "grant-attribution resolver suite",
+      "definition_sha256": "7006bfdc6c2774c3f5bd0424ce50e5413879471272c717447f6d1dd9dae70c2b",
+      "id": "grant-attribution resolver suite:1"
+    },
+    {
+      "name": "provisioner grant-write attribution suite",
+      "definition_sha256": "06b4af3e9f611935e8cc86ad835bbe36be2ef51c78870b1dee8cc992f07d48a3",
+      "id": "provisioner grant-write attribution suite:1"
+    },
+    {
+      "name": "grant attribution is load-bearing (mutation-gated)",
+      "definition_sha256": "13f58d51c5aec7dfe2069aa6a111179df2b465cf7bfebd8ec28da07cbbaae16b",
+      "id": "grant attribution is load-bearing (mutation-gated):1"
+    },
+    {
+      "name": "provisioner defence gates are load-bearing (mutation-gated)",
+      "definition_sha256": "4c32cc2440d13392d7a101957db47fbd8a93c4b7a253422222d27ff2464c2f7d",
+      "id": "provisioner defence gates are load-bearing (mutation-gated):1"
+    },
+    {
+      "name": "responsible-leader authorization suite",
+      "definition_sha256": "ad90b9284b7ea6540b312972cbf4a2e9bf90c652e8b2db66209d076e0f509538",
+      "id": "responsible-leader authorization suite:1"
+    },
+    {
+      "name": "request-record integrity suite",
+      "definition_sha256": "d82530aa1f33fae637a2a1e4321749302c3fa5e18559a6e2465c520bc0576284",
+      "id": "request-record integrity suite:1"
+    },
+    {
+      "name": "decision-notification suite",
+      "definition_sha256": "d2e138f657aa65b743645e46e99b8895dfea8b7e6e1fac66a4816329f0c7b5d2",
+      "id": "decision-notification suite:1"
+    },
+    {
+      "name": "leader-notification suite",
+      "definition_sha256": "88f45849eb49db458279d0797bedc2b1ca0135a64f3f15d251d7a013f22d8768",
+      "id": "leader-notification suite:1"
+    },
+    {
+      "name": "notification-transport suite",
+      "definition_sha256": "ecad8c82c319a82512de37857b2e1b9c6f14cedcdf1832124cf84ae69817d4fa",
+      "id": "notification-transport suite:1"
+    },
+    {
+      "name": "capability gate suite",
+      "definition_sha256": "71517d502f2f5a4d720e3dba9ae5352ad89604530214048fb7929fe3554575a1",
+      "id": "capability gate suite:1"
+    },
+    {
+      "name": "interaction routing suite",
+      "definition_sha256": "ac1ee0feaa1e416a1d3836eb15dade54286e1ca9e0ad6fd84c8f3be66f0660f0",
+      "id": "interaction routing suite:1"
+    },
+    {
+      "name": "task liveness deployment contract suite",
+      "definition_sha256": "34b3ca3d072fdeda80b0951f59166f796f8ef422f9495c0b92a33e9bdc97edff",
+      "id": "task liveness deployment contract suite:1"
+    },
+    {
+      "name": "task liveness deployment gates are load-bearing",
+      "definition_sha256": "7c3a3472b3e99781eb684bb4bac921d9717609d681a1ee8575968a84c4f32b3b",
+      "id": "task liveness deployment gates are load-bearing:1"
+    },
+    {
+      "name": "single recovery writer suite",
+      "definition_sha256": "5c1b3dd67db2af8ff2e7ed9350d621df4cdbb3c29459d590eae77d6bb3c445bd",
+      "id": "single recovery writer suite:1"
+    },
+    {
+      "name": "benign agent-error proposer suite",
+      "definition_sha256": "102fe60e89c8ae324c9829317a578bcca1f68fa014b94a378b62782a6e6ea8ee",
+      "id": "benign agent-error proposer suite:1"
+    },
+    {
+      "name": "platform watchdog detectors suite",
+      "definition_sha256": "6f2c98267a222753313a94c63591cd1e0b9c799407bb430fec5392fc02361936",
+      "id": "platform watchdog detectors suite:1"
+    },
+    {
+      "name": "single recovery writer deployment contract suite",
+      "definition_sha256": "0f6417c7170bade62e121316f3b4422c1184f933f9ee8df2c2f90311c6fcfd20",
+      "id": "single recovery writer deployment contract suite:1"
+    },
+    {
+      "name": "single recovery writer deployment gates are load-bearing",
+      "definition_sha256": "781bd646dc7551c909311841544b07350e0e79316d32eb0430f9fdaedec898e1",
+      "id": "single recovery writer deployment gates are load-bearing:1"
+    },
+    {
+      "name": "admitted-PR closeout ledger suite",
+      "definition_sha256": "b7e419931e56f55a7963e2de7b56de99e96d1f138766df81cf386a139c323a9b",
+      "id": "admitted-PR closeout ledger suite:1"
+    },
+    {
+      "name": "admitted-PR closeout gates are load-bearing",
+      "definition_sha256": "4f88a396063f20f1e5f94df43431cda3807dde9e380615e200dde4052f257654",
+      "id": "admitted-PR closeout gates are load-bearing:1"
+    },
+    {
+      "name": "closeout snapshot repair suite",
+      "definition_sha256": "2f3c5ca2915fa3b648b244ac284204c7483b9818d062af3e0a73c741f5cbd0dd",
+      "id": "closeout snapshot repair suite:1"
+    },
+    {
+      "name": "closeout snapshot repair gates are load-bearing",
+      "definition_sha256": "c91494d7b4528655b260fa0c00546cfe03ff724fba79f406c8bef0bdf38a47fb",
+      "id": "closeout snapshot repair gates are load-bearing:1"
+    },
+    {
+      "name": "recovery dry-run harness suite",
+      "definition_sha256": "7e611b252a0750cce23c33b1836ee650c7c62ba63651b9ae8742a40e3ea1594e",
+      "id": "recovery dry-run harness suite:1"
+    },
+    {
+      "name": "recovery dry-run harness gate",
+      "definition_sha256": "369cde6cd7c231c942921509edb0eed4dc22892928b5a03cad72f4f99172707a",
+      "id": "recovery dry-run harness gate:1"
+    },
+    {
+      "name": "Discord scheduled-job delivery suite",
+      "definition_sha256": "5a609fc418a5e82ce1669d46833319fc892100cced362e6232cba00a12aa06c5",
+      "id": "Discord scheduled-job delivery suite:1"
+    },
+    {
+      "name": "Discord rollout-pin transport suite",
+      "definition_sha256": "49dfd2902de9b47e5ad8dbabdb33a9fa062d74aba205e449b6550987392f05f0",
+      "id": "Discord rollout-pin transport suite:1"
+    },
+    {
+      "name": "Beszel to Gatus bridge suite",
+      "definition_sha256": "e2216e247f31d7b166f67df2495f41be932792a515f0709361c0f8935833744a",
+      "id": "Beszel to Gatus bridge suite:1"
+    },
+    {
+      "name": "CI main and runtime Gatus suite",
+      "definition_sha256": "d0bf83b3d9dfcfe49775590dad00f472df2eab46feb8f5e534ab07761b50f771",
+      "id": "CI main and runtime Gatus suite:1"
+    },
+    {
+      "name": "hung CI job evaluator suite",
+      "definition_sha256": "c3ee25949e70c4c9877ad9e4473eed722d5caf070405dadb62426d62b0aa6cab",
+      "id": "hung CI job evaluator suite:1"
+    },
+    {
+      "name": "Runner census Gatus suite",
+      "definition_sha256": "612ceef4bf8896fe88f4cd3311afa23afd829183c6abafc541ade135d2fc84ea",
+      "id": "Runner census Gatus suite:1"
+    },
+    {
+      "name": "Runner census mutation gate",
+      "definition_sha256": "860e3a48e0922b1b88251410183f89074779b75d1a0ffdf7d29bd245207bd0f6",
+      "id": "Runner census mutation gate:1"
+    },
+    {
+      "name": "DB backup freshness suite",
+      "definition_sha256": "da51aa83353511f9194eb8677e83e81bcd14add983fde4f0b553f8431bb526e7",
+      "id": "DB backup freshness suite:1"
+    },
+    {
+      "name": "quota brake suite",
+      "definition_sha256": "33e15f43745f6f8f96d0f1e0cdbea3243080cf33c74a9fd108e1a6d86676a9a1",
+      "id": "quota brake suite:1"
+    },
+    {
+      "name": "quota pacing verdict hostile suite",
+      "definition_sha256": "fcb527232eee4c18da7bf8507b5559be6864054ec8c9f05bfd05755a6121d6e3",
+      "id": "quota pacing verdict hostile suite:1"
+    },
+    {
+      "name": "pacer admission audit hostile suite",
+      "definition_sha256": "64010645d380e8ddfc711ee9095dcbdaadd4e777a87f37293b7249f68c0d7ec5",
+      "id": "pacer admission audit hostile suite:1"
+    },
+    {
+      "name": "codex countdown readout hostile suite",
+      "definition_sha256": "72cb6641a575369999c759b52dc39ec0284e5e4f1a2d11444f8f7d08f25f3d7f",
+      "id": "codex countdown readout hostile suite:1"
+    },
+    {
+      "name": "claude countdown readout hostile suite",
+      "definition_sha256": "79736ac34493c8498b2b8006646578ceca6f5ea65075a016faff579486c42f97",
+      "id": "claude countdown readout hostile suite:1"
+    },
+    {
+      "name": "muse countdown readout hostile suite",
+      "definition_sha256": "bb2e6e840a0f4ae345abbb05b90e6c7bb4df4b50724efd4cad3b988cee4e19e2",
+      "id": "muse countdown readout hostile suite:1"
+    },
+    {
+      "name": "bridge row inventory hostile suite",
+      "definition_sha256": "2f1dad227023c5ec6b2c092fa6612f5745fc44882cc38a8a6d32e0f2b07386fa",
+      "id": "bridge row inventory hostile suite:1"
+    },
+    {
+      "name": "pacer concurrency hostile suite",
+      "definition_sha256": "55208cf3b5a33fdc035fc5b2283a6123dc5a78cf11ae848e5d23e9a80be20454",
+      "id": "pacer concurrency hostile suite:1"
+    },
+    {
+      "name": "pacer apply hostile suite",
+      "definition_sha256": "36f086959e810e9b8c9fb08c7e07eaeb52918f8e1707d010a9bfc41bc7cd7953",
+      "id": "pacer apply hostile suite:1"
+    },
+    {
+      "name": "review bot sandbox canary suite",
+      "definition_sha256": "a33c48816fcb374a82d6ebd5113a6d18d21087c7ba0b10ade375aefe72ac6a05",
+      "id": "review bot sandbox canary suite:1"
+    },
+    {
+      "name": "auth denial discriminator hostile suite",
+      "definition_sha256": "fc3da594d7a6693e110decc6ab20bc7ea16b9f1a08a5a848be4920b41bb35ef4",
+      "id": "auth denial discriminator hostile suite:1"
+    },
+    {
+      "name": "model pin cleanup hostile suite",
+      "definition_sha256": "2fbb5b311314bd8f7b41d8d518cbf865f3b983a08b94b8b891dfec6f3cd4d7b4",
+      "id": "model pin cleanup hostile suite:1"
+    },
+    {
+      "name": "terminal worktree cache reclaim hostile suite",
+      "definition_sha256": "c52256149f31c9503e78bf795b3f4951ecca03304f678bcb2e90894c4f89af4e",
+      "id": "terminal worktree cache reclaim hostile suite:1"
+    },
+    {
+      "name": "terminal worktree prune hostile suite",
+      "definition_sha256": "8db756e70edb9ab7868306fdbcd993df0c25b0dccc2114099a3b11e5caeb3ed8",
+      "id": "terminal worktree prune hostile suite:1"
+    },
+    {
+      "name": "worktree prune wrapper contract suite",
+      "definition_sha256": "30f14bb10ded6c60427ee8c8d95063ddc914d4edaa275dc56024e3b12fd041cc",
+      "id": "worktree prune wrapper contract suite:1"
+    },
+    {
+      "name": "worktree prune deployment contract suite",
+      "definition_sha256": "218cf3bb992da9a1c2caf4ee049369c1d99f4944f1562d28fbe743d140ac1084",
+      "id": "worktree prune deployment contract suite:1"
+    },
+    {
+      "name": "auth denial discriminator mutation gate",
+      "definition_sha256": "114ce08f3ea00dde5052918f99697045649e640e5d87b78825bd638c9825221c",
+      "id": "auth denial discriminator mutation gate:1"
+    },
+    {
+      "name": "process lost probe hostile suite",
+      "definition_sha256": "d72321116e784da0a93f087a8c2dbcb8ce6b4cf2fe922b9fb00e8d88045b7fc8",
+      "id": "process lost probe hostile suite:1"
+    },
+    {
+      "name": "process lost probe mutation gate",
+      "definition_sha256": "a1dabcccd8be46367d7868d7a468c65cf81890ff4593f07b738572131f79c718",
+      "id": "process lost probe mutation gate:1"
+    },
+    {
+      "name": "platform watchdog gate",
+      "definition_sha256": "ce98736d244afe13e3970cb850680c73a2541626a0f0b61eaa4d2704f7f83fcd",
+      "id": "platform watchdog gate:1"
+    },
+    {
+      "name": "quota burn derivation suite",
+      "definition_sha256": "572d6bedc170f4f6eef13b0431cfa4fa7fc48ab78646a508bc6c3d55e7a63f1c",
+      "id": "quota burn derivation suite:1"
+    },
+    {
+      "name": "cold-start detector suite",
+      "definition_sha256": "feb4645a56731ef8c1fa726337a0bf03a9e268f7838fae5d7e1ab20ef7443945",
+      "id": "cold-start detector suite:1"
+    },
+    {
+      "name": "red-main poll suite",
+      "definition_sha256": "fd02917f8f33674069fed0357db8a859e2693c981f6658963d4e4a35a1273d21",
+      "id": "red-main poll suite:1"
+    },
+    {
+      "name": "capability-pathway host verifier suite",
+      "definition_sha256": "fa1314917618a815d38ea085aa779c333004a5df5693064eb3c260b7a048596e",
+      "id": "capability-pathway host verifier suite:1"
+    },
+    {
+      "name": "web_search lane passthrough probe suite",
+      "definition_sha256": "968ea0c27c01a9bf77af8da7b3c3e8a1ac8c0e8340d4352fa604cf34d6738d46",
+      "id": "web_search lane passthrough probe suite:1"
+    },
+    {
+      "name": "platform watchdog offline evidence suite",
+      "definition_sha256": "b5a52f6143ad089f6f9cdf3b657ded3f4afce847bc410a638f10c1d784fe39bb",
+      "id": "platform watchdog offline evidence suite:1"
+    },
+    {
+      "name": "platform watchdog snapshot-builder suite",
+      "definition_sha256": "0bd245c5360a57d71c46c99519c9661340e3ebb18159af9819f89f2ce5eac984",
+      "id": "platform watchdog snapshot-builder suite:1"
+    },
+    {
+      "name": "platform watchdog snapshot-builder mutations are load-bearing",
+      "definition_sha256": "e57322e5a6ec53cd728e24c7929c9aa2712b5fffd90f36049eddb538302c2877",
+      "id": "platform watchdog snapshot-builder mutations are load-bearing:1"
+    },
+    {
+      "name": "SQL backend seam suite",
+      "definition_sha256": "b411b59feec1c7719cdbe2cb7d67eff2c30ba374824d618729434faa341209b9",
+      "id": "SQL backend seam suite:1"
+    },
+    {
+      "name": "suite-precondition and wrong-gate refusal suite",
+      "definition_sha256": "09a634bac24ef0f01a50cce5146b563b38e5fb9baaaf62895c3dda005ef25489",
+      "id": "suite-precondition and wrong-gate refusal suite:1"
+    },
+    {
+      "name": "fail-closed CI status suite",
+      "definition_sha256": "2cf55794205f50c42c3b8ccb48dfccd4ef24688bdc9ebfb7a7680f2623e17e9c",
+      "id": "fail-closed CI status suite:1"
+    },
+    {
+      "name": "dark-step reporter suite",
+      "definition_sha256": "6c3d1ccf01de0d0cc7c3338b7740bb2f2a90fc826ed5c3d32fbb426b91b7db5f",
+      "id": "dark-step reporter suite:1"
+    },
+    {
+      "name": "failure-drain suite",
+      "definition_sha256": "6d4cb75ac3a220fb40d16d7c65af81ff1971ecc5989543557b6237a1ff2d3b1e",
+      "id": "failure-drain suite:1"
+    },
+    {
+      "name": "Prove the dark-step reporter still detects a silenced report",
+      "definition_sha256": "7ed3dd55bf05ba3ab5671ee9bf4ac56313b90bc3b72c598a9efd87093001df5e",
+      "id": "Prove the dark-step reporter still detects a silenced report:1"
+    },
+    {
+      "name": "running-vs-reviewed drift suite",
+      "definition_sha256": "27924055d866d9c6e00eaf638389f53d7b738288072e06b4904e866ab165bb5f",
+      "id": "running-vs-reviewed drift suite:1"
+    },
+    {
+      "name": "bootstrap operating-model guard suite",
+      "definition_sha256": "e406e704b6271fcce1a88bbab107fb824eb97d8820f70c34630d91becd8fdb70",
+      "id": "bootstrap operating-model guard suite:1"
+    },
+    {
+      "name": "handoff-channel credential-scanner selftest",
+      "definition_sha256": "657b2576395ddf184cbc2c39f96f418a6f34168cabccb2e1e29830a7b8f3ebc5",
+      "id": "handoff-channel credential-scanner selftest:1"
+    },
+    {
+      "name": "dropchannel_scan narrowing is not vacuous (mutation-gated)",
+      "definition_sha256": "e69625684d52dd5fba0a8d7a171c414e8e29d9ceddadb3ba8752a89273cd4b25",
+      "id": "dropchannel_scan narrowing is not vacuous (mutation-gated):1"
+    },
+    {
+      "name": "a matched pattern never reads as a miss (SIGPIPE verdict gate)",
+      "definition_sha256": "1f22398e6f2750bfe139708c4efbc4a063da9f1eb9d99c3a0bb5e9065511f6b1",
+      "id": "a matched pattern never reads as a miss (SIGPIPE verdict gate):1"
+    },
+    {
+      "name": "cold-start detector refusals are not vacuous (mutation-gated)",
+      "definition_sha256": "059bd869942bb3addc4aa4c39263bfd71220a5a8f5204d449a2f5164c02198e0",
+      "id": "cold-start detector refusals are not vacuous (mutation-gated):1"
+    },
+    {
+      "name": "check 9 filters both sides of its join (case_d0a36ded)",
+      "definition_sha256": "837cd3f5fe256c894e58aeeddac9a4769984fa32a64b9a149c1966f3b5f724f3",
+      "id": "check 9 filters both sides of its join (case_d0a36ded):1"
+    },
+    {
+      "name": "check 12 measures the two-layer boundary (case_b51dd455)",
+      "definition_sha256": "3b5c28f4276cc1cc494c4f32be55aa1cce376fb4b77525681bd129fad942069e",
+      "id": "check 12 measures the two-layer boundary (case_b51dd455):1"
+    },
+    {
+      "name": "orphan retirement refuses what it must (case_d0a36ded)",
+      "definition_sha256": "f05a6286552ae7a79e04785404ef67464c14b0718f924eabc0fdf56e33fce9b8",
+      "id": "orphan retirement refuses what it must (case_d0a36ded):1"
+    },
+    {
+      "name": "Discord delivery proof is not vacuous (mutation-gated)",
+      "definition_sha256": "d81b51e9a4bcbe063dc9b20675b81d6e0c826f87e97e31166abc6d65595cfd2f",
+      "id": "Discord delivery proof is not vacuous (mutation-gated):1"
+    },
+    {
+      "name": "database backup stall detector suite",
+      "definition_sha256": "4368d26b44920b4c6660b4bedad428ffafb8760c3e02569b5c83eee400a90c52",
+      "id": "database backup stall detector suite:1"
+    },
+    {
+      "name": "database backup stall monitor wrapper suite",
+      "definition_sha256": "81374b5af427a594776f358c812e999308dd7886b0ead9aa74d6470a7985d3ce",
+      "id": "database backup stall monitor wrapper suite:1"
+    },
+    {
+      "name": "host-side database backup fallback suite",
+      "definition_sha256": "87c68d66bcf8925c3fdaef87c58cf55c127f3e3437a2660ff18e8534e7f37808",
+      "id": "host-side database backup fallback suite:1"
+    },
+    {
+      "name": "runner disk-pressure detector suite",
+      "definition_sha256": "4d69774864bba16512adfbb5305e8adc9efd77927e1180a0a19ed55631d1be75",
+      "id": "runner disk-pressure detector suite:1"
+    },
+    {
+      "name": "host-side database backup deployment contract suite",
+      "definition_sha256": "a21d461b2e3227591d1d0e66ed3940eda9bf7e0a6188d61d2031b836029b7c3a",
+      "id": "host-side database backup deployment contract suite:1"
+    },
+    {
+      "name": "host-side database backup deployment gates are load-bearing",
+      "definition_sha256": "2f18a0676bd44c998f66f918c3bb37a3113066b3afb5ab645029ed3633e6e4dd",
+      "id": "host-side database backup deployment gates are load-bearing:1"
+    },
+    {
+      "name": "database idle transaction stall detector suite",
+      "definition_sha256": "c94fa902e06596f56070d8b88f725ddaa0e8cedfbe2e4f5f4f27f31c244c36b1",
+      "id": "database idle transaction stall detector suite:1"
+    },
+    {
+      "name": "The case_9e76f76d monitor's recorded command still runs from a clean tree",
+      "definition_sha256": "9047b6b03aded690ee5d307c2ec3de19e532c69bb74897ce8a75eb7b3397cd4e",
+      "id": "The case_9e76f76d monitor's recorded command still runs from a clean tree:1"
+    },
+    {
+      "name": "deployed-vs-repo plugin manifest drift suite",
+      "definition_sha256": "849a7bd40ef97b79d87948995116b30733a5dfb4dc6c6deaaae31d1208c656f5",
+      "id": "deployed-vs-repo plugin manifest drift suite:1"
+    },
+    {
+      "name": "deployed-vs-repo drift suite is not vacuous (mutation-gated)",
+      "definition_sha256": "c6cc3ffb833c50d43dbd02416fd2123dba1275e6f9a969e47cd3588e475cb822",
+      "id": "deployed-vs-repo drift suite is not vacuous (mutation-gated):1"
+    },
+    {
+      "name": "upstream gate suite",
+      "definition_sha256": "ae3f835b5784ed15538f80799239607aeb04408bef5be0bac64b07cfd69b00e2",
+      "id": "upstream gate suite:1"
+    },
+    {
+      "name": "upstream readiness suite is not vacuous (mutation-gated)",
+      "definition_sha256": "0892271fae5c85dfe5fec70d410545a92e6fb246f14792c9c7f7ccde1f9e0024",
+      "id": "upstream readiness suite is not vacuous (mutation-gated):1"
+    },
+    {
+      "name": "pinned upstream blobs are filable, and sendable blobs are pinned (mutation-gated)",
+      "definition_sha256": "c2db82bd40ea089de04c6a2333962d2ec6ea08ffebbf5a1c2181827607d7e356",
+      "id": "pinned upstream blobs are filable, and sendable blobs are pinned (mutation-gated):1"
+    },
+    {
+      "name": "upstream bundle filing-strip gate",
+      "definition_sha256": "eaa180ca35547c5361faae83a0ed92e4a54e5a6ff879a2eacbdadcaf0171321c",
+      "id": "upstream bundle filing-strip gate:1"
+    },
+    {
+      "name": "filing-strip gate is not vacuous (mutation-gated)",
+      "definition_sha256": "7e94ff590a55f2e284ab7936662eb1a70280bb63d514d472994c577034fc81ff",
+      "id": "filing-strip gate is not vacuous (mutation-gated):1"
+    },
+    {
+      "name": "fork-disclosure author classifier + token placement (case_092cd51d gate, offline half)",
+      "definition_sha256": "f2d28249d908798ad127a14bdd3fa9f9a4692c10dd0ea37ce9248761cf2a86ca",
+      "id": "fork-disclosure author classifier + token placement (case_092cd51d gate, offline half):1"
+    },
+    {
+      "name": "case_35e86d49 host-validation activation gate suite",
+      "definition_sha256": "dace98a2d66857cadef290f235b69491d4eaaff906e4cc8b7136756e6daefd93",
+      "id": "case_35e86d49 host-validation activation gate suite:1"
+    },
+    {
+      "name": "case_3dd27f43 host-evidence capture suite",
+      "definition_sha256": "657759849fa307ee74305cd435f7fe56e2f48b6c140afcb86c6fcc9376686d57",
+      "id": "case_3dd27f43 host-evidence capture suite:1"
+    },
+    {
+      "name": "case_3dd27f43 host-render capture suite",
+      "definition_sha256": "43aed11290e12f3bc0fe2a127bf592591db0a4b04e3d8386e2e3e17dafd9cadb",
+      "id": "case_3dd27f43 host-render capture suite:1"
+    },
+    {
+      "name": "case_3dd27f43 carrier/render binding normalization",
+      "definition_sha256": "b621be2afe19081a070d3e50f9c032322fd9d31aae02708a2b7f7b5f85f141f6",
+      "id": "case_3dd27f43 carrier/render binding normalization:1"
+    },
+    {
+      "name": "tool-approval deadline enforcement probe suite",
+      "definition_sha256": "81cc6557f823fe09ae9ebff2f21c9416d46227826e24b1e016a1bd565f106ca6",
+      "id": "tool-approval deadline enforcement probe suite:1"
+    },
+    {
+      "name": "model-endpoint preflight suite",
+      "definition_sha256": "3076d1f3243fde11d0b0c40c365f69ca76b6aacdfff185e3ccd0cec0fd527f2a",
+      "id": "model-endpoint preflight suite:1"
+    },
+    {
+      "name": "CLIProxy release preflight suite",
+      "definition_sha256": "b23a9a62f57b683725a6e9624a748738e415ca979e929553d6717935dee0df06",
+      "id": "CLIProxy release preflight suite:1"
+    },
+    {
+      "name": "CLIProxy quota controller suite",
+      "definition_sha256": "f2e64ba48b5aace040705c2e51c069b10296df00e0a822e32921b356d3e0e61e",
+      "id": "CLIProxy quota controller suite:1"
+    },
+    {
+      "name": "OmniRoute chain verifier credential suite",
+      "definition_sha256": "e15ca9eebd9eb5ca6ecb9b088f4204dbacdf0f216ae87720f0efc16dcf6c988c",
+      "id": "OmniRoute chain verifier credential suite:1"
+    },
+    {
+      "name": "OmniRoute registration credential suite",
+      "definition_sha256": "a58a90480b985c859166945e7a6a432c35328f6c687068ecbac7d728b0748b0d",
+      "id": "OmniRoute registration credential suite:1"
+    },
+    {
+      "name": "teamclaude rotation watcher suite",
+      "definition_sha256": "7cfc8453176e05cc45349ff22552e986b589a1baf94c57e5291f4c82ef33c8d1",
+      "id": "teamclaude rotation watcher suite:1"
+    },
+    {
+      "name": "live-path acceptance self-test (mutation-gated)",
+      "definition_sha256": "85ccbbd759b778812121ec9e9cd4ed48add2a2259c5a830bbd44a1efb45b6399",
+      "id": "live-path acceptance self-test (mutation-gated):1"
+    },
+    {
+      "name": "case_4ea7d92e host-check contracts (mutation-gated)",
+      "definition_sha256": "ca9553338baeb0167c03cf2a83e078ec404bfd06609eb6cdf8492ba7f71be1cb",
+      "id": "case_4ea7d92e host-check contracts (mutation-gated):1"
+    },
+    {
+      "name": "host timer registry (offline, mutation-controlled)",
+      "definition_sha256": "ef23a1cb3e2c4342d198b40f760d1c034a7f8c922f35b37be3984bb7ed88a530",
+      "id": "host timer registry (offline, mutation-controlled):1"
+    },
+    {
+      "name": "home-PC runner guard suite",
+      "definition_sha256": "ece27dbe4cfd4bd28669c20ff2515f25a11c6b0a9c17bfcac3e45f4f8683ad71",
+      "id": "home-PC runner guard suite:1"
+    },
+    {
+      "name": "home-PC guard deployment contract suite",
+      "definition_sha256": "26184df8465fa04c443062d71990da6038ba1c3d5fa2dd8280ebb92386bc56ea",
+      "id": "home-PC guard deployment contract suite:1"
+    },
+    {
+      "name": "Secret scan",
+      "definition_sha256": "d17861aa9832ecf320805aada934e5db720644870fe6fd43194428087933a229",
+      "id": "Secret scan:1"
+    },
+    {
+      "name": "gh_token.sh argv-leak suite",
+      "definition_sha256": "64e1ee3fc976d6d741dbdf24f3977c46520d76091eb6ef528c711bca1dff66aa",
+      "id": "gh_token.sh argv-leak suite:1"
+    },
+    {
+      "name": "Prove the argv-leak suite still detects a credential on argv",
+      "definition_sha256": "6b9d6d39d1d56f83d0864c5029046aeb0bca623fbc1d4e43ee819b13b45449f1",
+      "id": "Prove the argv-leak suite still detects a credential on argv:1"
+    },
+    {
+      "name": "gh_token.sh api request-body suite",
+      "definition_sha256": "a67dc44a52fb1fa1dafab87179d6248677dccdb0ac52d6f5fc2c3a216696604b",
+      "id": "gh_token.sh api request-body suite:1"
+    },
+    {
+      "name": "Prove the api-body suite still detects a dropped request body",
+      "definition_sha256": "37814e7f635af876427c4aab9eb4e0a743657dd8a055625047f32598673fd823",
+      "id": "Prove the api-body suite still detects a dropped request body:1"
+    },
+    {
+      "name": "gh_token.sh dispatch-contract suite",
+      "definition_sha256": "5ea18fbc32b245a8ada2e97480658feb00fa58787ccacdfa196d926a6673d1f0",
+      "id": "gh_token.sh dispatch-contract suite:1"
+    },
+    {
+      "name": "Prove the dispatch suite still detects every regression",
+      "definition_sha256": "f3f6f6a613800a781b6ea5b0a567db1718f5481815cf632f551d34be5e81c0c9",
+      "id": "Prove the dispatch suite still detects every regression:1"
+    },
+    {
+      "name": "Prove the SQL backend suite still detects both unsafe shortcuts",
+      "definition_sha256": "19475ada03116bac79920a5aa9600f1f4cd8f30ff0268344cb685b8b99c6cda4",
+      "id": "Prove the SQL backend suite still detects both unsafe shortcuts:1"
+    },
+    {
+      "name": "Prove the precondition suite still detects each undeserved green",
+      "definition_sha256": "8978e9e2a633ed621c08f396b88e1d835e2b1ad9fea6e93d830ce71bb4a333b7",
+      "id": "Prove the precondition suite still detects each undeserved green:1"
+    },
+    {
+      "name": "Prove the CI status suite still detects a weakened refusal",
+      "definition_sha256": "a6730b4f31b481ce966f2c8effb0ea1bbada837fb5defaad1e7e38979cefcdb3",
+      "id": "Prove the CI status suite still detects a weakened refusal:1"
+    },
+    {
+      "name": "Prove the drift suite still detects a weakened detector",
+      "definition_sha256": "a988182fb315731e35f2e497d821a00cbf001d64fb94ed94fd0dd520a5e7228f",
+      "id": "Prove the drift suite still detects a weakened detector:1"
+    },
+    {
+      "name": "Prove the rotation watcher still detects a wrong verdict",
+      "definition_sha256": "dbb2aca79d630357611f910b10edb3b81aec645dfc3bb621fa6b6f3d48c69cb1",
+      "id": "Prove the rotation watcher still detects a wrong verdict:1"
+    },
+    {
+      "name": "Prove the brake still derives its burn rather than reading it",
+      "definition_sha256": "2576143107ed12ed0258b6847576cfa8e3abd127228249b78feccc50b69cb2bd",
+      "id": "Prove the brake still derives its burn rather than reading it:1"
+    },
+    {
+      "name": "Prove the 120m staleness cutoff is load-bearing (mutation-gated)",
+      "definition_sha256": "c8b0888ab4f32912a2838c30b4878aeacd734f99026fa437c2ea25f43226389e",
+      "id": "Prove the 120m staleness cutoff is load-bearing (mutation-gated):1"
+    },
+    {
+      "name": "case_09629d76 immutable carrier / host-render binding",
+      "definition_sha256": "d4ca406f0e7c912dc30d0189cf347199f9aa9110f912d609a290adc23da305c6",
+      "id": "case_09629d76 immutable carrier / host-render binding:1"
+    },
+    {
+      "name": "DLQ redrive CLI standalone suite",
+      "definition_sha256": "88ee9831ea83b1142308cb6172ba45372d6076986cd06d26c2240faf3fe74455",
+      "id": "DLQ redrive CLI standalone suite:1"
+    },
+    {
+      "name": "Restore toolkit-vendored files",
+      "definition_sha256": "f360b35b790901b2a1095f8d604fee9d4b712a2a532aefcaf404c40479c16440",
+      "id": "Restore toolkit-vendored files:2"
+    },
+    {
+      "name": "operator runbook suite",
+      "definition_sha256": "a5ff6e6440b600d72e8262a6f47eda26a143c0c82587c97951f2396ec85b6cb8",
+      "id": "operator runbook suite:1"
+    },
+    {
+      "name": "operator runbook \u2014 a withdrawn line survives regeneration",
+      "definition_sha256": "3cfb7ac3f450112200428ad8eb2e3428924916805c34219726b8b27e934d72bb",
+      "id": "operator runbook \u2014 a withdrawn line survives regeneration:1"
+    },
+    {
+      "name": "Restore toolkit-vendored files",
+      "definition_sha256": "300dbbd7aff9d7c2bfe82e41856df15bcd7134f930b3d3c7909ccc68ad25d630",
+      "id": "Restore toolkit-vendored files:3"
+    },
+    {
+      "name": "Broker security suite",
+      "definition_sha256": "d2f929d4cda1655103ee5243d8247f5d9c4f1bc26ea42ebe28a3f32acfca5bbc",
+      "id": "Broker security suite:1"
+    },
+    {
+      "name": "Mapping-guard calibration mutation suite",
+      "definition_sha256": "7cdd61395fe97e6691d1960a47503af66ea6f0d798fb6908c02caf7bb3f15df3",
+      "id": "Mapping-guard calibration mutation suite:1"
+    },
+    {
+      "name": "Prove credential and key-management surfaces stay absent",
+      "definition_sha256": "8b86201c238ae1f952b0b165f2d8719320d0c5efa876239a142622626702ad69",
+      "id": "Prove credential and key-management surfaces stay absent:1"
+    },
+    {
+      "name": "Restore toolkit-vendored files",
+      "definition_sha256": "d49343ea7ee6258ba8d36e19608f930678d74d4b1c7c8b67680732674a418f1f",
+      "id": "Restore toolkit-vendored files:4"
+    },
+    {
+      "name": "Install pinned host packages",
+      "definition_sha256": "e52c5e00fceb45db6b7982f14f85decf581b37613dea520965578870c2a53156",
+      "id": "Install pinned host packages:1"
+    },
+    {
+      "name": "Verify the install actually landed",
+      "definition_sha256": "25e05a843acb687708edd7c48cf7a4d2f103e8aa8637102db51533c4f0595932",
+      "id": "Verify the install actually landed:1"
+    },
+    {
+      "name": "Dispatch suite",
+      "definition_sha256": "f77c0e5e2065e28f94fb2fcc5438dde44750922692c94da53f87a2073bc3ec3a",
+      "id": "Dispatch suite:1"
+    },
+    {
+      "name": "Prove the wake action still ships disabled",
+      "definition_sha256": "c2740f8cce633c06e684ee2890c747761a146db9d164c20fcbdcdb426833e98e",
+      "id": "Prove the wake action still ships disabled:1"
+    },
+    {
+      "name": "Prove the capability set is exactly the reviewed one",
+      "definition_sha256": "98cb2c2bf3817dbb86a8eb8609579a92fec1a0c4938e69ae3b6badb79f873ce6",
+      "id": "Prove the capability set is exactly the reviewed one:1"
+    },
+    {
+      "name": "Prove the plugin never writes an issue",
+      "definition_sha256": "e1b90536c8a9db8fd4846ab005937bbc22b1ba64bad1f3402e3df4a2134b1bf7",
+      "id": "Prove the plugin never writes an issue:1"
+    },
+    {
+      "name": "Restore toolkit-vendored files",
+      "definition_sha256": "38703ede99aa7e8f25b4a4f1cf31f62ddfdd3d08be909024f73b317dfb0e2a80",
+      "id": "Restore toolkit-vendored files:5"
+    },
+    {
+      "name": "Install pinned host packages",
+      "definition_sha256": "719838aa454059ad275a98c4f2dc08d43991e76c73b1c5dc26a74d5be0377902",
+      "id": "Install pinned host packages:2"
+    },
+    {
+      "name": "Verify the install actually landed",
+      "definition_sha256": "518e5ce06d62bdd248156bd02e9a7077b479f9d2f6ce69b80984415957883766",
+      "id": "Verify the install actually landed:2"
+    },
+    {
+      "name": "Typecheck",
+      "definition_sha256": "0bed6da15aa2e6b5dd4b948d327ac329651fb1f68fffc832a6ab6bf0505176c5",
+      "id": "Typecheck:1"
+    },
+    {
+      "name": "cliproxy-insight suite",
+      "definition_sha256": "10369e3b4522b9c9243e3fbbd44d9c72b0b0abc264250cb061936e0e83a5a520",
+      "id": "cliproxy-insight suite:1"
+    },
+    {
+      "name": "Verify the plugin builds",
+      "definition_sha256": "ba3e74c75ab9a626e463ca78742c9f51c4dd2c1d73fdd08097b46c67abe510d2",
+      "id": "Verify the plugin builds:1"
+    },
+    {
+      "name": "Fail if the committed dist/ is stale",
+      "definition_sha256": "6153941c5ab1823f4347c7a5bdc6fb4e088aea7057bc3b2b44623d5097eba2a2",
+      "id": "Fail if the committed dist/ is stale:1"
+    },
+    {
+      "name": "Restore toolkit-vendored files",
+      "definition_sha256": "517ce6f41f5423c54919393d80983a796324a2656bcddbfc626b6c3b8c3cf935",
+      "id": "Restore toolkit-vendored files:6"
+    },
+    {
+      "name": "Syntax check",
+      "definition_sha256": "774c98bc4164fa3e1ed738530cbdd1e2228591a1caca4547db4061b43067a0e3",
+      "id": "Syntax check:1"
+    },
+    {
+      "name": "Receiver suite",
+      "definition_sha256": "917e6bc6a6b62272615ba7664c273cd6cbcb9bea241a62bff5bf7e4ca24eb148",
+      "id": "Receiver suite:1"
+    },
+    {
+      "name": "Shell tool suite",
+      "definition_sha256": "5801023610b725aa7270f3e8cf430da41842f05aedd4f3793a06942553961b87",
+      "id": "Shell tool suite:1"
+    },
+    {
+      "name": "Prove the suite detects a receiver that skips verification",
+      "definition_sha256": "848262dda4f82acbc4d94e2bea6ccdeb3110778b57cc013237f8d00d63b8f483",
+      "id": "Prove the suite detects a receiver that skips verification:1"
+    },
+    {
+      "name": "Prove the shell suite needs no credential and leaks no key",
+      "definition_sha256": "e848b82ce75b433a7d2ff09e629f2355d0a79c045b5826223566afff3ef58697",
+      "id": "Prove the shell suite needs no credential and leaks no key:1"
+    },
+    {
+      "name": "Restore toolkit-vendored files",
+      "definition_sha256": "17435f96526d0c76578100dd0676fea4edc2c9824eae6cb8b118e70f931a5fd2",
+      "id": "Restore toolkit-vendored files:7"
+    },
+    {
+      "name": "org-request-mcp regression suite",
+      "definition_sha256": "6a37e701118978e49e914ea7f43137fb9231f77ca7931038db102951bf952db6",
+      "id": "org-request-mcp regression suite:1"
+    },
+    {
+      "name": "Prove the suite rejects each tempting simplification",
+      "definition_sha256": "7a4e6cb16cb477cf5fe0abc339904939a8de6886111935a91d3a5328b00e0565",
+      "id": "Prove the suite rejects each tempting simplification:1"
+    },
+    {
+      "name": "Prove the transport cannot reach the provisioner",
+      "definition_sha256": "ae9742e69d426e9aa016054ca16819a3a74cdb83373b7eeded82901853ea1d26",
+      "id": "Prove the transport cannot reach the provisioner:1"
+    },
+    {
+      "name": "host-ops-mcp regression suite",
+      "definition_sha256": "6e1be72fe110047dbfd4cdc725bfe4eadf26c253233460ba03fe17178cec9f90",
+      "id": "host-ops-mcp regression suite:1"
+    },
+    {
+      "name": "Prove the suite rejects each tempting simplification",
+      "definition_sha256": "e6f801721c87dc6eb31e46538b21f635a90b791528030b6b0b3f70dae56e87fa",
+      "id": "Prove the suite rejects each tempting simplification:2"
+    },
+    {
+      "name": "Prove the transport cannot reach a write verb",
+      "definition_sha256": "4fda5bd67ef52a9e8be0f7d802e375d1fdef4fae3a9056acd623bb110d83ddb8",
+      "id": "Prove the transport cannot reach a write verb:1"
+    },
+    {
+      "name": "Report steps that never ran",
+      "definition_sha256": "b9d43c27ca7306dffd87a6cc0cf677dbdcc53005e58de2a58a0ee697cf18d4cb",
+      "id": "Report steps that never ran:1"
+    },
+    {
+      "name": "upstream lint and reputation suites",
+      "definition_sha256": "1f248cbbcbcb9037b4f882eb74102d826a85d7b7f2a32ce3398ccdf8603292a5",
+      "id": "upstream lint and reputation suites:1"
+    },
+    {
+      "name": "upstream pipeline suites are not vacuous (mutation-gated)",
+      "definition_sha256": "0559a88d3647f9bc102b4ad1b2fbfbec3454e2b7033b04a736f151baca27ad1b",
+      "id": "upstream pipeline suites are not vacuous (mutation-gated):1"
+    },
+    {
+      "name": "two-bot staging pre-check suite",
+      "definition_sha256": "5b4222369a84b151b4cf41c6862acb78f90e705c08888d71c756c30c5038c6e3",
+      "id": "two-bot staging pre-check suite:1"
+    },
+    {
+      "name": "operator run dirs hostile suite",
+      "definition_sha256": "93e88096feac59e97dd2a2219a8c1d16a82b8d5431a7648801461f37c2a1fee0",
+      "id": "operator run dirs hostile suite:1"
+    },
+    {
+      "name": "operator runs disk push contract suite",
+      "definition_sha256": "0ada295ff751c78c0e8cb3e65304bf9a53645a40f4b1538ec6efa5750ae405db",
+      "id": "operator runs disk push contract suite:1"
+    },
+    {
+      "name": "project regen prune hostile suite",
+      "definition_sha256": "d9088f32cb42a8c2c3a39064e7219f606c0407d237ab41faf14334e8a13ba650",
+      "id": "project regen prune hostile suite:1"
+    },
+    {
+      "name": "project regen prune deployment contract suite",
+      "definition_sha256": "235c97106e247de4554d3e1bdf4d3aca2c15b9790728ef77f8ce00b512d8f4a6",
+      "id": "project regen prune deployment contract suite:1"
+    },
+    {
+      "name": "operator regen strip suite",
+      "definition_sha256": "c243eeae05943ecedc78dcd1abcbcb35436223989884b174422fe7ffe49cf43a",
+      "id": "operator regen strip suite:1"
+    },
+    {
+      "name": "review routing contract holds",
+      "definition_sha256": "35c0fcb4d835ba2b0f43014ddc57b6d1f6448705e9eab0be22d9eacc70007bc7",
+      "id": "review routing contract holds:1"
+    },
+    {
+      "name": "review tier-1 checks suite",
+      "definition_sha256": "ba096db63754cc36de07683e696cef4a6c2239c456807d4569a75bba48972657",
+      "id": "review tier-1 checks suite:1"
+    },
+    {
+      "name": "readme script-index gate",
+      "definition_sha256": "c5e397debd0cdc6d09fa3f1b0d3a81350e92f522854abc7bbea189bcc84530dc",
+      "id": "readme script-index gate:1"
+    },
+    {
+      "name": "deploy-window wrapper and pin mutation suites",
+      "definition_sha256": "de99c1a2f368f74aef6a0ee13125f27390acd796387ff13f956ad0179c833ce5",
+      "id": "deploy-window wrapper and pin mutation suites:1"
+    },
+    {
+      "name": "bounded shadow-reader suite",
+      "definition_sha256": "b41c4dbb70365f9060c98aec0fa53105cd1566cd75f14f93871c6076b389a71c",
+      "id": "bounded shadow-reader suite:1"
+    },
+    {
+      "name": "dropchannel_scan offline fixture suite",
+      "definition_sha256": "74edc70648dff3d198d106833d94b747a8c49885459c5c85ec472f1cb9c6f809",
+      "id": "dropchannel_scan offline fixture suite:1"
+    },
+    {
+      "name": "acceptance-transport reply suite",
+      "definition_sha256": "c1672ee9d7c85bf7e6215ecb3a538107d0d0fa3686bd833c682bc59b39a4bc35",
+      "id": "acceptance-transport reply suite:1"
+    },
+    {
+      "name": "upstream pre-push hook suite",
+      "definition_sha256": "d17415d895b71c3d735f0cb735ddb94308d4bace65e517206dfdf66cfa268b81",
+      "id": "upstream pre-push hook suite:1"
+    },
+    {
+      "name": "cliproxy mgmt recon argv-leak suite",
+      "definition_sha256": "7b1f398fe29b08115e7041e2639e4a276744ebe6800f7fb9324389ae43418932",
+      "id": "cliproxy mgmt recon argv-leak suite:1"
+    },
+    {
+      "name": "credential-chain offline fixture suite",
+      "definition_sha256": "387a0e3d54be9b71f8676c6e1e08c1460e94dc3f80d03d9e15fa3d0794c3dffd",
+      "id": "credential-chain offline fixture suite:1"
+    },
+    {
+      "name": "reviewer-eval survival atomic-write suite",
+      "definition_sha256": "3e2c69da8e292600ff137f0822bf1d988e774afcca7f1e788ada0c383cd361f5",
+      "id": "reviewer-eval survival atomic-write suite:1"
+    },
+    {
+      "name": "org-snapshot offline suite",
+      "definition_sha256": "85ec7a02d725f8d11a330c0afea5d86a315c2831027459d4673eda5eb3cb6ace",
+      "id": "org-snapshot offline suite:1"
+    },
+    {
+      "name": "gh_access dispatch and policy purity suite",
+      "definition_sha256": "a3e95a288ac8a32376918fd75ee9cce293841484a3d42f2812ce295e9a160670",
+      "id": "gh_access dispatch and policy purity suite:1"
+    },
+    {
+      "name": "reviewer-eval observational-collect atomic-write suite",
+      "definition_sha256": "2dd18b564c90ba85954c34f967b56de0677abb1aa41b5431e22e8ae7342329e0",
+      "id": "reviewer-eval observational-collect atomic-write suite:1"
+    },
+    {
+      "name": "reviewer-eval arm-import atomic-write suite",
+      "definition_sha256": "adee48f5c4ce471d65409a2cc7352c449d7af9d7e34b20efee63a677f74d32e1",
+      "id": "reviewer-eval arm-import atomic-write suite:1"
+    },
+    {
+      "name": "staged Tier-0 port drift gate",
+      "definition_sha256": "119fb48d46ccfce91b7c3262cc1fd993e84f17fa1be4be1e76578f37201c7bc1",
+      "id": "staged Tier-0 port drift gate:1"
+    },
+    {
+      "name": "reviewer-eval merge-survival atomic-write suite",
+      "definition_sha256": "25bb4e38823e7e959f9b911f7ca390c9570bc14f0c657e2e8231c9169835c03b",
+      "id": "reviewer-eval merge-survival atomic-write suite:1"
+    },
+    {
+      "name": "credential-chain lockdown fixture suite",
+      "definition_sha256": "1c477e40540a43a2c640a72b3d855057f6c6d85774874ad76b1432b94908aecb",
+      "id": "credential-chain lockdown fixture suite:1"
+    },
+    {
+      "name": "balancer silence guard is not vacuous (mutation-gated)",
+      "definition_sha256": "9c21790c9d87e95992fbb62eebdf9187413f07ed281049f4c311546c01e3ef43",
+      "id": "balancer silence guard is not vacuous (mutation-gated):1"
+    },
+    {
+      "name": "red-main poll suite is not vacuous (mutation-gated)",
+      "definition_sha256": "6139ba6bfdec72906ab96ab225d1388035eb1e2816dea16ba38180924c16f787",
+      "id": "red-main poll suite is not vacuous (mutation-gated):1"
+    },
+    {
+      "name": "fleet-run-stall 20-min window suite",
+      "definition_sha256": "e7d98ed4709effe0cbeebefa68770a3b4e953e48611e13416234c712e51ecfb6",
+      "id": "fleet-run-stall 20-min window suite:1"
+    },
+    {
+      "name": "docker hygiene suite",
+      "definition_sha256": "e8051b29ca7e025c42c79887d1a28bfde56a1bd893d9484fb25a6de88b83be05",
+      "id": "docker hygiene suite:1"
+    },
+    {
+      "name": "reviewer bake-off unittest suites",
+      "definition_sha256": "7619f3a6e1fbb511dd97b299a152fbd431b37c6ebe72e7672d571572145062d9",
+      "id": "reviewer bake-off unittest suites:1"
+    },
+    {
+      "name": "cliproxy seam extract suite",
+      "definition_sha256": "0f7e9361a43a4d926199dc121ca501a1d9aa8a18813cc05aaa8c64e16a77b81c",
+      "id": "cliproxy seam extract suite:1"
+    },
+    {
+      "name": "garm provider latency baseline suite",
+      "definition_sha256": "7759d53d623cc98d09f2fa008522160a15bceb74623d93d2dd4b3a72b67cc5e9",
+      "id": "garm provider latency baseline suite:1"
+    },
+    {
+      "name": "kofra preview parity suite",
+      "definition_sha256": "fa4848d731acffb66d9bbfb3e2bc3635de2450bddfb352a43d44d92d35d3114a",
+      "id": "kofra preview parity suite:1"
+    },
+    {
+      "name": "upstream draft pin audit suite",
+      "definition_sha256": "c9570cd211b2d5051cd21826baf6bc48f2cd96de0d333628780a3c34500db622",
+      "id": "upstream draft pin audit suite:1"
+    },
+    {
+      "name": "cliproxy config gate suite",
+      "definition_sha256": "47b9932b6849341802896c09dbeaec3b9d80702cf2001f604ee3ab66cab8f1df",
+      "id": "cliproxy config gate suite:1"
+    },
+    {
+      "name": "garm image lint suite",
+      "definition_sha256": "4d8c4d39d65708eab0b9ecb36b08ceb84a4742d7db67b75ed92b980ed5d941ef",
+      "id": "garm image lint suite:1"
+    },
+    {
+      "name": "operator copy-risk gate suite",
+      "definition_sha256": "99ab5d4d0dc07ce2ef2dd1c0f2ed5dff906676811e83e756f55199b8c468d38f",
+      "id": "operator copy-risk gate suite:1"
+    },
+    {
+      "name": "reviewer-eval corpus atomic-write suite",
+      "definition_sha256": "58a53f01dc3584cf1da00d391406a804986d7f06b559a7acf60112bd379e08d1",
+      "id": "reviewer-eval corpus atomic-write suite:1"
+    },
+    {
+      "name": "cliproxy feed-contract suite",
+      "definition_sha256": "b35414e65be6ec8fe61248d717f8b7dc5de2b5dcaa1128f8c64d48e04da02410",
+      "id": "cliproxy feed-contract suite:1"
+    },
+    {
+      "name": "flap guard suite",
+      "definition_sha256": "0a448ee280bd6d11a68b3f0d1c743766458eba0889c42591f18db110ae452571",
+      "id": "flap guard suite:1"
+    },
+    {
+      "name": "public-comment hygiene gate suite",
+      "definition_sha256": "f57b6e2fb6eefb6879adb58d30aee417f651f8da02b78bdf72543ad3e5a2af60",
+      "id": "public-comment hygiene gate suite:1"
+    },
+    {
+      "name": "watchdog writer-compat suite",
+      "definition_sha256": "3f485d839c634bba8d9163437072f6788a234ea0cf33bc8b900c995e13f01caa",
+      "id": "watchdog writer-compat suite:1"
+    },
+    {
+      "name": "deploy-window manifest gate suite",
+      "definition_sha256": "c6301885426ddf4a9135e0d9202d94803da930732aa419773172399f696de896",
+      "id": "deploy-window manifest gate suite:1"
+    },
+    {
+      "name": "Disposition Stop guard hook suite",
+      "definition_sha256": "96d560a20b9316193ae466daff6af2f5b661134417ebe9e69614f226038e8f77",
+      "id": "Disposition Stop guard hook suite:1"
+    },
+    {
+      "name": "operator workspace reconciler and sweep suites",
+      "definition_sha256": "92c3d3ebb151364423cbf35a0a258a51331834739402a43976b837c49679100c",
+      "id": "operator workspace reconciler and sweep suites:1"
+    },
+    {
+      "name": "invariant views suite",
+      "definition_sha256": "84963b915490027c3ad326cd3e514f02158f7046817cbbd2aead16d64432a1a2",
+      "id": "invariant views suite:1"
+    },
+    {
+      "name": "project regen prune manifest atomic suite",
+      "definition_sha256": "ac590838022b65d1d3fc805df636ebd2345551088d725ac58c7d5dbad8e11a35",
+      "id": "project regen prune manifest atomic suite:1"
+    },
+    {
+      "name": "sweep-auto node7b1ff338 pressure-gate suite",
+      "definition_sha256": "43098e7002af54a9e1758a667165cd59feac95e204e166031562dd8501f6e9dd",
+      "id": "sweep-auto node7b1ff338 pressure-gate suite:1"
+    },
+    {
+      "name": "host regenerable cache reclaim hostile suite",
+      "definition_sha256": "69fc2ac9c541d59d8707058c53efda87779a7ea33c350f5bfe9df31b5d0636f7",
+      "id": "host regenerable cache reclaim hostile suite:1"
+    }
+  ],
+  "removed": [
+    {
+      "id": "secret-exposure audit regression suite:1",
+      "name": "secret-exposure audit regression suite",
+      "forbidden_inputs": [
+        "test_secret_exposure_audit.sh"
+      ],
+      "toolkit_commands": [
+        "./test_secret_exposure_audit.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Test and subject are byte-identical; 12/12 assertions in both cold copies.",
+      "index": 67,
+      "working_directory": ".",
+      "run_sha256": "49ac3ad9de9c1abb8cbe41e112051d196822753a967366a8e7ebdd9b98c8220a",
+      "private_command": "./test_secret_exposure_audit.sh",
+      "input_paths": [
+        "secret_exposure_audit.sh",
+        "test_secret_exposure_audit.sh"
+      ]
+    },
+    {
+      "id": "routing-liveness and stall-alarm suite:1",
+      "name": "routing-liveness and stall-alarm suite",
+      "forbidden_inputs": [
+        "test_queue_liveness.sh"
+      ],
+      "toolkit_commands": [
+        "./test_queue_liveness.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Exact test and detector. Test explicitly disables default throttle/DB reads and injects its own data commands; private production SQL backend is not an executed suite input.",
+      "index": 81,
+      "working_directory": ".",
+      "run_sha256": "d7c30cc3509a57f12b9719bd44d94e98d0a08053b98e5dabae2404727166ccd2",
+      "private_command": "./test_queue_liveness.sh",
+      "input_paths": [
+        "queue_liveness.sh",
+        "test_queue_liveness.sh"
+      ]
+    },
+    {
+      "id": "task liveness reconciler suite:1",
+      "name": "task liveness reconciler suite",
+      "forbidden_inputs": [
+        "python3 -m unittest -v test_liveness_reconciler.py"
+      ],
+      "toolkit_commands": [
+        "python3 -m unittest -v test_liveness_reconciler.py"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Both liveness source modules exact. Four-case fixture and test identifier substitutions are consistent; no status/action/UUID change. Public test requires the canonical fixture path.",
+      "index": 85,
+      "working_directory": ".",
+      "run_sha256": "3254fc5c017d2081aee94c63258d2b1209bc54ceed9077fcba2fa1d40f5ae4f4",
+      "private_command": "python3 -m unittest -v test_liveness_reconciler.py",
+      "input_paths": [
+        "liveness_reconciler.py",
+        "liveness_reconciler_source.js",
+        "test/fixtures/case_d2b472ea-four-cases.json",
+        "test_liveness_reconciler.py"
+      ]
+    },
+    {
+      "id": "Discord delivery monitor suite:1",
+      "name": "Discord delivery monitor suite",
+      "forbidden_inputs": [
+        "test_discord_job_health_monitor.sh"
+      ],
+      "toolkit_commands": [
+        "./test_discord_job_health_monitor.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Wrapper, detector and test exact; staged-source and injected fake outputs cover the full exercised wrapper closure.",
+      "index": 100,
+      "working_directory": ".",
+      "run_sha256": "64236de786806b434a3516efc3a68ef065ebfa4607f369da04fa701677d0f3c1",
+      "private_command": "./test_discord_job_health_monitor.sh",
+      "input_paths": [
+        "discord_job_health_monitor.sh",
+        "scripts/discord_job_health.js",
+        "test_discord_job_health_monitor.sh"
+      ]
+    },
+    {
+      "id": "blocked-issue audit applier suite:1",
+      "name": "blocked-issue audit applier suite",
+      "forbidden_inputs": [
+        "test_blocked_audit.sh"
+      ],
+      "toolkit_commands": [
+        "./test_blocked_audit.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Test and blocked detector exact.",
+      "index": 129,
+      "working_directory": ".",
+      "run_sha256": "f37a2790cf67069988d653d0d2bcb83f3535b7c6ddf56ab4b00dc1628dfe076c",
+      "private_command": "./test_blocked_audit.sh",
+      "input_paths": [
+        "blocked_audit.sh",
+        "test_blocked_audit.sh"
+      ]
+    },
+    {
+      "id": "interaction envelope lint suite:1",
+      "name": "interaction envelope lint suite",
+      "forbidden_inputs": [
+        "test_interaction_envelope_lint.sh"
+      ],
+      "toolkit_commands": [
+        "./test_interaction_envelope_lint.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Envelope test, linter and routing dependency exact.",
+      "index": 130,
+      "working_directory": ".",
+      "run_sha256": "36ff31f4e45304631b12e2fedd675d84004d1164e1dab18d5cec390d2f28e62b",
+      "private_command": "./test_interaction_envelope_lint.sh",
+      "input_paths": [
+        "interaction_envelope_lint.sh",
+        "interaction_route.sh",
+        "test_interaction_envelope_lint.sh"
+      ]
+    },
+    {
+      "id": "model lane probe suite:1",
+      "name": "model lane probe suite",
+      "forbidden_inputs": [
+        "test_model_lane_probe.sh"
+      ],
+      "toolkit_commands": [
+        "./test_model_lane_probe.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Test, lane probe and pg_source.js exact. Suite uses generated source and curl doubles, not a database.",
+      "index": 134,
+      "working_directory": ".",
+      "run_sha256": "757b7d496848ea7fb15f9890e33c2c7377580892c51a577f666cf710c2a5525b",
+      "private_command": "./test_model_lane_probe.sh",
+      "input_paths": [
+        "model_lane_probe.sh",
+        "pg_source.js",
+        "test_model_lane_probe.sh"
+      ]
+    },
+    {
+      "id": "opencode shared-budget probe suite:1",
+      "name": "opencode shared-budget probe suite",
+      "forbidden_inputs": [
+        "test_opencode_shared_budget_probe.sh"
+      ],
+      "toolkit_commands": [
+        "./test_opencode_shared_budget_probe.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Test and shared-budget probe exact.",
+      "index": 136,
+      "working_directory": ".",
+      "run_sha256": "4790cebd4ecdf677d0ebf41b32d623597a4cb86dd4beb859d6b5bd46b5c6c612",
+      "private_command": "./test_opencode_shared_budget_probe.sh",
+      "input_paths": [
+        "opencode_shared_budget_probe.sh",
+        "test_opencode_shared_budget_probe.sh"
+      ]
+    },
+    {
+      "id": "breaker co-tenancy probe suite:1",
+      "name": "breaker co-tenancy probe suite",
+      "forbidden_inputs": [
+        "test_breaker_cotenancy_probe.sh"
+      ],
+      "toolkit_commands": [
+        "./test_breaker_cotenancy_probe.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Test and co-tenancy breaker probe exact.",
+      "index": 137,
+      "working_directory": ".",
+      "run_sha256": "207beeec96e5b34d2c94424af94295509b4d978e87c79f89fcc3ca061febd1dc",
+      "private_command": "./test_breaker_cotenancy_probe.sh",
+      "input_paths": [
+        "breaker_cotenancy_probe.sh",
+        "test_breaker_cotenancy_probe.sh"
+      ]
+    },
+    {
+      "id": "sibling-run guard suite:1",
+      "name": "sibling-run guard suite",
+      "forbidden_inputs": [
+        "test_sibling_guard.sh"
+      ],
+      "toolkit_commands": [
+        "./test_sibling_guard.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Guard and regression test exact; all fake sources generated in the cold suite.",
+      "index": 147,
+      "working_directory": ".",
+      "run_sha256": "5475b29f92b6103b4aef4256d4d95a3b526ff6d00b9b312a7dc863f0151dbf2c",
+      "private_command": "./test_sibling_guard.sh",
+      "input_paths": [
+        "sibling_guard.sh",
+        "test_sibling_guard.sh"
+      ]
+    },
+    {
+      "id": "handoff-channel unversioned-drop suite:1",
+      "name": "handoff-channel unversioned-drop suite",
+      "forbidden_inputs": [
+        "test_channel_drift.sh"
+      ],
+      "toolkit_commands": [
+        "./test_channel_drift.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Test and channel detector exact. Required README/runbook/git/exemption examples are generated by the test, not ambient private checkout files; minimal cold closure proves this.",
+      "index": 149,
+      "working_directory": ".",
+      "run_sha256": "f51ba7578e999a308b1ee126f336dab74bf68cae7e043c6f5ed9debe5cf52e76",
+      "private_command": "./test_channel_drift.sh",
+      "input_paths": [
+        "channel_drift.sh",
+        "test_channel_drift.sh"
+      ]
+    },
+    {
+      "id": "Discord delivery monitor is not vacuous (mutation-gated):1",
+      "name": "Discord delivery monitor is not vacuous (mutation-gated)",
+      "forbidden_inputs": [
+        "verification/case_5516df1c-monitor-mutation-gate.sh"
+      ],
+      "toolkit_commands": [
+        "./verification/job-health-monitor-wrapper-mutation-gate.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Gate changes comments and temporary-directory prefix only. Wrapper, detector and complete baseline exact.",
+      "index": 159,
+      "working_directory": ".",
+      "run_sha256": "6a55283eaaaab66befdaf491e0de24b05d7482b8ded2c6587f078a8efccbe082",
+      "private_command": "./verification/case_5516df1c-monitor-mutation-gate.sh",
+      "input_paths": [
+        "discord_job_health_monitor.sh",
+        "scripts/discord_job_health.js",
+        "test_discord_job_health_monitor.sh",
+        "verification/case_5516df1c-monitor-mutation-gate.sh"
+      ]
+    },
+    {
+      "id": "stale unblock-descriptor sweep suite:1",
+      "name": "stale unblock-descriptor sweep suite",
+      "forbidden_inputs": [
+        "test_stale_descriptor_sweep.sh"
+      ],
+      "toolkit_commands": [
+        "./test_stale_descriptor_sweep.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Test and stale-descriptor source exact.",
+      "index": 160,
+      "working_directory": ".",
+      "run_sha256": "1b916d1caa1a877ffe18811153d2a003c39ea44342f7284088290f3a3e4360cb",
+      "private_command": "./test_stale_descriptor_sweep.sh",
+      "input_paths": [
+        "scripts/stale_descriptor_sweep.js",
+        "test_stale_descriptor_sweep.sh"
+      ]
+    },
+    {
+      "id": "parked backlog detector suite:1",
+      "name": "parked backlog detector suite",
+      "forbidden_inputs": [
+        "bash ./test_parked_backlog_guard.sh"
+      ],
+      "toolkit_commands": [
+        "bash ./test_parked_backlog_guard.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Test, detector and maintained preservation helper exact. First cold attempt omitted the helper; corrected full closure passes 30 suite assertions plus 26/26 preservation checks in both copies.",
+      "index": 161,
+      "working_directory": ".",
+      "run_sha256": "6ff4fc74a39a2098dd9d5e88c351b31f80b5428605b8b87071c845e3a1ac87fd",
+      "private_command": "bash ./test_parked_backlog_guard.sh",
+      "input_paths": [
+        "scripts/parked_backlog_guard.js",
+        "test/parked_backlog_guard_preservation.cjs",
+        "test_parked_backlog_guard.sh"
+      ]
+    },
+    {
+      "id": "parked backlog detector is not vacuous (isolated mutation gate):1",
+      "name": "parked backlog detector is not vacuous (isolated mutation gate)",
+      "forbidden_inputs": [
+        "node ./verification/case_317e6404-mutation-gate.cjs"
+      ],
+      "toolkit_commands": [
+        "node ./verification/parked-backlog-guard-mutation-gate.cjs"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Only initial gate comment loses card identifier; detector/test/preservation helper exact. Named mutant assertions and baseline/restore logic unchanged. Not run locally.",
+      "index": 162,
+      "working_directory": ".",
+      "run_sha256": "f15da967f20ae6e0e02db17732d9c4383d4ed1cb86c638de56e17123c8252a19",
+      "private_command": "node ./verification/case_317e6404-mutation-gate.cjs",
+      "input_paths": [
+        "scripts/parked_backlog_guard.js",
+        "test/parked_backlog_guard_preservation.cjs",
+        "test_parked_backlog_guard.sh",
+        "verification/case_317e6404-mutation-gate.cjs"
+      ]
+    },
+    {
+      "id": "stale-descriptor sweep is not vacuous (mutation-gated):1",
+      "name": "stale-descriptor sweep is not vacuous (mutation-gated)",
+      "forbidden_inputs": [
+        "verification/case_c22b6545-mutation-gate.sh"
+      ],
+      "toolkit_commands": [
+        "./verification/stale-descriptor-sweep-mutation-gate.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Gate comments/usage scrubbed; executable mutation operators, guards and named assertions unchanged. Detector/test exact.",
+      "index": 170,
+      "working_directory": ".",
+      "run_sha256": "848da2281d32bb2ad8266b138c8fd8f294df990936bedf482a9bd489cc04bc5f",
+      "private_command": "./verification/case_c22b6545-mutation-gate.sh",
+      "input_paths": [
+        "scripts/stale_descriptor_sweep.js",
+        "test_stale_descriptor_sweep.sh",
+        "verification/case_c22b6545-mutation-gate.sh"
+      ]
+    },
+    {
+      "id": "plugin manifest authority-surface suite:1",
+      "name": "plugin manifest authority-surface suite",
+      "forbidden_inputs": [
+        "test_plugin_manifest_gate.sh"
+      ],
+      "toolkit_commands": [
+        "./test_plugin_manifest_gate.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Test and authority classifier exact. Both cold copies pass all 23 assertions. This is independent source/closure proof for removing this generic duplicate, not permission to weaken retained deployment/host evidence.",
+      "index": 172,
+      "working_directory": ".",
+      "run_sha256": "5cb60f731875ad606ab9fe915c0333eeb38e8d68851918855d82b7c23f2109a7",
+      "private_command": "./test_plugin_manifest_gate.sh",
+      "input_paths": [
+        "plugin_manifest_gate.sh",
+        "test_plugin_manifest_gate.sh"
+      ]
+    },
+    {
+      "id": "interaction triage suite:1",
+      "name": "interaction triage suite",
+      "forbidden_inputs": [
+        "test_interaction_triage.sh"
+      ],
+      "toolkit_commands": [
+        "./test_interaction_triage.sh"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Triage test and source exact.",
+      "index": 192,
+      "working_directory": ".",
+      "run_sha256": "b95aa3d86eddf6cf018b2b28aa18de27c50d816daf693979247f166cd42582da",
+      "private_command": "./test_interaction_triage.sh",
+      "input_paths": [
+        "interaction_triage.sh",
+        "test_interaction_triage.sh"
+      ]
+    },
+    {
+      "id": "Prove the channel suite still detects each way to blind it:1",
+      "name": "Prove the channel suite still detects each way to blind it",
+      "forbidden_inputs": [],
+      "toolkit_commands": [
+        "set -uo pipefail\nrc=0\n\nstage() { cp channel_drift.sh test_channel_drift.sh \"$1/\"; chmod +x \"$1\"/*.sh; }\n\n# The suite colours its PASS/FAIL markers, so the raw line is\n# \"  <ESC>[32mPASS<ESC>[0m  <name>\" and a literal grep for \"PASS  x\"\n# never matches. Strip the escapes before any assertion reads them \u2014\n# NOT by loosening the greps, which would let \"PASS\" anywhere on the\n# line satisfy a check meant to be about one named assertion.\nplain() { sed -e 's/\\x1b\\[[0-9;]*m//g' \"$1\"; }\n\n# chan_mutation_check <label> <before-line> <after-line> <expected-red-test>...\nchan_mutation_check() {\n  local label=\"$1\" before=\"$2\" after=\"$3\"; shift 3\n  local mut; mut=\"$(mktemp -d)\"; stage \"$mut\"\n\n  # Rung 1: baseline.\n  if ! (cd \"$mut\" && ./test_channel_drift.sh > base.txt 2>&1); then\n    echo \"::error::$label: the UNMUTATED suite already fails in the staging dir; this gate proves nothing\"\n    cat \"$mut/base.txt\"; rm -rf \"$mut\"; return 1\n  fi\n  # ...and a baseline with no assertions in it is not a baseline.\n  local npass; npass=\"$(plain \"$mut/base.txt\" | grep -c 'PASS' || true)\"\n  if [ \"${npass:-0}\" -lt 10 ]; then\n    echo \"::error::$label: the baseline reports only ${npass:-0} passing assertions; the suite has been gutted\"\n    cat \"$mut/base.txt\"; rm -rf \"$mut\"; return 1\n  fi\n\n  # Rung 2: the assertions this mutation is supposed to trip must be\n  # THERE, and green, before the mutation is applied.\n  local t\n  for t in \"$@\"; do\n    if ! plain \"$mut/base.txt\" | grep -qF \"PASS  $t\"; then\n      echo \"::error::$label: the baseline has no PASSING assertion named '$t' \u2014 it was renamed or deleted, and this guard is now blind\"\n      cat \"$mut/base.txt\"; rm -rf \"$mut\"; return 1\n    fi\n  done\n\n  # awk on an exact line, not sed: these anchors are full of\n  # characters sed reads as syntax, and a mutation that silently does\n  # nothing is the single failure mode this step exists to avoid.\n  if ! grep -qxF \"$before\" \"$mut/channel_drift.sh\"; then\n    echo \"::error::$label: could not find the anchor line in channel_drift.sh; the code moved and this guard is now blind, fix it\"\n    rm -rf \"$mut\"; return 1\n  fi\n  awk -v b=\"$before\" -v a=\"$after\" '$0 == b { print a; next } { print }' \\\n    \"$mut/channel_drift.sh\" > \"$mut/m\" && mv \"$mut/m\" \"$mut/channel_drift.sh\"\n  chmod +x \"$mut/channel_drift.sh\"\n  if ! bash -n \"$mut/channel_drift.sh\"; then\n    echo \"::error::$label: the mutant does not parse; it would fail for the wrong reason\"\n    rm -rf \"$mut\"; return 1\n  fi\n  if cmp -s channel_drift.sh \"$mut/channel_drift.sh\"; then\n    echo \"::error::$label: the mutation changed nothing\"\n    rm -rf \"$mut\"; return 1\n  fi\n\n  # Rung 3: the suite must fail, AND on the named assertions.\n  if (cd \"$mut\" && ./test_channel_drift.sh > out.txt 2>&1); then\n    echo \"::error::$label: test_channel_drift.sh PASSED against the mutant\"\n    cat \"$mut/out.txt\"; rm -rf \"$mut\"; return 1\n  fi\n  for t in \"$@\"; do\n    if ! plain \"$mut/out.txt\" | grep -qF \"FAIL  $t\"; then\n      echo \"::error::$label: the suite went red, but NOT on '$t' \u2014 the red is not attributable to this mutation\"\n      cat \"$mut/out.txt\"; rm -rf \"$mut\"; return 1\n    fi\n  done\n  rm -rf \"$mut\"\n  echo \"  ok  $label\"\n}\n\n# 1. Regress into tool_drift.sh's path matching. This is the change\n#    case_9c11948c originally proposed (\"point tool_drift.sh compare at the\n#    channel\"), and it is wrong in both directions at once: it passes\n#    a tampered file that kept its name, and it fails a compliant drop\n#    the repo has since renamed. The whole reason this tool exists is\n#    that it matches on content.\nchan_mutation_check \"match-on-path-not-content\" \\\n  '    if [ -n \"${BY_HASH[$hash]:-}\" ]; then' \\\n  '    if [ -n \"${BY_BASE[$(strip_prefix \"$base\")]:-}\" ]; then' \\\n  'a renamed drop matching a blob at another path passes' \\\n  'a same-size, different-content drop fails' || rc=1\n\n# 2. Drop the shebang test from the runnable classifier, keeping the\n#    exec bit and the extension list. Reads as a simplification. It\n#    means anything named like evidence is never checked, and\n#    `bash TOG-nnn-findings.md` still runs it.\nchan_mutation_check \"shebang-test-removed\" \\\n  \"  case \\\"\\$(head -c 2 \\\"\\$f\\\" 2>/dev/null)\\\" in '#!') return 0 ;; esac\" \\\n  '  :' \\\n  'a shebang alone makes a file runnable, whatever it is named' || rc=1\n\n# 3. Honour an exemption that states no reason instead of refusing.\n#    The tempting lenient default, and it turns the exemption file\n#    into a mute button: one line, no explanation, detector silenced.\nchan_mutation_check \"unreasoned-exemption-honoured\" \\\n  '        die \"$exempt:$lineno: exemption for '\"'\"'$name'\"'\"' has no reason (want '\"'\"'<basename><TAB><reason>'\"'\"')\"' \\\n  '        reason=\"(unspecified)\"' \\\n  'an exemption with no reason is REFUSED, not honoured' || rc=1\n\n# 4. Demote STALE to a warning, failing only on UNVERSIONED. Reads as\n#    noise reduction. STALE is the case where a mirror STOPPED\n#    mirroring \u2014 a file the operator installed from, edited in place\n#    or swapped, and it is strictly more dangerous than one that was\n#    never imported, because it looks reviewed.\nchan_mutation_check \"stale-demoted-to-warning\" \\\n  '  if [ \"$unver\" -gt 0 ] || [ \"$stale\" -gt 0 ]; then' \\\n  '  if [ \"$unver\" -gt 0 ]; then' \\\n  'a same-size, different-content drop fails' || rc=1\n\n# 5. Treat an ABSENT required mirror as nothing to report (case_2493ab4a).\n#    The most tempting of the five: the suite right above it asserts\n#    that \"an exemption for an absent file is inert\", so skipping a\n#    file that is not there reads as the consistent behaviour. It is\n#    the exact opposite for a required mirror \u2014 absence IS the\n#    finding, and it is the state the channel is in until the\n#    operator installs the README. This mutation makes the one thing\n#    case_2493ab4a exists to detect report clean.\nchan_mutation_check \"absent-required-mirror-ignored\" \\\n  '      missing=$((missing+1)); L_MISSING+=(\"$rbase  (want the bytes of $rpath)\")' \\\n  '      :' \\\n  'a MISSING required mirror fails' \\\n  'the report names absence as its own category' || rc=1\n\n# 6. Check a required mirror by PRESENCE rather than content. The\n#    same defect as mutation 1, on the path where it matters most:\n#    the README is the file whose entire content is the byte-for-byte\n#    rule, so \"a README is installed\" is precisely the assurance that\n#    is worth nothing. A truncated or hand-retyped copy passes.\nchan_mutation_check \"required-mirror-matched-on-presence\" \\\n  '    if [ \"$hash\" = \"${REQUIRED_HASH[$rbase]}\" ]; then' \\\n  '    if [ -f \"$rf\" ]; then' \\\n  'a required mirror whose bytes are not the committed blob fails' \\\n  'a tampered required mirror is not reported as UNVERSIONED' || rc=1\n\n# 7. Downgrade the missing-canonical-blob REFUSAL to a skip. case_70ae2474's\n#    lesson, on this table: a comparison that did not happen must not\n#    read as an answer. Renaming handoff-channel-README.md in the repo\n#    without updating REQUIRED_MIRRORS would then silently stop\n#    checking the README, and the run would go green having measured\n#    nothing \u2014 the failure mode that is worse than a red.\nchan_mutation_check \"missing-canonical-blob-skipped-not-refused\" \\\n  '      || die \"required mirror source is not on $ref: $rpath (the table in $ME names a file this ref does not have; fix the table, do not delete the entry)\"' \\\n  '      || continue' \\\n  'a ref with no canonical blob REFUSES rather than passing or failing' || rc=1\n\nexit $rc"
+      ],
+      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Exact inline run block, channel subject and test. Stage, non-vacuity, named attribution and restore behavior identical; fixture inputs are generated, proven by cold baseline. No local mutation claim.",
+      "index": 212,
+      "working_directory": ".",
+      "run_sha256": "87470fe21ef8a7fc763edef85e33000183becb62baaaa6b388eb6d33b48e6d04",
+      "private_command": "set -uo pipefail\nrc=0\n\nstage() { cp channel_drift.sh test_channel_drift.sh \"$1/\"; chmod +x \"$1\"/*.sh; }\n\n# The suite colours its PASS/FAIL markers, so the raw line is\n# \"  <ESC>[32mPASS<ESC>[0m  <name>\" and a literal grep for \"PASS  x\"\n# never matches. Strip the escapes before any assertion reads them \u2014\n# NOT by loosening the greps, which would let \"PASS\" anywhere on the\n# line satisfy a check meant to be about one named assertion.\nplain() { sed -e 's/\\x1b\\[[0-9;]*m//g' \"$1\"; }\n\n# chan_mutation_check <label> <before-line> <after-line> <expected-red-test>...\nchan_mutation_check() {\n  local label=\"$1\" before=\"$2\" after=\"$3\"; shift 3\n  local mut; mut=\"$(mktemp -d)\"; stage \"$mut\"\n\n  # Rung 1: baseline.\n  if ! (cd \"$mut\" && ./test_channel_drift.sh > base.txt 2>&1); then\n    echo \"::error::$label: the UNMUTATED suite already fails in the staging dir; this gate proves nothing\"\n    cat \"$mut/base.txt\"; rm -rf \"$mut\"; return 1\n  fi\n  # ...and a baseline with no assertions in it is not a baseline.\n  local npass; npass=\"$(plain \"$mut/base.txt\" | grep -c 'PASS' || true)\"\n  if [ \"${npass:-0}\" -lt 10 ]; then\n    echo \"::error::$label: the baseline reports only ${npass:-0} passing assertions; the suite has been gutted\"\n    cat \"$mut/base.txt\"; rm -rf \"$mut\"; return 1\n  fi\n\n  # Rung 2: the assertions this mutation is supposed to trip must be\n  # THERE, and green, before the mutation is applied.\n  local t\n  for t in \"$@\"; do\n    if ! plain \"$mut/base.txt\" | grep -qF \"PASS  $t\"; then\n      echo \"::error::$label: the baseline has no PASSING assertion named '$t' \u2014 it was renamed or deleted, and this guard is now blind\"\n      cat \"$mut/base.txt\"; rm -rf \"$mut\"; return 1\n    fi\n  done\n\n  # awk on an exact line, not sed: these anchors are full of\n  # characters sed reads as syntax, and a mutation that silently does\n  # nothing is the single failure mode this step exists to avoid.\n  if ! grep -qxF \"$before\" \"$mut/channel_drift.sh\"; then\n    echo \"::error::$label: could not find the anchor line in channel_drift.sh; the code moved and this guard is now blind, fix it\"\n    rm -rf \"$mut\"; return 1\n  fi\n  awk -v b=\"$before\" -v a=\"$after\" '$0 == b { print a; next } { print }' \\\n    \"$mut/channel_drift.sh\" > \"$mut/m\" && mv \"$mut/m\" \"$mut/channel_drift.sh\"\n  chmod +x \"$mut/channel_drift.sh\"\n  if ! bash -n \"$mut/channel_drift.sh\"; then\n    echo \"::error::$label: the mutant does not parse; it would fail for the wrong reason\"\n    rm -rf \"$mut\"; return 1\n  fi\n  if cmp -s channel_drift.sh \"$mut/channel_drift.sh\"; then\n    echo \"::error::$label: the mutation changed nothing\"\n    rm -rf \"$mut\"; return 1\n  fi\n\n  # Rung 3: the suite must fail, AND on the named assertions.\n  if (cd \"$mut\" && ./test_channel_drift.sh > out.txt 2>&1); then\n    echo \"::error::$label: test_channel_drift.sh PASSED against the mutant\"\n    cat \"$mut/out.txt\"; rm -rf \"$mut\"; return 1\n  fi\n  for t in \"$@\"; do\n    if ! plain \"$mut/out.txt\" | grep -qF \"FAIL  $t\"; then\n      echo \"::error::$label: the suite went red, but NOT on '$t' \u2014 the red is not attributable to this mutation\"\n      cat \"$mut/out.txt\"; rm -rf \"$mut\"; return 1\n    fi\n  done\n  rm -rf \"$mut\"\n  echo \"  ok  $label\"\n}\n\n# 1. Regress into tool_drift.sh's path matching. This is the change\n#    case_9c11948c originally proposed (\"point tool_drift.sh compare at the\n#    channel\"), and it is wrong in both directions at once: it passes\n#    a tampered file that kept its name, and it fails a compliant drop\n#    the repo has since renamed. The whole reason this tool exists is\n#    that it matches on content.\nchan_mutation_check \"match-on-path-not-content\" \\\n  '    if [ -n \"${BY_HASH[$hash]:-}\" ]; then' \\\n  '    if [ -n \"${BY_BASE[$(strip_prefix \"$base\")]:-}\" ]; then' \\\n  'a renamed drop matching a blob at another path passes' \\\n  'a same-size, different-content drop fails' || rc=1\n\n# 2. Drop the shebang test from the runnable classifier, keeping the\n#    exec bit and the extension list. Reads as a simplification. It\n#    means anything named like evidence is never checked, and\n#    `bash TOG-nnn-findings.md` still runs it.\nchan_mutation_check \"shebang-test-removed\" \\\n  \"  case \\\"\\$(head -c 2 \\\"\\$f\\\" 2>/dev/null)\\\" in '#!') return 0 ;; esac\" \\\n  '  :' \\\n  'a shebang alone makes a file runnable, whatever it is named' || rc=1\n\n# 3. Honour an exemption that states no reason instead of refusing.\n#    The tempting lenient default, and it turns the exemption file\n#    into a mute button: one line, no explanation, detector silenced.\nchan_mutation_check \"unreasoned-exemption-honoured\" \\\n  '        die \"$exempt:$lineno: exemption for '\"'\"'$name'\"'\"' has no reason (want '\"'\"'<basename><TAB><reason>'\"'\"')\"' \\\n  '        reason=\"(unspecified)\"' \\\n  'an exemption with no reason is REFUSED, not honoured' || rc=1\n\n# 4. Demote STALE to a warning, failing only on UNVERSIONED. Reads as\n#    noise reduction. STALE is the case where a mirror STOPPED\n#    mirroring \u2014 a file the operator installed from, edited in place\n#    or swapped, and it is strictly more dangerous than one that was\n#    never imported, because it looks reviewed.\nchan_mutation_check \"stale-demoted-to-warning\" \\\n  '  if [ \"$unver\" -gt 0 ] || [ \"$stale\" -gt 0 ]; then' \\\n  '  if [ \"$unver\" -gt 0 ]; then' \\\n  'a same-size, different-content drop fails' || rc=1\n\n# 5. Treat an ABSENT required mirror as nothing to report (case_2493ab4a).\n#    The most tempting of the five: the suite right above it asserts\n#    that \"an exemption for an absent file is inert\", so skipping a\n#    file that is not there reads as the consistent behaviour. It is\n#    the exact opposite for a required mirror \u2014 absence IS the\n#    finding, and it is the state the channel is in until the\n#    operator installs the README. This mutation makes the one thing\n#    case_2493ab4a exists to detect report clean.\nchan_mutation_check \"absent-required-mirror-ignored\" \\\n  '      missing=$((missing+1)); L_MISSING+=(\"$rbase  (want the bytes of $rpath)\")' \\\n  '      :' \\\n  'a MISSING required mirror fails' \\\n  'the report names absence as its own category' || rc=1\n\n# 6. Check a required mirror by PRESENCE rather than content. The\n#    same defect as mutation 1, on the path where it matters most:\n#    the README is the file whose entire content is the byte-for-byte\n#    rule, so \"a README is installed\" is precisely the assurance that\n#    is worth nothing. A truncated or hand-retyped copy passes.\nchan_mutation_check \"required-mirror-matched-on-presence\" \\\n  '    if [ \"$hash\" = \"${REQUIRED_HASH[$rbase]}\" ]; then' \\\n  '    if [ -f \"$rf\" ]; then' \\\n  'a required mirror whose bytes are not the committed blob fails' \\\n  'a tampered required mirror is not reported as UNVERSIONED' || rc=1\n\n# 7. Downgrade the missing-canonical-blob REFUSAL to a skip. case_70ae2474's\n#    lesson, on this table: a comparison that did not happen must not\n#    read as an answer. Renaming handoff-channel-README.md in the repo\n#    without updating REQUIRED_MIRRORS would then silently stop\n#    checking the README, and the run would go green having measured\n#    nothing \u2014 the failure mode that is worse than a red.\nchan_mutation_check \"missing-canonical-blob-skipped-not-refused\" \\\n  '      || die \"required mirror source is not on $ref: $rpath (the table in $ME names a file this ref does not have; fix the table, do not delete the entry)\"' \\\n  '      || continue' \\\n  'a ref with no canonical blob REFUSES rather than passing or failing' || rc=1\n\nexit $rc",
+      "input_paths": [
+        "channel_drift.sh",
+        "test_channel_drift.sh"
+      ]
+    }
+  ],
+  "private_compatibility": {
+    "tag": "v0.2.2",
+    "commit": "7c4b39a2157ceb122ae50c7f554cc43c6891c829",
+    "sha256": "6c42bf0ed35fe28a76e5dca13a2b6c90c8c453c7dc086406c4169159daa412d6",
+    "entries": [
+      "plugins/gh-token-broker/dist/disclosure.js|plugins/gh-token-broker/dist/disclosure.js|v0.2.2",
+      "plugins/gh-token-broker/dist/ownership.js|plugins/gh-token-broker/dist/ownership.js|v0.2.2",
+      "plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|v0.2.2",
+      "verification/case_9e76f76d-recorded-command.sh|verification/case_9e76f76d-recorded-command.sh|v0.2.2",
+      "verification/case_9e76f76d-recorded-command.txt|verification/case_9e76f76d-recorded-command.txt|v0.2.2",
+      "verification/case_46e26fa6-mutation-gate.sh|verification/case_46e26fa6-mutation-gate.sh|v0.2.2",
+      "verification/case_f909ca1f-mutation-gate.sh|verification/case_f909ca1f-mutation-gate.sh|v0.2.2"
+    ]
+  },
+  "suites_job_sha256": "2f0de7be5319a1e00f4a2d207a942fc43e9dc8f050a1620aa378bc724c9e7531",
+  "manifest_sha256": "1dc989ed2fd142eafa28256a2a0e636f32cc1a9c88d1a0e1fce864640ff425fd",
+  "restored_files_sha256": {
+    "acceptance_org_lib.sh": "8db92e9d11f5a21776dbc1f71296b752291e6758ddc2a5ad67a129a86a5ed00a",
+    "acceptance_rehearsal.sh": "a54e0b0bc79bb1a52edee3ea865b852e855c7f706370846cd512cc69c1c3080c",
+    "acp_crash_triage.sh": "b2192adcf3017f3746b1986d2806aac55ce3befa87ed73ac04cb95aa74c7b38f",
+    "agent_endpoint_preflight.sh": "fa4c9ca7dcb52f954b0c6f1d574e87264e0e4b66d0b4137c52d5ba3efed37d32",
+    "app_tree_guard.sh": "00d51d441571ef206df32f4a453966d0ce2ba2339471c22b2c2620835015b9e1",
+    "auth_denial_discriminator.py": "4c2df4ac258d163ae9123973751bb9974b7ecb9f9ca0343c7d8e72ac0837d481",
+    "blocked_audit.sh": "7d2b9b0441fe711db6549f8d2b85ec1c70068c64c59716fc6b61b2537f4d6f20",
+    "breaker_cotenancy_probe.sh": "98803f04df13850c8c625a70d714eb5c497e2bd2e12765f770f653d64ea0a4ae",
+    "capability_gate.sh": "ffaf69032dce3df599a65febd3fd490726883e967e7ed7f7b33c3b32ed395a89",
+    "capture_network_name_evidence.sh": "4cc5a4701e7e5dfddaf08c891b037562ea93090b4c484a1bc4f794e07d18338f",
+    "channel_drift.sh": "df24828126c0946c617634d2804d114db046523ddc0ccf7e2472462f048a1797",
+    "cliproxy_quota_contract.py": "8cdbd554450a6760ee43e2ef1726ae5e05564b64602023233c8a3076f60125cf",
+    "cliproxy_quota_controller.py": "03da6d246b4b4627c89503200b81c0f9fd5c7c1e29c12a2e867a9f09c179429e",
+    "cliproxy_release_preflight.sh": "121e4ec7d9e7c1886a44d8b411a8edec812c561e0accbc66fbef776d83b071b0",
+    "cold_start_detector.sh": "6b10a5326c74297c4268cba7f17275cbdac38481a53355359c4886886f339d34",
+    "discord_job_health_monitor.sh": "6d924829d4fc0f926e2ee7fcd5789d7ab471dce8e493e6127efe177a303bbeb3",
+    "dispatch-acceptance-measurement.py": "de4e20efa1e535ca7b48e7811bb757c2d055df4afedced8fb1bb171cc44625ff",
+    "docs/app-tree-immutability.md": "791b401a3c2bea618bd46989150045d9ebb8a64cfb81069625ed747df2122a60",
+    "docs/bind-mount-ownership.md": "d7e122a4dddcb68c0143b3478b756209c54bc15040da771d0ea53e76218618c5",
+    "docs/capability-gate.md": "eb5b7e2cf642067a56c78cb2dcb5c6975dc71c43600bdbaa26cb9510925832c4",
+    "docs/cold-start-detector.md": "fe9bafe67707905fe2a7830b2f5be08bc1c1f7eda910de5049ced3709ec2ce01",
+    "docs/interaction-routing.md": "080b9650090687c14f8fd3d61b83000bb84a494ee27a4016deaf2e44ee275e82",
+    "docs/liveness-reconciler.md": "7c498ecb9c07c01d1850bbd5a3553b186d87f6638871eaebf2a2989193da0d7a",
+    "docs/model-lane-probe.md": "f561c49a50a8224cee6ea7c1dbe573df3e99f3c32d69e983566df186bd016f34",
+    "docs/opencode-shared-budget-probe.md": "372ca55ce472bf83fd29f5835b0416b079d83be648f082860591d0937050fd96",
+    "docs/operator-handoff-channel.md": "010b876556208e6bdaf93915289c3db6bbe5715d9773b62c5622ed7ed519b89d",
+    "docs/parked-backlog-detector.md": "d3f30dba42f52be719661fc124fda275f779a72c609169e8c0fd4a883234c60d",
+    "docs/responsible-leader.md": "3ff0edd3fd3179f7dbef259ee82682153656c667c9ea2ed7224a99a3bef8f368",
+    "external_disclosure.js": "8210b7252872275c47e5ccb29e3106187f5fa5c9a4e913174e38209a10f1afae",
+    "gh_ci_status.sh": "19e3b2daf862e090f6c21c2ea4e359c3ce1fc78d05c73ba88e3497b0fa21cd7a",
+    "gh_embedded_token_remediate.py": "6693d6324a1e86821a0e44e243078ee61722ee96f8f6e82400e6f1644bc6877d",
+    "gh_scope_residue.sh": "0cd902cfd5981e01ea28412e3668ae4deed10f615adc0642847b2e636c4988ea",
+    "gh_scope_residue_monitor.sh": "897d5ea6b54d1172c967abe0ea73b0024d2100fddcd0ad22842980299019fdc7",
+    "git_remote_credential_scan.sh": "0689ae05cd1f7fd8fcff0c10ff5a0eae68603b5d5e33c6212bd5083b6c27e380",
+    "handoff-channel-README.md": "a6c924d43141a3c594b1216564d672e4f7abc66ba9010be8e709a0c5afd137fb",
+    "interaction_envelope_lint.sh": "1034b3448a6aa6999cfa7647cd79e8be319927c3ea29ee5d364da7ef6fe42d2c",
+    "interaction_route.sh": "52188935094755c52e86e694882232d13200bf9472996d06edbadc679620fa86",
+    "interaction_triage.sh": "89d0da0928de962e03af98c3b26e06b20d9c545dee0d0c3f70ee0aba4914eddf",
+    "lib/durable_queue.py": "f6e424c4549639a05b47dc916345cc17087ad4818c49e117f62206aeddd82339",
+    "lib/mutation_watchdog.py": "1fd595f3eb658848005ede9e39b56311cb60f05084be7b701f951918d2be50ac",
+    "lib/notify_exec.py": "153ceb32b708bf3177ebe2ceac557faa2aed79048a66de1de8cea76b0cb38119",
+    "lib/provisioning_policy.sh": "ade7e2595a9ba2967dd8150992e3d49a4c00c55e9dd50619a71991059870b330",
+    "lib/reqrecord.sh": "7874b93a0f8e316ade76ae020004396652c2b806ceafc310bfff919375fe2e2c",
+    "liveness_reconciler.py": "bff2b858a79475fd1a3344ccf600aee98103ea1222f5bd49cc5314fd524bcfb5",
+    "liveness_reconciler_source.js": "387dd95f510abbfe7a20ac6702c891628cf9d96ac0ffe822363d1faedce7c741",
+    "model_lane_probe.sh": "18b61998b89eccef509bf6f9782622e4990f3c60ddb6bad2ec01a87217abb404",
+    "omniroute/rehearsal/verify-compiled-patch.mjs": "2d95e62df66ab2a77d2f86520d5dc0fa6e70d781c9ef53600024822c454327ae",
+    "opencode_shared_budget_probe.sh": "d69e78e4000066540672c6a419d75e6d0ad64d6b9b2752c31d54aca3f90dee56",
+    "operator_runbook.sh": "707ca8e0990bdc7f7bc1828a246870f1fb32c468ce3ed8c261798994d3605ed4",
+    "org_access_review.sh": "e3c61e43d7fea3faf0bb355d9384de5be9b5a730189999c98645c80782a49d0d",
+    "org_orphan_retire.sh": "348713dc4d7a899f6058f8bfc1531a9e30930834e507ec28d769e2661b135b8c",
+    "pacing_verdict.py": "8bddb2d3d1a5296c8942b938e41e9a6c5345625a06cc276ccefd31b15bf44151",
+    "paperclip_activation_gate.sh": "e8979920de58e6c28b2e1b4d6acc8af1c7f1a974b0ed73ef3bf40e6aa7a1a803",
+    "pg_source.js": "53394713967614b68e2ed8d2ea6d9dc08fd2408f2b4c4389f6cf2eb6cba05393",
+    "plugin_deploy_drift.sh": "a8cd01908ee2dbcf184c72c6ec44c71a0e2faed9591baab66e61d9750f949dbc",
+    "plugin_manifest_gate.sh": "1e2892d35a7df70d3c3116e6ec2104135d538266039bc41258ca304a05835fb1",
+    "plugins/cliproxy-insight/docs/adr/0003-never-retry-within-a-firing.md": "8cbe39d89f83b31fb8d6aae7552a0c201d092c7155225febbd93396200877327",
+    "plugins/cliproxy-insight/docs/adr/0004-reuse-router-secret-ref-guard.md": "edb869a090830d96dccff51311935e1a113fd6e770908a2365871356b8dfa27c",
+    "plugins/cliproxy-insight/esbuild.config.mjs": "47e03c7cb69025bed63421198177dad062beb0def054bde8c8deed184832e3c8",
+    "plugins/cliproxy-insight/package-lock.json": "d4e24899f11c995eafb18eca909ee451008b51d01a66632ad6b3b41f48712715",
+    "plugins/cliproxy-insight/src/config/secret-ref.ts": "515f06709dd69c16b303a7fe72cd8a4f67ec654783678756bf702e14c9793e22",
+    "plugins/cliproxy-insight/tests/company-scope.spec.ts": "772e1cd25978a1769fc04ccc6a38d18f559490a9ed7126b0af74f91f67004869",
+    "plugins/cliproxy-insight/tests/helpers.ts": "8c953892abfc2d1383cf3a78a2b935ccc6c0e798218ad76bec3c25c0674b706e",
+    "plugins/cliproxy-insight/tsconfig.json": "5236b62c86043e75a9e1b2ec4fa4458d166ea9e46b8b6f1f1a9e821589a4ed93",
+    "plugins/dispatch/dist/manifest.js": "98c299f44aeb380b8f22a810755a4647c697550be0044ddb8e9c3b51f03a16cf",
+    "plugins/dispatch/dist/reporting.js": "157298d8b008a941e8829b5de9913564262d26622446798b3343fd62c86e9668",
+    "plugins/dispatch/dist/selection.js": "ab9d41fc8d2f421689d94a884b53d694060991775c1e03438045382a0e2a6006",
+    "plugins/dispatch/package-lock.json": "6659c5a6e6510c5c8845caa3f1c8b0f9e9559b3c87f15fb5ea3f938102c44d43",
+    "plugins/dispatch/package.json": "4b1c33e26b40c10fd104f9923793dcae9f99d68558892b7eefe7065086384a5a",
+    "plugins/dispatch/test/dispatch.test.mjs": "e9cfa9bd45e6340385bf39599dff43d6e9c7074150854700e030274601d4b71d",
+    "plugins/gh-token-broker/dist/disclosure.js": "e57bd6c71ab31a459242cb0d80f77fb0ff1bf4fa0267c997fe8b324bb1cf3e9d",
+    "plugins/gh-token-broker/dist/ownership.js": "2bc828e418c4250cc039510f621230c84ab9a04b5e4c5cc5540d84ea33550a6a",
+    "plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql": "90a7b4bbc5b6f58d07df212c065f2ce04eeed18e4c1cdb1bd44b9f1a1e90e2df",
+    "plugins/model-selection/docs/adr/0001-volume-aware-cost-term.md": "fc5f47572070aa7c8c747f6e5c2b8002f902fefca5394ba3cfbbafc002520af8",
+    "plugins/model-selection/docs/adr/0002-capability-exclusion-is-a-floor.md": "debb52f4b5b19790af6974259bcfc416658646a95b37d27603fef964e8bf0bbe",
+    "plugins/model-selection/docs/context-evidence.md": "5f955a875c1725cdd5780a86992a8dd8ff12af549d5530d11c2880b614828bbc",
+    "plugins/model-selection/migrations/README.md": "eaa5bd07cce3a95076abedd63d294156f73b3e0e45ac7f6c75787cbf91823900",
+    "plugins/model-selection/package-lock.json": "7bedb3b299d8561676942286fa11c49b208a061939db31a480fd8ff55409c54c",
+    "plugins/model-selection/scripts/anchor-check.mjs": "f897f6c367d774f6dc70218ea176f74794dc65706515e02168b80928d25f301f",
+    "plugins/model-selection/scripts/check-stage2-gate.mjs": "977300ee0f76857e3e189bb2f82fa08dcddc675dfaa53a24658b3b998d90de9e",
+    "plugins/model-selection/scripts/refresh-volume-profiles.mjs": "bf7693d6f15ee6ef2d1b5bf6242fd0daf927c5cd6991fed1d75f01b4a7dcae02",
+    "plugins/model-selection/scripts/require-mutation-ci.mjs": "f1a83d2a378fd54d809c93497ff9b57a733d13780b5d2451c68709aec657d208",
+    "plugins/model-selection/src/aa-free/fetch.ts": "cb8aa084e464748bb9d02f3fcf02a9c5b725fdfbbdbc8e1dca90801131d0e89a",
+    "plugins/model-selection/src/aa-free/parse.ts": "db639b19528793818db4d95c6d82dc575fa0692707c8cb1496d33fbf3bee1a74",
+    "plugins/model-selection/src/aa-free/project.ts": "adb5a4c9b71e84751833fd1d18ce83e6ebe3d883b07626997333400b1776fbcb",
+    "plugins/model-selection/src/aa-free/registry.ts": "90277b51e53c92d949fae8fd79863ba40751d587764a44758a0ed8c740318baf",
+    "plugins/model-selection/src/aa-index/diff.ts": "2da94cd51a6bab80798f52711441e7b2230af7c6e61fadf831e25a66edb9a3d0",
+    "plugins/model-selection/src/aa-index/fetch.ts": "bb585ee81d4a1d1bf8d511e829fa625401b29966929b4873ffb93cde388ccd93",
+    "plugins/model-selection/src/aa-index/parse.ts": "af7ca87a321c3907ec19d9bef717fa6adf167b5aafafe0964a3a055c5213c2ad",
+    "plugins/model-selection/src/admission-budget.ts": "0a1b1a9c23bb0c863ca66e850c616acaf7528d9c52fd61c512a74411310e8970",
+    "plugins/model-selection/src/admission-simulator.ts": "88967207136cdea868039bf0ce3a0f77752d46bfd22cafdc1b35323815b49ba3",
+    "plugins/model-selection/src/config/secret-ref.ts": "b24ea2524eda69e2832a03733552e0e9b563c1e6e1d0c6775a381e5224af8a4c",
+    "plugins/model-selection/src/context-evidence.ts": "d136b38c477d8ef4c022d7e715f7a611b890b7eb3d45a99b6c58b28dc82b489b",
+    "plugins/model-selection/src/dispatch-reporting.ts": "ed68d713495f880939c0c098978e7fe48d40aa763d4be0835fe1013747073d3e",
+    "plugins/model-selection/src/engine/ancillary.ts": "723569ce792e4ba97978a0a2906dc73782925eb1bb9acc363daf06c4988b79ea",
+    "plugins/model-selection/src/engine/classify-call.ts": "b1fd445378e5400cbd1d33cdc613b7361be98cfd6c8cf9bcdb896b61028e09af",
+    "plugins/model-selection/src/engine/classify.ts": "18613f7f912c46eceb038ba381a4763798c1ee75114e1fe50a6d7b210efe23c2",
+    "plugins/model-selection/src/engine/effort.ts": "730e96f02bd34003ade255d4aab83b2a614b3031be0af9ce3d478b1f72fe180a",
+    "plugins/model-selection/src/engine/lane-evidence.ts": "1ff9f3bc87c7e5b44710b260d00338fb8dd25a07a591a5237444ab0165f60e96",
+    "plugins/model-selection/src/engine/model-id.ts": "213ed747079e68805c9c6b38d71a9f5d172853d127168849df6e77787ae46d0e",
+    "plugins/model-selection/src/engine/objective.ts": "15025d075936af4ee0e5f8a451edb2c09f052f8ffef2cdb92260da74130838b7",
+    "plugins/model-selection/src/engine/profiles.ts": "5e48eadd90b68cf093de04dd8ef3d934d46554aaea71d156222d07150a3474e0",
+    "plugins/model-selection/src/engine/tier-outcomes.ts": "96263401f3e62d0921d810c6a8d03c3f35702224d7481edb96c6b6a3629ee429",
+    "plugins/model-selection/src/hot-cache.ts": "50eaaaabd6fa10174577ad05042920c8f9b39c6ba775270e6d0a325b2df0d798",
+    "plugins/model-selection/src/lane-capacity/availability-source.ts": "193de8bdff9e5d7be16f65f85044060679278197a3324ef87650bf2b95789fe1",
+    "plugins/model-selection/src/lane-capacity/types.ts": "e80a93eae6205bd6796520b19fbc022e7440ed6abea16b0f9c89852e893bb2cf",
+    "plugins/model-selection/src/lane-capacity/url-policy.ts": "2e60116061f2d211a4ff59333dcfb27d16f7376b9b07dd573ece411b89f2c518",
+    "plugins/model-selection/src/lane-capacity/value-normalization.ts": "ea98c2abb2a06cb21feef946786440760cc26d09cdf6a40a99e23c43c846b94f",
+    "plugins/model-selection/src/price-sync/fetch.ts": "b3be8b7de1e9873303ef3bd4558fcb070de6207628f7e00514fdce449a1893f5",
+    "plugins/model-selection/src/price-sync/match.ts": "163e9745d83c6f063ca499e2cd30fe982e4a6e5786a6dc248bd7e2fee978520d",
+    "plugins/model-selection/src/price-sync/parse.ts": "08fa9c56d0d14d075ac7497dd42ccbe68baf1a62d764584e942bd2e47a3a8f00",
+    "plugins/model-selection/src/tier-policy-tool.ts": "b8e1db8c8e99a748d81b3171f7f41a0f47024a0786c58185063b36d0d44357ea",
+    "plugins/model-selection/tests/aa-free/aa-free.spec.ts": "3454d14d40430f764f6c0a1df70021d53c8396ebfc25becfc18a581bcb280eb1",
+    "plugins/model-selection/tests/aa-free/fixture.ts": "5334b31f8ab141b3440a15d99da53d7ecb2857fd6ce2b2296637144862534dc8",
+    "plugins/model-selection/tests/aa-index/fetch.spec.ts": "12fc4f6ca0c1dd147da4de8c846aaf79091ccb6977455d652ff6f106f31b8574",
+    "plugins/model-selection/tests/aa-index/parse.spec.ts": "86342ad5ee8641849248b7139a2caf4e704571a2a3b9431db437cdf7b838300d",
+    "plugins/model-selection/tests/accepted-work-worker.spec.ts": "10ce2c8d53c9a8efe7093d77e458f8e2def20aeb8a98b2208e7ee4ce206c99c7",
+    "plugins/model-selection/tests/additive-config.spec.ts": "09a7a57a8d67efbd792a59728d238fec111e644eedbc779208c0ef1fa951378c",
+    "plugins/model-selection/tests/admission-budget.spec.ts": "c4a239e7edf5b1b0b11619bf78f0272c16acd7d0d0190ebcd4a1ff116bff8292",
+    "plugins/model-selection/tests/admission-shadow.spec.ts": "4043bc53d5b585b873bab102aa0f50f98207ff74291ea637481407ed1f14ef60",
+    "plugins/model-selection/tests/ancillary.spec.ts": "e5b90092da0a43ffbd17cd9ad571fe8e278cdc501ba0820c73abfaaf3519ef7d",
+    "plugins/model-selection/tests/availability-source.spec.ts": "1e1310714763a81f2eb4adfb608ca37a20e91a3089dca49ec7044816f5c35e0b",
+    "plugins/model-selection/tests/capacity-ledger.spec.ts": "20425debe0d2ad20c153681f69fed6431bd09b079f0972838506abb5b4468ac2",
+    "plugins/model-selection/tests/card-accept-gate.spec.ts": "720a640cf5e7417134aa8c6bd162439ecfd27e6cf536fa44c33d46bc6be88e39",
+    "plugins/model-selection/tests/classify-call.spec.ts": "2b13b939db10b74a47949df75da6aa341c1b6f193de40c56a4849a33855e9365",
+    "plugins/model-selection/tests/classify.spec.ts": "271186956ff1449fabd3e8ed0f3bf3d9df542e1fd811cc9783f33ce5ec1905fa",
+    "plugins/model-selection/tests/context-evidence.spec.ts": "6e7c32798b0ceac6972e21e1153921aec83bb990b446ee16b445cda692290219",
+    "plugins/model-selection/tests/context-log-fixture.ts": "012f9b6db00c62f01e49d52a5dad33d2b9909440d89f029808cf3eeb269a1258",
+    "plugins/model-selection/tests/context-lookup.spec.ts": "ee24f3ed59fa91fbf5640e2692d5cfaa80d356cbe96bd4128799607b78b1af24",
+    "plugins/model-selection/tests/cost-attribution.spec.ts": "a8119b378b124e791c7138373b635ca3182c71a8958ffcf9ee3b42144c8b63fb",
+    "plugins/model-selection/tests/counts-only-guards.spec.ts": "a5775f413ae406d8452caee8dfe289ed563ceacbd67e41127ed0acb1934a5781",
+    "plugins/model-selection/tests/counts-only.spec.ts": "8febb143ef79ce9c155143164dfed4bcbf20fa1ff7cf6ae35e6aaf0c431a729e",
+    "plugins/model-selection/tests/effort.spec.ts": "396a0c15a3ef5d8b1571266ff292e63f15e690da3e6b6767e51d4138a74a71ae",
+    "plugins/model-selection/tests/fixture-scan-control/nested-out-of-plugin-read.spec.ts": "687ecabbf9222d0a70c47ae4e5af1f2691a983af12b7f626fedbffc3e2c62905",
+    "plugins/model-selection/tests/fixtures/tier_roster.snapshot.json": "b81b067fd42c34461a80c567217d9cb4d93cdb8bd601df11211a1640251085ef",
+    "plugins/model-selection/tests/hot-cache.spec.ts": "73729cb96077adcce328d09df5d5cc77662c1b16d3c2651fc2819ed2f9a66b8f",
+    "plugins/model-selection/tests/lane-evidence.spec.ts": "8d9285f0668985755e3bc027f4f5bc4cee4fe8141b2b08bb6014ec07c1ee9df7",
+    "plugins/model-selection/tests/lane-exhaustion-rehearsal.spec.ts": "d1d7115cf0c781c9039c51b6d576fa3d7d46f5477ee482a12f807f0e7fc3962e",
+    "plugins/model-selection/tests/live-lane-namespace.spec.ts": "8496c1adf3ce207e01202bacf0b99cf7b3b0d5449132f7b4a860d631f078ea8b",
+    "plugins/model-selection/tests/model-id.spec.ts": "d2b9ea0e19baf6aea8a4c6ac774ee8a1ad7c72d46d449f2b45416affd6ad5972",
+    "plugins/model-selection/tests/objective.spec.ts": "6e3d558e6f8efee5ed689180843024d3c5607672a0312af8e33e687c40a22dc6",
+    "plugins/model-selection/tests/pace-adverse-round2.spec.ts": "bd08010c9ab2fb036f96592d12f140688539e2c8b4ced1e62ec1ba4a4358fd75",
+    "plugins/model-selection/tests/poll.spec.ts": "0b69e60432b0e35e71ced3e9825ceb1cae5f136000b27f57e0b7ad7fa710cb2b",
+    "plugins/model-selection/tests/price-sync/diff.spec.ts": "072283c4ff22db6507bc9225d06f16025dd29d2b6e9293df70a716b8c91508e8",
+    "plugins/model-selection/tests/price-sync/fetch.spec.ts": "ee02d9299cb6016353e3f7a83821d287da0e12fe42c96db312ce5b306ef59012",
+    "plugins/model-selection/tests/price-sync/match.spec.ts": "74600b03633f765ed894580628ea8c20d1d63d5569548b73efa5bf661985feea",
+    "plugins/model-selection/tests/price-sync/parse.spec.ts": "2f5d1383c23ad0182c532c4a7944c7ba4f39a9b0416435e84caa01e86a892d00",
+    "plugins/model-selection/tests/profiles.spec.ts": "87f8ec5ff5c51cc128e4bd08e5e8d17a9819e928d6cff7006ac8d18010a82edb",
+    "plugins/model-selection/tests/run-resolve-helpers.ts": "32efeb6a34570b27521a0a3d169a792104ad756ae6b8a8cb3cf46eea33cf5cb3",
+    "plugins/model-selection/tests/same-price-family.spec.ts": "32ffb90498c8686f323ed7e3a8ca00cff139bf27daf9a428164578cf0c32787c",
+    "plugins/model-selection/tests/tier-outcomes.spec.ts": "7674e6992274eed7108dcc5dca06d053b4136518ee3afbc83ada799054360fc1",
+    "plugins/model-selection/tests/tier-policy/serving-evaluator-t1baseline.d.ts": "285b9719bf9e98cf90103e62fda1e85e209fc07a16a5ec2a6d7580e7eb05eb1d",
+    "plugins/model-selection/tests/tier-policy/serving-evaluator-t1baseline.js": "904b4bd73ea2463b783004a07733c5c87231b81f12116c1b883c31e845b70914",
+    "plugins/model-selection/tests/tier-policy/serving-evaluator-t1cap080.d.ts": "285b9719bf9e98cf90103e62fda1e85e209fc07a16a5ec2a6d7580e7eb05eb1d",
+    "plugins/model-selection/tests/tier-policy/serving-evaluator-t1cap080.js": "904b4bd73ea2463b783004a07733c5c87231b81f12116c1b883c31e845b70914",
+    "plugins/model-selection/tests/tier.spec.ts": "e569be300553aef40b2c6e85fc47c04a6102138becb961412f2a05a65df8c9b5",
+    "plugins/model-selection/tsconfig.json": "e3ec5ba9d0d74843256775108c5ea7106aeb0f0a09ac6505245c5bc24ce51a85",
+    "plugins/omniroute-broker/package.json": "c8b0b74015b569f38423e57609689cf9be2021049696552f2fa40531dddb2fc6",
+    "plugins/omniroute-broker/test/fixtures/mapping-plan.json": "5301b2a4653f980ffd1397ce9d99ee2a0d783f657b6dce264c3d304984b347da",
+    "predispatch-deploy-gate.sh": "1012110aa0045728db59f2548fdae2d1fec4f871b750f688971104ba31097c95",
+    "queue_liveness.sh": "85543b41a2d25ce03350382e24f4f68c81d1ed5ccc83dca157fa57b8f38f388b",
+    "quota_brake.sh": "ffbcb95b3cb6d5f2a11947c3eaf008ccd6a9c30e1213c4d664c956eda9418738",
+    "quota_burn_derive.py": "c77fc0f1f8ac516f7f4a40e06f0e9e563bfad3199a6f5e6f934a223321d6b2d0",
+    "rehearsal_authorized_preflight.sh": "e75c0202031d8c74898dfc2a79c767075c5f99f1d0b5574168d2d576159b3e9d",
+    "rehearsal_endpoint_preflight.sh": "cf02489fad8123b363dbb9d3d4d408adf940de4f67357b49dd3b5bad31c89f34",
+    "repro_case_b908b030_escape.sh": "f8e5e2118f48e8d094ed78d5177deab8869b0907b14d7c279e2edf8c9136a48d",
+    "scripts/discord_job_health.js": "2c255bb856e28f17201491179c11f635a25bf306ad6cf24c276aafbaeabae2cd",
+    "scripts/grant_attribution.js": "1de7292f5957b6923671cf38392934858419f14ea87e21b8fa094f0dcfa18401",
+    "scripts/install-ops-tooling-release.sh": "8f0351e84416ad1f87b9052912b21272d8b54cbc442690dee9b48d6467577e22",
+    "scripts/mapping-guard-calibration.mjs": "523b48e26c1f6bf3210dcc12e853dc92756c211a758a02b1a6606cbfc8c36b01",
+    "scripts/paperclip_run_path_guard.py": "1591fc32bb054cfb9f6dc6e5bf9bad131919a6c30c181bff756d0bd36ad18ee5",
+    "scripts/parked_backlog_guard.js": "2296fb606128d8b0d4bf39602ee2622a43b1f9666e7f62cbd33a762e13d4cab0",
+    "scripts/stale_descriptor_sweep.js": "bc8f593e3cd415b5a74b1c4dbc5c88ed0e6d90aa201669ad0cfdb4f74b8e77f3",
+    "scripts/storage_audit.sh": "777c4f7fbfc55172a3234c5bdbc62046e2b0ec7449a9c32f12ed8046b04a67a8",
+    "scripts/case_e20effbb-mapping-guard-calibration.mjs": "523b48e26c1f6bf3210dcc12e853dc92756c211a758a02b1a6606cbfc8c36b01",
+    "secret_exposure_audit.sh": "67cc775efb5619ff808a6bfe6ace6aded91113237d25635d8314b26e41771539",
+    "sibling_guard.sh": "93b14debe4cfb5fd7a059103a431cc87afbc36e66fa0705d0e4ba77cf3019874",
+    "skills.sh": "91f0c7f0180f0ec4a04193fcea6ebf1f58f7765554f2817dc4819301c51d5258",
+    "test/external-disclosure.test.mjs": "dac15e46b073cef74b3b8e13f34e4b24e55e91612c6aba450550d6c6a907470d",
+    "test/fixtures/gh_ci_status/RECORDED.md": "b7951de6c585400a35ef15613afa29f3f967c9b263b272a9c52e5b7f41a49544",
+    "test/fixtures/gh_ci_status/annotations-97325818136-realred.json": "285a842aa96c0fc331dfb946abd0e955e00d1948f091bbda37bd06dfd1f14b91",
+    "test/fixtures/gh_ci_status/annotations-97325826859-realred.json": "285a842aa96c0fc331dfb946abd0e955e00d1948f091bbda37bd06dfd1f14b91",
+    "test/fixtures/gh_ci_status/annotations-97651116017-nonstart-14s-batch.json": "bc936943b92ee5e0e5f4bf023ebab8df0a540f4fa0aea120dcb4e60ae904ad67",
+    "test/fixtures/gh_ci_status/annotations-97651116102-nonstart-14s-batch.json": "bc936943b92ee5e0e5f4bf023ebab8df0a540f4fa0aea120dcb4e60ae904ad67",
+    "test/fixtures/gh_ci_status/annotations-97651116158-nonstart-14s.json": "bc936943b92ee5e0e5f4bf023ebab8df0a540f4fa0aea120dcb4e60ae904ad67",
+    "test/fixtures/gh_ci_status/annotations-97651116183-nonstart-14s-batch.json": "bc936943b92ee5e0e5f4bf023ebab8df0a540f4fa0aea120dcb4e60ae904ad67",
+    "test/fixtures/gh_ci_status/annotations-97652743200-nonstart.json": "00ce3b9180b2374755f0971c6a41eda7a3d2fce07b9e9cfe587594799410345d",
+    "test/fixtures/gh_ci_status/annotations-97652743325-nonstart.json": "00ce3b9180b2374755f0971c6a41eda7a3d2fce07b9e9cfe587594799410345d",
+    "test/fixtures/gh_ci_status/annotations-97652743332-nonstart.json": "00ce3b9180b2374755f0971c6a41eda7a3d2fce07b9e9cfe587594799410345d",
+    "test/fixtures/gh_ci_status/annotations-97652743390-nonstart.json": "00ce3b9180b2374755f0971c6a41eda7a3d2fce07b9e9cfe587594799410345d",
+    "test/fixtures/gh_ci_status/annotations-97653688773-green-warning.json": "2e65be851d6483441f12dc591b28151335258251c3ccbd65a7e5e497ca62cfd5",
+    "test/fixtures/gh_ci_status/check-runs-24f0d30-green.json": "798eb8a7eba2f91e221458b9fbc68f9cac1c1427982a5f3cdba0f17a1e611c7c",
+    "test/fixtures/gh_ci_status/check-runs-4f2bea9-nonstart.json": "9635135d20bbe35e8443d1b19e234f4ebce9cd7de2b4ad34994d232836d6f634",
+    "test/fixtures/gh_ci_status/check-runs-4fd26c0-realred.json": "faba897a1c42dfce99aea332ce19594db5c5fd9549213694b618fc30b60bf00f",
+    "test/fixtures/gh_ci_status/check-runs-ae85924-nonstart-14s.json": "9ce59027af51d5339b9472916faee1b60d27c5d1dac8087c56feb09236eafc11",
+    "test/fixtures/liveness-reconciler-four-cases.json": "699d54c68e0e2eb2990a9b9cd9ee8577ae71d213a9cbea8a1e1b371239f9662d",
+    "test/fixtures/orgdb/org.sql": "6a7edb0f6b562ea12b8b238d73ef7a4f2c8a98f113c0fd96f136785f5f6bdf66",
+    "test/fixtures/orgdb/paperclipai": "66112d3662728227f8c1335e81053698d9b5edb8aadef7fd2b9d0f43e8c23458",
+    "test/fixtures/orgdb/reset.sh": "09b5a6248596ae02507c1d2089c812f3248ace5f77c021f8a9060bdbe84cd361",
+    "test/fixtures/orgdb/schema.sql": "b59c0a11c3a427dbd090d29290b3812c2b621c2641d051cbe86c12ee14bc0b12",
+    "test/fixtures/case_d2b472ea-four-cases.json": "699d54c68e0e2eb2990a9b9cd9ee8577ae71d213a9cbea8a1e1b371239f9662d",
+    "test/parked_backlog_guard_preservation.cjs": "525695fc728b9a3fdb98cc89269e5847bb284a8286e6902863c1446734ea897e",
+    "test_app_tree_guard.sh": "171bb761705c075ecf6985d56872bb07f3962cb1c90fcd6d69e204cf26bb63fc",
+    "test_approval_timeout_probe.sh": "4fedddf70d17bfabf5fc76ceb96f5e7ae5ca95eef62f0c042fba80eaa99c2484",
+    "test_auth_denial_discriminator.py": "96a03f82880ae524a8bba9bf19de9ecb901532edef5626860555927714151e69",
+    "test_blocked_audit.sh": "bb6a15e4ec91dd174948a8f0ea775648528f89026bbb2ebc148f776f992c5f0b",
+    "test_bootstrap_operating_model.sh": "aa7185467d5afae3237c71a07d114148643151b42d0556b911c7d216335df99a",
+    "test_breaker_cotenancy_probe.sh": "08ea402908aa0ceea97abf8093d4d1f8c3c1b95bd935c98ea6d5da737a6ebb4b",
+    "test_capability_gate.sh": "cf7548a457392c2ce41f6be424a3d29caad2a2bc4e710c1a7d655c81425e2223",
+    "test_capture_network_name_evidence.sh": "270b68e38b0dfc414c6f13046a3e9485ede198c8331ce055f88fa400dcb32c39",
+    "test_channel_drift.sh": "596d6d537d3b73b37a54b8342089ba681583ec7fd525b737fae4aec46a27484d",
+    "test_cold_start_detector.sh": "9a5b447fb66c3d822283005e6fa570499e0595cb3885cdeebf22fe82aa443974",
+    "test_credential_chain_audit.sh": "fef7398b0ff2ef3d45b1be944a7c2289ec6565de610f52bca6001db9ebf73907",
+    "test_credential_chain_pin_gate.sh": "d3259a3a01ae32c5048e0a4721319744f82c9fe15ce37c55e186765a645b4728",
+    "test_decision_notify.sh": "d8b53623c7170b09c3c48fa3d4a964b237f0329663017dceaba83c293716bb5c",
+    "test_discord_job_health_monitor.sh": "07cf698e3b6f84c78d03ceb998d16dddd0bfa221cbc83918de2daa660ee82904",
+    "test_gh_scope_residue_monitor.sh": "043d90ab2f916868b64ecae10a45b89d9fd86b175ddac98885dcf0d1ccab3533",
+    "test_gh_token_api_body.sh": "bdffa8b9c2b87ef411b7eb45f0d3a12786f909a0f0f0f8dc07cfef292e17ee10",
+    "test_gh_token_dispatch.sh": "4dcfdb0755aabb943243319185174737a2bbb0733b21370f22b2a2ab66c7c635",
+    "test_grant_attribution.sh": "e045b2f418870afdf8a7a325fbd15a3d1b4e9619c95bf1e86ab8d22a983e9804",
+    "test_interaction_envelope_lint.sh": "c756b1599733e2a9d888d6235035dd32031505da797ac17b68dbd4f34921a173",
+    "test_interaction_triage.sh": "c3594cdddbec4c15ad1fe17d4057ab651b742fd874cb4004dd4d8fcf748a24fa",
+    "test_leader_notify.sh": "8a54245a8dc50231a20260cbead9a1bae990e096e36c8d1a9994c397c1bce60e",
+    "test_liveness_reconciler.py": "258fafda58e2307510564a48ef87a6c50d480cb50e8034599c76a8522fece444",
+    "test_model_lane_probe.sh": "fdf69623e4baee2ccd0687df8d63bbc2223edf91f18b2de5eaa961345125e487",
+    "test_omniroute_rehearsal_translator.mjs": "f4e3ceb5a35bc8b193bfb624b149f8e6503d6389b0dcd849f54d03af2424a7e6",
+    "test_opencode_shared_budget_probe.sh": "fbe5a2e3fde4e5aed59e5c5caaa25c713028fd9587a1402a74c6d0fc1c990fbc",
+    "test_orgdb_fixture.sh": "9faf8aa5d9e3ced8252b5eece0b4797f870adb47ec9358251ebb4e1e5feecb77",
+    "test_pacing_verdict.py": "8dee827bd336b84676e24097d5999c4f67fa990c3f6192a712be51d440793084",
+    "test_paperclip_activation_gate.sh": "df1ee47ebf779733bd7d3da0ace0a54a03092c9e068ccae5ed2bea0227ca39f4",
+    "test_paperclip_run_path_guard.py": "b8f2b984b7f52d5e80718b92d8232f6aa829ce67b79e91112c18286853e74727",
+    "test_parked_backlog_guard.sh": "1dc898c0ecb2cb0b423ec6843ec82e7db8b8dd1ee63e0c544ed3e62b7a250e7a",
+    "test_plugin_manifest_gate.sh": "ea6aebd73667d5efc25ddabbc0bb15cafdcdd092db55a3298f4a82a147a23af9",
+    "test_provisioning_policy.sh": "4c17e05c0b641d6dc612de5f342c43c5d03f8a5d80e2d15a95fe1d1bfad17530",
+    "test_queue_liveness.sh": "15b525b1d411d4d10f1ccfbc7368120be14fbbb55c9ec24169546840d63ec143",
+    "test_quota_brake.sh": "691bf19cf4301a972ddbfc2481cc7806c5ce81222a28d4de335b0aa5306c11cc",
+    "test_quota_burn_derive.sh": "e72525dccf08aa382a3c30dd217cd475eb99c58a2c7e33f17d58a11fc6875b22",
+    "test_render_binding_normalization.sh": "c69bdb5104d90c449e7ece7e9137ef31e0def8fc4496ff7e84a48833df00748a",
+    "test_responsible_leader.sh": "7467fd1ede05afa043db6c977fcc3be4cf1a177f5c0ed2d72e83b61a6649cb27",
+    "test_secret_exposure_audit.sh": "399703e781a26a6c2555f16da37c9968c386eeb7b91f938bef53208db04601cc",
+    "test_sibling_guard.sh": "4cd01817407cec8a4ab78f0a890098a6c2521129133327fc7434191094ec3c62",
+    "test_stale_descriptor_sweep.sh": "0d8022b586bbb8300b7b72c6b8b3a7da13dcd01c259df2f49cad6341514ad2af",
+    "test_suite_preconditions.sh": "86f91b5ff13e906ca21c661df5282e445199dee0eb06b7a875e5a5ba47587259",
+    "test_case_1ba58d26_acceptance.py": "98140b4eea6b52ec15f02b0279fcda0a9ad15cb020f93e55e29b023d16866f7c",
+    "test_case_e20effbb_mapping_guard.mjs": "dc155e41ca63c588ef335c0430e05c8bab7d5a3ab04391d240ffd8e09502cbcc",
+    "test_case_8b8a8c87_predispatch_deploy_gate.sh": "5f658a8bbfc8eb83d88dce821bf7683b566c365c4008a0db2c317e3ac9651541",
+    "test_case_c88628c1_check9_symmetry.sh": "04946bb95247bac874532b8eb59a91481e9dc4e25f120afbc5bd8b823f968a2a",
+    "test_upstream_filing_readiness.sh": "aabfff1a9b4a0f2c6e96a3293ed7a961d50d5ae26f4afc16d7c83c8835743b1f",
+    "tests/fixtures/combo-mapping/catalogue.json": "430c0449acd831a9407ef8f4f8af26e760e392334715915935e8b0ac79f67dc8",
+    "tests/fixtures/combo-mapping/mapping-plan.json": "5301b2a4653f980ffd1397ce9d99ee2a0d783f657b6dce264c3d304984b347da",
+    "tests/fixtures/case_3531a34b/case_05be2d4e-combo-allowlist.txt": "ef7a03dd9ed84291ab91ae1eb0ac7c030a2374cfae4a01c870ab61c0e0fcd3de",
+    "tests/fixtures/case_3531a34b/case_05be2d4e-combo-specs.json": "4482dea6b8a2eeabdfffcdef1e7945a8de7893bf63497ed767476dbc54035724",
+    "tests/fixtures/case_3531a34b/case_05be2d4e-mapping-plan.json": "5301b2a4653f980ffd1397ce9d99ee2a0d783f657b6dce264c3d304984b347da",
+    "tests/fixtures/case_3531a34b/catalogue.json": "430c0449acd831a9407ef8f4f8af26e760e392334715915935e8b0ac79f67dc8",
+    "tests/fixtures/weekly-lanes-synthetic/claude-weekly-lanes.json": "c76b0175d07f1b9075dd0555525a793842a0b703f169cc6f81961ff3d466cc0d",
+    "tests/fixtures/weekly-lanes-synthetic/codex-weekly-lanes.json": "5a19e3f66a5decc3f7c41f40b58ff2f3f81f5f6941bd562532301c56d61ec070",
+    "tests/fixtures/weekly-lanes-synthetic/muse-weekly-lanes.json": "823585775f24b963d3d090bafa5b769d197c1c2ebc61559211645a259d264bf5",
+    "case_1ba58d26_acceptance.py": "de4e20efa1e535ca7b48e7811bb757c2d055df4afedced8fb1bb171cc44625ff",
+    "case_8b8a8c87_predispatch_deploy_gate.sh": "1012110aa0045728db59f2548fdae2d1fec4f871b750f688971104ba31097c95",
+    "tool_drift.sh": "24a9f063d273cb4b39990488289443a0c3a3d7e18858a7f0d5c61ebf9d114ea8",
+    "upstream_filing_readiness.sh": "f05e274aaf5a98861e015f6572b9472090a82f833e18d06700a50b110f986e3b",
+    "verification/auth-denial-mutation-gate.py": "d413e66270e945dbc6fbfd7f60de073c3d37c1bfc218a770ae0f2f98c220718e",
+    "verification/case_bb74e741-filing-gate-check5-mutants.sh": "293c8bd32760b8d50344997263df4fc73546f5c7c4fd53999dc513cba13f395c",
+    "verification/case_214ad18c-empty-gzip-residue-repro.mjs": "ee99a806f06575168facfdfe808d9f2dc20b40830738e0e6f4395d86c1166a25",
+    "verification/case_79b85f97-truncated-reasoning-502.sh": "52173d4d339a43d935c896574b126f8a24f8c2d26b16e3fb8fcd379dbbf6d7a7",
+    "verification/case_317e6404-mutation-gate.cjs": "bffb7f7983524081acae4f4f863f792a8cad6e2bceab81e1bf709bf7a5c92de5",
+    "verification/case_bb2ac7f4-mutation-gate.sh": "e51b7b821aa9159d6ae262736f4b5e825013fe61e0a3c99796eca06431bcb45f",
+    "verification/case_77bba75d-mutation-gate.sh": "9be48867df693da6bb1c05b50090711f35a846f809d24b03f63ec364d643e898",
+    "verification/case_5516df1c-monitor-mutation-gate.sh": "3465f0dccb82d2a2cb627955fd764d560ac15e8c9be525878039913c9dfa200b",
+    "verification/case_5516df1c-mutation-gate.sh": "1b255f396d794b663915d5eea6768e7179aed5d48b593d5eb96f1ed1afce00a1",
+    "verification/case_f17dd2a7-find-hash-collision.mjs": "7e375bb8855bfe68b52c0d38476c21c821b71c085e586658295d20eecf66494b",
+    "verification/case_9e76f76d-recorded-command.sh": "76247283046db49bd2b4e7d5eadb55de9dab7df952d3bdc5e0b8f60d19f43a96",
+    "verification/case_9e76f76d-recorded-command.txt": "f798863d7b4f07263c6e269ada7b9f6d0b0729da2ca77a9eec310d8e1fdba626",
+    "verification/case_28030601-mutation-gate.sh": "a9fb85724e6b8bed3b4cd79fb311660747199d3a5ff291d3a2a70e26a944efec",
+    "verification/case_46e26fa6-mutation-gate.sh": "ffca51399510081341c55d4867eb68a1227f3675f729f71d0aa31faa8789535d",
+    "verification/case_ce726d7b-mutation-gate.sh": "bc0a7581e3c721f06761aca7f42794f3b5779bd68f4ec0f27d84965d17e8df2a",
+    "verification/case_f909ca1f-mutation-gate.sh": "66f64b36e41affc0fe9791875bd7725450d9e60ab3ac063bcd2fc8e8f4a2bfe1",
+    "verification/case_c22b6545-mutation-gate.sh": "12720839464be617fb0a3343da3a97baf49fbb4d6e95b7c2d299dc952e862d4d",
+    "verification/upstream-bundle-filing-gate.sh": "a3fc430692b445eea53fa78a1d302a8148cf00f61fcd5f74d39dd166a72d99c1"
+  },
+  "workflow_defaults_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

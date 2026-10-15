@@ -1,0 +1,1 @@
+{"id":"00000000-0000-4000-8000-000000000064","enabled":true,"provider_name":"lxd_node7b1ff338","max_runners":3,"min_idle_runners":1,"instances":[{"name":"garm-a1","status":"running","runner_status":"idle"},{"name":"garm-a2","status":"running","runner_status":"running"}]}

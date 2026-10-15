@@ -1,0 +1,12 @@
+[Unit]
+Description=case_0ddff3ec controller /tmp disk alarm: 80% warn / 90% page to Gatus (read-only df, pushes two endpoints)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/paperclip/case_705a486a.env
+ExecStart=%h/paperclip-ops/ops/case_0ddff3ec/tmp-disk-alarm.sh
+TimeoutStartSec=3m
+NoNewPrivileges=true
+UMask=0077

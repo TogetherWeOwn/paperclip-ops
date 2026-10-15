@@ -1,0 +1,4 @@
+{
+  "name": "Change-gated CI",
+  "description": "Area-based CI with a ci-ok aggregator and full main/nightly runs. Pin the reusable workflow and replace placeholder jobs before adoption."
+}

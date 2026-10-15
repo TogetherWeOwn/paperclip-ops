@@ -1,0 +1,31 @@
+# balancer-silence fragment (case_e6def006; install case_f4b931e7).
+#
+# WIRING (operator, at deploy — not in this slice): append the
+# `external-endpoints:` entry below under `external-endpoints:` in
+# gatus-config.yaml (or !include the fragment if the Gatus version supports
+# it — verify with `gatus --validate` per OPERATOR.md §4). Pusher:
+# ops/case_658bf6b9/push-balancer-silence.sh every 5m via root cron (cron sources
+# the root-only env for GATUS_URL/GATUS_EXTERNAL_TOKEN plus the REAL host
+# LOG/STATE paths — see the ADDENDUM; a --user manager could not read it).
+#
+# DEDICATED KEY: platform_balancer-silence only. Never reuse a memory or
+# another monitor's key. Token is ${GATUS_EXTERNAL_TOKEN} (root-only env),
+# never a literal. Heartbeat 10m = 2x the 5m push period: a missed push
+# fails closed (UNKNOWN, never healthy). Alerts mirror the established
+# queue-age pair: Discord + custom (Akmatori), hourly reminder while the
+# breach holds (floor 5m, v5.37.0 watchdog), send-on-resolved closes the
+# incident on recovery (inherited from the default-alert above).
+
+external-endpoints:
+  - name: balancer-silence
+    group: platform
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "Fleet balancer log quiet (see balancer-silence-guard log)"
+        minimum-reminder-interval: 60m
+      - type: custom
+        description: "Fleet balancer log quiet (see balancer-silence-guard log)"
+        minimum-reminder-interval: 60m

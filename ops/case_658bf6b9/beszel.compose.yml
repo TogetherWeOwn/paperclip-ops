@@ -1,0 +1,28 @@
+# beszel.compose.yml — case_658bf6b9 phase-1 Beszel hub (pinned, localhost-only).
+#
+# Hub image pinned by digest (tag alone is mutable). Upstream quickstart
+# (https://beszel.dev/guide/getting-started) uses floating tags on all
+# interfaces; this pilot pins henrygd/beszel:0.20.0 and publishes
+# 127.0.0.1:8090 only.
+# Cloudflare Access sits in front; there is no public-anonymous route.
+#
+# Operator: copy to /opt/beszel/compose.yml, then `docker compose up -d`.
+# Verify the digest after pull:
+#   docker image inspect henrygd/beszel:0.20.0 --format '{{.RepoDigests}}'
+# must list henrygd/beszel@sha256:897e807a065adf8e89e30ae0cd79d1f5e38fe84ccaffbc418bde9d3cdca4eacc
+name: beszel
+
+services:
+  beszel:
+    image: henrygd/beszel:0.20.0@sha256:897e807a065adf8e89e30ae0cd79d1f5e38fe84ccaffbc418bde9d3cdca4eacc
+    container_name: beszel
+    restart: unless-stopped
+    environment:
+      APP_URL: http://127.0.0.1:8090
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - beszel_data:/beszel_data
+
+volumes:
+  beszel_data:

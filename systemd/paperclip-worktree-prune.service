@@ -1,0 +1,43 @@
+[Unit]
+Description=Prune idle worktrees of closed cards, bounded and capped (case_b1d141af)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+# Default the removal cap to the safe end: an unset or empty
+# PAPERCLIP_WORKTREE_PRUNE_MAX_REMOVE is read as 0 by the wrapper (observe-only),
+# and this line keeps the default visible. It sits above EnvironmentFile= so the
+# operator's env file takes precedence (EnvironmentFile= overrides Environment=
+# regardless of order).
+#
+# The env file carries the container name, the read-only API credential and the
+# removal CAP only. Whether a run may write is decided by run-worktree-prune.sh,
+# which passes --apply literally on argv -- no EnvironmentFile can supply that
+# bit. The sweep-auto drift was a unit labelled dry-run whose mode came from the
+# environment; here the mode bit lives in reviewed bundle bytes and the env file
+# can only turn the volume knob, never flip the mode. First live runs use cap 0
+# (decide and report, provably incapable of a removal); the operator raises the
+# cap after reading the report.
+Environment=PAPERCLIP_WORKTREE_PRUNE_MAX_REMOVE=0
+EnvironmentFile=/etc/paperclip/worktree-prune.env
+# The installer renders @SOURCE_REF@ from the independently reviewed 40-hex
+# commit and installs these bytes outside the mutable checkout.
+WorkingDirectory=/usr/local/libexec/paperclip-worktree-prune/@SOURCE_REF@
+ExecStartPre=/usr/bin/test -x /usr/local/libexec/paperclip-worktree-prune/@SOURCE_REF@/ops/case_b1d141af/run-worktree-prune.sh
+ExecStartPre=/usr/bin/test -x /usr/bin/timeout
+ExecStartPre=/usr/bin/test -x /usr/bin/podman
+ExecStartPre=/usr/bin/sha256sum --check --strict /usr/local/libexec/paperclip-worktree-prune/@SOURCE_REF@/SHA256SUMS
+# 25 min in-container bound (wrapper default 1500 s) < 27 min host timeout < 30 min unit bound.
+ExecStart=/usr/bin/timeout --signal=TERM --kill-after=15s 27m /usr/local/libexec/paperclip-worktree-prune/@SOURCE_REF@/ops/case_b1d141af/run-worktree-prune.sh
+TimeoutStartSec=30m
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The host writes nothing: all state (the dated report JSON) lives in the
+# container under <root>/data/worktree-prune, and the report summary goes to
+# stdout (the journal). The host only talks to the podman runtime.
+UMask=0077

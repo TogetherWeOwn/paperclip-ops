@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "probeId": "fixture-beta",
+  "hostname": "probe-beta.fixtures.example",
+  "allowedOrigins": ["https://probe-beta.fixtures.example"],
+  "collectionEnabled": true,
+  "content": {
+    "title": "Fixture Beta — coming soon",
+    "heading": "Fixture Beta — coming soon",
+    "body": "Fixture Beta is an early idea for a small developer helper, not an available product. Joining the list is not a purchase or a reservation.",
+    "draft": true
+  },
+  "paths": {
+    "privacy": "/privacy",
+    "changelog": "/changelog",
+    "health": "/health",
+    "signup": "/api/signup"
+  },
+  "privacy": {
+    "controller": "Fixture Test Controller (test data only, not a real business)",
+    "contact": "privacy-fixture@example.invalid",
+    "country": "Testland (test data only)",
+    "noticeVersion": "fixture-2026-10-03",
+    "approval": true,
+    "placeholder": false,
+    "notice": "Test-fixture notice only. We collect your email address with your consent to send updates about this probe. You may withdraw consent at any time; withdrawal deletes your address. We keep addresses for at most 90 days. We do not sell addresses or share them with third parties."
+  },
+  "changelog": [
+    {
+      "version": "0.2.0",
+      "date": "2026-10-03",
+      "notes": [
+        "Fixture Beta enabled a consented waitlist for isolated tests only.",
+        "No real product, price or launch date is offered."
+      ]
+    },
+    {
+      "version": "0.1.0",
+      "date": "2026-10-03",
+      "notes": ["Initial probe page."]
+    }
+  ],
+  "limits": {
+    "maxEmailLength": 254,
+    "maxSignups": 10000,
+    "signupWindowMs": 60000,
+    "maxSignupsPerWindow": 60,
+    "retentionDays": 90
+  },
+  "inbox": {
+    "enabled": true,
+    "address": "person-ee6485ee@example.invalid",
+    "maxRawBytes": 131072,
+    "maxSubjectChars": 200,
+    "maxTextChars": 2000,
+    "maxRecords": 1000,
+    "retentionDays": 90
+  }
+}

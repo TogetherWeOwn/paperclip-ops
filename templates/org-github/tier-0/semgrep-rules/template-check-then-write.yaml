@@ -1,0 +1,18 @@
+# TEMPLATE — disabled until a repo names its grant-write sinks (case_5789b2d5).
+#
+# The report asks for "no check-then-write on grants": a read that authorises
+# followed by a separate write that assumes the read still holds is a TOCTOU
+# hole; grants must be written atomically (conditional write, transaction,
+# single upsert). Like the authz template, this ships matching nothing —
+# `paths.include` is empty — because only the repo knows its grant sinks.
+# Copy, name the sinks, measure 20 PRs, then promote.
+rules:
+  - id: tier0-template-no-check-then-write-grants
+    languages: [javascript]
+    severity: WARNING
+    message: "TEMPLATE — possible check-then-write on a grant. Name the grant-write sinks to enable."
+    metadata:
+      tier0: "template-disabled"
+    # Matches nothing until a repo replaces this stub with its real
+    # grant-write sink shape. Valid config, zero findings by construction.
+    pattern: __tier0_template_name_your_grant_sink__(...)

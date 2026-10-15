@@ -1,0 +1,11 @@
+{
+  "description": "a 403 on the first read fails closed and stops reading that repo",
+  "now": "2026-10-04T12:00:00Z",
+  "repos": "o/r",
+  "expect": {"success": false, "verdict": "FAIL", "text_has": ["o/r main", "HTTP 403"], "call_count": 1},
+  "routes": {
+    "repos/o/r/commits/main/check-runs?per_page=100": {"rc": 1, "stderr": "gh: Resource not accessible by integration (HTTP 403)"},
+    "repos/o/r/pulls?state=open&sort=created&direction=desc&per_page=31": {"rc": 0, "body": [{"number":12,"state":"open","title":"change 12","head":{"ref":"b12","sha":"4b2f9c0e6a1d83754c9e0b2a6f1d8e3c7a5b9042"},"base":{"ref":"main"}}]},
+    "repos/o/r/commits/4b2f9c0e6a1d83754c9e0b2a6f1d8e3c7a5b9042/check-runs?per_page=100": {"rc": 0, "body": {"total_count": 0, "check_runs": []}}
+  }
+}

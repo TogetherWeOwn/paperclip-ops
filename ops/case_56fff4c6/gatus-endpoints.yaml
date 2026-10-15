@@ -1,0 +1,61 @@
+# ops/case_56fff4c6/gatus-endpoints.yaml — case_56fff4c6 monitoring-of-monitor.
+#
+# MERGE: append the entry below under the host Gatus config's
+# `external-endpoints:` list (see ops/case_658bf6b9/gatus-config.yaml for the
+# alerting providers it reuses: discord + the Akmatori Alertmanager feed).
+# The verdict arrives via probe-gatus.sh run OFF the status-page host on a
+# 5-minute cadence; a missed 10m heartbeat fails closed (UNKNOWN, never
+# healthy). Cron/workflow install is a separate CEO Operator card, same as
+# the case_658bf6b9 push scripts.
+#
+# WHAT IT COVERS (parent case_66436e78 item 7, monitoring of the monitor):
+# Gatus watches every endpoint and pushes every incident — but nothing
+# watches Gatus. If the Gatus container dies, all heartbeats go stale
+# silently and the status page cannot report its own death. This endpoint
+# is the independent liveness record for Gatus itself.
+#
+# FAIL-CLOSED, TWICE. (a) A failed probe pushes success=false, paging like
+# any other DOWN. (b) When Gatus itself is down no Gatus alert CAN fire, so
+# probe-gatus.sh additionally exits non-zero (the calling workflow goes red
+# where GitHub itself notifies) and POSTs a direct Discord notice when
+# DISCORD_HEARTBEAT_WEBHOOK_URL is configured, bypassing Gatus entirely.
+# The Gatus endpoint is the dashboard record; the exit code + direct notice
+# are the actual page. A missed heartbeat with no push at all reads stale =
+# DOWN, never healthy.
+#
+# OFF-HOST MEANS OFF-HOST. The probe must not run on node7b1ff338's status-page
+# stack: a dead host kills the probe with it and the page goes blind
+# together. CI runners (or a second host) are the correct bed — never the
+# machine Gatus runs on. STAGING-ONLY in this slice: the first live probe
+# targets the staging page; production paging waits for the phase-2 go.
+#
+# NO SECRETS: the probe URL and optional Cloudflare Access service token
+# are ${ENV} references resolved from the root-only 0600 env file on the
+# probing machine. The offline suite (test_case_df6ed188_monitoring_of_monitor.sh)
+# fails the build on any secret-shaped string or Bearer literal in this file.
+#
+# Push key derivation (same as case_658bf6b9): <group>_<name> with separators
+# mapped to '-': platform_gatus-heartbeat.
+# Push: POST /api/v1/endpoints/<key>/external?success=<bool>&error=<msg>
+# with Authorization: Bearer ${GATUS_EXTERNAL_TOKEN} (curl config file,
+# never argv — see ops/case_658bf6b9/_gatus_push.sh).
+#
+# THRESHOLD: the Gatus heartbeat interval is 10m (same as every other
+# cron-pushed external endpoint); the probe fires every 5m so one missed
+# tick does not page, two in a row do. Probe timeout 15s; page text carries
+# the probed URL host + HTTP result only, never tokens.
+#
+# OWNER: DevOps & Reliability Engineer (this card). RUNBOOK:
+# ops/case_56fff4c6/OPERATOR.md#gatus-heartbeat.
+
+external-endpoints:
+  - name: gatus-heartbeat
+    group: platform
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "Gatus itself unreachable off-host (see probe-gatus log). OWNER DevOps/Reliability. RUNBOOK ops/case_56fff4c6/OPERATOR.md#gatus-heartbeat"
+      - type: custom
+        description: "Gatus itself unreachable off-host (see probe-gatus log). OWNER DevOps/Reliability. RUNBOOK ops/case_56fff4c6/OPERATOR.md#gatus-heartbeat"

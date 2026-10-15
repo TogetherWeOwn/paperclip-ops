@@ -1,0 +1,14 @@
+[Unit]
+Description=case_0ddff3ec controller /tmp retention: orphaned pnpm store + run scratch + survey (runs inside the Paperclip container)
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/paperclip/case_705a486a.env
+# The script is streamed into the container: it needs no install there, and the
+# container sees only its own /tmp and process table, which is exactly the scope.
+StandardInput=file:%h/paperclip-ops/ops/case_5866fa6f/disk-retention-sweep.sh
+ExecStart=/usr/bin/docker exec -i -u node ${PAPERCLIP_CONTAINER} bash -s -- --tmp-only --apply
+TimeoutStartSec=15m
+NoNewPrivileges=true
+UMask=0077

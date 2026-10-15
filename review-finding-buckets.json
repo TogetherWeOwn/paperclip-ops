@@ -1,0 +1,16 @@
+{
+  "$schema": "review-finding-buckets/v1",
+  "description": "Bucket taxonomy for expensive-review findings (case_6bf2cca9 feedback loop). Every finding from an expensive (Tier-2) review is labelled with the bucket that should have caught it. A bucket seen 3+ times in 90 days becomes a Semgrep/lint rule or a Tier-1 prompt.",
+  "buckets": [
+    {"id": "tier0-semgrep", "catcher": "Tier-0 deterministic gate", "meaning": "A Semgrep/custom rule should have flagged it"},
+    {"id": "tier0-lint", "catcher": "Tier-0 deterministic gate", "meaning": "An existing linter/parser check should have flagged it"},
+    {"id": "tier0-tests", "catcher": "Tier-0 deterministic gate", "meaning": "A repo test (validators, authz matrix, EXPLAIN scan) should have failed"},
+    {"id": "tier1-docs-diff", "catcher": "Tier-1 cheap model", "meaning": "Docs-vs-diff check: a changed doc section is no longer true of the code"},
+    {"id": "tier1-ac-evidence", "catcher": "Tier-1 cheap model", "meaning": "Acceptance-criteria-to-evidence mapping gap (AC without symbol+test)"},
+    {"id": "tier1-claims-diff", "catcher": "Tier-1 cheap model", "meaning": "PR description claims-vs-diff mismatch"},
+    {"id": "security-boundary", "catcher": "Tier-2 expensive review", "meaning": "Correctly needed the expensive reviewer (authz/secrets/migrations/infra)"},
+    {"id": "size-complexity", "catcher": "Tier-2 expensive review", "meaning": "Correctly needed the expensive reviewer (large-diff emergent issue)"},
+    {"id": "other", "catcher": "triage", "meaning": "Does not fit above; triage decides the real bucket"}
+  ],
+  "promotion_rule": "A non-Tier-2 bucket (tier0-*, tier1-*) reaching 3 findings in 90 days must become a Semgrep/lint rule or a Tier-1 prompt update on the same card that reports it. Tier-2 buckets (security-boundary, size-complexity) confirm routing is working and need no promotion."
+}

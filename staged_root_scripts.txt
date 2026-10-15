@@ -1,0 +1,33 @@
+# Scripts staged outside this repo that an operator is asked to run AS ROOT.
+# case_965c83b3.
+#
+# Why this manifest exists.  case_965c83b3 is about agent-writable files in a
+# privileged execution path.  The remediation for case_965c83b3 was itself staged as
+# an agent-writable file in a privileged execution path -- measured 2026-08-24:
+#
+#   /paperclip/operator-handoff        root:root  1777
+#   .../case_965c83b3-apply.sh               node:node  0755   -- agent-OWNED
+#
+# and the operator was asked to `podman exec -u root` it.  The original finding
+# is agent -> agent escalation.  That handoff was agent -> root, which is worse
+# than the bug it was fixing.  Nobody attacked it; it just should never have
+# been the ask.
+#
+# The rule this encodes: a script an operator runs as root must have a
+# canonical copy in git, where changing it needs a reviewed PR, and the staged
+# copy is only ever a mirror to be checked against it.  git is the integrity
+# anchor, not the filesystem -- there is no directory in this container that
+# uid `node` cannot write, so no mode bit can stand in for the review.
+#
+# `credential_chain_audit.sh --staged` reads this file and reports DRIFT when a
+# mirror stops matching its source.  Detection, not prevention: an agent that
+# edits the mirror can edit this manifest too.  What it buys is that the swap
+# has to be loud, and the 2026-08-24 03:31 helper incident is the precedent for
+# why that is worth having -- the live credential helper was deleted and
+# replaced with an older build and nothing noticed for six minutes.
+#
+# Format:  <absolute staged path>  <repo-relative canonical source>
+# An entry whose staged path is absent is reported OK: a script that is not on
+# disk is not a script anyone can be tricked into running.
+
+/paperclip/operator-handoff/case_965c83b3-apply.sh	credential_chain_lockdown.sh

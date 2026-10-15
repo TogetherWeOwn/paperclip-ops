@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the transcript sidecar mode-drift audit every 6 hours at :23 (matches the retired routine's cadence)
+
+[Timer]
+OnCalendar=*-*-* 0/6:23:00
+RandomizedDelaySec=60s
+AccuracySec=30s
+Persistent=true
+Unit=paperclip-case_d376bf4e-transcript-mode-audit.service
+
+[Install]
+WantedBy=timers.target

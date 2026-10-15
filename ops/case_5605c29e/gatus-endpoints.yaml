@@ -1,0 +1,51 @@
+# ops/case_5605c29e/gatus-endpoints.yaml — case_5605c29e Keeper ingest freshness.
+#
+# MERGE: append the entry below under the host Gatus config's
+# `external-endpoints:` list (see ops/case_658bf6b9/gatus-config.yaml for the
+# alerting providers it reuses: discord + the Akmatori Alertmanager feed).
+# The value arrives via push-keeper-ingest.sh on cron; a missed 10m
+# heartbeat fails closed (UNKNOWN, never healthy). Cron install is a
+# separate CEO Operator card, same as the case_658bf6b9 push scripts.
+#
+# WHAT IT COVERS (parent case_66436e78 item 5, dependencies): Keeper
+# (cpa-usage-keeper) is the sole live queue consumer — when its ingest
+# stalls, usage rows stop landing in app.db and quota/usage views go
+# stale. The push script GETs the staging/test freshness surface, reads
+# the latest successful ingest timestamp, and pushes lag against the
+# warn/crit bounds below. Probe failure, missing timestamp, or stale
+# ingest all push DOWN (fail-closed).
+#
+# FAIL-CLOSED: a probe failure pages; a silent cron pages via the
+# heartbeat. There is no "assume healthy" path.
+#
+# READ-ONLY / NO SECRETS: the probe is one GET; it never writes Keeper.
+# Push messages carry lag seconds + the bound only — never payload rows,
+# never the URL, never a bearer. The freshness URL and optional bearer
+# are ${ENV} references resolved from the root-only 0600 env file on
+# the host. The offline suite (test_case_6b0b5439_keeper_ingest.sh) fails the
+# build on any secret-shaped string or Bearer literal in this file.
+#
+# Push key derivation (same as case_658bf6b9): <group>_<name> with separators
+# mapped to '-': keeper_ingest-freshness.
+# Push: POST /api/v1/endpoints/<key>/external?success=<bool>&error=<msg>
+# with Authorization: Bearer ${GATUS_EXTERNAL_TOKEN} (curl config file,
+# never argv — see ops/case_658bf6b9/_gatus_push.sh).
+#
+# THRESHOLDS (starting values, documented once here and in OPERATOR.md —
+# keep both in agreement): warn at 1800s (30m), crit at 3600s (60m).
+# Keeper ingests near-continuously while agents run, so 30m without a
+# successful ingest is early warning and 60m is page-worthy. The single
+# boolean endpoint pushes DOWN at warn so the page fires early; the
+# message escalates warning → critical.
+
+external-endpoints:
+  - name: ingest-freshness
+    group: keeper
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD ingest lag at/over warn 1800s (crit 3600s). OWNER on-call (case_a97273bd). RUNBOOK ops/case_5605c29e/OPERATOR.md#ingest-freshness"
+      - type: custom
+        description: "THRESHOLD ingest lag at/over warn 1800s (crit 3600s). OWNER on-call (case_a97273bd). RUNBOOK ops/case_5605c29e/OPERATOR.md#ingest-freshness"

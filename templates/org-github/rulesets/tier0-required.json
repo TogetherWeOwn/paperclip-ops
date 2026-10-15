@@ -1,0 +1,38 @@
+{
+  "_comment": "case_4784a03d stage 2: identical to tier0-report-only.json with enforcement ACTIVE. Apply no earlier than 24h after the evaluate ruleset lands, and only when no gate's false-positive rate over the last 20 PRs exceeds 5%. Same deliberate omission: Paperclip Review stays out of required checks (case_4a48e6a3).",
+  "name": "tier-0-quality-gate",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["refs/heads/main"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "required_status_checks": [
+          {
+            "context": "ci-ok",
+            "integration_id": 15368
+          }
+        ],
+        "strict_required_status_checks_policy": false
+      }
+    },
+    {
+      "type": "required_workflows",
+      "parameters": {
+        "workflows": [
+          {
+            "repository_id": "REPO_ID_OF_DOT_GITHUB",
+            "path": ".github/workflows/tier-0-quality-gate.yml",
+            "ref": "PINNED_SHA"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+# ops/case_66436e78/gatus-endpoints.yaml — case_66436e78 backup-freshness invariant
+#
+# MERGE: append the entry below under the host Gatus config's
+# `external-endpoints:` list (see ops/case_658bf6b9/gatus-config.yaml for the
+# alerting providers it reuses: discord + the Akmatori Alertmanager feed).
+# The value arrives via push-db-backup-freshness.sh on a */5 cron (sourcing
+# the root-only 0600 env file); a missed 10m heartbeat fails closed
+# (UNKNOWN, never healthy). Cron install is a separate CEO Operator card,
+# same as the case_658bf6b9 push scripts.
+#
+# The entry carries its threshold, its owner, and its runbook pointer in
+# the alert description, so the page itself says what breached and who owns
+# the next step. No secret lives here: the only variable is the shared
+# external token, resolved from the root-only 0600 env file on the host.
+#
+# Push key derivation (same as case_658bf6b9): <group>_<name> with separators
+# mapped to '-': paperclip_db-backup-freshness.
+
+external-endpoints:
+  - name: db-backup-freshness
+    group: paperclip
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "THRESHOLD newest usable archive older than 2h (MAX_BACKUP_AGE_HOURS) or unmeasurable. OWNER director. RUNBOOK docs/runbooks/database-backup-stall.md"
+      - type: custom
+        description: "THRESHOLD newest usable archive older than 2h (MAX_BACKUP_AGE_HOURS) or unmeasurable. OWNER director. RUNBOOK docs/runbooks/database-backup-stall.md"

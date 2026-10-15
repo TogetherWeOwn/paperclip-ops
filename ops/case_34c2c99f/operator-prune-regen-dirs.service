@@ -1,0 +1,7 @@
+[Unit]
+Description=Strip regenerable build output (node_modules/target/...) from finished Operator SSH run folders; never deletes sources
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/ubuntu/paperclip-enterprise-company/ops/worker-vps/prune-operator-regen-dirs.py --apply
+TimeoutStartSec=900

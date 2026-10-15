@@ -1,0 +1,60 @@
+{
+  "//": [
+    "case_d5cbfb18 tool_connection registration payload. Substitute MCP_HOSTNAME and",
+    "the secretId of the bearer, then create the connection with this config.",
+    "",
+    "THE ONE FIELD THAT SILENTLY VOIDS THE WHOLE EPIC",
+    "  config.headerPolicy.metadata.forward. The gateway derives its metadata",
+    "  headers from this list and THE DEFAULT IS THE EMPTY LIST. A connection",
+    "  registered the obvious way — url and nothing else, the Zapier pattern the",
+    "  issue points at — forwards NO x-paperclip-agent-id, with no error, no",
+    "  warning, and no degraded health status. The transport becomes silently",
+    "  anonymous, which is the exact failure the epic exists to prevent.",
+    "",
+    "  Our server fails closed on a missing agent header, so the failure is loud",
+    "  on the first tools/call rather than silent. That is a backstop, not a",
+    "  reason to omit this list.",
+    "",
+    "  It must sit under `config`, not `transport_config`. readHeaderPolicy",
+    "  checks config first and falls back to transportConfig; put it in config",
+    "  and do not rely on the fallback.",
+    "",
+    "NO SECRET IN THE URL",
+    "  The existing Octavo Foundry / Zapier row carries its auth token in",
+    "  plaintext in transport_config.url. That half of the pattern is",
+    "  deliberately NOT copied. The bearer is a Paperclip secret, injected as an",
+    "  Authorization header per call by resolveCredentialHeaders, and the suite",
+    "  upstream already asserts such a value never lands in activity, invocation",
+    "  or audit logs.",
+    "",
+    "VERSION SELECTOR",
+    "  Left unset, which resolves to `latest`. Do not pin it: a pinned",
+    "  versionSelector silently keeps serving the old value through a rotation,",
+    "  so a rotated-because-leaked bearer would go on working."
+  ],
+
+  "name": "Org provisioning request queue",
+  "description": "Submit and review approval-gated org provisioning requests. Identity is taken from the Paperclip tool gateway and is never a tool argument.",
+  "transport": "mcp_remote",
+
+  "config": {
+    "url": "https://MCP_HOSTNAME/mcp",
+    "headerPolicy": {
+      "metadata": {
+        "forward": ["agent_id", "company_id", "run_id", "correlation_id"]
+      }
+    }
+  },
+
+  "credentialRefs": [
+    {
+      "name": "org_request_mcp_bearer",
+      "secretId": "REPLACE_WITH_SECRET_ID",
+      "placement": "header",
+      "key": "authorization",
+      "prefix": "Bearer "
+    }
+  ],
+
+  "quarantineNewEntries": true
+}

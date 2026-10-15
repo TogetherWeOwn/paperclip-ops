@@ -1,0 +1,13 @@
+[Unit]
+Description=Reconcile CI_nodecf677d86_RUNNER with home-PC runner liveness every minute
+
+[Timer]
+OnBootSec=1m
+OnUnitActiveSec=60s
+RandomizedDelaySec=0
+AccuracySec=1s
+Persistent=false
+Unit=paperclip-ci-node93f4bccf-guard.service
+
+[Install]
+WantedBy=timers.target

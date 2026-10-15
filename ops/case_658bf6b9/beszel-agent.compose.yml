@@ -1,0 +1,35 @@
+# beszel-agent.compose.yml — case_658bf6b9 phase-1 per-host agent template.
+#
+# Agent image pinned by digest. KEY/TOKEN/HUB_URL come from the hub's
+# Add System dialog (or /settings/tokens) — the operator pastes them
+# host-side; they are never committed here.
+#
+# Operator: copy to the monitored host, fill in the three values, then
+#   docker compose up -d
+# Verify the digest after pull:
+#   docker image inspect henrygd/beszel-agent:0.20.0 --format '{{.RepoDigests}}'
+# must list henrygd/beszel-agent@sha256:765e3d4a087c4bcbf6b78ed0f1dfdcd669c4bf6ad5789a832d2944603ae7fd08
+name: beszel-agent
+
+# NOTE: `network_mode: host` is upstream's required agent mode (the agent
+# scrapes host /proc + the Docker socket); the agent LISTEN port therefore
+# binds all interfaces. This is accepted for phase 1 because the agent
+# speaks only the hub's authenticated protocol — but keep the host firewall
+# closed on it and never expose it beyond the monitored host itself.
+services:
+  beszel-agent:
+    image: henrygd/beszel-agent:0.20.0@sha256:765e3d4a087c4bcbf6b78ed0f1dfdcd669c4bf6ad5789a832d2944603ae7fd08
+    container_name: beszel-agent
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - beszel_agent_data:/var/lib/beszel-agent
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      LISTEN: 45876
+      KEY: "<public key from hub Add System>"
+      HUB_URL: "<hub url>"
+      TOKEN: "<token from hub Add System>"
+
+volumes:
+  beszel_agent_data:

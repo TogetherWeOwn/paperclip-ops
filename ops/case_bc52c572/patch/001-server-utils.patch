@@ -1,0 +1,127 @@
+diff --git a/packages/adapter-utils/src/server-utils.ts b/packages/adapter-utils/src/server-utils.ts
+index 08872e9..0d59e67 100644
+--- a/packages/adapter-utils/src/server-utils.ts
++++ b/packages/adapter-utils/src/server-utils.ts
+@@ -2,6 +2,7 @@ import type { ExecutionContinuationEnvelope } from "@paperclipai/shared";
+ import { spawn, type ChildProcess } from "node:child_process";
+ import { createHash, randomUUID } from "node:crypto";
+ import { constants as fsConstants, promises as fs, type Dirent } from "node:fs";
++import fsSync from "node:fs";
+ import os from "node:os";
+ import path from "node:path";
+ import { CONNECTION_INTENT_AGENT_GUIDANCE } from "@paperclipai/shared";
+@@ -1939,6 +1940,114 @@ export function stringifyPaperclipWakePayload(
+   return JSON.stringify(normalized);
+ }
+ 
++// E2BIG guard: Linux MAX_ARG_STRLEN is 128 KiB per env var. A 300 KiB card
++// context (issue + comments + executionContinuation) would kill spawn() at
++// execve. Relay via a file when the payload exceeds the threshold.
++export const PAPERCLIP_WAKE_PAYLOAD_ENV_THRESHOLD = 100_000;
++export const PAPERCLIP_WAKE_PAYLOAD_FILE_ENV = "PAPERCLIP_WAKE_PAYLOAD_FILE";
++export const PAPERCLIP_WAKE_PAYLOAD_JSON_ENV = "PAPERCLIP_WAKE_PAYLOAD_JSON";
++const PAPERCLIP_WAKE_PAYLOAD_FILE_NAME = "paperclip-wake.json";
++
++function resolvePaperclipWakePayloadFileDir(
++  env: Record<string, string>,
++): string {
++  for (const key of [
++    "PAPERCLIP_RUN_SCRATCH_DIR",
++    "PAPERCLIP_TASK_SCRATCH_DIR",
++    "PAPERCLIP_SCRATCH_DIR",
++    "PAPERCLIP_TMPDIR",
++    "TMPDIR",
++  ] as const) {
++    const v = env[key]?.trim();
++    if (v) return v;
++  }
++  return os.tmpdir();
++}
++
++/**
++ * Write the wake payload into `env` without exceeding the per-var execve
++ * limit. Small payloads stay in PAPERCLIP_WAKE_PAYLOAD_JSON for backward
++ * compatibility. Large payloads are written to a file and only a tiny
++ * placeholder remains in the env var; readers should use
++ * readPaperclipWakePayloadJsonFromEnv() / parsePaperclipWakePayloadFromEnv().
++ *
++ * Returns the full JSON string (or null if empty), regardless of relay.
++ */
++export function writePaperclipWakePayloadEnv(
++  env: Record<string, string>,
++  value: unknown,
++  options: { omitIssueDescription?: boolean } = {},
++): string | null {
++  const json = stringifyPaperclipWakePayload(value, options);
++  if (!json) {
++    delete env[PAPERCLIP_WAKE_PAYLOAD_FILE_ENV];
++    delete env[PAPERCLIP_WAKE_PAYLOAD_JSON_ENV];
++    return null;
++  }
++  if (Buffer.byteLength(json, "utf8") <= PAPERCLIP_WAKE_PAYLOAD_ENV_THRESHOLD) {
++    env[PAPERCLIP_WAKE_PAYLOAD_JSON_ENV] = json;
++    delete env[PAPERCLIP_WAKE_PAYLOAD_FILE_ENV];
++    return json;
++  }
++  const dir = resolvePaperclipWakePayloadFileDir(env);
++  const filePath = path.join(dir, PAPERCLIP_WAKE_PAYLOAD_FILE_NAME);
++  try {
++    fsSync.mkdirSync(dir, { recursive: true });
++    fsSync.writeFileSync(filePath, json, "utf8");
++    env[PAPERCLIP_WAKE_PAYLOAD_FILE_ENV] = filePath;
++    // Keep a tiny placeholder in the env var so `env` scanning / logging still
++    // sees the key without carrying 300 KiB into execve.
++    env[PAPERCLIP_WAKE_PAYLOAD_JSON_ENV] = JSON.stringify({
++      truncated: true,
++      fallbackFetchNeeded: true,
++      fileRelay: true,
++    });
++  } catch {
++    // If the file write fails, still avoid E2BIG — cap the env var to a
++    // truncated placeholder; the wake is recoverable via API fallback.
++    delete env[PAPERCLIP_WAKE_PAYLOAD_FILE_ENV];
++    env[PAPERCLIP_WAKE_PAYLOAD_JSON_ENV] = JSON.stringify({
++      truncated: true,
++      fallbackFetchNeeded: true,
++    });
++  }
++  return json;
++}
++
++export function readPaperclipWakePayloadJsonFromEnv(
++  env: Record<string, string> | NodeJS.ProcessEnv,
++): string | null {
++  const filePath =
++    typeof env[PAPERCLIP_WAKE_PAYLOAD_FILE_ENV] === "string"
++      ? (env[PAPERCLIP_WAKE_PAYLOAD_FILE_ENV] as string).trim()
++      : "";
++  if (filePath) {
++    try {
++      const data = fsSync.readFileSync(filePath, "utf8");
++      if (data.trim().length > 0) return data;
++    } catch {
++      // fall through to JSON env var
++    }
++  }
++  const json =
++    typeof env[PAPERCLIP_WAKE_PAYLOAD_JSON_ENV] === "string"
++      ? (env[PAPERCLIP_WAKE_PAYLOAD_JSON_ENV] as string).trim()
++      : "";
++  return json.length > 0 ? json : null;
++}
++
++export function parsePaperclipWakePayloadFromEnv(
++  env: Record<string, string> | NodeJS.ProcessEnv,
++): PaperclipWakePayload | null {
++  const json = readPaperclipWakePayloadJsonFromEnv(env);
++  if (!json) return null;
++  try {
++    return normalizePaperclipWakePayload(JSON.parse(json));
++  } catch {
++    return null;
++  }
++}
++
+ export function isPaperclipRecoveryWakePayload(value: unknown): boolean {
+   const normalized = normalizePaperclipWakePayload(value);
+   return Boolean(

@@ -1,0 +1,16 @@
+[Unit]
+Description=case_5bc31800 sweeper watchdog: read-only check of the session-secret-sweeper user unit (host-cron, findings-only, case_4ea7d92e)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/paperclip/case_d376bf4e.env
+WorkingDirectory=%h/paperclip-ops
+ExecStart=%h/paperclip-ops/ops/case_4ea7d92e/sweeper_watchdog_check.sh
+TimeoutStartSec=5m
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

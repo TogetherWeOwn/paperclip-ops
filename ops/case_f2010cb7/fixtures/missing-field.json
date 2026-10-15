@@ -1,0 +1,11 @@
+[
+  {
+    "name": "node7b1ff338",
+    "disk_used_percent": 42.5,
+    "inode_used_percent": 12.0,
+    "cpu_used_percent": 25.0,
+    "mem_used_percent": 60.0,
+    "load15_per_cpu": 0.8,
+    "container_restarts_24h": 0
+  }
+]

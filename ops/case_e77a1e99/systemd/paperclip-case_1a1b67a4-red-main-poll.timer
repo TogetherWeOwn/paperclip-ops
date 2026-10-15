@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll company-repo main branches every 15 minutes (matches the watchdog minutes-scale mandate)
+
+[Timer]
+OnCalendar=*:0,15,30,45
+RandomizedDelaySec=60s
+AccuracySec=30s
+Persistent=true
+Unit=paperclip-case_1a1b67a4-red-main-poll.service
+
+[Install]
+WantedBy=timers.target

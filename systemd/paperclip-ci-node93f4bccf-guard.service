@@ -1,0 +1,28 @@
+[Unit]
+Description=Route long ops-tooling mutation jobs to the owner home-PC runners while online (case_0bf02bac)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/paperclip/ci-node93f4bccf-guard.env
+Environment=CI_nodecf677d86_GUARD_SOURCE_REF=@SOURCE_REF@
+LoadCredentialEncrypted=ci-node93f4bccf-guard-gh-token:/etc/credstore.encrypted/ci-node93f4bccf-guard-gh-token
+WorkingDirectory=/usr/local/libexec/paperclip-ci-node93f4bccf-guard/@SOURCE_REF@
+ExecStartPre=/usr/bin/test -r /usr/local/libexec/paperclip-ci-node93f4bccf-guard/@SOURCE_REF@/ci_node93f4bccf_guard.py
+ExecStartPre=/usr/bin/test -x /usr/local/libexec/paperclip-ci-node93f4bccf-guard/@SOURCE_REF@/run-ci-node93f4bccf-guard.sh
+ExecStartPre=/usr/bin/test -x /usr/bin/python3
+ExecStartPre=/usr/bin/test -x /usr/bin/bash
+ExecStartPre=/usr/bin/test -x /usr/bin/flock
+ExecStartPre=/usr/bin/test -x /usr/bin/timeout
+ExecStartPre=/usr/bin/sha256sum --check --strict /usr/local/libexec/paperclip-ci-node93f4bccf-guard/@SOURCE_REF@/SHA256SUMS
+ExecStart=/usr/bin/flock -n /var/lib/paperclip/ci-node93f4bccf-guard/guard.lock /usr/bin/timeout --signal=TERM --kill-after=5s 45s /usr/bin/bash /usr/local/libexec/paperclip-ci-node93f4bccf-guard/@SOURCE_REF@/run-ci-node93f4bccf-guard.sh
+TimeoutStartSec=55s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/paperclip/ci-node93f4bccf-guard

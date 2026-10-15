@@ -1,0 +1,59 @@
+# Exact read-only commands for paperclip-host-reader on node7b1ff338 (case_81816394). Do not
+# replace these with command prefixes, wildcards, SETENV, a shell, or a
+# generic docker subcommand. The broker gets no Docker socket/group access; sudo
+# authorizes exactly five fixed reads: container logs, container state, one
+# image read (all three root-bound Docker), the observed-running-image
+# container read exercised by image_binding.py at install and every broker
+# start (root-bound Docker), and the CLIProxy unit read below (E3 of the CTO
+# topology-evidence decision, case_477bab93 rev 8a515f6a, ubuntu-bound --user).
+# broker.py re-reads the installed render at startup and refuses unless the
+# three Docker executor grants are present exactly once; the E3/installer gate
+# in test_host_ops_install.sh pins the other two. The retired
+# paperclip.service user-unit grant is gone: host operator verified 2026-10-05
+# that node7b1ff338 runs no such unit, so `docker inspect` is the state source.
+#
+# The image-reference placeholder on the docker line below is substituted by
+# install.sh from the canonical node7b1ff338 Docker pin (asserted by --paperclip-image-ref),
+# and must name the same image as paperclipImageRef in config.json; the broker
+# re-reads this installed file at startup and refuses if the two disagree.
+# Do not hand-edit either one: re-run
+# install.sh so both move together.
+#
+# The CLIProxy unit placeholder below is substituted by install.sh from its
+# required --cliproxy-unit argument. That name is host state captured by the
+# operator during the consolidated host window: pinned, never wildcarded,
+# invented or defaulted here. Exactly one such grant; no lifecycle verb
+# (restart/start/stop/enable/reload) against any unit may ever appear in this
+# allow-list (E2, enforced by the rendered-sudoers comparison and pinned by
+# the installer gate).
+#
+# The two are equal as image references but NOT byte-identical: sudoers treats a
+# colon as the run-as separator, so install.sh escapes every colon in the
+# rendered grant as "\:". Both a tag (name:tag) and a registry digest
+# (name@sha256:<64hex>) carry one, so an unescaped reference is a syntax error
+# that visudo rejects and the installer aborts on. config.json stores the plain
+# reference; broker.py unescapes this file before comparing them.
+Cmnd_Alias PAPERCLIP_LOGS_READ = \
+  /usr/bin/docker logs paperclip --tail 200 --since 15m --timestamps
+
+paperclip-host-reader ALL=(root) NOPASSWD: PAPERCLIP_LOGS_READ
+
+Cmnd_Alias PAPERCLIP_SERVICE_READ = \
+  /usr/bin/docker inspect paperclip --format {{json .State}}
+
+paperclip-host-reader ALL=(root) NOPASSWD: PAPERCLIP_SERVICE_READ
+
+Cmnd_Alias PAPERCLIP_IMAGE_READ = \
+  /usr/bin/docker image inspect @@PAPERCLIP_IMAGE_REF@@ --format {{json .}}
+
+paperclip-host-reader ALL=(root) NOPASSWD: PAPERCLIP_IMAGE_READ
+
+Cmnd_Alias PAPERCLIP_CONTAINER_READ = \
+  /usr/bin/docker container inspect paperclip --format {{.Image}}|{{.ImageDigest}}|{{.State.Running}}
+
+paperclip-host-reader ALL=(root) NOPASSWD: PAPERCLIP_CONTAINER_READ
+
+Cmnd_Alias PAPERCLIP_CLIPROXY_READ = \
+  /usr/bin/env XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/systemctl --user show @@PAPERCLIP_CLIPROXY_UNIT@@ --no-pager --property=ActiveState\,SubState\,MainPID
+
+paperclip-host-reader ALL=(ubuntu) NOPASSWD: PAPERCLIP_CLIPROXY_READ

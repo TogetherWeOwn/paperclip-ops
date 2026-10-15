@@ -1,0 +1,36 @@
+[Unit]
+Description=GitHub Actions runner (dedicated isolated UID)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@RUNNER_USER@
+Group=@RUNNER_USER@
+WorkingDirectory=@RUNNER_HOME@
+Environment=HOME=@USER_HOME@
+# GitHub custom services must start runsvc.sh, not run.sh.
+ExecStart=@RUNNER_HOME@/runsvc.sh
+Restart=always
+RestartSec=5s
+KillMode=control-group
+KillSignal=SIGINT
+TimeoutStopSec=2min
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+# DAC under a different UID is the primary boundary. Masks are defense in depth.
+InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/run/containerd
+ReadWritePaths=@RUNNER_HOME@ @USER_HOME@
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+
+[Install]
+WantedBy=multi-user.target

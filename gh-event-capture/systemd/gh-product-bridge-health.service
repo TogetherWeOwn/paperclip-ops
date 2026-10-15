@@ -1,0 +1,21 @@
+[Unit]
+Description=Independently check product bridge firing health
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/node %h/.local/lib/gh-product-bridge/current/gh-event-capture/src/runtime-cli.js watch %h/secure-drop/gh-product-bridge/runtime.json
+WorkingDirectory=%h/.local/lib/gh-product-bridge/current/gh-event-capture
+Environment="PATH=%h/secure-drop/gh-product-bridge/bin:/usr/local/bin:/usr/bin:/bin"
+UnsetEnvironment=PAPERCLIP_API_KEY PAPERCLIP_RUN_ID GH_TOKEN GITHUB_TOKEN NODE_OPTIONS NODE_PATH
+UMask=0077
+TimeoutStartSec=12s
+TimeoutStopSec=3s
+TimeoutStartFailureMode=terminate
+KillMode=control-group
+KillSignal=SIGTERM
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
+Restart=no
+NoNewPrivileges=yes
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,150 @@
+# sweep-auto node7b1ff338 pressure-gate repair candidate (case_0ce22efa).
+# Baseline: live host ops/paperclip/sweep-auto/sweep_auto.py
+# SHA256 bf32bd3277724b39aae03b6bc17714fa3c874099eeebf1024afbede2b589826c (56527 bytes, verified from host-source doc rev 6e8c129e)
+# Apply: verify the hash first (see ops/case_0ce22efa/README.md), then `patch -p1 --fuzz=0 < this file`.
+--- a/ops/paperclip/sweep-auto/sweep_auto.py
++++ b/ops/paperclip/sweep-auto/sweep_auto.py
+@@ -18,7 +18,9 @@
+ State:        ~/.local/state/paperclip-sweep-auto/state.json         (per-agent / per-card action history)
+ 
+ Hard limits per firing: <=3 agent resets, <=4 card releases, <=2 wake comments, <=20 pin clears, <=3 loop guards.
+-Aborts (log only): 1-min load > 12, /api/health slower than 10 s or not ok, DB helper failure, board key 401.
++Aborts (log only): node7b1ff338 pressure veto (CPU/IO some avg60 > 30, memory full avg60 > 5, load5 > 96,
++MemAvailable < 8 GiB, or unreadable telemetry), /api/health slower than 10 s or not ok, DB helper
++failure, board key 401.
+ 
+ Secrets: the CLIProxy key is read from ~/secure-drop/cliproxy.env at runtime and sent as an HTTP header
+ via urllib (never on a command line, never logged). The Paperclip board key stays inside .pc.curl (curl -K).
+@@ -62,7 +64,17 @@
+ REBLOCK_CHURN_24H = 3                   # >=3 recovery actions on one card in 24 h = churn -> ALERT, no action
+ ALERT_REASONS = {"reblock_churn", "release_limit_24h"}
+ MAX_PIN_PROBES_PER_FIRING = 5           # distinct unserved model ids probed per firing (45 s each worst case)
+-LOAD_ABORT = 12.0
++# node7b1ff338 host-pressure gate (case_0ce22efa). The retired single-host brake on 1-minute
++# load aborted a 32-thread / 125 GB controller that idles hot on load1 while PSI
++# shows no stall. Thresholds mirror ops/lib/host_pressure.py (CPU/IO some avg60,
++# memory full avg60, load5 backstop) and the MemAvailable floor from
++# recovery_writer.py; this file stays stdlib-only so the block is duplicated
++# here instead of imported. Load1 is logged for context and never a veto.
++node7525e5a1_CPU_SOME_MAX = 30.0
++node7525e5a1_IO_SOME_MAX = 30.0
++node7525e5a1_MEM_FULL_MAX = 5.0
++node7525e5a1_LOAD5_HARD_MAX = 96.0
++node7525e5a1_MIN_AVAILABLE_BYTES = 8 * 1024**3
+ HEALTH_ABORT_S = 10.0
+ PROBE_TIMEOUT_S = 45
+ RELEASE_MIN_AGE_MIN = 3                 # let the watchdog settle before we touch a fresh block
+@@ -259,6 +271,101 @@
+     with open("/proc/loadavg") as f:
+         return float(f.read().split()[0])
+ 
++# ----------------------------------------------------------------------------------------------------
++# node7b1ff338 host-pressure gate helpers (fail closed; stdlib only).
++# ----------------------------------------------------------------------------------------------------
++import math
++
++
++class PressureError(ValueError):
++    """Required host telemetry is missing or malformed (fail closed)."""
++
++
++def _psi_avg60(kind: str, row: str, text: str) -> float:
++    """Parse one PSI avg60 value; anything missing or malformed raises."""
++    if not isinstance(text, str):
++        raise PressureError(f"{kind} PSI is unreadable")
++    rows = [line.split() for line in text.splitlines() if line.startswith(f"{row} ")]
++    if len(rows) != 1:
++        raise PressureError(f"{kind} PSI {row} row is missing or duplicated")
++    fields: dict[str, str] = {}
++    for item in rows[0][1:]:
++        key, sep, value = item.partition("=")
++        if not sep or not key or not value or key in fields:
++            raise PressureError(f"{kind} PSI row is malformed")
++        fields[key] = value
++    if "avg60" not in fields:
++        raise PressureError(f"{kind} PSI avg60 is missing")
++    try:
++        value = float(fields["avg60"])
++    except ValueError as error:
++        raise PressureError(f"{kind} PSI avg60 is malformed") from error
++    if not 0.0 <= value <= 100.0:
++        raise PressureError(f"{kind} PSI avg60 is outside 0..100")
++    return value
++
++
++def _loadavg_triplet(text: str) -> tuple[float, float, float]:
++    """Parse (load1, load5, load15); NaN/negative/missing raises."""
++    if not isinstance(text, str):
++        raise PressureError("load averages are unreadable")
++    fields = text.split()
++    if len(fields) < 3:
++        raise PressureError("load averages are incomplete")
++    try:
++        loads = (float(fields[0]), float(fields[1]), float(fields[2]))
++    except ValueError as error:
++        raise PressureError("load averages are malformed") from error
++    if any(not math.isfinite(v) or v < 0 for v in loads):
++        raise PressureError("load averages are outside the valid range")
++    return loads
++
++
++def _mem_available_bytes(text: str) -> int:
++    """Parse MemAvailable kB; anything missing or malformed raises."""
++    if not isinstance(text, str):
++        raise PressureError("MemAvailable is unreadable")
++    rows = [line.split() for line in text.splitlines() if line.startswith("MemAvailable:")]
++    if len(rows) != 1 or len(rows[0]) != 3 or rows[0][2] != "kB":
++        raise PressureError("MemAvailable is missing or malformed")
++    digits = rows[0][1]
++    if not digits.isascii() or not digits.isdecimal():
++        raise PressureError("MemAvailable is missing or malformed")
++    return int(digits) * 1024
++
++
++def node7b1ff338_pressure_veto(read_text=None) -> str | None:
++    """Return None when the host has headroom, else the veto reason.
++
++    read_text(path) defaults to the live /proc file. Missing or malformed
++    telemetry returns a veto string (fail closed); load1 alone never vetoes.
++    """
++    def read(path: str) -> str:
++        if read_text is not None:
++            return read_text(path)
++        with open(path, encoding="ascii") as handle:
++            return handle.read()
++
++    try:
++        cpu = _psi_avg60("cpu", "some", read("/proc/pressure/cpu"))
++        io = _psi_avg60("io", "some", read("/proc/pressure/io"))
++        mem_full = _psi_avg60("memory", "full", read("/proc/pressure/memory"))
++        _load1, load5, _load15 = _loadavg_triplet(read("/proc/loadavg"))
++        available = _mem_available_bytes(read("/proc/meminfo"))
++    except (PressureError, OSError, UnicodeError) as error:
++        return f"host telemetry unreadable (fail closed): {error}"
++    if cpu > node7525e5a1_CPU_SOME_MAX:
++        return f"cpu some avg60 {cpu:.1f} > {node7525e5a1_CPU_SOME_MAX:.0f}"
++    if io > node7525e5a1_IO_SOME_MAX:
++        return f"io some avg60 {io:.1f} > {node7525e5a1_IO_SOME_MAX:.0f}"
++    if mem_full > node7525e5a1_MEM_FULL_MAX:
++        return f"memory full avg60 {mem_full:.1f} > {node7525e5a1_MEM_FULL_MAX:.0f}"
++    if load5 > node7525e5a1_LOAD5_HARD_MAX:
++        return f"load5 {load5:.1f} > {node7525e5a1_LOAD5_HARD_MAX:.0f}"
++    if available < node7525e5a1_MIN_AVAILABLE_BYTES:
++        return f"MemAvailable {available // 1024**2} MiB < {node7525e5a1_MIN_AVAILABLE_BYTES // 1024**3} GiB"
++    return None
++
+ 
+ def db(sql: str, params: dict | None = None, timeout_s: int = 90) -> list[dict]:
+     """Read-only psql via `docker exec -i paperclip-db` (same path as /tmp/autonomy-research/q.sh).
+@@ -1034,8 +1141,9 @@
+         prev = parse_ts(s.state.get("last_firing_at"))
+         if prev and (now_utc() - prev).total_seconds() > FIRING_GAP_ALERT_MIN * 60:
+             s.alert("timer", f"previous firing was {int((now_utc() - prev).total_seconds() // 60)} min ago (>{FIRING_GAP_ALERT_MIN}) -- timer or host gap")
+-        if s.load > LOAD_ABORT:
+-            raise Abort(f"load1 {s.load:.1f} > {LOAD_ABORT}")
++        veto = node7b1ff338_pressure_veto()
++        if veto is not None:
++            raise Abort(f"host pressure veto: {veto} (load1 {s.load:.1f})")
+         t0 = time.monotonic()
+         code, body = api_json("GET", "/api/health", timeout=int(HEALTH_ABORT_S) + 2)
+         s.health_ms = int((time.monotonic() - t0) * 1000)

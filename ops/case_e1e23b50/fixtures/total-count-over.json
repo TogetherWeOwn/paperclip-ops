@@ -1,0 +1,17 @@
+{
+  "description": "total_count above what came back means unseen runs: fail closed",
+  "now": "2026-10-04T12:00:00Z",
+  "repos": "o/r",
+  "expect": {"success": false, "verdict": "FAIL", "text_has": ["page full", "3 of 140"]},
+  "routes": {
+    "repos/o/r/commits/main/check-runs?per_page=100": {"rc": 0, "body": {"total_count": 1, "check_runs": [
+        {"id":900,"name":"Offline suites","node_id":"CR_900","head_sha":"9d1c4e7a2b6f0835c4d1e9a7b3f2068c5e4d7a10","external_id":"905","status":"completed","conclusion":"success","started_at":"2026-10-04T10:30:00Z","completed_at":"2026-10-04T10:50:00Z","url":"https://api.github.com/repos/o/r/check-runs/900","html_url":"https://github.com/o/r/runs/900","details_url":"https://github.com/o/r/actions/runs/899/job/900","output":{"title":null,"summary":null,"text":null,"annotations_count":0},"check_suite":{"id":898},"app":{"id":15368,"slug":"github-actions"},"pull_requests":[]}
+      ]}},
+    "repos/o/r/pulls?state=open&sort=created&direction=desc&per_page=31": {"rc": 0, "body": [{"number":12,"state":"open","title":"change 12","head":{"ref":"b12","sha":"4b2f9c0e6a1d83754c9e0b2a6f1d8e3c7a5b9042"},"base":{"ref":"main"}}]},
+    "repos/o/r/commits/4b2f9c0e6a1d83754c9e0b2a6f1d8e3c7a5b9042/check-runs?per_page=100": {"rc": 0, "body": {"total_count": 140, "check_runs": [
+        {"id":1131,"name":"Operator runbook gates","node_id":"CR_1131","head_sha":"4b2f9c0e6a1d83754c9e0b2a6f1d8e3c7a5b9042","external_id":"1136","status":"completed","conclusion":"success","started_at":"2026-10-04T11:10:00Z","completed_at":"2026-10-04T11:11:00Z","url":"https://api.github.com/repos/o/r/check-runs/1131","html_url":"https://github.com/o/r/runs/1131","details_url":"https://github.com/o/r/actions/runs/1130/job/1131","output":{"title":null,"summary":null,"text":null,"annotations_count":0},"check_suite":{"id":1129},"app":{"id":15368,"slug":"github-actions"},"pull_requests":[]},
+        {"id":1132,"name":"Operator runbook gates","node_id":"CR_1132","head_sha":"4b2f9c0e6a1d83754c9e0b2a6f1d8e3c7a5b9042","external_id":"1137","status":"completed","conclusion":"success","started_at":"2026-10-04T11:10:00Z","completed_at":"2026-10-04T11:11:00Z","url":"https://api.github.com/repos/o/r/check-runs/1132","html_url":"https://github.com/o/r/runs/1132","details_url":"https://github.com/o/r/actions/runs/1131/job/1132","output":{"title":null,"summary":null,"text":null,"annotations_count":0},"check_suite":{"id":1130},"app":{"id":15368,"slug":"github-actions"},"pull_requests":[]},
+        {"id":1133,"name":"Operator runbook gates","node_id":"CR_1133","head_sha":"4b2f9c0e6a1d83754c9e0b2a6f1d8e3c7a5b9042","external_id":"1138","status":"completed","conclusion":"success","started_at":"2026-10-04T11:10:00Z","completed_at":"2026-10-04T11:11:00Z","url":"https://api.github.com/repos/o/r/check-runs/1133","html_url":"https://github.com/o/r/runs/1133","details_url":"https://github.com/o/r/actions/runs/1132/job/1133","output":{"title":null,"summary":null,"text":null,"annotations_count":0},"check_suite":{"id":1131},"app":{"id":15368,"slug":"github-actions"},"pull_requests":[]}
+      ]}}
+  }
+}

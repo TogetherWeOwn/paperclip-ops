@@ -1,0 +1,268 @@
+# akmatori.compose.yml — case_658bf6b9 phase-1 pilot artifact (vendored, pinned).
+#
+# Vendored from upstream akmatori/akmatori tag v0.3.0 on 2026-09-28; ONLY the
+# following pilot changes were applied (everything else is byte-identical):
+#   1. Every image line carries its registry digest (tag alone is mutable).
+#      Upstream tags used an unpinned version variable defaulting to a
+#      floating tag — replaced with the published 0.3.0 digests below.
+#   2. The proxy publishes 127.0.0.1:${HTTP_PORT:-3000}:80 (localhost-only;
+#      upstream was "${HTTP_PORT:-8080}:80" on all interfaces and collided
+#      with the Gatus port). Cloudflare Access sits in front; there is no
+#      public-anonymous route.
+# Operator runs this file from /opt/akmatori (relative ./akmatori_data,
+# ./proxy paths resolve there). Phase 1 configures exactly one SSH host
+# (node7b1ff338) via the OPERATOR.md §5.3 restricted key — investigation is
+# read-only under that forced command; more hosts wait for the phase-2 go
+# decision. No fix proposal is approved during the pilot.
+#
+# Pinned digests (verify with: docker image inspect <img> --format '{{.RepoDigests}}'):
+#   ghcr.io/akmatori/api:0.3.0         sha256:255b7661d56e32ce7e478afd12d950a2f38eaa21f622c6f5ac14c4d1fdeb4acf
+#   ghcr.io/akmatori/mcp-gateway:0.3.0 sha256:89d2cb1a304a7bf250df18c6e247597093de240539c6a09a53e8e495f43fe37f
+#   ghcr.io/akmatori/agent:0.3.0       sha256:07c43437ade4cc68021289120fbb25045bb9431a51c8acf85926d1b38131cb04
+#   ghcr.io/akmatori/frontend:0.3.0    sha256:30cb5bcda533eda26030d8b8f9a564a5f980cb93000b624ee903a710f618b106
+#   postgres:16-alpine                 sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+#   alpine:3.19                        sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1
+#   nginx:alpine                       sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
+#
+# --- vendored upstream below (akmatori/akmatori v0.3.0 docker-compose.yml) ---
+# Secure Container Architecture
+# =============================
+# Network Isolation:
+# - frontend: nginx, frontend (external access)
+# - api-internal: API <-> DB, MCP Gateway <-> DB, API <-> Agent (WebSocket)
+# - codex-network: Agent <-> MCP Gateway ONLY (internal)
+#
+# Security:
+# - Agent container has NO database access
+# - Agent container has NO direct secrets
+# - Tool credentials fetched by MCP Gateway at execution time
+#
+# First-Run Setup:
+# - POSTGRES_PASSWORD is auto-generated to a file if not set
+# - ADMIN_PASSWORD is set via the web UI on first access (setup wizard)
+# - JWT_SECRET is auto-generated and stored in the database
+
+# Pin the Compose project name so resource names are stable regardless of the
+# install directory name (Compose v2 otherwise derives the project name from
+# the working directory).
+name: akmatori
+
+services:
+  # Init service to create data directories with correct permissions
+  # Also auto-generates a postgres password if one doesn't exist yet
+  init-dirs:
+    image: alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1
+    container_name: akmatori-init
+    user: root
+    volumes:
+      - ./akmatori_data:/akmatori
+    command: >
+      sh -c "
+        mkdir -p /akmatori/incidents /akmatori/context /akmatori/skills /akmatori/runbooks /akmatori/memory /akmatori/agents /akmatori/extensions /akmatori/secrets &&
+        if [ ! -f /akmatori/secrets/postgres_password ]; then
+          head -c 32 /dev/urandom | base64 | tr -d '=/+' | head -c 32 > /akmatori/secrets/postgres_password;
+          echo 'Generated new PostgreSQL password';
+        fi &&
+        chmod 644 /akmatori/secrets/postgres_password &&
+        chown -R 1000:1000 /akmatori &&
+        chmod -R g+rwX,o+rwX /akmatori/memory &&
+        echo 'Data directories initialized with correct permissions'
+      "
+    restart: "no"
+
+  postgres:
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    container_name: akmatori-postgres
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "500m"
+        max-file: "3"
+    networks:
+      - api-internal
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-akmatori}
+      - POSTGRES_USER=${POSTGRES_USER:-akmatori}
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./akmatori_data/secrets/postgres_password:/run/secrets/postgres_password:ro
+    depends_on:
+      init-dirs:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-akmatori}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  akmatori-api:
+    image: ghcr.io/akmatori/api:0.3.0@sha256:255b7661d56e32ce7e478afd12d950a2f38eaa21f622c6f5ac14c4d1fdeb4acf
+    container_name: akmatori-api
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "500m"
+        max-file: "3"
+    networks:
+      - frontend
+      - api-internal
+    depends_on:
+      init-dirs:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-akmatori}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=${POSTGRES_DB:-akmatori}
+      - POSTGRES_PASSWORD_FILE=/akmatori/secrets/postgres_password
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - JWT_SECRET=${JWT_SECRET:-}
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-postgres,akmatori-api,mcp-gateway,akmatori-agent,frontend,localhost,127.0.0.1}
+      - http_proxy=${http_proxy:-}
+      - https_proxy=${https_proxy:-}
+      - no_proxy=${no_proxy:-postgres,akmatori-api,mcp-gateway,akmatori-agent,frontend,localhost,127.0.0.1}
+    volumes:
+      - ./akmatori_data:/akmatori
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--proxy=off", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  mcp-gateway:
+    image: ghcr.io/akmatori/mcp-gateway:0.3.0@sha256:89d2cb1a304a7bf250df18c6e247597093de240539c6a09a53e8e495f43fe37f
+    container_name: akmatori-mcp-gateway
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "500m"
+        max-file: "3"
+    networks:
+      - frontend        # For external access (SSH to remote servers, Zabbix API)
+      - api-internal    # For database access
+      - codex-network   # For MCP calls from Codex
+    depends_on:
+      init-dirs:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-akmatori}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=${POSTGRES_DB:-akmatori}
+      - POSTGRES_PASSWORD_FILE=/akmatori/secrets/postgres_password
+      - PORT=8080
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-postgres,akmatori-api,mcp-gateway,akmatori-agent,frontend,localhost,127.0.0.1}
+      - http_proxy=${http_proxy:-}
+      - https_proxy=${https_proxy:-}
+      - no_proxy=${no_proxy:-postgres,akmatori-api,mcp-gateway,akmatori-agent,frontend,localhost,127.0.0.1}
+    volumes:
+      - ./akmatori_data/secrets:/akmatori/secrets:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--proxy=off", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  akmatori-agent:
+    image: ghcr.io/akmatori/agent:0.3.0@sha256:07c43437ade4cc68021289120fbb25045bb9431a51c8acf85926d1b38131cb04
+    container_name: akmatori-agent
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "500m"
+        max-file: "3"
+    networks:
+      - frontend        # For external access (LLM API calls)
+      - api-internal    # For WebSocket to API
+      - codex-network   # For MCP calls to gateway
+    depends_on:
+      - akmatori-api
+      - mcp-gateway
+    environment:
+      - API_WS_URL=ws://akmatori-api:3000/ws/agent
+      - MCP_GATEWAY_URL=http://mcp-gateway:8080
+      - WORKSPACE_DIR=/workspaces
+      - SKILLS_DIR=/akmatori/skills
+      - PI_CACHE_RETENTION=long  # Extended prompt caching: 1hr Anthropic, 24hr OpenAI
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-postgres,akmatori-api,mcp-gateway,akmatori-agent,frontend,localhost,127.0.0.1}
+      - http_proxy=${http_proxy:-}
+      - https_proxy=${https_proxy:-}
+      - no_proxy=${no_proxy:-postgres,akmatori-api,mcp-gateway,akmatori-agent,frontend,localhost,127.0.0.1}
+    volumes:
+      - agent_sessions:/home/agent/.pi               # Persistent session data
+      - ./akmatori_data/incidents:/workspaces:rw      # ONLY incidents - no access to skills/tools source
+      - ./akmatori_data/context:/akmatori/context:ro  # Shared context files (read-only)
+      - ./akmatori_data/skills:/akmatori/skills:ro    # Skill definitions for pi-mono resource loader
+      - ./akmatori_data/runbooks:/akmatori/runbooks:ro  # Runbook SOPs scoped to runbook-searcher subagent
+      - ./akmatori_data/memory:/akmatori/memory:rw      # Cross-incident memory (memory-writer subagent edits in place; init-dirs widens perms to o+rwX so UID 1001 can write)
+      - ./akmatori_data/agents:/home/agent/.pi/agent/agents:ro       # Subagent definitions (runbook-searcher, memory-searcher, memory-writer)
+      - ./akmatori_data/extensions:/home/agent/.pi/agent/extensions:ro  # Operator-supplied pi extensions (baked pi-subagents lives at /opt/pi-extensions and is loaded via additionalExtensionPaths)
+    healthcheck:
+      test: ["CMD", "pgrep", "node"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    # NO database access
+    # LLM API keys passed via WebSocket from API
+    # Agent runs as UID 1001, can read API files (UID 1000) but not modify them
+
+  frontend:
+    image: ghcr.io/akmatori/frontend:0.3.0@sha256:30cb5bcda533eda26030d8b8f9a564a5f980cb93000b624ee903a710f618b106
+    container_name: akmatori-frontend
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "500m"
+        max-file: "3"
+    networks:
+      - frontend
+    depends_on:
+      - akmatori-api
+
+  proxy:
+    image: nginx:alpine@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
+    container_name: akmatori-proxy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "500m"
+        max-file: "3"
+    networks:
+      - frontend
+    depends_on:
+      - frontend
+      - akmatori-api
+    ports:
+      - "127.0.0.1:${HTTP_PORT:-3000}:80"
+    volumes:
+      - ./proxy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+networks:
+  frontend:
+    driver: bridge
+  api-internal:
+    driver: bridge
+    internal: true
+  codex-network:
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres_data:
+  akmatori_data:
+  agent_sessions:

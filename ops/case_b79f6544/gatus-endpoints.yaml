@@ -1,0 +1,42 @@
+# ops/case_b79f6544/gatus-endpoints.yaml — case_b79f6544
+#
+# MERGE: append the entry below under the host Gatus config's
+# `external-endpoints:` list (see ops/case_658bf6b9/gatus-config.yaml for the
+# alerting providers it reuses: discord + the Akmatori Alertmanager feed).
+# The value arrives via push-fleet-run-stall.sh on cron; a missed 10m
+# heartbeat fails closed (UNKNOWN, never healthy). Cron install is a separate
+# Operator card, same as the case_658bf6b9 and case_654dd2ec push scripts.
+#
+# WHAT IT PAGES ON: no heartbeat_runs row created or started for 20 minutes
+# while at least one todo/in_progress card has an invokable agent assignee
+# (ops/case_b79f6544/fleet_run_stall.sql). It reads the database from the host,
+# so it still fires when no agent can run. On 2026-10-08 the fleet created or
+# started no run from 18:02Z to 21:11Z while the control plane was up.
+#
+# PAGE TARGETS: the Discord post is the page for DevOps and the CEO digest
+# line; the custom (Akmatori) alert opens the read-only investigation.
+# failure-threshold 2: the SQL already waits 20 minutes, so two consecutive
+# 5-minute pushes (about 30 minutes from the last run) confirm the stall and a
+# single odd read cannot page. The default of 3 would add another 5 minutes.
+#
+# Push key: <group>_<name> with separators mapped to '-':
+# paperclip_fleet-run-stall. No secret lives here: the only variable is the
+# shared external token, resolved from the root-only 0600 env file.
+
+external-endpoints:
+  - name: fleet-run-stall
+    group: paperclip
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        failure-threshold: 2
+        success-threshold: 2
+        send-on-resolved: true
+        description: "THRESHOLD no heartbeat_runs row created or started for 20m while assigned todo/in_progress cards wait. OWNER devops; CEO digest. RUNBOOK ops/case_b79f6544/OPERATOR.md#fleet-run-stall"
+      - type: custom
+        failure-threshold: 2
+        success-threshold: 2
+        send-on-resolved: true
+        description: "THRESHOLD no heartbeat_runs row created or started for 20m while assigned todo/in_progress cards wait. OWNER devops; CEO digest. RUNBOOK ops/case_b79f6544/OPERATOR.md#fleet-run-stall"

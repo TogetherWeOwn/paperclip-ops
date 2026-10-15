@@ -1,0 +1,7 @@
+{
+  "description": "org runner list answers 403 (host credential lacks the self-hosted runners read permission); no queued demand, so an 'empty census' would read green",
+  "now": "2026-10-04T12:00:00Z",
+  "runners_http": 403,
+  "queued": [
+  ]
+}

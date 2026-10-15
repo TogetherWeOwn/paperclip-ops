@@ -1,0 +1,13 @@
+{
+  "description": "no runner carries two-isolated at all; a job asking for it has waited 30m",
+  "now": "2026-10-04T12:00:00Z",
+  "runners_pages": [
+    {"total_count": 2, "runners": [
+      {"id":1,"name":"node7b1ff338-docker-1","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-selfhosted","type":"custom"}]},
+      {"id":2,"name":"node7b1ff338-docker-2","os":"Linux","status":"online","busy":false,"labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"Linux","type":"read-only"},{"id":3,"name":"X64","type":"read-only"},{"id":4,"name":"two-selfhosted","type":"custom"}]}
+    ]}
+  ],
+  "queued": [
+    {"name":"Offline suites","status":"queued","created_at":"2026-10-04T11:30:00Z","labels":["self-hosted","two-isolated"]}
+  ]
+}

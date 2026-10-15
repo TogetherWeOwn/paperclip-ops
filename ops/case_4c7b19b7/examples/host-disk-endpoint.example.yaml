@@ -1,0 +1,27 @@
+# host-disk-endpoint.example.yaml — case_4c7b19b7 D8 Gatus fragment.
+#
+# OPERATOR: append this block under `external-endpoints:` in
+# ops/case_658bf6b9/gatus-config.yaml (it extends the pushed-endpoint series
+# `platform_discord-bot ... platform_garm-pool`; see the key-derivation
+# comment there), then `gatus --validate` per OPERATOR.md §4.
+# Every secret stays a ${VAR} reference resolved from the root-only 0600
+# env file — nothing secret is committed here.
+#
+# Pushed by ops/case_4c7b19b7/push-host-disk.sh (cron */5, operator-installed):
+# POST /api/v1/endpoints/platform_host-disk/external?success=<bool>&error=<msg>
+# with Authorization: Bearer ${GATUS_EXTERNAL_TOKEN}.
+# success=true when no local filesystem breaches warn (85%); success=false
+# naming the worst breacher otherwise. A missed 10m heartbeat fails closed
+# (UNKNOWN, never healthy).
+
+external-endpoints:
+  - name: host-disk
+    group: platform
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "CI host disk at or above warn threshold (see push-host-disk log)"
+      - type: custom
+        description: "CI host disk at or above warn threshold (see push-host-disk log)"

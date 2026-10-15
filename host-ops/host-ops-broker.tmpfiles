@@ -1,0 +1,16 @@
+d /var/lib/paperclip-host-ops 0750 paperclip-host-reader paperclip-host-reader -
+d /var/lib/paperclip-host-ops/keys 0700 paperclip-host-reader paperclip-host-reader -
+d /var/log/paperclip-host-ops 0750 paperclip-host-reader paperclip-host-reader -
+d /var/spool/paperclip-host-ops 0750 paperclip-host-reader paperclip-host-requests -
+# Requesters may create requests but cannot enumerate the queue. Sticky is an
+# availability guard against non-shared host users; case_e848a83d means shared-uid
+# agent runs still are not distinct principals, so requests contain no secrets.
+d /var/spool/paperclip-host-ops/requests 3730 paperclip-host-reader paperclip-host-requests -
+# Broker-owned outputs are readable but not replaceable by requesters. The
+# deployed mount must additionally scope these views to one company; this host
+# spool is not a cross-company publication surface.
+d /var/spool/paperclip-host-ops/previews 2750 paperclip-host-reader paperclip-host-requests -
+d /var/spool/paperclip-host-ops/responses 2750 paperclip-host-reader paperclip-host-requests -
+d /var/spool/paperclip-host-ops/.staging 0700 paperclip-host-reader paperclip-host-reader -
+d /var/spool/paperclip-host-ops/processing 0700 paperclip-host-reader paperclip-host-reader -
+d /var/spool/paperclip-host-ops/quarantine 0700 paperclip-host-reader paperclip-host-reader -

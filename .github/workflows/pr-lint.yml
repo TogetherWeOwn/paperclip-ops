@@ -1,0 +1,90 @@
+name: PR lint
+
+# Org convention for every change that lands on main (TogetherWeOwn GitHub standard):
+#   * PR title = Conventional Commits header: `type(scope): summary`, <= 100 chars, no trailing period.
+#     Types: feat fix perf refactor test docs build ci chore revert style security.
+#     Put the card ID in the body (`Refs: case_1cab5f7f`), not in the title.
+#   * PR body explains what changed, why, and how it was tested.
+#   * PR body follows the PR template (upstream paperclipai shape: Thinking Path, Linked Issues or
+#     Issue Description, What Changed, Verification, Risks, Model Used). The checks live in
+#     .github/scripts/pr_standards.py with their tests next to it; this job runs both. Public repos
+#     must not carry internal ticket ids, instance links or branch names with a card id.
+#   * CI change-gating policy (case_21bcd078 Phase 2, error mode): heavy jobs without job-level
+#     gating and workflow-level `paths:` on required-check producers fail here.
+#     The code is .github/scripts/ci_policy.py with its tests next to it.
+#   * Repos are squash-merge only and the squash commit title is the PR title, so the history on
+#     main is one conventional commit per PR. The push run flags any commit that bypasses it
+#     (for example a merge call that passes its own commit_title).
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-lint-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  REQUIRE_CARD_REF: "true"
+  # "warn" while open PRs migrate to the new template, then "error". Title format, an empty body and
+  # a missing card reference on a private repo are errors in both modes.
+  PR_STANDARDS_MODE: "warn"
+  # case_21bcd078 Phase 2 (case_5406e427): "error" now that every heavy job is
+  # change-gated and the canaries carry non-required markers. Fail-flip needs
+  # no ruleset change (pr-lint is already the required check).
+  CI_POLICY_MODE: "error"
+
+jobs:
+  pr-lint:
+    name: pr-lint
+    # case_1c9ba624 first cohort off Coolify: was [self-hosted, two-selfhosted]
+    # (static Coolify-co-resident Docker pool). Now GARM ephemeral; no Docker,
+    # no service, sparse checkout + python only. Required check name unchanged.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Prove a GARM runner selected this job
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${RUNNER_NAME:-}" in
+            garm-*) ;;
+            *) echo "::error::picked up by ${RUNNER_NAME:-unknown}, not a GARM runner"; exit 1 ;;
+          esac
+          printf 'GARM runner: name=%s os=%s arch=%s\n' "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github
+          sparse-checkout-cone-mode: true
+
+      - name: Unit-test the lint
+        run: |
+          python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
+          python3 -m unittest discover -s .github/scripts -p 'test_ci_policy.py'
+          python3 -m unittest discover -s .github/scripts -p 'test_action_pins.py'
+          python3 -m unittest discover -s .github/scripts -p 'test_docs_*.py'
+          python3 -m unittest discover -s .github/scripts -p 'test_review_trigger*.py'
+
+      - name: Check title, body and commits
+        env:
+          EVENT: ${{ github.event_name }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          REPO_PRIVATE: ${{ github.event.repository.private }}
+          COMMITS: ${{ toJSON(github.event.commits) }}
+        run: python3 .github/scripts/pr_standards.py
+
+      - name: Check CI change-gating policy (case_21bcd078, error mode)
+        run: python3 .github/scripts/ci_policy.py
+
+      - name: Check actions are SHA-pinned (case_10b7bbdf)
+        run: python3 .github/scripts/action_pins.py

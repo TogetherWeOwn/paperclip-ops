@@ -1,0 +1,11 @@
+[Unit]
+Description=case_0ddff3ec controller /tmp disk alarm, every 5 minutes
+
+[Timer]
+Unit=paperclip-tmp-disk-alarm.service
+OnCalendar=*:0/5
+Persistent=true
+RandomizedDelaySec=20
+
+[Install]
+WantedBy=timers.target

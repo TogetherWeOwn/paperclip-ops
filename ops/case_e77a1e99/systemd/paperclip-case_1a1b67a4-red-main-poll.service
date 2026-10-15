@@ -1,0 +1,16 @@
+[Unit]
+Description=Red-main poll: snapshot fragment plus incident drafts for the CEO routine (host-cron, findings-only, case_e77a1e99)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/paperclip/case_1a1b67a4.env
+WorkingDirectory=%h/paperclip-ops
+ExecStart=%h/paperclip-ops/ops/case_e77a1e99/red_main_poll_check.sh
+TimeoutStartSec=10m
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

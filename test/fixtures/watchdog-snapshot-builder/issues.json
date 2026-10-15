@@ -1,0 +1,5 @@
+[
+  {"id":"issue-a","identifier":"case_8c5fe4cc","status":"in_progress","priority":"high","assigneeAgentId":"agent-a","updatedAt":"2026-10-07T02:00:00Z","monitorNextCheckAt":null,"activeRecoveryAction":null,"activeRun":null,"blockerAttention":{"unresolvedBlockerCount":0}},
+  {"id":"issue-b","identifier":"case_d02d0252","status":"todo","priority":"critical","assigneeAgentId":"agent-b","updatedAt":"2026-10-01T00:00:00Z"},
+  {"id":"issue-c","identifier":"case_a6dbab15","status":"backlog","priority":"high","assigneeAgentId":null,"updatedAt":"2026-10-07T01:30:00Z"}
+]

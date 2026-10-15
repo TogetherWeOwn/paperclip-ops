@@ -1,0 +1,32 @@
+name: public-safety
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-safety-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reject private artifacts and deployment identifiers
+        run: python3 .github/scripts/public_safety.py
+      - name: Scan working tree and fetched history with reviewed fixture exceptions
+        env:
+          SCANNER: ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+        run: |
+          docker pull "$SCANNER"
+          docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" dir /repo --config /repo/.gitleaks.toml --redact=100 --no-banner
+          docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts=--all --config /repo/.gitleaks.toml --redact=100 --no-banner

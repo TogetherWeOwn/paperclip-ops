@@ -1,0 +1,16 @@
+[Unit]
+Description=Transcript sidecar mode-drift audit (host-cron, findings-only, case_4ea7d92e)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/paperclip/case_d376bf4e.env
+WorkingDirectory=%h/paperclip-ops
+ExecStart=%h/paperclip-ops/ops/case_4ea7d92e/transcript_mode_audit_check.sh
+TimeoutStartSec=10m
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

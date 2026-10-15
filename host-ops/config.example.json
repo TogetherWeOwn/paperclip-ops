@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "spoolPath": "/var/spool/paperclip-host-ops",
+  "statePath": "/var/lib/paperclip-host-ops",
+  "auditPath": "/var/log/paperclip-host-ops/audit.jsonl",
+  "privateKeyPath": "/var/lib/paperclip-host-ops/keys/response-signing.pem",
+  "healthUrl": "http://127.0.0.1:3100/api/health",
+  "paperclipDataPath": "/home/ubuntu/stacks/paperclip/data",
+  "paperclipImageRef": "@@PAPERCLIP_IMAGE_REF@@",
+  "opsToolingPath": "/opt/paperclip-ops/current",
+  "toolingSearchRoots": [
+    "/opt",
+    "/usr/local/libexec",
+    "/home/ubuntu"
+  ],
+  "toolingMarkers": [
+    "tool_drift.sh",
+    "capability_gate.sh",
+    "org_request_queue.sh",
+    "quota_brake.sh"
+  ],
+  "pollSeconds": 5,
+  "testMode": false,
+  "writesEnabled": false,
+  "writeAllowList": {
+    "version": 1,
+    "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "apps": {},
+    "scripts": {},
+    "stagingApps": {
+      "two-web-staging-SYNTHETIC": {
+        "coolifyAppUuid": "00000000-0000-4000-8000-000000000003",
+        "environment": "staging",
+        "allowedReleases": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        "deployPath": "/var/lib/coolify/staging/two-web-staging-SYNTHETIC"
+      },
+      "two-bot-staging-SYNTHETIC": {
+        "coolifyAppUuid": "00000000-0000-4000-8000-000000000020",
+        "environment": "staging",
+        "allowedReleases": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+        "deployPath": "/var/lib/coolify/staging/two-bot-staging-SYNTHETIC"
+      }
+    }
+  }
+}

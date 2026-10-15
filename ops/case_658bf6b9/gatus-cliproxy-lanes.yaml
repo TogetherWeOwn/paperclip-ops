@@ -1,0 +1,131 @@
+# case_9f650ce2 — CLIProxy per-lane health + quota-window Gatus module.
+#
+# DEPLOYMENT (source-only slice): this file is a FRAGMENT, not the live
+# config. The operator concatenates it into gatus-config.yaml at deploy time
+# (see MODULES.md "wiring"). Nothing here runs until the operator deploys it —
+# there is no host deploy in this slice.
+#
+# WHAT IT COVERS (parent case_66436e78 item 5, dependencies): one pull endpoint
+# plus one pushed external endpoint per CLIProxy lane. Lanes are the quota
+# contract providers (cliproxy_quota_contract.py): claude, codex, zai
+# (direct_auth) and opencode-go (logical_account). The pull endpoint proves
+# the lane answers HTTP; the pushed endpoint (fed by push-cliproxy-lanes.sh
+# from canonical quota telemetry) records per-lane up/down PLUS quota-window
+# remaining and fires when a lane is down or its window is exhausted.
+#
+# FAIL-CLOSED: a probe failure is DOWN. The pull endpoints have no
+# success-conditions that pass on error (any non-200 or timeout alerts), and
+# the push script pushes success=false for every lane when telemetry is
+# missing or malformed. There is no "assume healthy" path.
+#
+# READ-ONLY / NO SECRETS: pull probes are bare GETs with no auth headers —
+# the management credential never belongs in a monitoring check. Every URL
+# and token is a ${ENV} reference resolved from the root-only 0600 env file
+# on the host. The offline suite (test_case_60330d6f_cliproxy_lanes.sh) fails the
+# build on any secret-shaped string or Bearer literal in this file.
+
+endpoints:
+  - name: lane-claude
+    group: cliproxy
+    url: "${CLIPROXY_LANE_CLAUDE_HEALTH_URL}"
+    interval: 60s
+    conditions:
+      - "[STATUS] == 200"
+      - "[RESPONSE_TIME] < 3000"
+    alerts:
+      - type: discord
+        description: "CLIProxy lane claude unreachable (fail-closed DOWN)"
+      - type: custom
+        description: "CLIProxy lane claude unreachable (fail-closed DOWN)"
+
+  - name: lane-codex
+    group: cliproxy
+    url: "${CLIPROXY_LANE_CODEX_HEALTH_URL}"
+    interval: 60s
+    conditions:
+      - "[STATUS] == 200"
+      - "[RESPONSE_TIME] < 3000"
+    alerts:
+      - type: discord
+        description: "CLIProxy lane codex unreachable (fail-closed DOWN)"
+      - type: custom
+        description: "CLIProxy lane codex unreachable (fail-closed DOWN)"
+
+  - name: lane-zai
+    group: cliproxy
+    url: "${CLIPROXY_LANE_ZAI_HEALTH_URL}"
+    interval: 60s
+    conditions:
+      - "[STATUS] == 200"
+      - "[RESPONSE_TIME] < 3000"
+    alerts:
+      - type: discord
+        description: "CLIProxy lane zai unreachable (fail-closed DOWN)"
+      - type: custom
+        description: "CLIProxy lane zai unreachable (fail-closed DOWN)"
+
+  - name: lane-opencode-go
+    group: cliproxy
+    url: "${CLIPROXY_LANE_OPENCODE_GO_HEALTH_URL}"
+    interval: 60s
+    conditions:
+      - "[STATUS] == 200"
+      - "[RESPONSE_TIME] < 3000"
+    alerts:
+      - type: discord
+        description: "CLIProxy lane opencode-go unreachable (fail-closed DOWN)"
+      - type: custom
+        description: "CLIProxy lane opencode-go unreachable (fail-closed DOWN)"
+
+# Pushed by push-cliproxy-lanes.sh cron (every 5 min) from canonical quota
+# telemetry. Keys are <group>_<name> with separators mapped to '-':
+#   cliproxy_lane-claude  cliproxy_lane-codex
+#   cliproxy_lane-zai     cliproxy_lane-opencode-go
+# Push: POST /api/v1/endpoints/<key>/external?success=<bool>&error=<msg>
+# with Authorization: Bearer ${GATUS_EXTERNAL_TOKEN} (curl config file,
+# never argv — see _gatus_push.sh). Heartbeat 10m = 2x cron cadence.
+
+external-endpoints:
+  - name: lane-claude
+    group: cliproxy
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "CLIProxy lane claude down or quota window exhausted"
+      - type: custom
+        description: "CLIProxy lane claude down or quota window exhausted"
+
+  - name: lane-codex
+    group: cliproxy
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "CLIProxy lane codex down or quota window exhausted"
+      - type: custom
+        description: "CLIProxy lane codex down or quota window exhausted"
+
+  - name: lane-zai
+    group: cliproxy
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "CLIProxy lane zai down or quota window exhausted"
+      - type: custom
+        description: "CLIProxy lane zai down or quota window exhausted"
+
+  - name: lane-opencode-go
+    group: cliproxy
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "CLIProxy lane opencode-go down or quota window exhausted"
+      - type: custom
+        description: "CLIProxy lane opencode-go down or quota window exhausted"

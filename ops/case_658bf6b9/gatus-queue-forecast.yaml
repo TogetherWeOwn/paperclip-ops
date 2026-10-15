@@ -1,0 +1,75 @@
+# case_cce0de98 — Next-repo CI queue-wait forecast Gatus module.
+#
+# DEPLOYMENT (source-only slice): this file is a FRAGMENT, not the live
+# config. The operator concatenates it into gatus-config.yaml at deploy time
+# (see MODULES.md "wiring"). Nothing here runs until the operator deploys it —
+# there is no host deploy in this slice, and no live monitor enrollment.
+#
+# WHAT IT COVERS (parent case_66436e78, fanned out from case_0cc8b34c): one pushed
+# external endpoint, `platform/ci-queue-forecast`, fed by
+# push-queue-forecast.sh every 5 min. Each tick samples the age of the oldest
+# RUNNER-WAITING JOB for GH_REPO, appends it to a local samples file, and
+# forecasts whether the age trend crosses the saturation threshold within the
+# horizon. The age is the one push-ci-queue-age.sh alerts on (shared
+# _ci_queue_age.sh: job-level `queued` status, the needs-blocked drain job
+# excluded, runs listed server-side with `--created`), not a run-level age.
+#
+# COMPLEMENTS, DOES NOT DUPLICATE, the queue-age alert: the existing
+# `platform/ci-queue-age` endpoint fires when the oldest waiting job is
+# ALREADY past QUEUE_AGE_THRESHOLD_MIN (default 60, same as the alert;
+# sustained-firing alert). This forecast fires only while the age is still AT
+# OR BELOW threshold but the trend predicts it will cross threshold within
+# FORECAST_HORIZON_MIN (early warning). When the queue is already saturated
+# (strictly above threshold, the alert's own comparison) the forecaster pushes
+# success=true and names the queue-age alert as the owner, so one incident
+# never pages twice and no age is owned by neither.
+#
+# SAMPLE FLOOR: only runs older than FORECAST_MIN_AGE_MIN (default 5) are
+# inspected, bounding the per-run jobs calls; a job in a younger run has
+# waited less than the floor and samples as age 0. Set 0 to inspect every run.
+#
+# FORECAST HORIZON: FORECAST_HORIZON_MIN (default 60) ahead, from a
+# least-squares trend over the last FORECAST_LOOKBACK_MIN (default 120) of
+# samples. The horizon is a reporting window, not a guarantee: a burst of
+# queued jobs arriving after the last sample is invisible until the next tick.
+#
+# STALENESS HANDLING: a gap since the previous sample beyond
+# FORECAST_STALE_AFTER_MIN (default 20, about 4 missed 5-min ticks) means the
+# trend crosses a blind window, so the script pushes success=false
+# (fail-closed: a blind forecaster never reads green). Fewer than 2 samples,
+# or samples spanning less than FORECAST_MIN_SPAN_MIN (default 10), pushes
+# success=true "warming up" — no history is not an incident.
+#
+# FAIL-CLOSED: a `gh` failure (run list, truncated run list, or an unreadable
+# jobs API), an unreadable/unparseable samples file, or an unwritable state
+# dir pushes success=false for this endpoint. Missing GATUS_URL/token or
+# GH_REPO refuses (exit 2) before touching the network.
+#
+# READ-ONLY / NO SECRETS: the sampler runs `gh run list` and
+# `gh api .../runs/<id>/jobs` reads only — no dispatches, no re-runs, and it
+# selects no execution target: it reads runner-waiting job age and nothing
+# else. Every token is a ${ENV} reference
+# resolved from the root-only 0600 env file on the host. The offline suite
+# (test_case_60330d6f_queue_forecast.sh) fails the build on any secret-shaped
+# string in this file.
+#
+# Pushed by push-queue-forecast.sh cron (every 5 min). External key:
+#   platform_ci-queue-forecast
+# (per-repo fan-out via FORECAST_KEY_SUFFIX, e.g.
+# platform_ci-queue-forecast-two-web-next — each extra key needs its own
+# external-endpoint entry here at wiring time).
+# Push: POST /api/v1/endpoints/<key>/external?success=<bool>&error=<msg>
+# with Authorization: Bearer ${GATUS_EXTERNAL_TOKEN} (curl config file,
+# never argv — see _gatus_push.sh). Heartbeat 10m = 2x cron cadence.
+
+external-endpoints:
+  - name: ci-queue-forecast
+    group: platform
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "CI queue saturation forecast: threshold expected within horizon"
+      - type: custom
+        description: "CI queue saturation forecast: threshold expected within horizon"

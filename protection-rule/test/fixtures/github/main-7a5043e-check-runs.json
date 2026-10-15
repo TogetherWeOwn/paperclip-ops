@@ -1,0 +1,97 @@
+{
+  "total_count": 4,
+  "check_runs": [
+    {
+      "id": 112660042764,
+      "name": "ci-ok",
+      "head_sha": "7a5043e4b378e2648c9287ea00d916a16dacdb08",
+      "external_id": "00000000-0000-4000-8000-000000000137",
+      "html_url": "https://github.com/TogetherWeOwn/two-bot-next/actions/runs/37579975867/job/112660042764",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-07T06:19:39Z",
+      "completed_at": "2026-10-07T06:19:42Z",
+      "output": {
+        "title": null,
+        "summary": null
+      },
+      "app": {
+        "id": 15368,
+        "slug": "github-actions",
+        "name": "GitHub Actions"
+      },
+      "check_suite": {
+        "id": 101799503892
+      }
+    },
+    {
+      "id": 112657207736,
+      "name": "check",
+      "head_sha": "7a5043e4b378e2648c9287ea00d916a16dacdb08",
+      "external_id": "00000000-0000-4000-8000-000000000138",
+      "html_url": "https://github.com/TogetherWeOwn/two-bot-next/actions/runs/37579975867/job/112657207736",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-07T06:09:29Z",
+      "completed_at": "2026-10-07T06:12:31Z",
+      "output": {
+        "title": null,
+        "summary": null
+      },
+      "app": {
+        "id": 15368,
+        "slug": "github-actions",
+        "name": "GitHub Actions"
+      },
+      "check_suite": {
+        "id": 101799503892
+      }
+    },
+    {
+      "id": 112657201354,
+      "name": "gitleaks",
+      "head_sha": "7a5043e4b378e2648c9287ea00d916a16dacdb08",
+      "external_id": "00000000-0000-4000-8000-000000000139",
+      "html_url": "https://github.com/TogetherWeOwn/two-bot-next/actions/runs/37579975560/job/112657201354",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-07T06:09:26Z",
+      "completed_at": "2026-10-07T06:09:38Z",
+      "output": {
+        "title": null,
+        "summary": null
+      },
+      "app": {
+        "id": 15368,
+        "slug": "github-actions",
+        "name": "GitHub Actions"
+      },
+      "check_suite": {
+        "id": 101799503029
+      }
+    },
+    {
+      "id": 112657161888,
+      "name": "pr-lint",
+      "head_sha": "7a5043e4b378e2648c9287ea00d916a16dacdb08",
+      "external_id": "00000000-0000-4000-8000-000000000140",
+      "html_url": "https://github.com/TogetherWeOwn/two-bot-next/actions/runs/37579975560/job/112657161888",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-07T06:09:18Z",
+      "completed_at": "2026-10-07T06:09:25Z",
+      "output": {
+        "title": null,
+        "summary": null
+      },
+      "app": {
+        "id": 15368,
+        "slug": "github-actions",
+        "name": "GitHub Actions"
+      },
+      "check_suite": {
+        "id": 101799503029
+      }
+    }
+  ]
+}

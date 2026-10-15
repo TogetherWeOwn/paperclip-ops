@@ -1,0 +1,105 @@
+# case_8bbe9e21 — Merge-queue saturation probe Gatus module.
+#
+# DEPLOYMENT (source-only slice): this file is a FRAGMENT, not the live
+# config. The operator concatenates it into gatus-config.yaml at deploy time
+# (see MODULES.md "wiring"). Nothing here runs until the operator deploys it —
+# there is no host deploy in this slice, and no live monitor enrollment.
+# No alert route is created or changed by this slice: the `alerts:` entries
+# below are the standard discord+custom pair every module declares so the
+# endpoint is pageable once wired; the wiring itself is an operator step.
+#
+# WHAT IT COVERS (parent case_cc33e13f via case_f05a9638; context case_a97273bd — 190m
+# oldest waiter, 118 queued jobs on 2026-10-03): one pushed external
+# endpoint, `platform/merge-queue`, fed by push-merge-queue.sh every 5 min
+# from `gh api repos/<repo>/merge-queue/<branch>` across GH_REPOS. Each
+# entry contributes queue DEPTH (count) plus oldest-enqueue WAIT (now minus
+# `enqueuedAt`). HEALTHY exactly when the latched state is clear; DEGRADED
+# when depth or wait trips the alert band. The push message names the worst
+# repo, its depth and its oldest wait, so the page shows HOW deep the queue
+# is, not just up/down.
+#
+# COMPLEMENTS, DOES NOT DUPLICATE:
+# - case_b24794c2 GARM pool-health (runner capacity, not queue position).
+# - case_c542accd CI conclusion/runtime baseline (job outcomes, not queue depth).
+# - case_96fed9da enforce-readiness probe (roster tiers, not the merge queue).
+# - case_f3715a38 shadow-log freshness (log recency, not queue depth).
+# - case_ba9ad50e sub-minute-jobs proposal (job speed, not queue depth).
+# - push-ci-queue-age.sh (runner-waiting CI JOB age across the fleet) and
+#   push-garm-pool.sh (GARM-eligible demand): this module watches the MERGE
+#   QUEUE (entries awaiting merge-group checks plus merge), a different
+#   backlog with its own API, thresholds and hysteresis. Neither module
+#   reads the other's inputs.
+#
+# THRESHOLD PROPOSAL WITH HYSTERESIS (env-tunable, operator owns the values):
+#   depth: alert at MQ_DEPTH_ALERT (default 5 entries), clear at/below
+#     MQ_DEPTH_CLEAR (default 2). wait: alert at MQ_WAIT_ALERT_MIN
+#     (default 120 minutes), clear at/below MQ_WAIT_CLEAR_MIN (default 60).
+#   The alert band trips on EITHER signal; the clear band needs BOTH quiet.
+#   Between the bands the previous verdict LATCHES (state file MQ_STATE_FILE,
+#   default $HOME/.cache/merge-queue-state.json): a queue draining from 6 to
+#   3 entries stays DEGRADED until it reaches 2, so the page cannot flap on
+#   one merge. An unreadable state file degrades to stateless (alert band
+#   still pages), never to silent. No auto-merge, no runner change, no pool
+#   cap move — this module only reports.
+#   Why 120m: merge-group checks run the full CI matrix (~70m Offline
+#   suites); 120m is ~2x the longest suite, so a legitimately slow entry
+#   never pages while a case_a97273bd-scale stall (190m) always does.
+#
+# INPUT CONTRACT: GH_REPOS (space-separated owner/repo list), MQ_BRANCH
+# (default main). Each entry contributes its pull-request number plus
+# `enqueuedAt`; entries without a parseable `enqueuedAt` count toward depth
+# but not toward wait (wait reads "unknown": never fresh, never breaching on
+# its own — depth still enforces). Until the queue is enabled, the operator
+# may exercise the mapping against the checked-in example fixtures
+# (fixtures/merge-queue-healthy.example.json and
+# fixtures/merge-queue-saturated.example.json — labelled, not live
+# telemetry; fixed timestamps, stale-by-design under a live clock,
+# validated with a pinned clock).
+#
+# QUEUE ABSENT: a repo whose merge-queue endpoint 404s has no queue
+# configured (today: every repo — the case_082e9f7b trigger is inert until the
+# merge-queue rule exists). With MQ_REQUIRE_QUEUE=0 (default) that reads
+# HEALTHY with a "not enabled" note; with MQ_REQUIRE_QUEUE=1 it reads
+# DEGRADED so the operator can require the queue's presence.
+#
+# HEALTHY/DEGRADED MAPPING: HEALTHY (success=true) exactly when the latched
+# state is clear. DEGRADED (success=false) when depth or wait is at/above
+# the alert band, when the latch still holds alert inside the bands, when
+# the queue is required-but-absent, or on missing/malformed API input.
+#
+# FAIL-CLOSED: a gh transport failure, an unparseable merge-queue response
+# (root must be an object with an `entries` array — a bare array or any
+# other shape is corrupt), or a queue deeper than MQ_PAGE_LIMIT pages of
+# entries pushes success=false, never a silent skip. Missing GH_REPOS /
+# GATUS_URL / GATUS_EXTERNAL_TOKEN refuses (exit 2) before touching the
+# network.
+#
+# READ-ONLY / NO SECRETS: the push script issues GETs against the
+# merge-queue list endpoint and POSTs one boolean — no enqueue/dequeue
+# mutation, no ledger write, no admission, no pacing or runner change.
+# Every token is a ${ENV} reference resolved from the root-only 0600 env
+# file on the host. The offline suite (test_case_60330d6f_merge_queue.sh) fails
+# the build on any secret-shaped string in this file.
+#
+# Pushed by push-merge-queue.sh cron (every 5 min). External key:
+#   platform_merge-queue
+# (per-source fan-out via MQ_KEY_SUFFIX, e.g.
+# platform_merge-queue-canary — each extra key needs its own
+# external-endpoint entry here at wiring time).
+# Push: POST /api/v1/endpoints/<key>/external?success=<bool>&error=<msg>
+# with Authorization: Bearer ${GATUS_EXTERNAL_TOKEN} (curl config file,
+# never argv — see _gatus_push.sh). Heartbeat 10m = 2x cron cadence.
+# The push script also prints a one-line case_401f7b0d-merge-queue-v1 JSON
+# verdict to the cron log, so the module returns JSON on fixtures.
+
+external-endpoints:
+  - name: merge-queue
+    group: platform
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "merge queue saturated (depth/wait past alert band)"
+      - type: custom
+        description: "merge queue saturated (depth/wait past alert band)"

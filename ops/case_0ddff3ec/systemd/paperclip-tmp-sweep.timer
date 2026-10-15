@@ -1,0 +1,11 @@
+[Unit]
+Description=case_0ddff3ec controller /tmp retention, hourly
+
+[Timer]
+Unit=paperclip-tmp-sweep.service
+OnCalendar=*:17
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,80 @@
+# ===========================================================================
+# systemd unit for org-request-mcp (case_d5cbfb18).
+#
+# Install to /etc/systemd/system/org-request-mcp.service and substitute
+# OPERATOR_USER / OPERATOR_GROUP and the two paths.
+#
+# The unit runs as the OPERATOR user, not root: the CLIs it fronts reach the
+# database through a container exec (`docker exec` on node7b1ff338, `podman exec`
+# elsewhere — see containerEngine in config.example.json) and read
+# ~/secure-drop as that user, which is the entire reason this server lives on
+# the host instead of in the container.
+# ===========================================================================
+
+[Unit]
+Description=org-request-mcp — host-side MCP transport for org_request_queue.sh
+Documentation=https://github.com/TogetherWeOwn/paperclip-ops/blob/main/mcp/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=OPERATOR_USER
+Group=OPERATOR_GROUP
+
+# The config PATH is an argument; the config CONTENTS are not, and the file
+# holds a sha256 digest rather than the bearer itself. /proc/*/cmdline stays
+# boring, which matters because it is world-readable and every company on this
+# box shares the host.
+ExecStart=/usr/bin/node /opt/org-request-mcp/org-request-mcp.mjs /etc/org-request-mcp/config.json
+
+Restart=on-failure
+RestartSec=5s
+
+# Structured JSON lines on stdout; journald keeps them.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=org-request-mcp
+
+# --- Hardening ------------------------------------------------------------
+# Deliberately NOT PrivateNetwork or NetworkNamespacePath: the process must
+# reach the container-engine socket (docker or podman) and bind host loopback.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=no
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+
+# ProtectSystem=strict makes everything read-only; name the exceptions.
+# The queue's own state files (provisioner-request-queue.jsonl, the grant log)
+# live beside org_request_queue.sh, so that directory must stay writable.
+ReadWritePaths=/opt/paperclip-ops
+
+# systemd creates and chowns this; do not hand-make it.
+LogsDirectory=org-request-mcp
+LogsDirectoryMode=0750
+
+# The only address it may listen on. The server hard-codes 127.0.0.1 in
+# source, and this is the second, independent statement of the same
+# non-negotiable — belt and braces on the constraint that matters most.
+#
+# These filters apply to AF_INET/AF_INET6 only, so a container exec over the
+# engine UNIX socket is unaffected. VERIFY THAT ON THIS BOX ANYWAY: if the
+# engine is configured to reach a remote or TCP endpoint here, run corroboration will
+# start returning 503 run_check_unavailable — which is the correct fail-closed
+# behaviour, but for the wrong reason and it will look like a database outage.
+# Runbook step 7 checks exactly this. If it does bite, comment out these two
+# lines rather than weakening anything else; the bind address is still
+# hard-coded in source.
+IPAddressAllow=localhost
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target

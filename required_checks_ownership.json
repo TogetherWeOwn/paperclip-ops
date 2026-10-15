@@ -1,0 +1,45 @@
+{
+  "_comment": "Synthetic public test matrix. Not a production ownership or freshness attestation. Configure real deployment policy outside this repository.",
+  "stale_days": 14,
+  "owners": {
+    "automation-engineer": {"area": "example test ownership", "active": true},
+    "devops": {"area": "example test ownership", "active": true},
+    "ciso": {"area": "example test ownership", "active": true},
+    "qa-engineer": {"area": "example test ownership", "active": true},
+    "founding-engineer": {"area": "example test ownership", "active": true},
+    "web-engineer": {"area": "example test ownership", "active": true},
+    "code-reviewer": {"area": "example test ownership", "active": true},
+    "director": {"area": "example test ownership", "active": true}
+  },
+  "repos": [
+    {"repo": "TogetherWeOwn/paperclip-ops", "branch": "main", "checks": [
+      {"context": "Offline suites", "owner_role": "automation-engineer", "producer_workflow": ".github/workflows/ci.yml", "producer_job": "suites", "area": "ci-gates"},
+      {"context": "Operator runbook gates", "owner_role": "devops", "producer_workflow": ".github/workflows/ci.yml", "producer_job": "suites", "area": "operator-runbooks"},
+      {"context": "Privilege ceiling suites", "owner_role": "ciso", "producer_workflow": ".github/workflows/ci.yml", "producer_job": "privilege-suites", "area": "access-control"},
+      {"context": "dispatch suite", "owner_role": "automation-engineer", "producer_workflow": ".github/workflows/ci.yml", "producer_job": "suites", "area": "dispatch-automation"},
+      {"context": "gh-event-capture suite", "owner_role": "devops", "producer_workflow": ".github/workflows/ci.yml", "producer_job": "suites", "area": "webhook-infra"},
+      {"context": "model-selection suite", "owner_role": "automation-engineer", "producer_workflow": ".github/workflows/ci.yml", "producer_job": "model-selection-suite", "area": "model-routing"},
+      {"context": "omniroute-broker suite", "owner_role": "automation-engineer", "producer_workflow": ".github/workflows/ci.yml", "producer_job": "suites", "area": "omniroute"},
+      {"context": "org-request-mcp suite", "owner_role": "devops", "producer_workflow": ".github/workflows/ci.yml", "producer_job": "suites", "area": "org-request-infra"},
+      {"context": "Private mutation gates", "owner_role": "qa-engineer", "producer_workflow": ".github/workflows/ci.yml", "producer_job": "private-mutation-gates", "area": "test-quality"},
+      {"context": "ci-ok", "owner_role": "automation-engineer", "producer_workflow": ".github/workflows/ci.yml", "producer_job": "ci-ok", "area": "ci-gates"},
+      {"context": "pr-lint", "owner_role": "automation-engineer", "producer_workflow": ".github/workflows/pr-lint.yml", "producer_job": "pr-lint", "area": "pr-conventions"}
+    ]},
+    {"repo": "TogetherWeOwn/two-bot-next", "branch": "main", "checks": [
+      {"context": "check", "owner_role": "founding-engineer", "producer_workflow": ".github/workflows/check.yml", "producer_job": "check", "area": "bot-rust-ci"},
+      {"context": "worker check", "owner_role": "founding-engineer", "producer_workflow": ".github/workflows/check.yml", "producer_job": "worker", "area": "bot-rust-ci"},
+      {"context": "ci-ok", "owner_role": "founding-engineer", "producer_workflow": ".github/workflows/check.yml", "producer_job": "ci-ok", "area": "bot-ci-gates"},
+      {"context": "pr-lint", "owner_role": "founding-engineer", "producer_workflow": ".github/workflows/supply-chain.yml", "producer_job": "pr-lint", "area": "bot-ci-gates"},
+      {"context": "gitleaks", "owner_role": "founding-engineer", "producer_workflow": ".github/workflows/supply-chain.yml", "producer_job": "gitleaks", "area": "bot-ci-gates"}
+    ]},
+    {"repo": "TogetherWeOwn/two-web-next", "branch": "main", "checks": [
+      {"context": "check", "owner_role": "web-engineer", "producer_workflow": ".github/workflows/ci.yml", "producer_job": "check", "area": "web-ci"},
+      {"context": "gitleaks", "owner_role": "web-engineer", "producer_workflow": ".github/workflows/pr-gates.yml", "producer_job": "gitleaks", "area": "web-ci-gates"},
+      {"context": "pr-lint", "owner_role": "web-engineer", "producer_workflow": ".github/workflows/pr-gates.yml", "producer_job": "pr-lint", "area": "web-ci-gates"}
+    ]},
+    {"repo": "TogetherWeOwn/paperclip", "branch": "master", "checks": [
+      {"context": "ci / verify", "owner_role": "devops", "producer_workflow": ".github/workflows/pr.yml", "producer_job": "ci", "area": "fork-ci"},
+      {"context": "ci / e2e", "owner_role": "devops", "producer_workflow": ".github/workflows/pr.yml", "producer_job": "ci", "area": "fork-ci"}
+    ]}
+  ]
+}

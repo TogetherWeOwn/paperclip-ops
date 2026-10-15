@@ -1,0 +1,9 @@
+{
+  "repo": "TogetherWeOwn/paperclip-ops",
+  "branch": "main",
+  "source": "rulesets 22798757 (TogetherWeOwn main baseline) and 24079003 (pr-conventions), read 2026-10-05 with `gh api repos/TogetherWeOwn/paperclip-ops/rules/branches/main`. Operator one-pin packet on case_5acc136b (20261005T024931Z): ci-ok pinned to integration_id 15368 (GitHub Actions); the 10-context per-suite swap is void per case_f68c01e7 decision 2026-10-04. The nine small suite jobs consolidated into the suites job (case_a2b959d4).",
+  "required": [
+    {"context": "ci-ok", "integration_id": 15368},
+    {"context": "pr-lint", "integration_id": 15368}
+  ]
+}

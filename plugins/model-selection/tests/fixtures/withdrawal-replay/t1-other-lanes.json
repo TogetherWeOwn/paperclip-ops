@@ -1,0 +1,2021 @@
+{
+  "schema": "case_5b235efb-other-lanes-v1",
+  "source": "Companion to t1-records.json (the same 23 records, matched on ts). The non-Meta lanes that host a T1 candidate, cut from the same plugin-shadow decisions (schema case_577a5ee0-decision-v1, laneSnapshot.lanes): the recorded accounts per lane, the lane label and slot factor the snapshot carried, the snapshot age, the pace ordering the selector traced when it decided, and the bridge log's claude_5h_combined at or before ts (null before the bridge began logging it, 2026-10-04T17:28Z). Lanes with no T1 candidate (opencode-go, xai, devin, kimi) are omitted. The snapshot's per-account `state` is a different quantity from the pace engine's and is deliberately not carried.",
+  "records": [
+    {
+      "ts": "2026-10-04T00:23:09.600Z",
+      "bridgeClaude5hCombined": null,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 143,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T18:59:59.834Z",
+              "utilization": 0.2
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T10:00:00.099Z",
+              "utilization": 0.1
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 143,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.27
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.24
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "exhausted",
+              "serviceable": false,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T00:17:44.000Z",
+              "utilization": 0
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 143,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.421
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T02:12:48.067Z",
+      "bridgeClaude5hCombined": null,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 150,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T19:00:00.290Z",
+              "utilization": 0.2
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T09:59:59.523Z",
+              "utilization": 0.11
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 150,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.3
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.26
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "exhausted",
+              "serviceable": false,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T02:06:02.000Z",
+              "utilization": 0
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 150,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.421
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T02:20:01.206Z",
+      "bridgeClaude5hCombined": null,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 101,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T19:00:00.381Z",
+              "utilization": 0.2
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T09:59:59.716Z",
+              "utilization": 0.11
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 101,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.31
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.27
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "exhausted",
+              "serviceable": false,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T02:14:23.000Z",
+              "utilization": 0
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 101,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.421
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T02:30:20.432Z",
+      "bridgeClaude5hCombined": null,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 112,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T19:00:00.043Z",
+              "utilization": 0.2
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T10:00:00.322Z",
+              "utilization": 0.11
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 112,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.31
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.28
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "exhausted",
+              "serviceable": false,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T02:26:30.000Z",
+              "utilization": 0
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 112,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.421
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T02:35:25.107Z",
+      "bridgeClaude5hCombined": null,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 77,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T18:59:59.955Z",
+              "utilization": 0.2
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T10:00:00.348Z",
+              "utilization": 0.11
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 77,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.31
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.28
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "exhausted",
+              "serviceable": false,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T02:30:31.000Z",
+              "utilization": 0
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 77,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.421
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T02:37:04.649Z",
+      "bridgeClaude5hCombined": null,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 46,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T18:59:59.665Z",
+              "utilization": 0.2
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T10:00:00.031Z",
+              "utilization": 0.11
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 46,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.31
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.28
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "exhausted",
+              "serviceable": false,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T02:34:32.000Z",
+              "utilization": 0
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 46,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.421
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T14:44:19.004Z",
+      "bridgeClaude5hCombined": null,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 47,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T18:59:59.586Z",
+              "utilization": 0.41
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T09:59:59.916Z",
+              "utilization": 0.37
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 47,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.82
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.88
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:18.000Z",
+              "utilization": 0
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 47,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.443
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T14:45:01.173Z",
+      "bridgeClaude5hCombined": null,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 89,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T18:59:59.586Z",
+              "utilization": 0.41
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T09:59:59.916Z",
+              "utilization": 0.37
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 89,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.82
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.88
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:18.000Z",
+              "utilization": 0
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 89,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.443
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T14:49:21.949Z",
+      "bridgeClaude5hCombined": null,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 32,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T19:00:00.045Z",
+              "utilization": 0.42
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T10:00:00.404Z",
+              "utilization": 0.38
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 32,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.82
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.88
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:18.000Z",
+              "utilization": 0
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 32,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.443
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T15:12:51.091Z",
+      "bridgeClaude5hCombined": null,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 132,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T18:59:59.629Z",
+              "utilization": 0.46
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T09:59:59.902Z",
+              "utilization": 0.43
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 132,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.82
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.89
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:18.000Z",
+              "utilization": 0
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 132,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.443
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T16:19:56.465Z",
+      "bridgeClaude5hCombined": null,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 98,
+          "recordedState": "exhausted",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "exhausted",
+              "serviceable": false,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T18:59:59.535Z",
+              "utilization": 0.54
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "exhausted",
+              "serviceable": false,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T10:00:00.315Z",
+              "utilization": 0.49
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 98,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.82
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.89
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:17.000Z",
+              "utilization": 0.02
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 98,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.443
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T16:20:10.295Z",
+      "bridgeClaude5hCombined": null,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 112,
+          "recordedState": "exhausted",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "exhausted",
+              "serviceable": false,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T18:59:59.535Z",
+              "utilization": 0.54
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "exhausted",
+              "serviceable": false,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T10:00:00.315Z",
+              "utilization": 0.49
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 112,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.82
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.89
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:17.000Z",
+              "utilization": 0.02
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 112,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.443
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T17:40:32.095Z",
+      "bridgeClaude5hCombined": 56.5,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 12,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "exhausted",
+              "serviceable": false,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T18:59:59.692Z",
+              "utilization": 0.54
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T09:59:59.991Z",
+              "utilization": 0.52
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 12,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.82
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "degraded",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.9
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:17.000Z",
+              "utilization": 0.03
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 12,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.443
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T17:50:27.856Z",
+      "bridgeClaude5hCombined": 56.5,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 8,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "exhausted",
+              "serviceable": false,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T19:00:00.090Z",
+              "utilization": 0.54
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T10:00:00.060Z",
+              "utilization": 0.52
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 8,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.83
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "degraded",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.9
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:18.000Z",
+              "utilization": 0.03
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 8,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.443
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T18:50:19.628Z",
+      "bridgeClaude5hCombined": 60.0,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 120,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "exhausted",
+              "serviceable": false,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T19:00:00.504Z",
+              "utilization": 0.54
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T09:59:59.559Z",
+              "utilization": 0.53
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 120,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.83
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "degraded",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.9
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:17.000Z",
+              "utilization": 0.04
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 120,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.443
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T19:40:28.083Z",
+      "bridgeClaude5hCombined": 14.0,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 8,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T18:59:59.650Z",
+              "utilization": 0.54
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T10:00:00.044Z",
+              "utilization": 0.55
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 8,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.83
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "degraded",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.9
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:18.000Z",
+              "utilization": 0.04
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 8,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.448
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T19:50:20.038Z",
+      "bridgeClaude5hCombined": 15.0,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 120,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T18:59:59.803Z",
+              "utilization": 0.54
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T10:00:00.038Z",
+              "utilization": 0.55
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 120,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.83
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "degraded",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.9
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:17.000Z",
+              "utilization": 0.04
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 120,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.451
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T19:57:22.742Z",
+      "bridgeClaude5hCombined": 16.0,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 63,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T18:59:59.789Z",
+              "utilization": 0.55
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T10:00:00.042Z",
+              "utilization": 0.55
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 63,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.83
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "degraded",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.9
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:17.000Z",
+              "utilization": 0.04
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 63,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.455
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T20:40:32.142Z",
+      "bridgeClaude5hCombined": 19.5,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 11,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T18:59:59.519Z",
+              "utilization": 0.55
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T09:59:59.581Z",
+              "utilization": 0.56
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 11,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.83
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "degraded",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.91
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:18.000Z",
+              "utilization": 0.05
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 11,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.459
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T20:50:36.268Z",
+      "bridgeClaude5hCombined": 21.5,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 16,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T19:00:00.115Z",
+              "utilization": 0.55
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T09:59:59.938Z",
+              "utilization": 0.57
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 16,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.83
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "degraded",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.91
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:17.000Z",
+              "utilization": 0.06
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 16,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.459
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T21:48:46.390Z",
+      "bridgeClaude5hCombined": 61.5,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 25,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T18:59:59.518Z",
+              "utilization": 0.61
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T10:00:00.074Z",
+              "utilization": 0.65
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 25,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.83
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "degraded",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.91
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:17.000Z",
+              "utilization": 0.08
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 25,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.459
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T21:56:51.580Z",
+      "bridgeClaude5hCombined": 70.0,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "glm-5.3",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 30,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T19:00:00.000Z",
+              "utilization": 0.62
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "degraded",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T10:00:00.000Z",
+              "utilization": 0.66
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 30,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.83
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "degraded",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.91
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:17.000Z",
+              "utilization": 0.08
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 30,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.459
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ts": "2026-10-04T22:01:59.507Z",
+      "bridgeClaude5hCombined": 76.0,
+      "recordedPaceOrdering": [
+        "muse-spark-1.3-contributor(xhigh)",
+        "muse-spark-1.2-contributor",
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ],
+      "lanes": {
+        "cliproxy-claude": {
+          "ageSeconds": 96,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "claude-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-09T19:00:00.000Z",
+              "utilization": 0.62
+            },
+            {
+              "accountKey": "claude-lane-2",
+              "health": "degraded",
+              "serviceable": false,
+              "weight": 1,
+              "governingWindow": "seven_day",
+              "governingResetAt": "2026-10-10T10:00:00.000Z",
+              "utilization": 0.67
+            }
+          ]
+        },
+        "cliproxy-codex": {
+          "ageSeconds": 96,
+          "recordedState": "degraded",
+          "recordedSlotFactor": 0.25,
+          "accounts": [
+            {
+              "accountKey": "codex-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:41.000Z",
+              "utilization": 0.83
+            },
+            {
+              "accountKey": "codex-lane-2",
+              "health": "degraded",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-09T21:13:36.000Z",
+              "utilization": 0.91
+            },
+            {
+              "accountKey": "codex-lane-3",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-11T14:18:18.000Z",
+              "utilization": 0.08
+            }
+          ]
+        },
+        "cliproxy-zai": {
+          "ageSeconds": 96,
+          "recordedState": "available",
+          "recordedSlotFactor": 1,
+          "accounts": [
+            {
+              "accountKey": "zai-lane-1",
+              "health": "healthy",
+              "serviceable": true,
+              "weight": 1,
+              "governingWindow": "weekly",
+              "governingResetAt": "2026-10-06T04:09:05.000Z",
+              "utilization": 0.459
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+[Unit]
+Description=GitHub Actions runner (isolated fleet listener)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@RUNNER_USER@
+Group=@RUNNER_USER@
+WorkingDirectory=@RUNNER_HOME@
+Environment=HOME=@USER_HOME@
+Environment=XDG_RUNTIME_DIR=/run/user/@RUNNER_UID@
+Environment=DOCKER_HOST=unix:///run/user/@RUNNER_UID@/docker.sock
+Environment=RUNNER_ALLOW_RUNASROOT=0
+ExecStartPre=/usr/bin/test -x @RUNNER_HOME@/run.sh
+ExecStartPre=/usr/bin/test -S /run/user/@RUNNER_UID@/docker.sock
+ExecStartPre=/usr/bin/test ! -w /run/docker.sock
+ExecStart=@RUNNER_HOME@/run.sh
+Restart=always
+RestartSec=5s
+KillSignal=SIGINT
+TimeoutStopSec=2min
+
+# One service process means one runner listener and at most one job at a time.
+# Fleet concurrency is the number of separately named services; no listener
+# receives a host deployment secret here.
+NoNewPrivileges=true
+PrivateTmp=true
+BindReadOnlyPaths=/dev/null:/run/docker.sock
+BindReadOnlyPaths=/dev/null:/var/run/docker.sock
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@RUNNER_HOME@/_diag @RUNNER_HOME@/_work
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target

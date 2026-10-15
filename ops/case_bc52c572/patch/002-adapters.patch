@@ -1,0 +1,328 @@
+diff --git a/packages/adapter-utils/src/acpx-engine/execute.ts b/packages/adapter-utils/src/acpx-engine/execute.ts
+index 3a18977..1a9775e 100644
+--- a/packages/adapter-utils/src/acpx-engine/execute.ts
++++ b/packages/adapter-utils/src/acpx-engine/execute.ts
+@@ -72,7 +72,7 @@ import {
+   removeMaintainerOnlySkillSymlinks,
+   rewriteWorkspaceCwdEnvVarsForExecution,
+   shapePaperclipWorkspaceEnvForExecution,
+-  stringifyPaperclipWakePayload,
++  writePaperclipWakePayloadEnv,
+   type PaperclipSkillEntry,
+ } from "@paperclipai/adapter-utils/server-utils";
+ import { shellQuote } from "@paperclipai/adapter-utils/ssh";
+@@ -1912,7 +1912,6 @@ async function buildRuntime(input: {
+   const linkedIssueIds = Array.isArray(context.issueIds)
+     ? context.issueIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+     : [];
+-  const wakePayloadJson = stringifyPaperclipWakePayload(context.paperclipWake);
+   const issueWorkMode = readPaperclipIssueWorkModeFromContext(context);
+   if (wakeTaskId) env.PAPERCLIP_TASK_ID = wakeTaskId;
+   if (issueWorkMode) env.PAPERCLIP_ISSUE_WORK_MODE = issueWorkMode;
+@@ -1921,7 +1920,7 @@ async function buildRuntime(input: {
+   if (approvalId) env.PAPERCLIP_APPROVAL_ID = approvalId;
+   if (approvalStatus) env.PAPERCLIP_APPROVAL_STATUS = approvalStatus;
+   if (linkedIssueIds.length > 0) env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
+-  if (wakePayloadJson) env.PAPERCLIP_WAKE_PAYLOAD_JSON = wakePayloadJson;
++  writePaperclipWakePayloadEnv(env, context.paperclipWake);
+   applyPaperclipWorkspaceEnv(env, {
+     workspaceCwd: shapedWorkspaceEnv.workspaceCwd,
+     workspaceSource,
+diff --git a/packages/adapters/claude-local/src/server/execute.ts b/packages/adapters/claude-local/src/server/execute.ts
+index 1d3863e..ee0763b 100644
+--- a/packages/adapters/claude-local/src/server/execute.ts
++++ b/packages/adapters/claude-local/src/server/execute.ts
+@@ -48,7 +48,7 @@ import {
+   selectPaperclipTaskMarkdown,
+   rewriteWorkspaceCwdEnvVarsForExecution,
+   shapePaperclipWorkspaceEnvForExecution,
+-  stringifyPaperclipWakePayload,
++  writePaperclipWakePayloadEnv,
+   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
+   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
+ } from "@paperclipai/adapter-utils/server-utils";
+@@ -241,7 +241,6 @@ async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<Cl
+   const linkedIssueIds = Array.isArray(context.issueIds)
+     ? context.issueIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+     : [];
+-  const wakePayloadJson = stringifyPaperclipWakePayload(context.paperclipWake);
+   const issueWorkMode = readPaperclipIssueWorkModeFromContext(context);
+ 
+   if (wakeTaskId) {
+@@ -265,9 +264,7 @@ async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<Cl
+   if (linkedIssueIds.length > 0) {
+     env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
+   }
+-  if (wakePayloadJson) {
+-    env.PAPERCLIP_WAKE_PAYLOAD_JSON = wakePayloadJson;
+-  }
++  writePaperclipWakePayloadEnv(env, context.paperclipWake);
+   applyPaperclipWorkspaceEnv(env, {
+     workspaceCwd: shapedWorkspaceEnv.workspaceCwd,
+     workspaceSource,
+diff --git a/packages/adapters/codex-local/src/server/execute.ts b/packages/adapters/codex-local/src/server/execute.ts
+index 72ac42e..5b62bb1 100644
+--- a/packages/adapters/codex-local/src/server/execute.ts
++++ b/packages/adapters/codex-local/src/server/execute.ts
+@@ -47,7 +47,7 @@ import {
+   renderPaperclipWakePrompt,
+   selectPaperclipTaskMarkdown,
+   isPaperclipRecoveryWakePayload,
+-  stringifyPaperclipWakePayload,
++  writePaperclipWakePayloadEnv,
+   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
+   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
+   joinPromptSections,
+@@ -915,7 +915,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+     const linkedIssueIds = Array.isArray(context.issueIds)
+       ? context.issueIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+       : [];
+-    const wakePayloadJson = stringifyPaperclipWakePayload(context.paperclipWake);
+     const issueWorkMode = readPaperclipIssueWorkModeFromContext(context);
+     if (wakeTaskId) {
+       env.PAPERCLIP_TASK_ID = wakeTaskId;
+@@ -938,9 +937,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+     if (linkedIssueIds.length > 0) {
+       env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
+     }
+-    if (wakePayloadJson) {
+-      env.PAPERCLIP_WAKE_PAYLOAD_JSON = wakePayloadJson;
+-    }
++    writePaperclipWakePayloadEnv(env, context.paperclipWake);
+     refreshPaperclipWorkspaceEnvForExecution({
+       env,
+       envConfig,
+diff --git a/packages/adapters/cursor-cloud/src/server/execute.ts b/packages/adapters/cursor-cloud/src/server/execute.ts
+index f157b55..ea3dd4e 100644
+--- a/packages/adapters/cursor-cloud/src/server/execute.ts
++++ b/packages/adapters/cursor-cloud/src/server/execute.ts
+@@ -24,7 +24,7 @@ import {
+   selectPaperclipTaskMarkdown,
+   isPaperclipRecoveryWakePayload,
+   renderTemplate,
+-  stringifyPaperclipWakePayload,
++  writePaperclipWakePayloadEnv,
+ } from "@paperclipai/adapter-utils/server-utils";
+ 
+ type CursorCloudSession = {
+@@ -124,7 +124,6 @@ function buildWakeEnv(ctx: AdapterExecutionContext, configEnv: Record<string, st
+   const linkedIssueIds = Array.isArray(context.issueIds)
+     ? context.issueIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+     : [];
+-  const wakePayloadJson = stringifyPaperclipWakePayload(context.paperclipWake);
+   const issueWorkMode = readPaperclipIssueWorkModeFromContext(context);
+ 
+   if (wakeTaskId) env.PAPERCLIP_TASK_ID = wakeTaskId;
+@@ -133,7 +132,7 @@ function buildWakeEnv(ctx: AdapterExecutionContext, configEnv: Record<string, st
+   if (approvalId) env.PAPERCLIP_APPROVAL_ID = approvalId;
+   if (approvalStatus) env.PAPERCLIP_APPROVAL_STATUS = approvalStatus;
+   if (linkedIssueIds.length > 0) env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
+-  if (wakePayloadJson) env.PAPERCLIP_WAKE_PAYLOAD_JSON = wakePayloadJson;
++  writePaperclipWakePayloadEnv(env, context.paperclipWake);
+   if (issueWorkMode) env.PAPERCLIP_ISSUE_WORK_MODE = issueWorkMode;
+   if (authToken) {
+     env.PAPERCLIP_API_KEY = authToken;
+diff --git a/packages/adapters/cursor-local/src/server/execute.ts b/packages/adapters/cursor-local/src/server/execute.ts
+index 91ab88d..01c3ff4 100644
+--- a/packages/adapters/cursor-local/src/server/execute.ts
++++ b/packages/adapters/cursor-local/src/server/execute.ts
+@@ -46,7 +46,7 @@ import {
+   renderPaperclipWakePrompt,
+   selectPaperclipTaskMarkdown,
+   isPaperclipRecoveryWakePayload,
+-  stringifyPaperclipWakePayload,
++  writePaperclipWakePayloadEnv,
+   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
+   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
+   joinPromptSections,
+@@ -274,7 +274,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+   const linkedIssueIds = Array.isArray(context.issueIds)
+     ? context.issueIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+     : [];
+-  const wakePayloadJson = stringifyPaperclipWakePayload(context.paperclipWake);
+   const issueWorkMode = readPaperclipIssueWorkModeFromContext(context);
+   if (wakeTaskId) {
+     env.PAPERCLIP_TASK_ID = wakeTaskId;
+@@ -297,9 +296,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+   if (linkedIssueIds.length > 0) {
+     env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
+   }
+-  if (wakePayloadJson) {
+-    env.PAPERCLIP_WAKE_PAYLOAD_JSON = wakePayloadJson;
+-  }
++  writePaperclipWakePayloadEnv(env, context.paperclipWake);
+   refreshPaperclipWorkspaceEnvForExecution({
+     env,
+     envConfig,
+diff --git a/packages/adapters/gemini-local/src/server/execute.ts b/packages/adapters/gemini-local/src/server/execute.ts
+index de9257c..321979a 100644
+--- a/packages/adapters/gemini-local/src/server/execute.ts
++++ b/packages/adapters/gemini-local/src/server/execute.ts
+@@ -49,7 +49,7 @@ import {
+   renderPaperclipWakePrompt,
+   selectPaperclipTaskMarkdown,
+   isPaperclipRecoveryWakePayload,
+-  stringifyPaperclipWakePayload,
++  writePaperclipWakePayloadEnv,
+   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
+   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
+   runChildProcess,
+@@ -298,7 +298,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+   const linkedIssueIds = Array.isArray(context.issueIds)
+     ? context.issueIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+     : [];
+-  const wakePayloadJson = stringifyPaperclipWakePayload(context.paperclipWake);
+   const issueWorkMode = readPaperclipIssueWorkModeFromContext(context);
+   if (wakeTaskId) env.PAPERCLIP_TASK_ID = wakeTaskId;
+   if (issueWorkMode) env.PAPERCLIP_ISSUE_WORK_MODE = issueWorkMode;
+@@ -307,7 +306,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+   if (approvalId) env.PAPERCLIP_APPROVAL_ID = approvalId;
+   if (approvalStatus) env.PAPERCLIP_APPROVAL_STATUS = approvalStatus;
+   if (linkedIssueIds.length > 0) env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
+-  if (wakePayloadJson) env.PAPERCLIP_WAKE_PAYLOAD_JSON = wakePayloadJson;
++  writePaperclipWakePayloadEnv(env, context.paperclipWake);
+   refreshPaperclipWorkspaceEnvForExecution({
+     env,
+     envConfig,
+diff --git a/packages/adapters/grok-local/src/server/execute.ts b/packages/adapters/grok-local/src/server/execute.ts
+index a255284..b8cfe34 100644
+--- a/packages/adapters/grok-local/src/server/execute.ts
++++ b/packages/adapters/grok-local/src/server/execute.ts
+@@ -37,7 +37,7 @@ import {
+   selectPaperclipTaskMarkdown,
+   isPaperclipRecoveryWakePayload,
+   resolveLegacyPaperclipDesiredSkillNames,
+-  stringifyPaperclipWakePayload,
++  writePaperclipWakePayloadEnv,
+   refreshPaperclipWorkspaceEnvForExecution,
+   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
+   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
+@@ -285,7 +285,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+     const linkedIssueIds = Array.isArray(context.issueIds)
+       ? context.issueIds.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
+       : [];
+-    const wakePayloadJson = stringifyPaperclipWakePayload(context.paperclipWake);
+     const issueWorkMode = readPaperclipIssueWorkModeFromContext(context);
+     if (wakeTaskId) env.PAPERCLIP_TASK_ID = wakeTaskId;
+     if (issueWorkMode) env.PAPERCLIP_ISSUE_WORK_MODE = issueWorkMode;
+@@ -294,7 +293,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+     if (approvalId) env.PAPERCLIP_APPROVAL_ID = approvalId;
+     if (approvalStatus) env.PAPERCLIP_APPROVAL_STATUS = approvalStatus;
+     if (linkedIssueIds.length > 0) env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
+-    if (wakePayloadJson) env.PAPERCLIP_WAKE_PAYLOAD_JSON = wakePayloadJson;
++    writePaperclipWakePayloadEnv(env, context.paperclipWake);
+     refreshPaperclipWorkspaceEnvForExecution({
+       env,
+       envConfig,
+diff --git a/packages/adapters/hermes/src/server/execute.ts b/packages/adapters/hermes/src/server/execute.ts
+index ea54e57..aa0b128 100644
+--- a/packages/adapters/hermes/src/server/execute.ts
++++ b/packages/adapters/hermes/src/server/execute.ts
+@@ -39,6 +39,7 @@ import {
+   renderPaperclipWakePrompt,
+   selectPaperclipTaskMarkdown,
+   stringifyPaperclipWakePayload,
++  writePaperclipWakePayloadEnv,
+   isPaperclipRecoveryWakePayload,
+ } from "@paperclipai/adapter-utils/server-utils";
+ 
+@@ -509,8 +510,7 @@ export async function execute(
+   if (envWakeReason) env.PAPERCLIP_WAKE_REASON = envWakeReason;
+   const envCommentId = cfgString(ctxContext.commentId) || cfgString(ctxContext.wakeCommentId) || cfgString(ctx.config?.commentId);
+   if (envCommentId) env.PAPERCLIP_WAKE_COMMENT_ID = envCommentId;
+-  const wakePayloadJson = stringifyPaperclipWakePayload(ctxContext.paperclipWake);
+-  if (wakePayloadJson) env.PAPERCLIP_WAKE_PAYLOAD_JSON = wakePayloadJson;
++  writePaperclipWakePayloadEnv(env, ctxContext.paperclipWake);
+ 
+   // ── Resolve working directory ──────────────────────────────────────────
+   const cwd =
+diff --git a/packages/adapters/kimi-local/src/server/execute.ts b/packages/adapters/kimi-local/src/server/execute.ts
+index 04c5984..3edb582 100644
+--- a/packages/adapters/kimi-local/src/server/execute.ts
++++ b/packages/adapters/kimi-local/src/server/execute.ts
+@@ -41,7 +41,7 @@ import {
+   renderPaperclipWakePrompt,
+   selectPaperclipTaskMarkdown,
+   isPaperclipRecoveryWakePayload,
+-  stringifyPaperclipWakePayload,
++  writePaperclipWakePayloadEnv,
+   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
+   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
+ } from "@paperclipai/adapter-utils/server-utils";
+@@ -271,7 +271,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+   const linkedIssueIds = Array.isArray(context.issueIds)
+     ? context.issueIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+     : [];
+-  const wakePayloadJson = stringifyPaperclipWakePayload(context.paperclipWake);
+   const issueWorkMode = readPaperclipIssueWorkModeFromContext(context);
+   if (wakeTaskId) env.PAPERCLIP_TASK_ID = wakeTaskId;
+   if (issueWorkMode) env.PAPERCLIP_ISSUE_WORK_MODE = issueWorkMode;
+@@ -280,7 +279,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+   if (approvalId) env.PAPERCLIP_APPROVAL_ID = approvalId;
+   if (approvalStatus) env.PAPERCLIP_APPROVAL_STATUS = approvalStatus;
+   if (linkedIssueIds.length > 0) env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
+-  if (wakePayloadJson) env.PAPERCLIP_WAKE_PAYLOAD_JSON = wakePayloadJson;
++  writePaperclipWakePayloadEnv(env, context.paperclipWake);
+   refreshPaperclipWorkspaceEnvForExecution({
+     env,
+     envConfig,
+diff --git a/packages/adapters/opencode-local/src/server/execute.ts b/packages/adapters/opencode-local/src/server/execute.ts
+index 18c70c9..0074968 100644
+--- a/packages/adapters/opencode-local/src/server/execute.ts
++++ b/packages/adapters/opencode-local/src/server/execute.ts
+@@ -42,7 +42,7 @@ import {
+   renderPaperclipWakePrompt,
+   selectPaperclipTaskMarkdown,
+   isPaperclipRecoveryWakePayload,
+-  stringifyPaperclipWakePayload,
++  writePaperclipWakePayloadEnv,
+   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
+   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
+   runChildProcess,
+@@ -297,7 +297,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+   const linkedIssueIds = Array.isArray(context.issueIds)
+     ? context.issueIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+     : [];
+-  const wakePayloadJson = stringifyPaperclipWakePayload(context.paperclipWake);
+   const issueWorkMode = readPaperclipIssueWorkModeFromContext(context);
+   if (wakeTaskId) env.PAPERCLIP_TASK_ID = wakeTaskId;
+   if (issueWorkMode) env.PAPERCLIP_ISSUE_WORK_MODE = issueWorkMode;
+@@ -306,7 +305,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+   if (approvalId) env.PAPERCLIP_APPROVAL_ID = approvalId;
+   if (approvalStatus) env.PAPERCLIP_APPROVAL_STATUS = approvalStatus;
+   if (linkedIssueIds.length > 0) env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
+-  if (wakePayloadJson) env.PAPERCLIP_WAKE_PAYLOAD_JSON = wakePayloadJson;
++  writePaperclipWakePayloadEnv(env, context.paperclipWake);
+   refreshPaperclipWorkspaceEnvForExecution({
+     env,
+     envConfig,
+diff --git a/packages/adapters/pi-local/src/server/execute.ts b/packages/adapters/pi-local/src/server/execute.ts
+index 5ed953c..84fb28e 100644
+--- a/packages/adapters/pi-local/src/server/execute.ts
++++ b/packages/adapters/pi-local/src/server/execute.ts
+@@ -47,7 +47,7 @@ import {
+   renderPaperclipWakePrompt,
+   selectPaperclipTaskMarkdown,
+   isPaperclipRecoveryWakePayload,
+-  stringifyPaperclipWakePayload,
++  writePaperclipWakePayloadEnv,
+   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
+   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
+   runChildProcess,
+@@ -302,7 +302,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+   const linkedIssueIds = Array.isArray(context.issueIds)
+     ? context.issueIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+     : [];
+-  const wakePayloadJson = stringifyPaperclipWakePayload(context.paperclipWake);
+   const issueWorkMode = readPaperclipIssueWorkModeFromContext(context);
+     
+   if (wakeTaskId) env.PAPERCLIP_TASK_ID = wakeTaskId;
+@@ -312,7 +311,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+   if (approvalId) env.PAPERCLIP_APPROVAL_ID = approvalId;
+   if (approvalStatus) env.PAPERCLIP_APPROVAL_STATUS = approvalStatus;
+   if (linkedIssueIds.length > 0) env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
+-  if (wakePayloadJson) env.PAPERCLIP_WAKE_PAYLOAD_JSON = wakePayloadJson;
++  writePaperclipWakePayloadEnv(env, context.paperclipWake);
+   refreshPaperclipWorkspaceEnvForExecution({
+     env,
+     envConfig,

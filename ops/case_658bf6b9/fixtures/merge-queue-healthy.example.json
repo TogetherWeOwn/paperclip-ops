@@ -1,0 +1,13 @@
+{
+  "_comment": "case_8bbe9e21 EXAMPLE FIXTURE — not live telemetry. Operator fallback for GH merge-queue reads until the merge-queue rule exists (case_082e9f7b: today every repo 404s). A clear queue: 1 entry enqueued 10m ago. Shape: the GET merge-queue list response (object with entries[]). NOTE: enqueuedAt is fixed, so under a live clock this fixture reads stale-by-design (a fixture is not a producer); it validates the HEALTHY mapping with a pinned clock.",
+  "entries": [
+    {
+      "id": "MQE_example_healthy_1",
+      "position": 1,
+      "state": "AWAITING_CHECKS",
+      "enqueuedAt": "2026-10-03T03:50:00.000Z",
+      "headCommit": { "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      "pullRequest": { "number": 101 }
+    }
+  ]
+}

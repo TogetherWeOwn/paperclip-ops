@@ -1,0 +1,46 @@
+[Unit]
+Description=Paperclip single recovery writer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Default the repair cap to the safe end: an unset or empty
+# PAPERCLIP_RECOVERY_WRITER_MAX_REPAIRS would otherwise expand to nothing and
+# shift every later argument left. Kept above EnvironmentFile= so the
+# operator's env file takes precedence -- systemd applies these in order, and
+# EnvironmentFile= is documented to override Environment= regardless, so the
+# env file wins under either reading.
+#
+# The env file carries credentials, the detector command, the identity
+# plumbing and the repair CAP only. Whether this cycle may write is decided
+# by run-recovery-writer.sh, which passes --apply literally on argv -- no
+# EnvironmentFile can supply that bit. The sweep-auto drift was a unit
+# labelled dry-run whose mode came from the environment; here the mode bit
+# lives in reviewed bundle bytes and the env file can only turn the volume
+# knob, never flip the mode. First live cycles run at cap 0 (observe-only:
+# decide and report, provably incapable of a write); the operator raises
+# the cap after the parallel-run comparison.
+Environment=PAPERCLIP_RECOVERY_WRITER_MAX_REPAIRS=0
+EnvironmentFile=%h/.config/paperclip/recovery-writer.env
+# The installer renders @SOURCE_REF@ from the independently reviewed 40-hex
+# commit and installs these bytes outside the mutable checkout.
+WorkingDirectory=/usr/local/libexec/paperclip-recovery-writer/@SOURCE_REF@
+ExecStartPre=/usr/bin/test -x /usr/local/libexec/paperclip-recovery-writer/@SOURCE_REF@/recovery_writer.py
+ExecStartPre=/usr/bin/test -x /usr/local/libexec/paperclip-recovery-writer/@SOURCE_REF@/run-recovery-writer.sh
+ExecStartPre=/usr/bin/test -x /usr/bin/timeout
+ExecStartPre=/usr/bin/sha256sum --check --strict /usr/local/libexec/paperclip-recovery-writer/@SOURCE_REF@/SHA256SUMS
+ExecStartPre=/usr/bin/python3 /usr/local/libexec/paperclip-recovery-writer/@SOURCE_REF@/recovery_writer.py --check-service-credential --preflight-issue-id ${PAPERCLIP_PREFLIGHT_ISSUE_ID} --preflight-agent-id ${PAPERCLIP_PREFLIGHT_AGENT_ID}
+ExecStart=/usr/bin/timeout --signal=TERM --kill-after=15s 4m /usr/local/libexec/paperclip-recovery-writer/@SOURCE_REF@/run-recovery-writer.sh
+TimeoutStartSec=5m
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# No ReadWritePaths: the writer keeps no on-disk state, and a writable path
+# under %h would contradict ProtectHome=read-only and fail the unit at start.
+# Receipts go to stdout (the journal) or --receipt-out on an operator path.
+UMask=0077
+
+[Install]
+WantedBy=default.target

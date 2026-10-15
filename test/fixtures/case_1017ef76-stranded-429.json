@@ -1,0 +1,136 @@
+{
+ "provenance": "case_1017ef76. Reconstructed from the live board at 2026-10-04T20:50Z, the moment the O1 planner measured 30 stranded cards (resume wake case_5dfa9e48 followed at 20:51Z). Each row is one real card as it stood just before that wake: newest comment = the 429 rejection (id, timestamp and the first line of the body, as recorded), no run, executionState.monitor 'triggered' with nextCheckAt null, blockerAttention.unresolvedBlockerCount 0, activeRecoveryAction null. agentRuns carry each assignee's newest succeeded heartbeat run that finished before 20:50:00Z.",
+ "now": "2026-10-04T20:50:00Z",
+ "assignedInProgress": [
+  {
+   "issueId": "00000000-0000-4000-8000-000000000144",
+   "identifier": "case_0e12073a",
+   "status": "in_progress",
+   "assigneeAgentId": "00000000-0000-4000-8000-000000000145",
+   "liveRunCount": 0,
+   "queuedRunCount": 0,
+   "unresolvedBlockerCount": 0,
+   "monitorNextCheckAt": null,
+   "activeRecoveryAction": null,
+   "newestComment": {
+    "id": "00000000-0000-4000-8000-000000000146",
+    "createdAt": "2026-10-04T16:11:43.924Z",
+    "body": "API Error: Request rejected (429) · All credentials for model claude-sonnet-5-5 are cooling down"
+   }
+  },
+  {
+   "issueId": "00000000-0000-4000-8000-000000000147",
+   "identifier": "case_a99daa6c",
+   "status": "in_progress",
+   "assigneeAgentId": "00000000-0000-4000-8000-000000000145",
+   "liveRunCount": 0,
+   "queuedRunCount": 0,
+   "unresolvedBlockerCount": 0,
+   "monitorNextCheckAt": null,
+   "activeRecoveryAction": null,
+   "newestComment": {
+    "id": "00000000-0000-4000-8000-000000000148",
+    "createdAt": "2026-10-04T17:17:28.801Z",
+    "body": "API Error: Request rejected (429) · All credentials for model claude-sonnet-5-5 are cooling down"
+   }
+  },
+  {
+   "issueId": "00000000-0000-4000-8000-000000000149",
+   "identifier": "case_0bf02bac",
+   "status": "in_progress",
+   "assigneeAgentId": "00000000-0000-4000-8000-000000000150",
+   "liveRunCount": 0,
+   "queuedRunCount": 0,
+   "unresolvedBlockerCount": 0,
+   "monitorNextCheckAt": null,
+   "activeRecoveryAction": null,
+   "newestComment": {
+    "id": "00000000-0000-4000-8000-000000000151",
+    "createdAt": "2026-10-04T16:18:08.409Z",
+    "body": "API Error: Request rejected (429) · All credentials for model claude-sonnet-5-5 are cooling down"
+   }
+  },
+  {
+   "issueId": "00000000-0000-4000-8000-000000000152",
+   "identifier": "case_1d10b79d",
+   "status": "in_progress",
+   "assigneeAgentId": "00000000-0000-4000-8000-000000000153",
+   "liveRunCount": 0,
+   "queuedRunCount": 0,
+   "unresolvedBlockerCount": 0,
+   "monitorNextCheckAt": null,
+   "activeRecoveryAction": null,
+   "newestComment": {
+    "id": "00000000-0000-4000-8000-000000000154",
+    "createdAt": "2026-10-04T16:10:50.320Z",
+    "body": "API Error: Request rejected (429) · All credentials for model claude-sonnet-5-5 are cooling down"
+   }
+  },
+  {
+   "issueId": "00000000-0000-4000-8000-000000000155",
+   "identifier": "case_89c0bb6e",
+   "status": "in_progress",
+   "assigneeAgentId": "00000000-0000-4000-8000-000000000049",
+   "liveRunCount": 0,
+   "queuedRunCount": 0,
+   "unresolvedBlockerCount": 0,
+   "monitorNextCheckAt": null,
+   "activeRecoveryAction": null,
+   "newestComment": {
+    "id": "00000000-0000-4000-8000-000000000156",
+    "createdAt": "2026-10-04T17:02:37.507Z",
+    "body": "API Error: Request rejected (429) · All credentials for model claude-sonnet-5-5 are cooling down"
+   }
+  },
+  {
+   "issueId": "00000000-0000-4000-8000-000000000157",
+   "identifier": "case_5cc8f0a3",
+   "status": "in_progress",
+   "assigneeAgentId": "00000000-0000-4000-8000-000000000153",
+   "liveRunCount": 0,
+   "queuedRunCount": 0,
+   "unresolvedBlockerCount": 0,
+   "monitorNextCheckAt": null,
+   "activeRecoveryAction": null,
+   "newestComment": {
+    "id": "00000000-0000-4000-8000-000000000158",
+    "createdAt": "2026-10-04T16:17:17.408Z",
+    "body": "API Error: Request rejected (429) · All credentials for model claude-sonnet-5-5 are cooling down"
+   }
+  },
+  {
+   "issueId": "00000000-0000-4000-8000-000000000159",
+   "identifier": "case_df697f05",
+   "status": "in_progress",
+   "assigneeAgentId": "00000000-0000-4000-8000-000000000049",
+   "liveRunCount": 0,
+   "queuedRunCount": 0,
+   "unresolvedBlockerCount": 0,
+   "monitorNextCheckAt": null,
+   "activeRecoveryAction": null,
+   "newestComment": {
+    "id": "00000000-0000-4000-8000-000000000160",
+    "createdAt": "2026-10-04T16:10:55.818Z",
+    "body": "API Error: Request rejected (429) · All credentials for model claude-sonnet-5-5 are cooling down"
+   }
+  }
+ ],
+ "agentRuns": [
+  {
+   "agentId": "00000000-0000-4000-8000-000000000145",
+   "lastSucceededAt": "2026-10-04T20:43:19Z"
+  },
+  {
+   "agentId": "00000000-0000-4000-8000-000000000150",
+   "lastSucceededAt": "2026-10-04T20:46:09Z"
+  },
+  {
+   "agentId": "00000000-0000-4000-8000-000000000153",
+   "lastSucceededAt": "2026-10-04T20:36:19Z"
+  },
+  {
+   "agentId": "00000000-0000-4000-8000-000000000049",
+   "lastSucceededAt": "2026-10-04T20:47:37Z"
+  }
+ ]
+}

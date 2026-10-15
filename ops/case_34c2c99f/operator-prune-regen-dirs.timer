@@ -1,0 +1,10 @@
+[Unit]
+Description=Every 10 min: strip regenerable dirs from finished Operator run folders
+
+[Timer]
+OnCalendar=*:02/10
+Persistent=true
+Unit=operator-prune-regen-dirs.service
+
+[Install]
+WantedBy=timers.target

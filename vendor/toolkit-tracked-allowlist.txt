@@ -1,0 +1,10 @@
+# Toolkit-manifest paths knowingly TRACKED in this repo (diverged from the tag;
+# sync-toolkit.sh restores around them so CI tests the tree, not the tag).
+# sync-toolkit.sh FAILS if any other manifest path is tracked: a vendored file
+# committed back by accident would otherwise be tested stale with nothing red.
+omniroute/case_05be2d4e-combo-allowlist.txt
+omniroute/case_05be2d4e-combo-specs.json
+omniroute/case_05be2d4e-mapping-plan.json
+plugins/omniroute-broker/dist/approvals.js
+plugins/omniroute-broker/dist/audit.js
+plugins/omniroute-broker/dist/manifest.js

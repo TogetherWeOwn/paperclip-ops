@@ -1,0 +1,89 @@
+# case_96fed9da — Router enforce-readiness probe Gatus module.
+#
+# DEPLOYMENT (source-only slice): this file is a FRAGMENT, not the live
+# config. The operator concatenates it into gatus-config.yaml at deploy time
+# (see MODULES.md "wiring"). Nothing here runs until the operator deploys it —
+# there is no host deploy in this slice, and no live monitor enrollment.
+# No alert route is created or changed by this slice: the `alerts:` entries
+# below are the standard discord+custom pair every module declares so the
+# endpoint is pageable once wired; the wiring itself is an operator step.
+#
+# WHAT IT COVERS (parent case_66436e78; builds on done case_3d05301b): one pushed
+# external endpoint, `router/enforce-readiness`, fed by
+# push-enforce-readiness.sh every 5 min from a local case_3d05301b
+# enforce-readiness readout file (schema case_1320d1f5-enforce-readiness-v1):
+# per-tier enabled-row counts (gap list) plus the case_d5f0e2f5 enforce
+# preflight gate mirrored as pass/fail. HEALTHY exactly when the readout's
+# own verdict is "ready" and the readout is fresh; DEGRADED on a not-ready
+# verdict, a stale/future/unreadable readout, or a wrong-schema input. The
+# push message names the empty tiers and the failing blocking gates so the
+# page shows WHY enforce would refuse, not just up/down.
+#
+# COMPLEMENTS, DOES NOT DUPLICATE:
+# - case_3d05301b itself (the probe): this module is the status-page surface
+#   for its verdict. It re-evaluates nothing — verdict, gap list and gate
+#   status are read, never recomputed — and it changes no routing state.
+# - case_f3715a38 shadow-window (shadow-log freshness + window-landing gauge):
+#   a different router fact on different inputs. A stale shadow log says
+#   nothing about tier coverage and an empty tier says nothing about log
+#   freshness; neither module reads the other's inputs.
+# - case_8936ffd2 lag-detector sweep (decision-log freshness), case_3097ed32
+#   stale-pin cleanup (this probe never cleans pins), case_d5f0e2f5 (the live
+#   config-resolve refusal; this module mirrors its empty-tier rule as a
+#   readout, never as a resolve path), case_adc03405 enforce path (actual pin
+#   writes; this module never writes).
+# Other non-goals live elsewhere: proposal-delivery metric (case_07aa689b),
+# queue wait-time SLO (case_1555b1d1), staging alert drill (case_93aed7ff), Keeper
+# freshness (case_5605c29e).
+#
+# INPUT CONTRACT: ENFORCE_READINESS points at a case_1320d1f5-enforce-readiness-v1
+# JSON object. Required fields: verdict ("ready"|"not-ready"), evaluatedAt
+# (probe-observed epoch ms). Advisory fields: emptyTiers (tier names),
+# gates ([{gate, pass, blocking, reason}] — only blocking=false failures are
+# ignored), enforceAllowed, selectionModeObserved. Until a live producer
+# lands, the operator may point ENFORCE_READINESS at a checked-in example
+# fixture (fixtures/enforce-readiness-ready.example.json or
+# fixtures/enforce-readiness-notready.example.json — clearly labelled, not
+# live telemetry).
+#
+# HEALTHY/DEGRADED MAPPING: HEALTHY (success=true) exactly when verdict is
+# "ready" AND the readout is fresh (evaluatedAt within
+# READINESS_STALE_AFTER_SEC, default 3600 — one hour, the blind-monitor
+# horizon: a readiness producer that stops writing reads as stale within the
+# hour, never as healthy silence). DEGRADED (success=false) on a not-ready
+# verdict, on evaluatedAt older than the horizon or in the future (clock or
+# producer corrupt), or on missing/malformed/wrong-schema input.
+#
+# FAIL-CLOSED: an unreadable or corrupt input pushes success=false, never a
+# silent skip. Missing ENFORCE_READINESS / GATUS_URL / GATUS_EXTERNAL_TOKEN
+# refuses (exit 2) before touching the network.
+#
+# READ-ONLY / NO SECRETS: the push script reads one local JSON file and
+# POSTs one boolean — no fetches, no ledger writes, no admission, no pacing
+# or enforcement change. Every token is a ${ENV} reference resolved from the
+# root-only 0600 env file on the host. The offline suite
+# (test_case_60330d6f_enforce_readiness.sh) fails the build on any secret-shaped
+# string in this file.
+#
+# Pushed by push-enforce-readiness.sh cron (every 5 min). External key:
+#   router_enforce-readiness
+# (per-source fan-out via ENFORCE_KEY_SUFFIX, e.g.
+# router_enforce-readiness-canary — each extra key needs its own
+# external-endpoint entry here at wiring time).
+# Push: POST /api/v1/endpoints/<key>/external?success=<bool>&error=<msg>
+# with Authorization: Bearer ${GATUS_EXTERNAL_TOKEN} (curl config file,
+# never argv — see _gatus_push.sh). Heartbeat 10m = 2x cron cadence.
+# The push script also prints a one-line case_080c50a9-enforce-readiness-v1 JSON
+# verdict to the cron log, so the module returns JSON on fixtures.
+
+external-endpoints:
+  - name: enforce-readiness
+    group: router
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "Router enforce readiness not-ready or unreadable (fail-closed DOWN)"
+      - type: custom
+        description: "Router enforce readiness not-ready or unreadable (fail-closed DOWN)"

@@ -1,0 +1,33 @@
+# ops/case_ebbb469a/gatus-endpoints.yaml — case_ebbb469a
+#
+# MERGE: append the entry below under the host Gatus config's
+# `external-endpoints:` list (see ops/case_658bf6b9/gatus-config.yaml for the
+# alerting providers it reuses: discord + the Akmatori Alertmanager feed).
+# Values arrive via push-runner-census.py on cron (every 5m); a missed 10m
+# heartbeat fails closed (UNKNOWN, never healthy). Cron install is a separate
+# CEO Operator card, same as the case_658bf6b9 push scripts.
+#
+# Push key derivation (same as case_658bf6b9): <group>_<name> => platform_runner-census.
+#
+# The alert description names the THRESHOLD that breached, the OWNER and the
+# RUNBOOK, so the page itself says what broke and who acts (case_9b48cd0a). No
+# secret lives here: the only variable is the shared external token, resolved
+# from the root-only 0600 env file on the host.
+#
+# minimum-reminder-interval re-pages hourly while a breach holds (same as
+# ci-queue-age in ops/case_658bf6b9/gatus-config.yaml); recovery closes the incident
+# through each provider's default send-on-resolved.
+
+external-endpoints:
+  - name: runner-census
+    group: platform
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "Runner census breach (see push-runner-census log). THRESHOLD queued demand older than 15m for a label with 0 online runners; a runner carrying both two-isolated and two-selfhosted; or an UNKNOWN census (API 403, malformed or truncated read, stale queued file). OWNER devops. RUNBOOK ops/case_ebbb469a/OPERATOR.md#runner-census"
+        minimum-reminder-interval: 60m
+      - type: custom
+        description: "Runner census breach (see push-runner-census log). THRESHOLD queued demand older than 15m for a label with 0 online runners; a runner carrying both two-isolated and two-selfhosted; or an UNKNOWN census (API 403, malformed or truncated read, stale queued file). OWNER devops. RUNBOOK ops/case_ebbb469a/OPERATOR.md#runner-census"
+        minimum-reminder-interval: 60m

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the case_5bc31800 sweeper watchdog every 2 hours at :17 (matches the retired routine's cadence)
+
+[Timer]
+OnCalendar=*-*-* 0/2:17:00
+RandomizedDelaySec=60s
+AccuracySec=30s
+Persistent=true
+Unit=paperclip-case_d376bf4e-sweeper-watchdog.service
+
+[Install]
+WantedBy=timers.target

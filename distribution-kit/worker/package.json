@@ -1,0 +1,10 @@
+{
+  "name": "probe-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reusable consent-first probe Worker (isolated tests only; not deployed)",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

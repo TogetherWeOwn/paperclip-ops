@@ -1,0 +1,35 @@
+{
+  "agents": [
+    {
+      "id": "a-behind",
+      "name": "agent-behind",
+      "runtimeConfig": {
+        "heartbeat": {"enabled": true, "wakeOnDemand": true, "maxConcurrentRuns": 2},
+        "modelProfiles": {"default": "claude-sonnet-5-5"}
+      }
+    },
+    {
+      "id": "a-ahead",
+      "name": "agent-ahead",
+      "runtimeConfig": {
+        "heartbeat": {"enabled": true, "wakeOnDemand": true, "maxConcurrentRuns": 3},
+        "modelProfiles": {"default": "claude-sonnet-5-5"},
+        "dailyCaps": {"runs": 200}
+      }
+    },
+    {
+      "id": "a-crit",
+      "name": "agent-crit",
+      "runtimeConfig": {
+        "heartbeat": {"enabled": true, "wakeOnDemand": false, "maxConcurrentRuns": 2}
+      }
+    },
+    {
+      "id": "a-mixed",
+      "name": "agent-mixed",
+      "runtimeConfig": {
+        "heartbeat": {"enabled": false, "wakeOnDemand": true, "maxConcurrentRuns": 2}
+      }
+    }
+  ]
+}

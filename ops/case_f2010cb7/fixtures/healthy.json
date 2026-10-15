@@ -1,0 +1,28 @@
+[
+  {
+    "name": "node7b1ff338",
+    "disk_used_percent": 42.5,
+    "inode_used_percent": 12.0,
+    "cpu_used_percent": 25.0,
+    "mem_used_percent": 60.0,
+    "load15_per_cpu": 0.8,
+    "failed_units": 0,
+    "container_restarts_24h": 0,
+    "disk_total_bytes": 107374182400,
+    "disk_history": [
+      {"t": 1759400000, "used_bytes": 45000000000},
+      {"t": 1759486400, "used_bytes": 45100000000},
+      {"t": 1759572800, "used_bytes": 45200000000}
+    ]
+  },
+  {
+    "name": "ovh-1",
+    "disk_used_percent": 61.0,
+    "inode_used_percent": 30.0,
+    "cpu_used_percent": 40.0,
+    "mem_used_percent": 55.5,
+    "load15_per_cpu": 1.2,
+    "failed_units": [],
+    "container_restarts_24h": 2
+  }
+]

@@ -1,0 +1,142 @@
+# ===========================================================================
+# Caddy site block for host-ops-mcp (case_16723128).
+#
+# Substitute (standalone-site template form):
+#   MCP_HOSTNAME      the public hostname, e.g. host-ops-mcp.example.com
+#                     (a DIFFERENT hostname from org-request-mcp — one name per
+#                     transport, so a bearer for one is useless at the other).
+#                     On THIS host prefer the handle deployment below instead
+#                     (no new hostname), and read MCP_HOSTNAME as the existing
+#                     site name (`host-48c35084.example.invalid`).
+#   HOST_EGRESS_IP    this host's public egress as Caddy sees it after
+#                     de-proxying (192.0.2.239 on this host; re-check
+#                     with the operator if the host's egress ever changes).
+#                     A container-IP allowlist is deliberately NOT a variable
+#                     here: behind Cloudflare Caddy never sees the container
+#                     peer, so it would 403 every real call (case_96d4d8b5
+#                     preflight).
+#
+# DEPLOYMENT CHOICE ON THIS HOST (case_96d4d8b5 preflight).
+# The live org-request-mcp transport on this host is NOT a standalone site:
+# it is a `handle` under the existing `host-48c35084.example.invalid` site (host
+# /etc/caddy/Caddyfile:23-29), guarded by
+# `not client_ip 192.0.2.239 127.0.0.1`. Prefer the same shape for
+# host-ops — a second handle (`handle_path /host-ops/*`, so
+# `/host-ops/mcp` strips to `/mcp` upstream) under that site — so there is no new
+# hostname, no new DNS record, and the site's TLS plus the global Cloudflare
+# `trusted_proxies` apply as-is. This file stays a standalone-site template
+# for portability; on THIS host the operator deploys its §§1-5 as that
+# handle (see host-ops-install-runbook.md §4). If a new hostname is chosen
+# instead, it needs its own Cloudflare-proxied DNS record first, and §2
+# below must still use `client_ip`.
+#
+# THE BEARER REACHES CADDY THROUGH ITS ENVIRONMENT, AND ONLY THAT WAY.
+#   `{$HOST_OPS_MCP_BEARER}` in section 3 is expanded from Caddy's own process
+#   environment when the config loads. Put it there with a systemd drop-in that
+#   reads a 0600 root-owned env file — systemd reads that file itself, so the
+#   credential exists in exactly ONE place on this host and has exactly one
+#   consumer:
+#
+#     printf 'HOST_OPS_MCP_BEARER=%s\n' "$bearer" | sudo tee /etc/caddy/host-ops-mcp.env >/dev/null
+#     sudo chmod 600 /etc/caddy/host-ops-mcp.env
+#     sudo chown root:root /etc/caddy/host-ops-mcp.env
+#     sudo systemctl edit caddy      # [Service]
+#                                    # EnvironmentFile=/etc/caddy/host-ops-mcp.env
+#     sudo systemctl restart caddy   # RESTART, not reload — a reload does not
+#                                    # re-read the unit environment.
+#
+#   A DIFFERENT bearer from org-request-mcp's. One credential per transport:
+#   rotating or revoking one must not move the other.
+#
+# WHY THIS EXISTS
+#   The MCP server binds 127.0.0.1 and is never published. The Paperclip tool
+#   gateway runs INSIDE the container and cannot reach host loopback, and the
+#   gateway's SSRF guard refuses private addresses on this deployment
+#   (PAPERCLIP_DEPLOYMENT_MODE=authenticated + EXPOSURE=public), so it cannot
+#   be pointed at 10.89.x.x either. A public hostname in front of a loopback
+#   origin is the only remaining route, and it is the one the issue's own
+#   "behind the established Caddy pattern" clause sanctions.
+#
+#   Caddy terminates TLS and the bearer. It is NOT a naked passthrough: an
+#   unauthenticated request never reaches the origin.
+# ===========================================================================
+
+MCP_HOSTNAME {
+
+	# --- 1. Only /mcp exists. ------------------------------------------------
+	# Everything else is refused at the edge, so an internet-wide scanner
+	# learns nothing about what is behind this name.
+	@notmcp not path /mcp
+	respond @notmcp 404
+
+	# --- 2. Source restriction. ---------------------------------------------
+	# The ONLY legitimate client is the Paperclip tool gateway running in the
+	# container on this host. This is not optional: it is what keeps a leaked
+	# bearer from being usable from the open internet.
+	#
+	# THIS HOST IS BEHIND CLOUDFLARE (case_96d4d8b5 preflight). The host Caddyfile
+	# sets a global Cloudflare `trusted_proxies` (/etc/caddy/Caddyfile:11),
+	# and every public hostname arrives through Cloudflare — so `remote_ip`
+	# here is a Cloudflare edge peer, NEVER the gateway. A `remote_ip`
+	# allowlist would 403 every real gateway call. Match the live,
+	# working org-request-mcp transport on this host instead: `client_ip`
+	# (the client address restored through the already-trusted Cloudflare
+	# proxies) allowlisting the host egress plus loopback, as a `handle`
+	# under the existing site (host Caddyfile:23-29):
+	#   not client_ip 192.0.2.239 127.0.0.1
+	# Do NOT reintroduce `remote_ip` here, and do NOT add a per-site
+	# `trusted_proxies` — the global one is the trust root `client_ip`
+	# depends on. `HOST_EGRESS_IP` is this host's public egress as Caddy
+	# sees it after de-proxying (192.0.2.239 on this host; re-check
+	# with the operator if the host's egress ever changes).
+	@notlocal not client_ip HOST_EGRESS_IP 127.0.0.1
+	respond @notlocal 403
+
+	# --- 3. Bearer termination. ---------------------------------------------
+	# The credential lives in Paperclip's secret store on the gateway side and
+	# in Caddy's unit environment here. It is NEVER in transport_config.url and
+	# never on a command line.
+	#
+	# `{$HOST_OPS_MCP_BEARER}` is substituted by Caddy at config-load time from the
+	# environment, so the literal never appears in this file — which is the file
+	# that tends to get copied into a ticket.
+	@unauthorized not header Authorization "Bearer {$HOST_OPS_MCP_BEARER}"
+	respond @unauthorized 401 {
+		# Deliberately NO WWW-Authenticate header. The Paperclip gateway treats
+		# a 401 carrying a bearer/oauth WWW-Authenticate as a signal to go
+		# discover OAuth endpoints on us; we are not an OAuth server, and that
+		# discovery would bury the real cause — a wrong bearer — under a
+		# protocol error.
+		close
+	}
+
+	# --- 4. Origin. ---------------------------------------------------------
+	reverse_proxy 127.0.0.1:8392 {
+		# Strip anything the client sent that could be mistaken for a
+		# gateway-stamped identity. The origin fails closed on a missing
+		# x-paperclip-agent-id, but it CANNOT tell a forwarded header from a
+		# forged one, so the untrusted copies are removed here, at the only
+		# layer that knows the difference.
+		header_up -X-Forwarded-For-Original
+		header_up X-Real-IP {remote_host}
+
+		# The origin is a small node process; a slow upstream should surface as
+		# a timeout rather than an accumulating pile of open sockets. 130s
+		# covers the broker poll interval plus executor time with headroom.
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 130s
+		}
+	}
+
+	# --- 5. Logging. --------------------------------------------------------
+	# Request lines only. The Authorization header must never reach a log file
+	# on a shared host; Caddy does not log headers by default, and nothing here
+	# turns that on.
+	log {
+		output file /var/log/caddy/host-ops-mcp.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

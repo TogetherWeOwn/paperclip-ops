@@ -1,0 +1,17 @@
+{
+  "_comment": "case_db57ba1a EXAMPLE FIXTURE — not live telemetry. Operator reference for the FRESH mapping until the live producer lands. A fresh pool: 1 running+idle instance whose updated_at is 2m before the pinned suite clock (2026-10-03T04:00:00Z). Shape: the garm-cli pool show JSON (id, enabled, min_idle_runners, max_runners, provider_name, instances[]). NOTE: timestamps are fixed, so under a live clock this fixture reads stale-by-design (a fixture is not a producer); it validates the FRESH mapping with a pinned clock.",
+  "id": "pool-fresh1111-bbbb-cccc-dddd-eeeeffff0000",
+  "enabled": true,
+  "min_idle_runners": 0,
+  "max_runners": 5,
+  "provider_name": "lxd",
+  "instances": [
+    {
+      "name": "runner-fresh-01",
+      "status": "running",
+      "runner_status": "idle",
+      "created_at": "2026-10-03T03:30:00Z",
+      "updated_at": "2026-10-03T03:58:00Z"
+    }
+  ]
+}

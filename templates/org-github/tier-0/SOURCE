@@ -1,0 +1,15 @@
+# Recorded source pin for the staged Tier-0 port (case_34675099).
+#
+# The files under tier-0/ are a port of this commit, not a fork: do not
+# hand-edit the port. Fix upstream (PR #824), then re-port and bump
+# SOURCE_SHA here. check-staged-drift.sh (next to this file's parent dir)
+# diffs the staged files against the source at SOURCE_SHA and fails naming
+# the drifted file(s) plus the re-port command.
+#
+# Layout of the port (paths relative to the paperclip-ops root):
+#   source .github/workflows/tier-0-quality-gate.yml -> staged tier-0/tier-0-quality-gate.yml
+#     (header-only delta: the staged copy swaps the source header for the
+#     org-facing header; bodies from the `name:` line on must match exactly)
+#   source semgrep-rules/<file> -> staged tier-0/semgrep-rules/<file> (verbatim)
+SOURCE_SHA=61754d9dd4cc93cf4d61ea48b681e7b73fed5605
+SOURCE_PR=824

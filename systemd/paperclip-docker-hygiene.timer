@@ -1,0 +1,12 @@
+[Unit]
+Description=Prune dangling Docker images and build cache weekly (case_b0e822f6)
+
+[Timer]
+OnCalendar=Sun *-*-* 03:20:00
+RandomizedDelaySec=10m
+AccuracySec=1m
+Persistent=true
+Unit=paperclip-docker-hygiene.service
+
+[Install]
+WantedBy=timers.target

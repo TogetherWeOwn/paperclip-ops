@@ -1,0 +1,26 @@
+[Unit]
+Description=Gated Healthchecks.io check-in for product bridge
+# Single gated attempt per tick: pings ONLY after confirming fresh healthy
+# consumer completion AND a fresh watcher heartbeat. Fail-closed: any stale
+# or unreadable side suppresses the ping (exit 0, journal note) so the
+# provider deadline runs toward the Discord alert. No repeating scheduler
+# lives in the script; this unit is the only 60s driver.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/node %h/.local/lib/gh-product-bridge/current/gh-event-capture/scripts/healthchecks-checkin.mjs %h/secure-drop/gh-product-bridge/runtime.json
+WorkingDirectory=%h/.local/lib/gh-product-bridge/current/gh-event-capture
+Environment="PATH=%h/secure-drop/gh-product-bridge/bin:/usr/local/bin:/usr/bin:/bin"
+UnsetEnvironment=PAPERCLIP_API_KEY PAPERCLIP_RUN_ID GH_TOKEN GITHUB_TOKEN NODE_OPTIONS NODE_PATH HC_PING_FILE HC_CHECKIN_ALLOW_HTTP_LOOPBACK
+UMask=0077
+TimeoutStartSec=15s
+TimeoutStopSec=3s
+TimeoutStartFailureMode=terminate
+KillMode=control-group
+KillSignal=SIGTERM
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
+Restart=no
+NoNewPrivileges=yes
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,121 @@
+# ===========================================================================
+# Caddy site block for org-request-mcp (case_d5cbfb18).
+#
+# Substitute:
+#   MCP_HOSTNAME      the public hostname, e.g. org-mcp.example.com
+#   CONTAINER_EGRESS  the container's egress address as seen by the host.
+#                     Find it with the engine this host answers to (case_d8f38556:
+#                     node7b1ff338 is Docker-only):  docker inspect -f '{{.NetworkSettings.IPAddress}}' <paperclip-container>
+#                     On a podman box the network is 192.0.2.49/23; measure it on
+#                     this host rather than copying that prefix.
+#
+# THE BEARER REACHES CADDY THROUGH ITS ENVIRONMENT, AND ONLY THAT WAY.
+#   `{$ORG_MCP_BEARER}` in section 3 is expanded from Caddy's own process
+#   environment when the config loads. Put it there with a systemd drop-in that
+#   reads a 0600 root-owned env file — systemd reads that file itself, so the
+#   credential exists in exactly ONE place on this host and has exactly one
+#   consumer:
+#
+#     printf 'ORG_MCP_BEARER=%s\n' "$bearer" | sudo tee /etc/caddy/org-request-mcp.env >/dev/null
+#     sudo chmod 600 /etc/caddy/org-request-mcp.env
+#     sudo chown root:root /etc/caddy/org-request-mcp.env
+#     sudo systemctl edit caddy      # [Service]
+#                                    # EnvironmentFile=/etc/caddy/org-request-mcp.env
+#     sudo systemctl restart caddy   # RESTART, not reload — a reload does not
+#                                    # re-read the unit environment.
+#
+#   Deliberately NOT a bare file something is expected to `cat`. An earlier
+#   draft of these docs had the operator write the bearer to
+#   /etc/caddy/org-request-mcp.bearer, which nothing ever read (case_0409633c): a
+#   plaintext credential on disk with no consumer is a credential with no
+#   reason to exist. If you find that file on a host, it is from that draft —
+#   remove it.
+#
+# WHY THIS EXISTS
+#   The MCP server binds 127.0.0.1 and is never published. The Paperclip tool
+#   gateway runs INSIDE the container and cannot reach host loopback, and the
+#   gateway's SSRF guard refuses private addresses on this deployment
+#   (PAPERCLIP_DEPLOYMENT_MODE=authenticated + EXPOSURE=public), so it cannot
+#   be pointed at 10.89.x.x either. A public hostname in front of a loopback
+#   origin is the only remaining route, and it is the one the issue's own
+#   "behind the established Caddy pattern" clause sanctions.
+#
+#   Caddy terminates TLS and the bearer. It is NOT a naked passthrough: an
+#   unauthenticated request never reaches the origin.
+# ===========================================================================
+
+MCP_HOSTNAME {
+
+	# --- 1. Only /mcp exists. ------------------------------------------------
+	# Everything else is refused at the edge, so an internet-wide scanner
+	# learns nothing about what is behind this name.
+	@notmcp not path /mcp
+	respond @notmcp 404
+
+	# --- 2. Source restriction. ---------------------------------------------
+	# The ONLY legitimate client is the Paperclip tool gateway running in the
+	# container on this host. This is condition 5 of the approval and it is not
+	# optional: it is what keeps a leaked bearer from being usable from the
+	# open internet.
+	#
+	# NOTE the ordering. `remote_ip` here is the real peer address because this
+	# block does not trust any forwarded header — do NOT add `trusted_proxies`
+	# or a `client_ip` matcher unless something genuinely fronts Caddy, or this
+	# control becomes spoofable by an `X-Forwarded-For` the attacker chooses.
+	@notlocal not remote_ip CONTAINER_EGRESS 127.0.0.1
+	respond @notlocal 403
+
+	# --- 3. Bearer termination. ---------------------------------------------
+	# The credential lives in Paperclip's secret store on the gateway side and
+	# in Caddy's unit environment here. It is NEVER in transport_config.url (the
+	# Zapier antipattern the issue calls out) and never on a command line.
+	#
+	# `{$ORG_MCP_BEARER}` is substituted by Caddy at config-load time from the
+	# environment, so the literal never appears in this file — which is the file
+	# that tends to get copied into a ticket. See the header for how the
+	# environment gets set.
+	@unauthorized not header Authorization "Bearer {$ORG_MCP_BEARER}"
+	respond @unauthorized 401 {
+		# Deliberately NO WWW-Authenticate header. The Paperclip gateway treats
+		# a 401 carrying a bearer/oauth WWW-Authenticate as a signal to go
+		# discover OAuth endpoints on us (tool-access.ts remoteTools); we are
+		# not an OAuth server, and that discovery would bury the real cause —
+		# a wrong bearer — under a protocol error.
+		close
+	}
+
+	# --- 4. Origin. ---------------------------------------------------------
+	reverse_proxy 127.0.0.1:8391 {
+		# Strip anything the client sent that could be mistaken for a
+		# gateway-stamped identity. The origin fails closed on a missing
+		# x-paperclip-agent-id, but it CANNOT tell a forwarded header from a
+		# forged one, so the untrusted copies are removed here, at the only
+		# layer that knows the difference.
+		#
+		# This does not remove the gateway's own headers: those arrive from the
+		# gateway on the request Caddy is proxying, and `header_up -X` removes
+		# only what would otherwise be passed through from an untrusted peer
+		# claiming to be it. Combined with (2), the only peer that can set
+		# these at all is the container's gateway.
+		header_up -X-Forwarded-For-Original
+		header_up X-Real-IP {remote_host}
+
+		# The origin is a small node process; a slow upstream should surface as
+		# a timeout rather than an accumulating pile of open sockets.
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 130s
+		}
+	}
+
+	# --- 5. Logging. --------------------------------------------------------
+	# Request lines only. The Authorization header must never reach a log file
+	# on a shared host; Caddy does not log headers by default, and nothing here
+	# turns that on.
+	log {
+		output file /var/log/caddy/org-request-mcp.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

@@ -1,0 +1,5 @@
+[
+  {"id":"r1","agentId":"agent-a","status":"succeeded","createdAt":"2026-10-07T02:30:00Z","finishedAt":"2026-10-07T02:32:00Z","errorCode":null,"contextSnapshot":{"issueId":"issue-a","wakeReason":"dispatch_stalled_issue"}},
+  {"id":"r2","agentId":"agent-a","status":"failed","createdAt":"2026-10-07T02:40:00Z","finishedAt":"2026-10-07T02:41:00Z","errorCode":"setup_failed","contextSnapshot":{"issueId":"issue-a","wakeReason":"issue_commented","wakeCommentId":"comment-a"}},
+  {"id":"r3","agentId":"agent-a","status":"succeeded","createdAt":"2026-10-07T02:50:00Z","finishedAt":"2026-10-07T02:55:00Z","errorCode":null,"contextSnapshot":{"issueId":"issue-b","wakeReason":"issue_assigned"}}
+]

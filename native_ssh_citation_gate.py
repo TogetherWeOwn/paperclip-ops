@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""Re-validate every ADR citation for case_01fa2cdd against the installed Paperclip tree.
+
+The ADR (docs/native-ssh-os-authority-split.md) names exact `file:line` seams. Line
+numbers rot silently: a citation that drifts still *reads* authoritative, and a seam
+that was never deployed reads identical to one that was. Both failures previously
+reached a board comment as fact.
+
+Each citation is therefore keyed on ANCHOR TEXT, not on a line number. The gate
+reports three distinct outcomes, and only the first is clean:
+
+  present   anchor found; the recorded line is correct
+  drifted   anchor found at a DIFFERENT line; the ADR's number is stale
+  absent    anchor not found in the installed tree at all
+
+`absent` is the load-bearing case. A seam accepted on a branch but never deployed is
+absent here, and calling that "protected" is the exact error this gate exists to stop.
+
+Read-only. Never prints file contents beyond the matched anchor line.
+
+Exit codes:
+  0  every citation present at its recorded line
+  1  one or more citations drifted or absent
+  2  usage or audit error
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import sys
+from typing import Any
+
+# (key, path, recorded_line, anchor_substring, why_it_matters)
+#
+# recorded_line is what the ADR asserts today. anchor is a substring unique within
+# the file. Uniqueness is enforced at runtime: a non-unique anchor is an audit error,
+# not a silent first-match, because a first-match resolver reads the wrong site.
+CITATIONS: tuple[tuple[str, str, int, str, str], ...] = (
+    (
+        "spawn_target_resolver",
+        "/app/packages/adapter-utils/src/server-utils.ts",
+        2338,
+        "async function resolveSpawnTarget(",
+        "constructs the ssh spawn target; the native-SSH carrier",
+    ),
+    (
+        "ssh_resolved_no_guard",
+        "/app/packages/adapter-utils/src/server-utils.ts",
+        2351,
+        'const sshResolved = await resolveCommandPath("ssh", process.cwd(), env)',
+        "ssh is resolved here with no assigned-model/authority throw preceding it",
+    ),
+    (
+        "child_spawn_site",
+        "/app/packages/adapter-utils/src/server-utils.ts",
+        3248,
+        "const child = spawn(target.command, target.args, {",
+        "the shared child-process spawn seam",
+    ),
+    (
+        "run_child_process",
+        "/app/packages/adapter-utils/src/server-utils.ts",
+        3194,
+        "function runChildProcess",
+        "narrow seam; insufficient alone, ACP and in-process adapters bypass it",
+    ),
+    (
+        "ssh_argv_builder",
+        "/app/packages/adapter-utils/src/ssh.ts",
+        1224,
+        "export async function buildSshSpawnTarget(",
+        "builds remote command/argv/cwd/env",
+    ),
+    (
+        "remote_runtime_staging",
+        "/app/packages/adapter-utils/src/remote-managed-runtime.ts",
+        128,
+        'path.posix.join(workspaceRemoteDir, ".paperclip-runtime", input.adapterKey)',
+        "runtime staged into an agent-writable remote tree; non-authoritative",
+    ),
+    (
+        "adapter_execute_seam",
+        "/app/server/src/services/heartbeat.ts",
+        15564,
+        "adapterResult = await adapter.execute(",
+        "the complete per-run executor boundary the ADR selects",
+    ),
+    (
+        "plugin_dynamic_import",
+        "/app/server/src/adapters/plugin-loader.ts",
+        180,
+        "const mod = await import(modulePath)",
+        "external adapter code loaded into the server process",
+    ),
+    (
+        "acpx_runtime_options",
+        "/app/packages/adapter-utils/src/acpx-engine/execute.ts",
+        3283,
+        "const runtimeOptions: PaperclipAcpRuntimeOptions = {",
+        "ACP builds its runtime outside runChildProcess()",
+    ),
+    (
+        "decision_signing_uid_check",
+        "/app/server/src/services/decision-signing.ts",
+        17,
+        "stats.uid !== currentUserId",
+        "signing key is bound to the CURRENT process uid, which is the agent uid",
+    ),
+)
+
+# Symbols the case_e4054a66 acceptance comment cited as deployed protection. Each must be
+# ABSENT from the installed tree for the gate's "not deployed" finding to hold. If one
+# appears, the finding is stale and the ADR must be re-reviewed, so presence fails.
+ABSENT_EXPECTED: tuple[tuple[str, str], ...] = (
+    ("hostExecutor", "case_e4054a66 host-executor seam"),
+    ("HostExecutor", "case_e4054a66 host-executor seam (type)"),
+    ("assertAssignedModel", "case_e4054a66 pre-dispatch assigned-model throw"),
+    ("launchAuthorization", "signer-issued launch envelope"),
+)
+
+ABSENT_SCAN_FILES: tuple[str, ...] = (
+    "/app/packages/adapter-utils/src/server-utils.ts",
+    "/app/packages/adapter-utils/src/ssh.ts",
+)
+
+
+def find_anchor(path: Path, anchor: str) -> tuple[str, int | None, str]:
+    """Return (state, line_number, detail). State is present/absent/error."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return "absent", None, "file_not_found"
+    except OSError as exc:
+        return "error", None, f"unreadable: {exc.strerror}"
+
+    hits = [i for i, line in enumerate(text.splitlines(), start=1) if anchor in line]
+    if not hits:
+        return "absent", None, "anchor_not_found"
+    if len(hits) > 1:
+        # A first-match resolver would answer with the wrong site. Refuse instead.
+        return "error", None, f"anchor_not_unique: {len(hits)} matches at {hits}"
+    return "present", hits[0], "ok"
+
+
+def count_symbol(path: Path, symbol: str) -> int | None:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return text.count(symbol)
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--json", action="store_true", help="emit machine-readable output")
+    parser.add_argument(
+        "--root",
+        default="",
+        help="prefix for installed paths (test fixtures only; default is the real tree)",
+    )
+    args = parser.parse_args(argv)
+
+    def resolve(p: str) -> Path:
+        return Path(args.root + p) if args.root else Path(p)
+
+    results: list[dict[str, Any]] = []
+    failures = 0
+    audit_errors = 0
+
+    for key, raw_path, recorded, anchor, why in CITATIONS:
+        path = resolve(raw_path)
+        state, line, detail = find_anchor(path, anchor)
+
+        if state == "error":
+            verdict, audit_errors = "error", audit_errors + 1
+        elif state == "absent":
+            verdict, failures = "absent", failures + 1
+        elif line != recorded:
+            verdict, failures = "drifted", failures + 1
+        else:
+            verdict = "present"
+
+        results.append(
+            {
+                "citation": key,
+                "path": raw_path,
+                "recorded_line": recorded,
+                "actual_line": line,
+                "verdict": verdict,
+                "detail": detail,
+                "why": why,
+            }
+        )
+
+    absent_results: list[dict[str, Any]] = []
+    for symbol, why in ABSENT_EXPECTED:
+        total = 0
+        unreadable = False
+        for raw_path in ABSENT_SCAN_FILES:
+            n = count_symbol(resolve(raw_path), symbol)
+            if n is None:
+                unreadable = True
+            else:
+                total += n
+        if unreadable:
+            verdict, audit_errors = "error", audit_errors + 1
+        elif total == 0:
+            verdict = "absent_as_expected"
+        else:
+            # Present means the ADR's "not deployed" finding no longer holds.
+            verdict, failures = "unexpectedly_present", failures + 1
+        absent_results.append(
+            {"symbol": symbol, "occurrences": total, "verdict": verdict, "why": why}
+        )
+
+    if args.json:
+        json.dump(
+            {
+                "citations": results,
+                "expected_absent": absent_results,
+                "failures": failures,
+                "audit_errors": audit_errors,
+            },
+            sys.stdout,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+    else:
+        print("ADR citation gate — docs/native-ssh-os-authority-split.md")
+        print()
+        for r in results:
+            mark = {"present": "ok  ", "drifted": "DRIFT", "absent": "ABSENT", "error": "ERROR"}[
+                r["verdict"]
+            ]
+            actual = r["actual_line"] if r["actual_line"] is not None else "-"
+            print(f"  [{mark}] {r['citation']}: recorded {r['recorded_line']}, actual {actual}")
+            if r["verdict"] != "present":
+                print(f"           {r['path']} — {r['detail']}")
+        print()
+        print("Symbols required ABSENT (case_e4054a66 seam not deployed):")
+        for r in absent_results:
+            mark = "ok  " if r["verdict"] == "absent_as_expected" else "FAIL"
+            print(f"  [{mark}] {r['symbol']}: {r['occurrences']} occurrence(s)")
+        print()
+        print(f"failures={failures} audit_errors={audit_errors}")
+
+    if audit_errors:
+        return 2
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

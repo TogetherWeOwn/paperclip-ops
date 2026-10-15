@@ -1,0 +1,125 @@
+# Reusable change-detection workflow for the org CI standard.
+#
+# Lives in the org `.github` repo at `.github/workflows/changes.yml`.
+# Callers reference a pinned SHA:
+#   uses: TogetherWeOwn/.github/.github/workflows/changes.yml@<sha>
+#
+# Standard: case_6b39c80f (mirrored in CI-STANDARD.md next to this file).
+# Rules enforced here: native `git diff --name-only --no-renames -z` against the
+# merge base, pinned actions only (checkout; everything else is stdlib python),
+# per-area boolean outputs, full-run triggers, no workflow-level `paths:` filters.
+#
+# Inputs are JSON strings because `workflow_call` inputs cannot be maps.
+# Outputs: `areas` is a JSON object (area -> true/false); gate jobs with
+#   if: fromJSON(needs.changes.outputs.areas).web, or
+#   if: needs.changes.outputs.full_run == 'true' to force everything.
+
+name: changes (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      areas-json:
+        description: >-
+          JSON object mapping area name to a list of globs, e.g.
+          '{"web":["web/**"],"bot":["bot/**"],"docs":["**.md","docs/**"]}'.
+        required: true
+        type: string
+      full-run-globs-json:
+        description: >-
+          JSON array of globs that force every job to run, e.g.
+          '["package.json","**/package.json","package-lock.json","**/package-lock.json",".github/**","shared/**"]'.
+        required: true
+        type: string
+      docs-areas-json:
+        description: JSON array of area names that count as docs-only.
+        required: false
+        default: '["docs"]'
+        type: string
+      base-ref:
+        description: >-
+          Explicit base ref to diff against. Empty means the PR merge base
+          (github.base_ref), falling back to origin/main.
+        required: false
+        default: ""
+        type: string
+    outputs:
+      areas:
+        description: JSON object mapping each area to true/false.
+        value: ${{ jobs.detect.outputs.areas }}
+      full_run:
+        description: "'true' when a full-run glob matched or a path has no area classification."
+        value: ${{ jobs.detect.outputs.full_run }}
+      docs_only:
+        description: "'true' when only docs areas changed and no full-run glob matched."
+        value: ${{ jobs.detect.outputs.docs_only }}
+
+jobs:
+  detect:
+    name: detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      areas: ${{ steps.match.outputs.areas }}
+      full_run: ${{ steps.match.outputs.full_run }}
+      docs_only: ${{ steps.match.outputs.docs_only }}
+    steps:
+      # Pinned: actions/checkout v4.2.2. Repin with the SHA, never a moving tag.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Diff against merge base and match areas
+        id: match
+        env:
+          AREAS_JSON: ${{ inputs.areas-json }}
+          FULL_RUN_JSON: ${{ inputs.full-run-globs-json }}
+          DOCS_AREAS_JSON: ${{ inputs.docs-areas-json }}
+          BASE_REF: ${{ inputs.base-ref }}
+          EVENT_BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ -n "$BASE_REF" ]; then
+            BASE="origin/$BASE_REF"
+          elif [ -n "$EVENT_BASE" ]; then
+            BASE="origin/$EVENT_BASE"
+          else
+            BASE="origin/main"
+          fi
+          # Fetch the branch, not an origin/-prefixed remote source. A failed
+          # fetch, merge-base or diff fails this job; never classify an error
+          # as an empty change. ci-ok must reject the failed changes result.
+          git fetch --no-tags origin "+refs/heads/${BASE#origin/}:refs/remotes/$BASE"
+          MERGE_BASE="$(git merge-base "$BASE" HEAD)"
+          CHANGED_FILES="$(mktemp "$RUNNER_TEMP/changed.XXXXXX")"
+          trap 'rm -f "$CHANGED_FILES"' EXIT
+          # --no-renames exposes deleted sources; -z preserves unusual paths.
+          # Source: https://git-scm.com/docs/git-diff#Documentation/git-diff.txt--z
+          git diff --name-only --no-renames -z "$MERGE_BASE" HEAD > "$CHANGED_FILES"
+          # Isolate stdlib imports from caller modules and PYTHONPATH.
+          # Source: https://docs.python.org/3/using/cmdline.html#cmdoption-I
+          # Same matching rules as scripts/detect_changes.py.
+          CHANGED_FILES="$CHANGED_FILES" python3 -I - <<'EOF' >> "$GITHUB_OUTPUT"
+          import fnmatch, json, os
+          areas = json.loads(os.environ["AREAS_JSON"])
+          full_globs = json.loads(os.environ["FULL_RUN_JSON"])
+          docs_areas = set(json.loads(os.environ["DOCS_AREAS_JSON"]))
+          with open(os.environ["CHANGED_FILES"], "rb") as fh:
+              raw = fh.read()
+          if raw and not raw.endswith(b"\0"):
+              raise ValueError("changed paths must be NUL-terminated")
+          changed = [os.fsdecode(p) for p in raw.split(b"\0") if p]
+          def hit(path, globs):
+              return any(fnmatch.fnmatchcase(path, g) for g in globs)
+          # Conservatively run everything for paths absent from the area map.
+          area_globs = [g for globs in areas.values() for g in globs]
+          full_run = any(hit(p, full_globs) or not hit(p, area_globs) for p in changed)
+          area_hit = {a: any(hit(p, g) for p in changed) for a, g in areas.items()}
+          hit_areas = {a for a, h in area_hit.items() if h}
+          docs_globs = [g for a, globs in areas.items() if a in docs_areas for g in globs]
+          docs_only = (bool(changed) and not full_run and hit_areas <= docs_areas
+                       and all(hit(p, docs_globs) for p in changed))
+          print(f"areas={json.dumps(area_hit, sort_keys=True)}")
+          print(f"full_run={'true' if full_run else 'false'}")
+          print(f"docs_only={'true' if docs_only else 'false'}")
+          EOF

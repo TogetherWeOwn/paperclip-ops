@@ -1,0 +1,4 @@
+[
+  {"issueId":"issue-a","reason":"dispatch_stalled_issue","createdAt":"2026-10-07T02:30:00Z","runId":"r1"},
+  {"issueId":"issue-a","kind":"dispatch_stalled_issue","at":"2026-10-07T02:00:00Z","runId":"recovered","identifier":"case_8c5fe4cc"}
+]

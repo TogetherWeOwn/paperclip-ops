@@ -1,0 +1,81 @@
+# case_db57ba1a — Pool-heartbeat freshness Gatus module.
+#
+# DEPLOYMENT (source-only slice): this file is a FRAGMENT, not the live
+# config. The operator concatenates it into gatus-config.yaml at deploy time
+# (see MODULES.md "wiring"). Nothing here runs until the operator deploys it —
+# there is no host deploy in this slice, and no live monitor enrollment.
+# No alert route is created or changed by this slice: the `alerts:` entries
+# below are the standard discord+custom pair every module declares so the
+# endpoint is pageable once wired; the wiring itself is an operator step.
+#
+# WHAT IT COVERS (Refs: case_ef1f7b4b): one pushed external endpoint,
+# `platform/pool-freshness`, fed by push-pool-freshness.sh every 5 min from
+# `garm-cli pool show` across GARM_POOLS. Each pool contributes its
+# HEARTBEAT: the freshest instance activity (max over instances of
+# max(created_at, updated_at), both casings accepted). FRESH exactly when
+# the heartbeat is within GARM_FRESHNESS_THRESHOLD_MIN (default 15) of now;
+# STALE past it. The push message names the worst pool plus its age, so the
+# page shows HOW stale the fleet is, not just up/down.
+#
+# COMPLEMENTS, DOES NOT DUPLICATE:
+# - case_b24794c2 GARM pool-health (runner capacity, not heartbeat recency;
+#   push-garm-pool.sh HEALTHY rule case_6ab2cd4d D2: zero VMs with min-idle 0
+#   AND no eligible-label breach => success).
+# - case_80716129 GARM orphan/stale VM reaper audit (instance-age buckets with
+#   TTL/orphan thresholds for reaping proposals, not live freshness).
+# - case_a97273bd queue-age on-call (runner-waiting CI job age, not pool
+#   heartbeat recency). Neither module reads the other's inputs.
+#
+# THRESHOLD PROPOSAL (env-tunable, operator owns the value): alert at
+# GARM_FRESHNESS_THRESHOLD_MIN (default 15 minutes). Why 15: the cron
+# cadence is 5m, so 15m tolerates two consecutive quiet polls plus jitter,
+# while staying well below the 60m eligible-queue breach in
+# push-garm-pool.sh — a stuck pool pages here first. Caveat, stated
+# plainly: this module reports OBSERVED activity. A long-idle low-traffic
+# pool whose long-lived instances have not changed state in hours reads
+# stale by design; the threshold is the operator's call for each pool's
+# churn character, not a proof of breakage.
+#
+# EMPTY-POOL RULE: zero instances with min-idle 0 reads healthy-idle (that
+# is today's fleet state on both installed pools, and push-garm-pool.sh
+# already calls it HEALTHY). Zero instances with min-idle reserved reads
+# STALE: there is no heartbeat at all where warm capacity was promised.
+#
+# FRESH/STALE MAPPING: FRESH (success=true) exactly when every pool's
+# heartbeat is within the threshold (idle pools included). STALE
+# (success=false) when any heartbeat is older than the threshold, when a
+# reserved-but-empty pool has no heartbeat at all, on a disabled pool,
+# over-max instances, or on missing/malformed pool input.
+#
+# FAIL-CLOSED: a garm-cli transport failure, an unparseable pool response,
+# an instance with no parseable timestamp (unknown-age is never fresh), or
+# a reserved-but-empty pool pushes success=false, never a silent skip.
+# Missing GARM_POOLS / GATUS_URL / GATUS_EXTERNAL_TOKEN refuses (exit 2)
+# before touching the network.
+#
+# READ-ONLY / NO SECRETS / NO REMEDIATION: the push script issues pool-show
+# GETs and POSTs one boolean — no delete/destroy/provision, no pool-cap
+# change, no admission, no pacing. Every token is a ${ENV} reference
+# resolved from the root-only 0600 env file on the host. The offline suite
+# (test_case_c99d8d47_pool_freshness.sh) fails the build on any secret-shaped
+# string in this file.
+#
+# Pushed by push-pool-freshness.sh cron (every 5 min). External key:
+#   platform_pool-freshness
+# Push: POST /api/v1/endpoints/<key>/external?success=<bool>&error=<msg>
+# with Authorization: Bearer ${GATUS_EXTERNAL_TOKEN} (curl config file,
+# never argv — see _gatus_push.sh). Heartbeat 10m = 2x cron cadence.
+# The push script also prints a one-line case_c99d8d47-pool-freshness-v1 JSON
+# verdict to the cron log, so the module returns JSON on fixtures.
+
+external-endpoints:
+  - name: pool-freshness
+    group: platform
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 10m
+    alerts:
+      - type: discord
+        description: "GARM pool heartbeat stale (no fresh instance activity)"
+      - type: custom
+        description: "GARM pool heartbeat stale (no fresh instance activity)"

@@ -249,6 +249,23 @@ FAKE_CARGO_STATUS=1 run_check
   && ok "Cargo dependency change without lockfile fails" \
   || bad "Cargo dependency change without lockfile fails (rc=$RC)"
 
+# A non-ASCII path must still detect its tracked lockfile and require --locked.
+new_repo
+$GIT -C "$REPO_DIR" config core.quotepath true
+mkdir -p "$REPO_DIR/crätes"
+printf '[package]\nname = "x"\nversion = "0.1.0"\n' > "$REPO_DIR/crätes/Cargo.toml"
+printf 'version = 3\n' > "$REPO_DIR/crätes/Cargo.lock"
+$GIT -C "$REPO_DIR" add -A >&2
+$GIT -C "$REPO_DIR" commit -qm "chore(cargo): seed unicode manifest and lockfile"
+CHANGE_BASE="$($GIT -C "$REPO_DIR" rev-parse HEAD)"
+printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1"\n' > "$REPO_DIR/crätes/Cargo.toml"
+commit_change "feat(cargo): add dependency under unicode path"
+FAKE_CARGO_STATUS=1 run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL generated-drift \
+  && grep -q 'metadata --locked --offline --format-version 1' "$FAKE_CARGO_LOG" \
+  && ok "non-ASCII Cargo path keeps tracked lockfile check locked" \
+  || bad "non-ASCII Cargo path keeps tracked lockfile check locked (rc=$RC)"
+
 new_repo
 printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[lib]\ncrate-type = ["rlib"]\n' > "$REPO_DIR/Cargo.toml"
 printf 'version = 3\n' > "$REPO_DIR/Cargo.lock"

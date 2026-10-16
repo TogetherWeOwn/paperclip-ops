@@ -191,13 +191,9 @@ GEN_FAIL=0
 # its side, above, or anywhere else in the tree fails, as dangling.
 cargo_lock_current() { # $1: changed Cargo.toml path; inspect committed inputs only.
   command -v cargo >/dev/null 2>&1 || return 1
-  local snapshot manifest dir lock_path lock_tracked result tracked_paths
+  local snapshot manifest dir lock_path lock_tracked result
   snapshot="$(mktemp -d 2>/dev/null)" || return 1
   if ! git archive HEAD 2>/dev/null | tar -x -C "$snapshot" 2>/dev/null; then
-    rm -rf "$snapshot"
-    return 1
-  fi
-  if ! tracked_paths="$(git ls-tree -r --name-only HEAD 2>/dev/null)"; then
     rm -rf "$snapshot"
     return 1
   fi
@@ -210,7 +206,7 @@ cargo_lock_current() { # $1: changed Cargo.toml path; inspect committed inputs o
   while true; do
     lock_path="${dir#./}"
     [[ "$dir" == "." ]] && lock_path=""
-    if grep -Fxq -- "${lock_path:+$lock_path/}Cargo.lock" <<<"$tracked_paths"; then
+    if git cat-file -e "HEAD:${lock_path:+$lock_path/}Cargo.lock" 2>/dev/null; then
       lock_tracked=1
       break
     fi

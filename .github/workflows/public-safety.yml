@@ -44,21 +44,27 @@ jobs:
           # commit with -p -U0 prints no patch, passing vacuously). Pushes
           # with a usable base scan before..HEAD so a multi-commit push
           # scans every pushed commit, not just the tip; new branches/tags
-          # (empty or zero BEFORE) or force-pushes whose old tip is absent
-          # from this clone fall back to the merge-base range, exactly as
-          # pull-request runs do. Unresolvable ranges fail closed via the
-          # rev-list validation below. An empty pull-request range also fails
-          # closed; other events with no new commits need only the tree scan.
+          # (empty or zero BEFORE) fall back to the merge-base range,
+          # exactly as pull-request runs do. A push whose BEFORE is non-zero
+          # but absent from this clone (force-push with a missing old tip)
+          # has unknown rewritten history: scanning the merge-base range
+          # would be empty on main (merge-base equals HEAD) and skip every
+          # rewritten commit, so scan all reachable history instead (HEAD).
+          # Unresolvable ranges fail closed via the rev-list validation
+          # below. An empty pull-request range also fails closed; other
+          # events with no new commits need only the tree scan.
           if [ "${{ github.event_name }}" = "push" ]; then
             BEFORE="${{ github.event.before }}"
             if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
               RANGE="$BEFORE..HEAD"
-            else
+            elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
               BASE_SHA="$(git merge-base origin/main HEAD)" || {
                 echo "no merge-base with origin/main; failing closed" >&2
                 exit 1
               }
               RANGE="$BASE_SHA..HEAD"
+            else
+              RANGE="HEAD"
             fi
           else
             BASE_SHA="$(git merge-base origin/main HEAD)" || {

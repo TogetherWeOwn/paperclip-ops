@@ -339,12 +339,24 @@ class PublicCI(unittest.TestCase):
         scan_args = git_scans[0]
         log_opts = next((arg for arg in scan_args if arg.startswith("--log-opts=")), None)
         self.assertEqual(log_opts, "--log-opts=" + expected, scan_args)
+        self._assert_tree_scanned(tmp)
         return expected
+
+    def _assert_tree_scanned(self, tmp):
+        # The exit-0 paths are justified by "the working-tree scan covers
+        # this event": pin that the dir scan ran before the early exit, so
+        # deleting or reordering it fails this test.
+        invocations = [json.loads(line) for line in
+                       Path(tmp, "docker-invocations.jsonl").read_text().splitlines()]
+        tree = [args for args in invocations
+                if "dir" in args and "/repo" in args]
+        self.assertEqual(len(tree), 1, invocations)
 
     def _assert_no_history_scan(self, tmp):
         invocations = [json.loads(line) for line in
                        Path(tmp, "docker-invocations.jsonl").read_text().splitlines()]
         self.assertFalse(any("git" in args for args in invocations), invocations)
+        self._assert_tree_scanned(tmp)
 
     def test_history_scan_script_uses_fail_closed_ranges(self):
         # Executes the workflow's actual range block in scratch repos for:
@@ -456,15 +468,15 @@ class PublicCI(unittest.TestCase):
             self._assert_scanned_range(tmp, rng)
             self.assertIn("secret.txt", range_log(rng))
 
-            # 5. push with an unreachable before (force-push) falls back
-            # to merge-base instead of scanning an empty range green.
+            # 5. push with an unreachable before (force-push) has unknown
+            # rewritten history: scan all reachable history instead of an
+            # empty merge-base range.
             set_origin(base0)
             git("checkout", "-q", "pr")
             r = self._run_history_scan(tmp, env, "push", bogus)
             self.assertEqual(r.returncode, 0, r.stderr)
-            rng = out("merge-base", "origin/main", "HEAD") + "..HEAD"
-            self._assert_scanned_range(tmp, rng)
-            self.assertIn("secret.txt", range_log(rng))
+            self._assert_scanned_range(tmp, "HEAD")
+            self.assertIn("secret.txt", range_log("HEAD"))
 
             # 6. Fail closed on an empty pull-request range.
             set_origin(main2)
@@ -487,6 +499,14 @@ class PublicCI(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("no new commits", r.stdout)
             self._assert_no_history_scan(tmp)
+
+            # 9. A non-zero unreachable push at the main tip (force-push to
+            # main) must not exit 0 with no history scan: the rewritten
+            # commits are unknown, so the full reachable history is scanned.
+            r = self._run_history_scan(tmp, env, "push", bogus)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("no new commits", r.stdout)
+            self._assert_scanned_range(tmp, "HEAD")
 
     def test_metadata_protocol_constant_does_not_exempt_private_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:

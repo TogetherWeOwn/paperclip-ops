@@ -185,6 +185,15 @@ class CardAndInternalRefs(unittest.TestCase):
         missing = GOOD_BODY.replace("Refs: case_1cab5f7f", "Fixes #12")
         self.assertIn(("error", "Card reference"), levels(ps.evaluate(env(BODY=missing))))
 
+    def test_private_gate_ignores_case_filenames(self):
+        # A filename alone is not a card reference, same as internal_hits:
+        # private bodies naming only a tracked file must still fail.
+        for filename in ("verification/case_c89b5362-drift-pin-mutation-gate.sh",
+                         "case_c89b5362-drift-pin-mutation-gate.sh"):
+            body = GOOD_BODY.replace("Refs: case_1cab5f7f", "See " + filename)
+            self.assertIn(("error", "Card reference"),
+                          levels(ps.evaluate(env(BODY=body))), filename)
+
     def test_public_detection_flags_case_refs_and_legacy_ids(self):
         # Both shapes are internal on public repos when they stand alone.
         legacy = "-".join(("TOG", "999999991"))

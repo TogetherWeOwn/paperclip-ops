@@ -289,11 +289,14 @@ def check_pull_request(env):
         # uses. Real private PRs cite tracker ids; this repo's own PRs cite
         # case_ refs. Requiring only case_ would red every adopter PR.
         tracker_hit = re.search(rf"\b(?:{prefixes})-\d+\b", body)
-        case_hit = re.search(r"\bcase_[0-9a-f]{8}\b", body)
+        # Exclude path-embedded refs, same as internal_hits: a filename
+        # alone (ops/case_xxxxxxxx/file or case_xxxxxxxx-name.sh) is not
+        # a live card reference.
+        case_hit = re.search(r"(?<!/)\bcase_[0-9a-f]{8}\b(?!-)", body)
         if not generated and not (tracker_hit or case_hit):
             level = "error" if env.get("REQUIRE_CARD_REF", "true").strip().lower() == "true" else "warning"
-            out.append(Finding(level, "Card reference", "Add a card reference to the PR body "
-                               "('Refs: case_1cab5f7f' in this public snapshot)."))
+            out.append(Finding(level, "Card reference", "Add a card reference to the PR body: "
+                               f"a tracker id ({prefixes} followed by '-<number>') or a case_<8 hex> ref."))
     else:
         for where, text in (("title", title), ("body", body), ("branch name", head_ref)):
             hits = internal_hits(text, prefixes)

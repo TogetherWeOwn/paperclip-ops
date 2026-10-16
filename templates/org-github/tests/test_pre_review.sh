@@ -35,9 +35,9 @@ trap 'rm -rf "$WORK"' EXIT
 # PATH (~10s per spawn). The staged script calls plain `git`, so shadow it
 # with the system git when one exists outside the current PATH.
 mkdir -p "$WORK/bin"
+export PATH="$WORK/bin:$PATH"
 if REALGIT="$(PATH="$(getconf PATH)" command -v git 2>/dev/null)" && [[ -n "$REALGIT" ]]; then
   ln -sf "$REALGIT" "$WORK/bin/git"
-  export PATH="$WORK/bin:$PATH"
 fi
 # Stop BASH_ENV from re-prepending the credential shim on child shells,
 # which would bury the shadow above (BASH_ENV= + real git first).
@@ -48,7 +48,9 @@ FAKE_CARGO_LOG="$WORK/cargo.log"
 export FAKE_CARGO_LOG
 cat > "$WORK/bin/cargo" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >> "$FAKE_CARGO_LOG"
+printf 'cwd=%s config=%s lock=%s args=%s\n' "$PWD" \
+  "$([[ -e .cargo/config.toml ]] && echo present || echo absent)" \
+  "$(grep -E '^version' Cargo.lock 2>/dev/null | head -n 1 || echo missing)" "$*" >> "$FAKE_CARGO_LOG"
 if [[ "${FAKE_CARGO_STATUS:-0}" -ne 0 ]]; then
   echo 'error: lock file needs to be updated but --locked was passed' >&2
   exit "$FAKE_CARGO_STATUS"
@@ -80,6 +82,7 @@ commit_change() {
 
 OUT=""; RC=0
 run_check() {
+  : > "$FAKE_CARGO_LOG"
   OUT="$(cd "$REPO_DIR" && bash "$PRE" --base "$CHANGE_BASE" "$@" 2>&1)" && RC=0 || RC=$?
 }
 has_row() { grep -qE "^$1  +$2" <<<"$OUT"; }
@@ -181,6 +184,8 @@ run_check
 # manifest edit from one that needs a Cargo.lock change.
 new_repo
 printf 'Cargo.lock\n' > "$REPO_DIR/.gitignore"
+mkdir -p "$REPO_DIR/.cargo"
+printf 'build.rustc = "/tmp/untrusted-compiler-wrapper"\n' > "$REPO_DIR/.cargo/config.toml"
 printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[lib]\ncrate-type = ["rlib"]\n' > "$REPO_DIR/Cargo.toml"
 $GIT -C "$REPO_DIR" add -A >&2
 $GIT -C "$REPO_DIR" commit -qm "chore(cargo): seed manifest"
@@ -191,9 +196,33 @@ commit_change "chore(cargo): add crate type"
 FAKE_CARGO_STATUS=0 run_check
 [[ "$RC" -eq 0 ]] && ! has_row FAIL generated-drift \
   && $GIT -C "$REPO_DIR" check-ignore -q Cargo.lock \
-  && grep -q 'metadata --locked --offline --format-version 1 --manifest-path Cargo.toml' "$FAKE_CARGO_LOG" \
-  && ok "dependency-neutral Cargo manifest passes with ignored lockfile" \
+  && grep -q 'metadata --locked --offline --format-version 1 --manifest-path .*Cargo.toml' "$FAKE_CARGO_LOG" \
+  && grep -Eq -- '--manifest-path /[^[:space:]]+/Cargo.toml' "$FAKE_CARGO_LOG" \
+  && grep -q '^cwd=' "$FAKE_CARGO_LOG" \
+  && ! grep -Fq "cwd=$REPO_DIR config=" "$FAKE_CARGO_LOG" \
+  && ! grep -Fq -- "--manifest-path $REPO_DIR/" "$FAKE_CARGO_LOG" \
+  && grep -q 'config=absent' "$FAKE_CARGO_LOG" \
+  && ok "dependency-neutral Cargo manifest uses isolated committed snapshot" \
   || bad "dependency-neutral Cargo manifest passes with ignored lockfile (rc=$RC)"
+
+new_repo
+printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1"\n' > "$REPO_DIR/Cargo.toml"
+printf 'version = 3\n' > "$REPO_DIR/Cargo.lock"
+$GIT -C "$REPO_DIR" add -A >&2
+$GIT -C "$REPO_DIR" commit -qm "chore(cargo): seed tracked lockfile"
+CHANGE_BASE="$($GIT -C "$REPO_DIR" rev-parse HEAD)"
+printf 'version = 4\n' > "$REPO_DIR/Cargo.lock"
+printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1"\ntokio = "1"\n' > "$REPO_DIR/Cargo.toml"
+$GIT -C "$REPO_DIR" add Cargo.toml >&2
+$GIT -C "$REPO_DIR" commit -qm "feat(cargo): add dependency without saved lock update"
+FAKE_CARGO_STATUS=1 run_check
+if [[ "$RC" -eq 1 ]] && has_row FAIL generated-drift \
+  && grep -q 'lock=version = 3' "$FAKE_CARGO_LOG" \
+  && grep -q '^version = 4$' "$REPO_DIR/Cargo.lock"; then
+  ok "Cargo metadata validates committed lock, not unsaved worktree lock"
+else
+  bad "Cargo metadata validates committed lock, not unsaved worktree lock (rc=$RC)"
+fi
 
 new_repo
 printf '[package]\nname = "x"\nversion = "0.1.0"\n' > "$REPO_DIR/Cargo.toml"
@@ -204,6 +233,7 @@ printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1"\
 commit_change "feat(cargo): add dependency"
 FAKE_CARGO_STATUS=1 run_check
 [[ "$RC" -eq 1 ]] && has_row FAIL generated-drift \
+  && grep -q 'metadata --locked --offline --format-version 1' "$FAKE_CARGO_LOG" \
   && ok "Cargo dependency change without lockfile fails" \
   || bad "Cargo dependency change without lockfile fails (rc=$RC)"
 

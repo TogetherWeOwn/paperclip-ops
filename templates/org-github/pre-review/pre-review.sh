@@ -189,9 +189,22 @@ GEN_FAIL=0
 # whose manifest is live but untouched is a lock-only update (audit-fix,
 # version bump), not drift: only a lockfile with no manifest of its kind at
 # its side, above, or anywhere else in the tree fails, as dangling.
-cargo_lock_current() { # $1: changed Cargo.toml path; no network or lockfile writes.
+cargo_lock_current() { # $1: changed Cargo.toml path; inspect committed inputs only.
   command -v cargo >/dev/null 2>&1 || return 1
-  cargo metadata --locked --offline --format-version 1 --manifest-path "$1" >/dev/null 2>&1
+  local snapshot manifest
+  snapshot="$(mktemp -d 2>/dev/null)" || return 1
+  if ! git archive HEAD 2>/dev/null | tar -x -C "$snapshot" 2>/dev/null; then
+    rm -rf "$snapshot"
+    return 1
+  fi
+  # Cargo config is executable policy from the submitted tree (build.rustc,
+  # wrappers, source replacement). Do not load it during this gate check.
+  find "$snapshot" -type d -name .cargo -prune -exec rm -rf {} + 2>/dev/null || true
+  manifest="$snapshot/$1"
+  (cd "$snapshot" && CARGO_HOME="$snapshot/cargo-home" cargo metadata --locked --offline --format-version 1 --manifest-path "$manifest" >/dev/null 2>&1)
+  local result=$?
+  rm -rf "$snapshot"
+  return "$result"
 }
 gen_pair() { # $1: manifest basename; $2...: lockfile basenames.
   local m="$1"; shift

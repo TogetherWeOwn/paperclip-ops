@@ -34,14 +34,15 @@ jobs:
           docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" dir /repo --config /repo/.gitleaks.toml --redact=100 --no-banner
           # Scan only commits introduced by this event. --all also includes
           # unrelated branches fetched by checkout and can fail on their history.
-          BASE="${HISTORY_BASE:-origin/main}"
-          if ! git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1 || \
-             ! git merge-base --is-ancestor "$BASE" HEAD 2>/dev/null; then
-            BASE="$(git merge-base origin/main HEAD 2>/dev/null || true)"
-          fi
+          BASE="${HISTORY_BASE:-}"
           RANGE="HEAD"
-          if [[ -n "$BASE" ]]; then
+          # Use a bounded range only when the event base is available and is
+          # an ancestor. On dispatch, rewritten bases, or no new commits, keep
+          # the full reachable history scan rather than silently scanning tip.
+          if [[ -n "$BASE" ]] && \
+             git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1 && \
+             git merge-base --is-ancestor "$BASE" HEAD 2>/dev/null; then
             RANGE="$BASE..HEAD"
-            [[ "$(git rev-list "$RANGE" --count 2>/dev/null || echo 0)" -gt 0 ]] || RANGE="-1 HEAD"
+            [[ "$(git rev-list "$RANGE" --count 2>/dev/null || echo 0)" -gt 0 ]] || RANGE="HEAD"
           fi
           docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts="$RANGE" --config /repo/.gitleaks.toml --redact=100 --no-banner

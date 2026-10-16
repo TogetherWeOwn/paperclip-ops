@@ -33,7 +33,9 @@ Refuse the promotion with a clear reason when:
   metadata is not an object.
 
 The CLI exits 2 with `refused: <reason>` on every refusal above, so shell
-callers can treat rc 2 as the refusal signal.
+callers can treat rc 2 as the refusal signal. If `--candidate` is supplied,
+an empty value is also refused with rc 2; commit comparisons trim whitespace
+and ignore hexadecimal letter case.
 
 The decision and the recorded rollback target both use the derived commit.
 A stale tag must never feed either path. This helper is a standalone

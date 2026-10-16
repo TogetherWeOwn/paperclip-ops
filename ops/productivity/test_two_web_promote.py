@@ -377,6 +377,20 @@ class LiveIdentity(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("promote", out)
 
+    def test_main_empty_candidate_refuses_rc_2(self):
+        rc, out, err = run_cli(deployments(), builds(), extra=("--candidate", ""))
+        self.assertEqual(rc, 2)
+        self.assertIn("refused:", err)
+        self.assertNotIn("promote", out)
+        self.assertNotIn("already-live", out)
+
+    def test_main_candidate_compare_is_case_insensitive(self):
+        rc, out, _ = run_cli(
+            deployments(), builds(), extra=("--candidate", ACTIVE_COMMIT.upper())
+        )
+        self.assertEqual(rc, 0)
+        self.assertIn("already-live", out)
+
     def test_main_refusal_exits_2(self):
         mixed = {
             "result": {

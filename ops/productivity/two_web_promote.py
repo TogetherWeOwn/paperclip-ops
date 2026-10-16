@@ -179,9 +179,13 @@ def derive_live_prod_identity(deployments_payload: dict, builds_payload: dict) -
 
 def decide_promotion(live_commit: str, candidate_commit: str) -> str:
     """Decide the promotion outcome from the Cloudflare-derived live commit."""
-    if not live_commit or not candidate_commit:
+    if not isinstance(live_commit, str) or not isinstance(candidate_commit, str):
         raise LiveIdentityError("live and candidate commits are both required")
-    if live_commit == candidate_commit:
+    live = live_commit.strip().lower()
+    candidate = candidate_commit.strip().lower()
+    if not live or not candidate:
+        raise LiveIdentityError("live and candidate commits are both required")
+    if live == candidate:
         return "already-live"
     return "promote"
 
@@ -206,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--deployments", required=True, help="Path to deployments JSON file")
     parser.add_argument("--builds", required=True, help="Path to builds JSON file")
-    parser.add_argument("--candidate", default="", help="Candidate commit to compare against live")
+    parser.add_argument("--candidate", default=None, help="Candidate commit to compare against live")
     args = parser.parse_args(argv)
 
     try:
@@ -221,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     print(json.dumps(identity, indent=2, sort_keys=True))
-    if args.candidate:
+    if args.candidate is not None:
         try:
             print(decide_promotion(identity["commit"], args.candidate))
         except (LiveIdentityError, TypeError, AttributeError) as exc:

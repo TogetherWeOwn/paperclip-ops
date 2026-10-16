@@ -328,6 +328,11 @@ class LiveIdentity(unittest.TestCase):
         with self.assertRaisesRegex(LiveIdentityError, "non-numeric percentage"):
             derive_live_prod_identity(bad, builds())
 
+    def test_huge_integer_percentage_refuses(self):
+        bad = deployments(percentage=10**400)
+        with self.assertRaisesRegex(LiveIdentityError, "out-of-range percentage"):
+            derive_live_prod_identity(bad, builds())
+
     def test_percentages_must_total_100(self):
         short = {
             "result": {
@@ -419,6 +424,13 @@ class LiveIdentity(unittest.TestCase):
         rc, _, err = run_cli(bad, builds())
         self.assertEqual(rc, 2)
         self.assertIn("refused:", err)
+
+    def test_main_huge_integer_percentage_refuses_rc_2(self):
+        rc, out, err = run_cli(deployments(percentage=10**400), builds())
+        self.assertEqual(rc, 2)
+        self.assertIn("refused:", err)
+        self.assertNotIn("Traceback", err)
+        self.assertNotIn("promote", out)
 
     def test_main_unreadable_input_exits_2(self):
         with tempfile.TemporaryDirectory() as tmpdir:

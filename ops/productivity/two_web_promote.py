@@ -110,6 +110,11 @@ def _validate_versions(versions: list) -> list[tuple[str, float | None]]:
                 f"live version {version_id} has non-numeric percentage {pct!r}: "
                 "refusing to guess live version"
             )
+        elif not 0 <= pct <= 100:
+            raise LiveIdentityError(
+                f"live version {version_id} has out-of-range percentage {pct!r}: "
+                "refusing to guess live version"
+            )
         else:
             validated.append((version_id, pct))
     return validated

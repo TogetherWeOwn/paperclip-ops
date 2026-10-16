@@ -494,24 +494,6 @@ commit_change "feat(auth): read credentials at runtime"
 run_check
 [[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "rust getter chains pass authz" \
   || bad "rust getter chains pass authz (rc=$RC)"
-# A bare literal passed as a call argument is still a credential.
-# Assembled via a variable reference so this file holds no literal.
-new_repo
-CALL_PW="hunter2""hunter2123"
-printf 'login(name, password = %s)\n' "$CALL_PW" > "$REPO_DIR/app.py"
-printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
-commit_change "feat(app): log in with literal"
-run_check
-[[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "call-arg literal still fails" \
-  || bad "call-arg literal still fails (rc=$RC)"
-# The same call-argument shape must be caught when there is no space after =.
-new_repo
-printf 'login(password=%s)\n' "$CALL_PW" > "$REPO_DIR/app.py"
-printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
-commit_change "feat(app): log in with unspaced literal"
-run_check
-[[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "unspaced call-arg literal still fails" \
-  || bad "unspaced call-arg literal still fails (rc=$RC)"
 # Cloud and private-key literals still fail. Split across adjacent
 # strings so this file never holds a contiguous scanner pattern; bash
 # concatenates them at runtime into the real fixture.

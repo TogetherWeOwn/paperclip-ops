@@ -137,6 +137,13 @@ class DriftGateTest(unittest.TestCase):
         self.assertEqual(rc, 1, out)
         self.assertIn("not bound", out)
 
+    def test_evidence_in_wrong_migration_order_fails(self):
+        rc, out = self.run_gate("--sql-hashes", self.hashes([("0042_a", A), ("0043_b", B)]),
+                           "--ledger", self.ledger([A, B]),
+                           "--evidence", self.evidence(migrations=(("0043_b", B), ("0042_a", A))))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("migration order does not match filename order", out)
+
     def test_future_evidence_fails(self):
         # A finished_at in the future (forged freshness) fails instead of
         # printing a negative age as ok.

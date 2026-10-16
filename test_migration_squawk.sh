@@ -191,7 +191,32 @@ else
   bad "canonical config excludes timeout rules and conflicting robust-statement advice"
 fi
 
-# 11. Prove both documented templates against real Squawk when available.
+# 11. A missing or crashing shared SQL helper must fail closed.
+mkdir -p "$WORK/broken"
+cp "$GATE" "$WORK/broken/migration_squawk.sh"
+chmod +x "$WORK/broken/migration_squawk.sh"
+out="$("$WORK/broken/migration_squawk.sh" "$WORK/migs3/0047_comment_only.sql" 2>&1 || true)"
+grep -q "migration_sql.py check failed" <<< "$out" \
+  && ! grep -q "ok: file standard" <<< "$out" \
+  && ok "missing migration_sql.py helper fails closed" \
+  || bad "missing migration_sql.py helper fails closed"
+
+# 12. File-standard findings point to the first visible statement line, not
+# preceding comments or the line immediately after a previous semicolon.
+cat > "$WORK/migs4/0053_statement_line.sql" <<'EOF'
+-- phase: expand
+SELECT 1;
+-- interstitial comment
+/* another
+   comment */
+CREATE INDEX bad_line_idx ON members (email);
+EOF
+out="$($GATE --squawk-bin "$WORK/bin/squawk-ok" "$WORK/migs4/0053_statement_line.sql" 2>&1 || true)"
+grep -q '0053_statement_line.sql:6: CREATE INDEX without CONCURRENTLY' <<< "$out" \
+  && ok "SQL helper reports the first visible statement line" \
+  || bad "SQL helper reports the first visible statement line"
+
+# 13. Prove both documented templates against real Squawk when available.
 cat > "$WORK/template-expand.sql" <<'EOF'
 -- phase: expand
 -- Replaces nothing. Safe to run while the previous release is serving.

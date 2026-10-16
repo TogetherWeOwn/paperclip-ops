@@ -117,6 +117,7 @@ jobs:
           persist-credentials: false
 
       - name: Fetch ledger and evidence artifacts (cross-job handoff)
+        id: inputs
         env:
           GH_TOKEN: ${{ github.token }}
           LEDGER_ARTIFACT: ${{ inputs.ledger-artifact }}
@@ -137,9 +138,28 @@ jobs:
           fi
           if [ -n "$EVIDENCE_ARTIFACT" ]; then
             gh run download "$GITHUB_RUN_ID" -n "$EVIDENCE_ARTIFACT" -D .paperclip-drift-inputs/evidence
-            ev=.paperclip-drift-inputs/evidence/rehearsal-evidence.json
-            [ -r "$ev" ] || { echo "evidence-artifact '$EVIDENCE_ARTIFACT' must contain rehearsal-evidence.json"; exit 2; }
-            printf '%s' "$ev" > .paperclip-drift-inputs/evidence.path
+            passed_evidence=()
+            while IFS= read -r candidate; do
+              if python3 - "$candidate" <<'PY'
+          import json
+          import sys
+
+          try:
+              with open(sys.argv[1], encoding="utf-8") as fh:
+                  document = json.load(fh)
+          except (OSError, ValueError):
+              raise SystemExit(1)
+          raise SystemExit(0 if document.get("status") == "passed" else 1)
+          PY
+              then
+                passed_evidence+=("$candidate")
+              fi
+            done < <(find .paperclip-drift-inputs/evidence -type f -name '*.json' -print)
+            [ "${#passed_evidence[@]}" -eq 1 ] || {
+              echo "evidence-artifact '$EVIDENCE_ARTIFACT' must hold exactly one passed JSON evidence document (found ${#passed_evidence[@]})"
+              exit 2
+            }
+            printf '%s' "${passed_evidence[0]}" > .paperclip-drift-inputs/evidence.path
           fi
           {
             if [ -f .paperclip-drift-inputs/ledger.path ]; then
@@ -177,7 +197,7 @@ jobs:
             --ledger "$DRIFT_LEDGER_FILE" "${EXTRA[@]}"
 
       - name: Page on drift (auto-filed card)
-        if: failure() && inputs.page-on-failure && steps.gate.outcome == 'failure'
+        if: failure() && inputs.page-on-failure && (steps.gate.outcome == 'failure' || steps.inputs.outcome == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -192,7 +212,7 @@ jobs:
             --body "The nightly schema-drift gate failed on ${{ github.ref_name }} at ${{ github.sha }}. See the failing run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Runbook: docs/migration-standard.md."
 
       - name: Page on drift (Discord)
-        if: failure() && inputs.page-on-failure && steps.gate.outcome == 'failure'
+        if: failure() && inputs.page-on-failure && (steps.gate.outcome == 'failure' || steps.inputs.outcome == 'failure')
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.discord-webhook }}
         run: |

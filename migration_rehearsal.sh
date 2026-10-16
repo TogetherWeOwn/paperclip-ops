@@ -5,15 +5,15 @@
 # WHAT IT DOES. Before a migration chain may ride a production deploy, the
 # exact pending chain must be proven on a throwaway clone of production:
 # branch off prod (PlanetScale branch) or restore a point-in-time branch,
-# apply the pending chain EXACTLY as production would (same files, same
-# order, same timeout preamble), report, then delete the clone. Evidence
+# apply the pending chain EXACTLY as production would (same files, sorted
+# migration order, same timeout preamble), report, then delete the clone. Evidence
 # fresher than 24h is required by the production preflight gate.
 #
 # Subcommands (all offline unless stated):
 #   plan --migrations-dir DIR --provider planetscale|pitr --out evidence.json
 #       [--only tag,tag...]
-#       Enumerate the pending chain (sorted *.sql, or exactly the --only
-#       tags when the caller computed the pending subset from the ledger),
+#       Enumerate the pending chain in sorted filename order, optionally
+#       filtered to the tags the caller computed from the production ledger.
 #       digest each file (sha256), and write a `planned` evidence document.
 #       No cloud calls.
 #   run --migrations-dir DIR --provider P --out evidence.json [--branch NAME]
@@ -52,6 +52,7 @@
 set -euo pipefail
 ME="$(basename "${BASH_SOURCE[0]}")"
 EVIDENCE_VERSION=1
+PSCALE_BIN="${PSCALE_BIN:-pscale}"
 
 die() { echo "REFUSED: $ME: $*" >&2; exit 2; }
 redact() { sed -E 's/(token|secret|password|passwd|key)=[^[:space:]"]+/\\1=<redacted>/gi'; }
@@ -60,7 +61,7 @@ now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 sha256_of() { sha256sum "$1" | awk '{print $1}'; }
 
-default_branch() { printf 'rehearsal/%s' "$(date -u +%Y%m%dT%H%M%SZ)"; }
+default_branch() { printf 'rehearsal-%s' "$(date -u +%Y%m%dt%H%M%Sz)"; }
 
 # chain_json DIR [ONLY]: JSON array of {"tag","sha256"} sorted by file
 # name. When ONLY (comma-separated tags) is given, exactly those tags form
@@ -89,7 +90,6 @@ if want is not None:
     missing = [t for t in want if t not in {m["tag"] for m in items}]
     if missing:
         sys.exit(f"--only names migrations not in the dir: {','.join(sorted(missing))}")
-    items.sort(key=lambda m: want.index(m["tag"]))
 if not items:
     sys.exit("no *.sql files in migrations dir (or --only matched none)")
 print(json.dumps(items))
@@ -138,33 +138,74 @@ EOF
       || die "--provider must be planetscale or pitr"
     [[ -n "$OUT" ]] || die "--out is required"
     [[ -z "$BRANCH" ]] && BRANCH="$(default_branch)"
+    [[ "$BRANCH" =~ ^[a-z][a-z0-9-]{0,47}$ ]] \
+      || die "--branch must be lowercase letters, digits, and hyphens (max 48 characters)"
     CHAIN="$(chain_json "$DIR" "$ONLY")" || die "cannot enumerate $DIR"
     case "$PROVIDER" in
       planetscale)
-        command -v pscale >/dev/null 2>&1 \
-          || die "planetscale rehearsal needs the pscale CLI on PATH"
+        command -v "$PSCALE_BIN" >/dev/null 2>&1 \
+          || die "planetscale rehearsal needs the pscale CLI on PATH (or PSCALE_BIN)"
         [[ -n "${REHEARSAL_PSCALE_ORG:-}" && -n "${REHEARSAL_PSCALE_DB:-}" ]] \
           || die "planetscale rehearsal needs REHEARSAL_PSCALE_ORG and REHEARSAL_PSCALE_DB"
         if [[ -z "${PLANETSCALE_SERVICE_TOKEN_ID:-}" || -z "${PLANETSCALE_SERVICE_TOKEN:-}" ]]; then
-          pscale auth check >/dev/null 2>&1 \
+          "$PSCALE_BIN" auth check >/dev/null 2>&1 \
             || die "planetscale rehearsal needs PLANETSCALE_SERVICE_TOKEN_ID and PLANETSCALE_SERVICE_TOKEN or valid pscale CLI auth"
         fi
-        CREATE=(pscale branch create "$REHEARSAL_PSCALE_DB" "$BRANCH" --org "$REHEARSAL_PSCALE_ORG" --from prod --wait)
-        DELETE=(pscale branch delete "$REHEARSAL_PSCALE_DB" "$BRANCH" --org "$REHEARSAL_PSCALE_ORG" --force)
+        CREATE=("$PSCALE_BIN" branch create "$REHEARSAL_PSCALE_DB" "$BRANCH" --org "$REHEARSAL_PSCALE_ORG" --from prod --wait)
+        DELETE=("$PSCALE_BIN" branch delete "$REHEARSAL_PSCALE_DB" "$BRANCH" --org "$REHEARSAL_PSCALE_ORG" --force)
         ;;
       pitr)
         [[ -n "${REHEARSAL_PITR_ENDPOINT:-}" && -n "${REHEARSAL_RESTORE_CMD:-}" ]] \
           || die "pitr rehearsal needs REHEARSAL_PITR_ENDPOINT and REHEARSAL_RESTORE_CMD"
-        # shellcheck disable=SC2206
-        CREATE=(${REHEARSAL_RESTORE_CMD} "$BRANCH")
+        RESTORE_ARGS="$(python3 - "$REHEARSAL_RESTORE_CMD" <<'EOF'
+import json, shlex, sys
+try:
+    argv = shlex.split(sys.argv[1])
+except ValueError as exc:
+    sys.exit(f"invalid REHEARSAL_RESTORE_CMD: {exc}")
+if not argv:
+    sys.exit("REHEARSAL_RESTORE_CMD is empty")
+print(json.dumps(argv))
+EOF
+)" || die "invalid REHEARSAL_RESTORE_CMD"
+        mapfile -d '' -t CREATE < <(python3 - "$RESTORE_ARGS" "$BRANCH" <<'EOF'
+import json, sys
+for arg in json.loads(sys.argv[1]) + [sys.argv[2]]:
+    sys.stdout.buffer.write(arg.encode() + b"\0")
+EOF
+)
         DELETE=("true")
         ;;
     esac
+    CLONE_CREATED=0
+    CLONE_CREATE_IN_PROGRESS=0
+    CLONE_CLEANED=0
+    cleanup_on_exit() {
+      local exit_code=$?
+      trap - EXIT INT TERM HUP
+      if [[ ("$CLONE_CREATED" -eq 1 || "$CLONE_CREATE_IN_PROGRESS" -eq 1) \
+            && "$CLONE_CLEANED" -eq 0 && "$PROVIDER" == planetscale ]]; then
+        if ! timeout 60 "${DELETE[@]}" 2>&1 | redact >&2; then
+          echo "WARN: $ME: exit cleanup failed for $BRANCH — delete it manually" >&2
+        fi
+      fi
+      if [[ -n "${WRAPDIR:-}" ]]; then rm -rf "$WRAPDIR"; fi
+      exit "$exit_code"
+    }
+    trap cleanup_on_exit EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
     STARTED="$(now_utc)"
     echo "rehearsal: creating branch $BRANCH (provider $PROVIDER)"
+    # --wait can be interrupted after remote creation but before CLI success.
+    CLONE_CREATE_IN_PROGRESS=1
     if ! "${CREATE[@]}" 2>&1 | redact >&2; then
+      CLONE_CREATE_IN_PROGRESS=0
       echo "FAIL: $ME: branch creation failed" >&2; exit 1
     fi
+    CLONE_CREATED=1
+    CLONE_CREATE_IN_PROGRESS=0
     # The branch name is the execution target contract. The caller command
     # must include the literal {branch} placeholder so the exact clone created
     # above is passed to the apply adapter, rather than silently targeting prod.
@@ -175,7 +216,7 @@ EOF
       RESULTS="[]"
     else
       HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-      WRAPDIR="$(mktemp -d)"; trap 'rm -rf "$WRAPDIR"' EXIT
+      WRAPDIR="$(mktemp -d)"
       if ! python3 - "$REHEARSAL_APPLY_CMD" "$BRANCH" > "$WRAPDIR/apply.argv0" <<'EOF'
 import shlex, sys
 try:
@@ -227,19 +268,23 @@ EOF
     if ! "${DELETE[@]}" 2>&1 | redact >&2; then
       echo "WARN: $ME: branch cleanup failed for $BRANCH — delete it manually" >&2
       CLEANUP="failed"
-    elif [[ "$PROVIDER" == "pitr" ]]; then
-      CLEANUP="delegated"
     else
-      CLEANUP="deleted"
+      CLONE_CLEANED=1
+      if [[ "$PROVIDER" == "pitr" ]]; then
+        CLEANUP="delegated"
+      else
+        CLEANUP="deleted"
+      fi
     fi
     STATUS="passed"
     [[ "$APPLY_RC" -eq 0 && "$CLEANUP" != "failed" ]] || STATUS="failed"
     python3 - "$OUT" "$CHAIN" "$RESULTS" <<EOF
 import json, sys
-chain = {m["tag"]: m["sha256"] for m in json.loads(sys.argv[2])}
+chain = json.loads(sys.argv[2])
 results = {m["tag"]: m["result"] for m in json.loads(sys.argv[3])}
-migs = [{"tag": t, "sha256": chain[t], "result": results.get(t, "not_attempted")}
-        for t in sorted(chain)]
+migs = [{"tag": m["tag"], "sha256": m["sha256"],
+         "result": results.get(m["tag"], "not_attempted")}
+        for m in chain]
 doc = {"version": $EVIDENCE_VERSION, "provider": "$PROVIDER",
        "branch": "$BRANCH", "apply_target": "$BRANCH", "base": "prod", "migrations": migs,
        "status": "$STATUS", "started_at": "$STARTED",
@@ -313,6 +358,8 @@ if sys.argv[3]:
         detail = only_ev[:1] + only_cand[:1] + mism[:1]
         sys.exit("FAIL: rehearsal evidence is not bound to this candidate chain "
                  f"(first divergence: {detail[0] if detail else 'empty evidence'})")
+    if [m.get("tag") for m in migs] != sorted(candidate):
+        sys.exit("FAIL: rehearsal evidence migration order does not match filename order")
     print(f"ok: rehearsal evidence bound to the candidate chain ({len(migs)} migration(s))")
 print(f"ok: rehearsal evidence fresh ({age:.1f}h < {limit}h), {len(migs)} migration(s) passed")
 EOF
@@ -327,10 +374,10 @@ EOF
     [[ -n "$BRANCH" ]] || die "--branch is required"
     case "$PROVIDER" in
       planetscale)
-        command -v pscale >/dev/null 2>&1 || die "needs the pscale CLI on PATH"
+        command -v "$PSCALE_BIN" >/dev/null 2>&1 || die "needs the pscale CLI on PATH (or PSCALE_BIN)"
         [[ -n "${REHEARSAL_PSCALE_ORG:-}" && -n "${REHEARSAL_PSCALE_DB:-}" ]] \
           || die "needs REHEARSAL_PSCALE_ORG and REHEARSAL_PSCALE_DB"
-        pscale branch delete "$REHEARSAL_PSCALE_DB" "$BRANCH" \
+        "$PSCALE_BIN" branch delete "$REHEARSAL_PSCALE_DB" "$BRANCH" \
           --org "$REHEARSAL_PSCALE_ORG" --force 2>&1 | redact >&2
         ;;
       *) die "--provider must be planetscale or pitr (pitr branches expire with the restore)" ;;

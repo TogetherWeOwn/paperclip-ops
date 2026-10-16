@@ -12,7 +12,9 @@ enforces them in CI with no database.
 
 - **Name:** `NNNN_slug.sql` — a 4-digit zero-padded prefix, an underscore,
   a short slug, `.sql`. Example: `0042_add_member_search_index.sql`. The
-  prefix order is the apply order, and the ledger gate keys files by content
+  prefix order is the apply order. Rehearsal filters `--only` to the tags
+  computed from the production ledger, but always applies them in filename
+  order, independent of input tag order. The ledger gate keys files by content
   hash, so renaming a shipped file is a new migration, never an edit.
 - **Phase header:** the first 15 lines carry a comment declaring the
   expand/contract phase, e.g. `-- phase: expand` or `-- phase: contract`.
@@ -131,8 +133,11 @@ jobs:
 Secrets are declared one by one (a reusable workflow cannot receive an
 opaque secret bundle). PlanetScale uses the standard service-token ID/token
 environment variables and waits for the created branch to be ready; without
-a token pair it requires valid `pscale auth check` credentials. PITR runs the
-caller-owned restore command for a point-in-time branch. The apply command
+a token pair it requires valid `pscale auth check` credentials. Generated
+PlanetScale branch names use lowercase letters, digits, and hyphens (maximum
+48 characters), and cleanup is attempted on normal completion and unexpected
+shell exits. PITR parses the caller-owned restore command as arguments
+(preserving quoted values) and appends the branch name. The apply command
 must contain `{branch}`; the workflow substitutes the created branch name and
 passes it as an explicit argument, preventing a passing rehearsal against an
 unrelated target. The adapter must connect to that branch and apply each

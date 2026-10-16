@@ -86,9 +86,11 @@ def load_ledger(path):
 
 
 def check_evidence(path, max_age_hours, candidate=None):
-    """Evidence freshness plus binding: when the candidate chain is given,
-    the evidence must rehearse exactly that chain (same tags, same
-    digests) — evidence for an unrelated chain never passes."""
+    """Evidence freshness plus binding to the candidate pending chain.
+
+    Tags and digests must match exactly, in the same filename-sorted migration
+    order used by the rehearsal; evidence for another chain or order fails.
+    """
     try:
         with open(path, encoding="utf-8") as fh:
             doc = json.load(fh)
@@ -137,6 +139,9 @@ def check_evidence(path, max_age_hours, candidate=None):
             detail = (only_ev[:1] + only_cand[:1] + mism[:1]) or ["empty evidence"]
             print("FAIL: rehearsal evidence is not bound to this candidate chain "
                   f"(first divergence: {detail[0]})")
+            return 1
+        if [m.get("tag") for m in migs] != sorted(candidate):
+            print("FAIL: rehearsal evidence migration order does not match filename order")
             return 1
         print(f"ok: rehearsal evidence bound to the candidate chain ({len(migs)} migration(s))")
     print(f"ok: rehearsal evidence fresh ({age_hours:.1f}h < {max_age_hours}h), "

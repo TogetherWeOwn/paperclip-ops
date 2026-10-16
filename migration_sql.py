@@ -9,7 +9,8 @@ def split_statements(source):
     """Return raw statement chunks and comment-masked SQL with line numbers."""
     chunks = []
     raw, code = [], []
-    line = start = 1
+    line = 1
+    start = None
     i, n = 0, len(source)
     state = "normal"
     dollar_end = ""
@@ -17,8 +18,11 @@ def split_statements(source):
     escape_string = False
 
     def append(ch, visible=True):
+        nonlocal start
         raw.append(ch)
         code.append(ch if visible else ("\n" if ch == "\n" else " "))
+        if visible and start is None and not ch.isspace():
+            start = line
 
     while i < n:
         ch = source[i]
@@ -91,10 +95,11 @@ def split_statements(source):
                 for c in dollar_end: append(c)
                 i += len(dollar_end); state = "dollar"; continue
         if ch == ";":
+            statement_start = start
             append(ch)
-            chunks.append((start, "".join(raw), "".join(code)))
+            chunks.append((statement_start or line, "".join(raw), "".join(code)))
             raw, code = [], []
-            start = line
+            start = None
             i += 1
             continue
         append(ch)

@@ -22,7 +22,9 @@
 #      from an existing index is valid by construction and takes no NOT
 #      VALID clause.
 # Then, when a `squawk` binary is available (SQUAWK_BIN or PATH), each file
-# is also linted by squawk itself and any squawk error fails the run.
+# is also linted by squawk itself and any squawk error fails the run. Failure
+# to run the shared SQL-check helper is itself a file-standard failure; the
+# gate never treats a missing or crashed helper as a pass.
 # Squawk runs with the canonical squawk-migration.toml next to this script
 # (override with --squawk-config), which excludes ONLY require-lock-timeout
 # and require-statement-timeout: timeout policy is enforced structurally by
@@ -102,13 +104,17 @@ for f in "${FILES[@]}"; do
   # construction, NOT VALID is not accepted there).
   FILE_FAIL="$FAIL"
   HAS_ADD=0; HAS_VALIDATE=0
+  if ! CHECK_OUTPUT="$(python3 "$HERE/migration_sql.py" check "$f")"; then
+    fail "$f: migration_sql.py check failed"
+    CHECK_OUTPUT=""
+  fi
   while IFS='|' read -r level line text; do
     case "$level" in
       FAIL) fail "$f:$line: $text" ;;
       META) [[ "$text" == ADD_CONSTRAINT ]] && HAS_ADD=1
             [[ "$text" == VALIDATE_CONSTRAINT ]] && HAS_VALIDATE=1 ;;
     esac
-  done < <(python3 "$HERE/migration_sql.py" check "$f")
+  done <<<"$CHECK_OUTPUT"
   if [[ "$HAS_ADD" -eq 1 && "$HAS_VALIDATE" -eq 1 ]]; then
     warn "$f: same file both ADDs and VALIDATEs a constraint — split across expand/contract migrations"
   fi

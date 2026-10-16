@@ -1549,6 +1549,8 @@ jobs:
       # above. Runs after the toolkit restore above, which this suite needs
       # for its gate files. Offline, stdlib only.
       - name: pr6 acceptance suite
+        env:
+          PR6_FREEZE_BASE: ${{ github.event.pull_request.base.sha }}
         run: python3 -m unittest -v test_pr6_acceptance.py
 
       # case_e6def006. Balancer-silence notification binding Gatus module:

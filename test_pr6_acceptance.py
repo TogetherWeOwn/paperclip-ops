@@ -342,6 +342,18 @@ class FreezeListDrift(unittest.TestCase):
             "generator names non-manifest paths: %r"
             % (sorted(set(regen) - dests),),
         )
+        if os.environ.get("PR6_FREEZE_BASE"):
+            self.assertEqual(
+                regen, committed,
+                "freeze list drifted from its PR-base generator",
+            )
+
+    def test_ci_passes_pull_request_base_for_freeze_comparison(self):
+        """CI compares the freeze list against the PR base, not a shallow HEAD."""
+        step = ci_step("pr6 acceptance suite")
+        self.assertIn(
+            "PR6_FREEZE_BASE: ${{ github.event.pull_request.base.sha }}", step
+        )
 
 
 class ToolkitRestore(unittest.TestCase):

@@ -366,6 +366,9 @@ class LiveIdentity(unittest.TestCase):
         }
         with self.assertRaisesRegex(LiveIdentityError, "out-of-range percentage"):
             derive_live_prod_identity(nan_pct, builds())
+        huge_pct = deployments(percentage=10**400)
+        with self.assertRaisesRegex(LiveIdentityError, "out-of-range percentage"):
+            derive_live_prod_identity(huge_pct, builds())
         # Through the CLI: json round-trips the NaN literal, which
         # json.loads accepts, so the guard must hold end to end.
         rc, _, err = run_cli(nan_pct, builds())
@@ -486,6 +489,13 @@ class LiveIdentity(unittest.TestCase):
         rc, _, err = run_cli(bad, builds())
         self.assertEqual(rc, 2)
         self.assertIn("refused:", err)
+
+    def test_main_huge_integer_percentage_refuses_rc_2(self):
+        rc, out, err = run_cli(deployments(percentage=10**400), builds())
+        self.assertEqual(rc, 2)
+        self.assertIn("refused:", err)
+        self.assertNotIn("Traceback", err)
+        self.assertNotIn("promote", out)
 
     def test_main_unreadable_input_exits_2(self):
         with tempfile.TemporaryDirectory() as tmpdir:

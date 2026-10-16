@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
 from pathlib import Path
 
@@ -112,7 +111,7 @@ def _validate_versions(versions: list) -> list[tuple[str, float | None]]:
                 f"live version {version_id} has non-numeric percentage {pct!r}: "
                 "refusing to guess live version"
             )
-        elif not math.isfinite(pct) or not 0 <= pct <= 100:
+        elif not 0 <= pct <= 100:
             raise LiveIdentityError(
                 f"live version {version_id} has out-of-range percentage {pct!r}: "
                 "refusing to guess live version"

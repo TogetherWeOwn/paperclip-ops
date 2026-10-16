@@ -98,8 +98,11 @@ class ServedModelsExactIds(unittest.TestCase):
         self.assertEqual(set(ids), set(POSITIVE_IDS))
 
     def test_malformed_rows_skipped_not_fatal(self):
-        payload = {"data": [{"id": "gpt-6-luna"}, {"noid": 1}, {"id": ""}, {"id": None}]}
+        payload = {"data": [{"id": "gpt-6-luna"}, {"noid": 1}, {"id": ""}, {"id": "   "}, {"id": None}, "bare-id"]}
         self.assertEqual(fetch(payload=payload), ["gpt-6-luna"])
+
+    def test_nonblank_ids_are_preserved_verbatim(self):
+        self.assertEqual(fetch([" partner/model "]), [" partner/model "])
 
 
 class ServedModelsOracleFailure(unittest.TestCase):
@@ -188,7 +191,7 @@ class ServedBearerContract(unittest.TestCase):
         finally:
             os.unlink(path)
 
-    def test_key_equals_value_strips_quotes(self):
+    def test_key_equals_value_strips_matching_quotes(self):
         path = write_key_file('KEY="quoted-bearer"\n')
         try:
             self.assertEqual(fc.served_bearer(path, "KEY"), "quoted-bearer")
@@ -197,6 +200,11 @@ class ServedBearerContract(unittest.TestCase):
         path = write_key_file("KEY='single-bearer'\n")
         try:
             self.assertEqual(fc.served_bearer(path, "KEY"), "single-bearer")
+        finally:
+            os.unlink(path)
+        path = write_key_file('KEY="unmatched\n')
+        try:
+            self.assertEqual(fc.served_bearer(path, "KEY"), '"unmatched')
         finally:
             os.unlink(path)
 
@@ -393,13 +401,9 @@ class ApplyExclusions(unittest.TestCase):
 PINNED_FUNCTIONS = (
     "ServedModelsError",
     "served_bearer",
-    "served_iso",
     "extract_served_ids",
     "fetch_served_models",
     "attach_served_models",
-    "exclusion_is_active",
-    "active_dropped_models",
-    "apply_exclusions",
 )
 
 
@@ -414,7 +418,20 @@ class HostPatchPin(unittest.TestCase):
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "host_patch.diff")
         with open(path) as f:
             head = f.read(2000)
-        self.assertIn("d8cab34855fee1507b8c72eae8c05ae76cb6da1e03250a650c1acdf29e2baa2d", head)
+        self.assertIn("Target: ops/cliproxy-live/live_accounts.py", head)
+        self.assertIn("93a99797b20726182f14938b394f58c4ec6b3adcc87fdfc7bcce787e465bf75e", head)
+        self.assertIn("Before byte count: 42536", head)
+        self.assertIn("servedModels oracle only", head)
+
+    def test_patch_does_not_replace_live_behavior(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "host_patch.diff")
+        with open(path) as f:
+            patch = f.read()
+        self.assertNotRegex(patch, r"(?m)^-[^-]")
+        self.assertIn("preserves plan-aware 0.2.46", patch.lower())
+        self.assertIn("pace_guard", patch)
+        self.assertIn("detect_free_resets", patch)
+        self.assertIn("freeResets", patch)
 
     def test_pinned_functions_verbatim_in_patch(self):
         normed = [re.sub(r"[ \t]+", " ", l).strip() for l in self.added_lines()]
@@ -448,14 +465,18 @@ class HostPatchHunkStructure(unittest.TestCase):
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "host_patch.diff")
         with open(path) as f:
             lines = f.read().splitlines()
-        header_re = re.compile(r"^@@ -(\d+),(\d+) \+(\d+),(\d+) @@")
+        header_re = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
         headers = [(i, l) for i, l in enumerate(lines) if l.startswith("@@")]
         self.assertGreaterEqual(len(headers), 1, "no hunks in host_patch.diff")
         cumulative = 0
         for idx, (lineno, header) in enumerate(headers):
             m = header_re.match(header)
             self.assertIsNotNone(m, msg="bad hunk header: %r" % header)
-            old_start, old_count, new_start, new_count = map(int, m.groups())
+            old_start, old_count, new_start, new_count = m.groups()
+            old_start = int(old_start)
+            old_count = int(old_count or 1)
+            new_start = int(new_start)
+            new_count = int(new_count or 1)
             end = headers[idx + 1][0] if idx + 1 < len(headers) else len(lines)
             body = [l for l in lines[lineno + 1:end] if not l.startswith("\\")]
             old = sum(1 for l in body if l.startswith(" ") or l.startswith("-"))
@@ -470,10 +491,11 @@ class HostPatchHunkStructure(unittest.TestCase):
                 msg="hunk %d new count: header says %d, body has %d"
                 % (idx + 1, new_count, new),
             )
+            expected_start = old_start + cumulative + (1 if old_count == 0 else 0)
             self.assertEqual(
-                new_start, old_start + cumulative,
+                new_start, expected_start,
                 msg="hunk %d new start: header says %d, want %d"
-                % (idx + 1, new_start, old_start + cumulative),
+                % (idx + 1, new_start, expected_start),
             )
             cumulative += new_count - old_count
 

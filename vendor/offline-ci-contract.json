@@ -1711,7 +1711,7 @@
     },
     {
       "name": "pr6 acceptance suite",
-      "definition_sha256": "4c4df50bb9eeb4459e679cbca33d133d471bdfaf5d3a9a8b1b6a5b90c5d5b948",
+      "definition_sha256": "63a04269075c57e92a96db6e55ba7bffb4f910e69a222a44cfd186d930e369f4",
       "id": "pr6 acceptance suite:1"
     }
   ],

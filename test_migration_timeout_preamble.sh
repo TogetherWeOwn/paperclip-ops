@@ -77,8 +77,12 @@ if grep -q "SET statement_timeout = '0';" "$WORK/cic.wrapped.sql" \
   # (the first 120s line is the preamble itself, so search past the CIC).
   lift_line="$(grep -n "SET statement_timeout = '0';" "$WORK/cic.wrapped.sql" | head -n 1 | cut -d: -f1)"
   cic_line="$(grep -n "CREATE INDEX CONCURRENTLY" "$WORK/cic.wrapped.sql" | head -n 1 | cut -d: -f1)"
+  # Capture-first (no tail | grep -q pipeline): piping into an early-exiting
+  # grep under pipefail can report a match as a miss (see
+  # verification/case_c25c4d3f-sigpipe-verdict-gate.sh).
+  cic_tail="$(tail -n +"$cic_line" "$WORK/cic.wrapped.sql")"
   if [[ "$lift_line" -lt "$cic_line" ]] \
-    && tail -n +"$cic_line" "$WORK/cic.wrapped.sql" | grep -q "SET statement_timeout = '120s';"; then
+    && grep -q "SET statement_timeout = '120s';" <<<"$cic_tail"; then
     ok "inject lifts statement_timeout around CONCURRENTLY builds only"
   else
     bad "inject lifts statement_timeout around CONCURRENTLY builds only"

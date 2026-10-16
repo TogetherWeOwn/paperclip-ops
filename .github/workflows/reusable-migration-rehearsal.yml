@@ -166,6 +166,8 @@ jobs:
           ONLY_TAGS: ${{ inputs.pending-tags }}
           PROVIDER: ${{ inputs.provider }}
           MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
+          REHEARSAL_BRANCH: rehearsal-${{ github.run_id }}-${{ github.run_attempt }}
+          REHEARSAL_CLEANUP_MARKER: ${{ runner.temp }}/rehearsal-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           # Plan-only when the selected provider cannot be used. Credentials
@@ -198,7 +200,40 @@ jobs:
             --migrations-dir "$MIGRATIONS_DIR" \
             --provider "$PROVIDER" \
             --only "$ONLY_TAGS" \
+            --branch "$REHEARSAL_BRANCH" \
             --out rehearsal-evidence.json
+
+      - name: Clean up abandoned PlanetScale clone
+        if: always() && inputs.provider == 'planetscale'
+        env:
+          REHEARSAL_PSCALE_ORG: ${{ secrets.rehearsal-pscale-org }}
+          REHEARSAL_PSCALE_DB: ${{ secrets.rehearsal-pscale-db }}
+          PLANETSCALE_SERVICE_TOKEN_ID: ${{ secrets.rehearsal-pscale-token-id }}
+          PLANETSCALE_SERVICE_TOKEN: ${{ secrets.rehearsal-pscale-token }}
+          REHEARSAL_BRANCH: rehearsal-${{ github.run_id }}-${{ github.run_attempt }}
+          REHEARSAL_CLEANUP_MARKER: ${{ runner.temp }}/rehearsal-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          [[ -e "$REHEARSAL_CLEANUP_MARKER" ]] || { echo "No interrupted clone to clean."; exit 0; }
+          if [[ -z "${REHEARSAL_PSCALE_ORG:-}" || -z "${REHEARSAL_PSCALE_DB:-}" ]]; then
+            echo "Cannot clean interrupted clone: provider scope is unavailable." >&2
+            exit 1
+          fi
+          if { [[ -z "${PLANETSCALE_SERVICE_TOKEN_ID:-}" || -z "${PLANETSCALE_SERVICE_TOKEN:-}" ]]; } \
+            && { ! command -v pscale >/dev/null 2>&1 || ! pscale auth check >/dev/null 2>&1; }; then
+            echo "Cannot clean interrupted clone: PlanetScale auth is unavailable." >&2
+            exit 1
+          fi
+          for attempt in 1 2 3; do
+            if bash .paperclip-migration-gates/migration_rehearsal.sh clean \
+              --provider planetscale --branch "$REHEARSAL_BRANCH"; then
+              rm -f "$REHEARSAL_CLEANUP_MARKER"
+              exit 0
+            fi
+            [[ "$attempt" -eq 3 ]] || sleep "$((attempt * 2))"
+          done
+          echo "WARN: cleanup failed; manually delete PlanetScale branch $REHEARSAL_BRANCH" >&2
+          exit 1
 
       # Pinned: actions/upload-artifact v7.0.1. Repin with the SHA on updates.
       - name: Upload rehearsal evidence

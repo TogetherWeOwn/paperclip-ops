@@ -34,6 +34,10 @@ if [[ "$1 $2" == "branch create" ]]; then
     while :; do sleep 1; done
   fi
 fi
+if [[ "$1 $2" == "branch delete" && "${FAKE_PSCALE_MISSING_DELETE:-}" == 1 ]]; then
+  echo "branch '$4' not found" >&2
+  exit 1
+fi
 echo "fake-pscale: $* (token=SENTINELTOKEN-must-never-reach-output)"
 FAKE
 cat > "$WORK/bin/fake-restore" <<'FAKE'
@@ -237,6 +241,15 @@ if [[ "$create_fail_rc" -ne 0 ]] && ! grep -q '^delete$' "$REC/pscale.argv"; the
 else
   bad "failed branch creation does not delete an unowned branch"
 fi
+
+FAKE_PSCALE_MISSING_DELETE=1 REHEARSAL_PSCALE_ORG=fake REHEARSAL_PSCALE_DB=fake \
+  PLANETSCALE_SERVICE_TOKEN_ID= PLANETSCALE_SERVICE_TOKEN= \
+  PSCALE_BIN="$WORK/bin/fake-pscale" \
+  "$GATE" clean --provider planetscale --branch "rehearsal-gone-001" \
+  >"$WORK/clean-missing-output" 2>&1 \
+  && grep -q "branch already absent" "$WORK/clean-missing-output" \
+  && ok "clean tolerates an already-deleted PlanetScale branch" \
+  || bad "clean tolerates an already-deleted PlanetScale branch"
 
 # SIGTERM during PlanetScale branch creation must still attempt cleanup.
 if command -v setsid >/dev/null 2>&1; then

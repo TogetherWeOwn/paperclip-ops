@@ -91,6 +91,7 @@ parser, not a standing operator command. Test entry points begin with `test_`.
 | `kofra_preview_parity.py` |
 | `migration_drift_gate.py` |
 | `migration_rehearsal.sh` |
+| `migration_sql.py` |
 | `migration_squawk.sh` |
 | `migration_timeout_preamble.sh` |
 | `muse_countdown.py` |

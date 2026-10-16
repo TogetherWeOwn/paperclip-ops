@@ -977,17 +977,45 @@ done
   || bad "7m. monitor-health dispatch" "$mh_bad"
 # 7m2. helper contract (monitor-health.sh): fixed localhost URLs, fixed
 # up/DOWN lines, fail-closed, upstream body/stderr never printed. Stub
-# curl records argv; its stderr carries a sentinel the way a real error
-# page could carry host text — a helper echoing it would leak.
+# curl records argv and enforces the real curl contract (see below); its
+# stderr carries a sentinel the way a real error page could carry host
+# text — a helper echoing it would leak.
 mkdir -p "$WORK/curlbin"
 cat > "$WORK/curlbin/curl" <<CURLSHIM
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$WORK/curl-argv.log"
+# Contract double for real curl: parse the flags the helper must send.
+# Without -o /dev/null the sentinel body reaches stdout (as with real
+# curl); without -w '%{http_code}' no code is printed; missing timeout
+# bounds are a contract violation (exit 99, so the helper reports DOWN).
+stub_out=""; stub_w=""; stub_ct=""; stub_mt=""
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o) stub_out="\${2:-}"; shift 2 ;;
+    -w) stub_w="\${2:-}"; shift 2 ;;
+    --connect-timeout) stub_ct="\${2:-}"; shift 2 ;;
+    --max-time) stub_mt="\${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ "\$stub_ct" != "3" || "\$stub_mt" != "5" ]]; then
+  echo "stub curl: missing timeout bound" >&2; exit 99
+fi
 case "\${CURL_FIXTURE:-ok}" in
-  ok) printf '200' ;;
-  http503) printf '503' ;;
+  ok) stub_code=200 ;;
+  http503) stub_code=503 ;;
+  http204) stub_code=204 ;;
   fail) echo "curl: (7) sentinel-upstream-text-42" >&2; exit 7 ;;
+  *) echo "stub curl: unknown fixture" >&2; exit 99 ;;
 esac
+if [[ "\$stub_out" == "/dev/null" ]]; then
+  :
+elif [[ -n "\$stub_out" ]]; then
+  printf 'sentinel-body-42' > "\$stub_out"
+else
+  printf 'sentinel-body-42'
+fi
+if [[ "\$stub_w" == '%{http_code}' ]]; then printf '%s' "\$stub_code"; fi
 CURLSHIM
 chmod +x "$WORK/curlbin/curl"
 mh_bad2=""
@@ -1000,6 +1028,13 @@ grep -qF "http://127.0.0.1:8090/api/health" "$WORK/curl-argv.log" \
   || mh_bad2="$mh_bad2 [beszel URL wrong: $(tr '\n' ' ' < "$WORK/curl-argv.log")]"
 grep -qF -- "--max-time 5" "$WORK/curl-argv.log" \
   || mh_bad2="$mh_bad2 [probe is unbounded (no --max-time 5)]"
+grep -qF -- "--connect-timeout 3" "$WORK/curl-argv.log" \
+  || mh_bad2="$mh_bad2 [probe is unbounded (no --connect-timeout 3)]"
+grep -qF -- "-o /dev/null" "$WORK/curl-argv.log" \
+  || mh_bad2="$mh_bad2 [probe does not discard the body (no -o /dev/null)]"
+grep -qF -- "-w %{http_code}" "$WORK/curl-argv.log" \
+  || mh_bad2="$mh_bad2 [probe does not capture the status (no -w %{http_code})]"
+if grep -qF "sentinel-body-42" <<<"$out"; then mh_bad2="$mh_bad2 [helper printed the response body]"; fi
 if grep -qiF "authorization" "$WORK/curl-argv.log"; then mh_bad2="$mh_bad2 [probe carries a credential]"; fi
 : > "$WORK/curl-argv.log"
 if out="$(PATH="$WORK/curlbin:/usr/bin:/bin" bash "$SRC/monitor-health.sh" gatus 2>&1)"; then
@@ -1012,6 +1047,10 @@ grep -qF "http://127.0.0.1:8080/health" "$WORK/curl-argv.log" \
 out="$(CURL_FIXTURE=http503 PATH="$WORK/curlbin:/usr/bin:/bin" bash "$SRC/monitor-health.sh" gatus 2>&1)"; rc=$?
 (( rc == 1 )) || mh_bad2="$mh_bad2 [503 wrong exit (rc=$rc): $out]"
 [[ "$out" == "gatus: DOWN (http 503)" ]] || mh_bad2="$mh_bad2 [503 output wrong: $out]"
+# only exactly 200 is up: any other 2xx still pages (exit 1).
+out="$(CURL_FIXTURE=http204 PATH="$WORK/curlbin:/usr/bin:/bin" bash "$SRC/monitor-health.sh" gatus 2>&1)"; rc=$?
+(( rc == 1 )) || mh_bad2="$mh_bad2 [204 wrong exit (rc=$rc): $out]"
+[[ "$out" == "gatus: DOWN (http 204)" ]] || mh_bad2="$mh_bad2 [204 output wrong: $out]"
 # unreachable pages (exit 1), sentinel stderr never printed.
 out="$(CURL_FIXTURE=fail PATH="$WORK/curlbin:/usr/bin:/bin" bash "$SRC/monitor-health.sh" beszel 2>&1)"; rc=$?
 (( rc == 1 )) || mh_bad2="$mh_bad2 [unreachable wrong exit (rc=$rc): $out]"

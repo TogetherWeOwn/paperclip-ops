@@ -227,6 +227,10 @@ class PublicCI(unittest.TestCase):
         safety = (ROOT / ".github/workflows/public-safety.yml").read_text()
         self.assertIn("gitleaks", safety)
         self.assertIn("public_safety.py", safety)
+        # History scan is scoped to HEAD-reachable commits only: --all would
+        # judge unrelated fetched branches by this branch's allowlist.
+        self.assertIn("--log-opts=HEAD", safety)
+        self.assertNotIn("--log-opts=--all", safety)
 
     def test_metadata_protocol_constant_does_not_exempt_private_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:

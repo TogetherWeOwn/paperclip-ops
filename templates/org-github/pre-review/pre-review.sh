@@ -295,7 +295,7 @@ echo "$ADDED_LINES" | grep -E 'catch\s*(\([^)]*\))?\s*\{\s*\}' >/dev/null \
 SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[bap]-[A-Za-z0-9-]{8,}|api[_-]?key["'"'"' ]*[:=]["'"'"' ]+[A-Za-z0-9_.-]{12,}|(token|secret|password)["'"'"' ]*[:=](["'"'"' ]*["'"'"'][^"'"'"' ]{12,}|["'"'"' ]+[^"'"'"' ().<>]{12,}(["'"'"' ,;#]|$)))'
 # Only assignment values may end at a closing paren: a colon introduces a type
 # annotation, where long type names such as SecretString are not literals.
-CALL_SECRET_RE='(token|secret|password)["'"'"' ]*=["'"'"' ]+[^"'"'"' ().<>]{12,}\)'
+CALL_SECRET_RE='(token|secret|password)["'"'"' ]*=["'"'"' ]*[^"'"'"' ().<>]{12,}\)'
 
 if grep -Eq "$SECRET_RE" <<<"$ADDED_LINES" || grep -Eq "$CALL_SECRET_RE" <<<"$ADDED_LINES"; then
   fail "authz" "possible secret in added lines — move to a credential store"

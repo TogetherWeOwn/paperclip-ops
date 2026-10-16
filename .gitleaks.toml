@@ -275,3 +275,10 @@ paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
 regexTarget = "line"
 regexes = ['''(?m)^\ \ \ \ "scripts/discord_job_health\.js":\ "2c255bb856e28f17201491179c11f635a25bf306ad6cf24c276aafbaeabae2cd",$''']
 
+[[allowlists]]
+targetRules = ["generic-api-key", "discord-api-token"]
+description = "File-integrity map in the vendored offline CI contract: every flagged value is a 64-hex sha256 digest of a file, not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = ['''(?m)^\+?\s*"[^"]+":\s*"[0-9a-f]{64}",?$''']

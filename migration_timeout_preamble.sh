@@ -35,6 +35,7 @@
 # Offline: reads files only, never touches a database, prints no secrets.
 set -euo pipefail
 ME="$(basename "${BASH_SOURCE[0]}")"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 LOCK_TIMEOUT="10s"
 STATEMENT_TIMEOUT="120s"
@@ -101,55 +102,7 @@ case "$cmd" in
       cat "$1"
     else
       print_preamble
-      python3 - "$1" <<EOF
-import re
-import sys
-stmt = "$STATEMENT_TIMEOUT"
-src = open(sys.argv[1], encoding="utf-8", errors="replace").read()
-# Split on ';' outside single-quoted strings (same statement rule as
-# migration_squawk.sh); comments ride along inside their statement.
-parts, buf = [], []
-i, n, in_str = 0, len(src), False
-while i < n:
-    ch = src[i]
-    if in_str:
-        buf.append(ch)
-        if ch == "'":
-            if i + 1 < n and src[i + 1] == "'":
-                buf.append("'")
-                i += 2
-                continue
-            in_str = False
-        i += 1
-        continue
-    if ch == "'":
-        in_str = True
-        buf.append(ch)
-        i += 1
-        continue
-    if ch == ";":
-        buf.append(ch)
-        parts.append("".join(buf))
-        buf = []
-        i += 1
-        continue
-    buf.append(ch)
-    i += 1
-tail = "".join(buf)
-if tail:
-    parts.append(tail)
-out = []
-for part in parts:
-    if re.search(r"\bCREATE\s+(UNIQUE\s+)?INDEX\s+CONCURRENTLY\b", part, re.I):
-        out.append("SET statement_timeout = '0';\n")
-        out.append(part)
-        if not part.rstrip().endswith(";"):
-            out.append(";")
-        out.append("\nSET statement_timeout = '%s';\n" % stmt)
-    else:
-        out.append(part)
-sys.stdout.write("".join(out))
-EOF
+      python3 "$HERE/migration_sql.py" inject "$1" "$STATEMENT_TIMEOUT"
     fi
     ;;
   *) cat >&2 <<EOF

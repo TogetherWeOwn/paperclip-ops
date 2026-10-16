@@ -90,6 +90,35 @@ if grep -q "SET statement_timeout = '0';" "$WORK/cic.wrapped.sql" \
 else
   bad "inject lifts statement_timeout around CONCURRENTLY builds only"
 fi
+# Comments, escaped strings, identifiers and dollar-quoted bodies must not
+# split statements or accidentally trigger the concurrent-index timeout lift.
+cat > "$WORK/comments.sql" <<'EOF'
+-- Don't split this note; semicolon ; remains a comment.
+/* block ; comment with 'quotes' and nested /* ; */ text */
+SELECT 'it''s; still a string', $$body; still quoted$$;
+-- CREATE INDEX CONCURRENTLY mentioned here is not executable SQL.
+CREATE INDEX CONCURRENTLY actual_idx ON t (x);
+EOF
+"$GATE" inject "$WORK/comments.sql" > "$WORK/comments.wrapped.sql"
+if grep -q -- "-- Don't split this note; semicolon ; remains a comment." "$WORK/comments.wrapped.sql" \
+  && grep -q "block ; comment with 'quotes'" "$WORK/comments.wrapped.sql" \
+  && [[ "$(grep -c "SET statement_timeout = '0';" "$WORK/comments.wrapped.sql")" -eq 1 ]] \
+  && [[ "$(grep -c 'CREATE INDEX CONCURRENTLY' "$WORK/comments.wrapped.sql")" -eq 2 ]]; then
+  ok "inject preserves comments and recognizes only executable concurrent indexes"
+else
+  bad "inject preserves comments and recognizes only executable concurrent indexes"
+fi
+REAL_SQUAWK="${SQUAWK_BIN:-$(command -v squawk || true)}"
+if [[ -n "$REAL_SQUAWK" && -x "$REAL_SQUAWK" ]]; then
+  if "$REAL_SQUAWK" --config "$HERE/squawk-migration.toml" "$WORK/comments.wrapped.sql" >/dev/null; then
+    ok "real squawk parses injected SQL with comment semicolons and apostrophes"
+  else
+    bad "real squawk parses injected SQL with comment semicolons and apostrophes"
+  fi
+else
+  printf '  SKIP real Squawk injected-output parse check: squawk binary unavailable\n'
+fi
+
 # A plain statement keeps the bounded timeout (no lift, no restore noise).
 "$GATE" inject "$WORK/bare.sql" > "$WORK/bare.wrapped.sql"
 if ! grep -q "statement_timeout = '0'" "$WORK/bare.wrapped.sql" \

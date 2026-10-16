@@ -73,9 +73,8 @@ on:
         default: 24
         type: number
       script-ref:
-        description: Pinned SHA of this repo to fetch the gate scripts from.
-        required: false
-        default: main
+        description: Required immutable 40-character commit SHA for gate scripts.
+        required: true
         type: string
       page-on-failure:
         description: Auto-file an issue and post to Discord when the gate fails.
@@ -103,6 +102,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Validate immutable gate-script reference
+        env:
+          SCRIPT_REF: ${{ inputs.script-ref }}
+        run: |
+          [[ "$SCRIPT_REF" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "script-ref must be a full 40-character commit SHA"; exit 2; }
+
       - name: Fetch canonical gate scripts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -116,8 +121,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           LEDGER_ARTIFACT: ${{ inputs.ledger-artifact }}
           EVIDENCE_ARTIFACT: ${{ inputs.evidence-artifact }}
+          LEDGER_FILE_INPUT: ${{ inputs.ledger-file }}
+          EVIDENCE_FILE_INPUT: ${{ inputs.evidence-file }}
         run: |
           set -euo pipefail
+          case "$LEDGER_FILE_INPUT$EVIDENCE_FILE_INPUT" in *$'\n'*|*$'\r'*)
+            echo "ledger/evidence file inputs must not contain line breaks" >&2; exit 2;;
+          esac
           mkdir -p .paperclip-drift-inputs/ledger .paperclip-drift-inputs/evidence
           if [ -n "$LEDGER_ARTIFACT" ]; then
             gh run download "$GITHUB_RUN_ID" -n "$LEDGER_ARTIFACT" -D .paperclip-drift-inputs/ledger
@@ -127,25 +137,28 @@ jobs:
           fi
           if [ -n "$EVIDENCE_ARTIFACT" ]; then
             gh run download "$GITHUB_RUN_ID" -n "$EVIDENCE_ARTIFACT" -D .paperclip-drift-inputs/evidence
-            ev="$(find .paperclip-drift-inputs/evidence -type f -name '*.json' -print -quit)"
-            [ -n "$ev" ] || { echo "evidence-artifact '$EVIDENCE_ARTIFACT' holds no JSON evidence document"; exit 2; }
+            ev=.paperclip-drift-inputs/evidence/rehearsal-evidence.json
+            [ -r "$ev" ] || { echo "evidence-artifact '$EVIDENCE_ARTIFACT' must contain rehearsal-evidence.json"; exit 2; }
             printf '%s' "$ev" > .paperclip-drift-inputs/evidence.path
           fi
           {
             if [ -f .paperclip-drift-inputs/ledger.path ]; then
               printf 'DRIFT_LEDGER_FILE=%s\n' "$(cat .paperclip-drift-inputs/ledger.path)"
             else
-              printf 'DRIFT_LEDGER_FILE=%s\n' "${{ inputs.ledger-file }}"
+              printf 'DRIFT_LEDGER_FILE=%s\n' "$LEDGER_FILE_INPUT"
             fi
             if [ -f .paperclip-drift-inputs/evidence.path ]; then
               printf 'DRIFT_EVIDENCE_FILE=%s\n' "$(cat .paperclip-drift-inputs/evidence.path)"
             else
-              printf 'DRIFT_EVIDENCE_FILE=%s\n' "${{ inputs.evidence-file }}"
+              printf 'DRIFT_EVIDENCE_FILE=%s\n' "$EVIDENCE_FILE_INPUT"
             fi
           } >> "$GITHUB_ENV"
 
       - name: Build candidate digests and run the drift gate
         id: gate
+        env:
+          MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
+          MAX_AGE_HOURS: ${{ inputs.max-age-hours }}
         run: |
           set -euo pipefail
           test -r "${DRIFT_LEDGER_FILE:-}" \
@@ -154,10 +167,10 @@ jobs:
             test -r "$DRIFT_EVIDENCE_FILE" \
               || { echo "drift gate: evidence input is set but unreadable: $DRIFT_EVIDENCE_FILE"; exit 2; }
           fi
-          (cd "${{ inputs.migrations-dir }}" && sha256sum ./*.sql) > /tmp/candidate-hashes.txt
+          (cd "$MIGRATIONS_DIR" && sha256sum ./*.sql) > /tmp/candidate-hashes.txt
           EXTRA=()
           if [ -n "${DRIFT_EVIDENCE_FILE:-}" ]; then
-            EXTRA=(--evidence "$DRIFT_EVIDENCE_FILE" --max-age-hours "${{ inputs.max-age-hours }}")
+            EXTRA=(--evidence "$DRIFT_EVIDENCE_FILE" --max-age-hours "$MAX_AGE_HOURS")
           fi
           python3 .paperclip-migration-gates/migration_drift_gate.py \
             --sql-hashes /tmp/candidate-hashes.txt \

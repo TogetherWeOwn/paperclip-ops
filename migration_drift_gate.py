@@ -97,6 +97,17 @@ def check_evidence(path, max_age_hours, candidate=None):
     if doc.get("status") != "passed":
         print(f"FAIL: rehearsal evidence status is {doc.get('status')!r}, want 'passed'")
         return 1
+    provider, cleanup = doc.get("provider"), doc.get("cleanup")
+    if provider == "planetscale" and cleanup != "deleted":
+        print("FAIL: PlanetScale rehearsal branch cleanup is not confirmed deleted")
+        return 1
+    if provider == "pitr" and cleanup != "delegated":
+        print("FAIL: PITR cleanup must be recorded as delegated expiration")
+        return 1
+    if (provider not in {"planetscale", "pitr"} or not doc.get("branch")
+            or doc.get("apply_target") != doc.get("branch")):
+        print("FAIL: rehearsal evidence target does not match its created branch")
+        return 1
     try:
         finished = datetime.datetime.strptime(
             doc["finished_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
@@ -147,11 +158,15 @@ def main(argv):
     applied = set(load_ledger(args.ledger))
 
     rc = 0
-    pending = sorted(t for t, h in candidate.items() if h not in applied)
+    pending = {tag: digest for tag, digest in candidate.items() if digest not in applied}
     if pending:
-        print(f"FAIL: {len(pending)} candidate migration(s) not in the production "
-              f"ledger; first: {pending[0]}")
-        rc = 1
+        if args.evidence:
+            print(f"ok: {len(pending)} pending migration(s) require bound rehearsal evidence")
+        else:
+            first = sorted(pending)[0]
+            print(f"FAIL: {len(pending)} candidate migration(s) are pending without "
+                  f"rehearsal evidence; first: {first}")
+            rc = 1
     else:
         print(f"ok: all {len(candidate)} candidate migrations are in the production ledger")
 
@@ -165,7 +180,10 @@ def main(argv):
         print("ok: no out-of-band production migrations (ledger matches candidate)")
 
     if args.evidence:
-        rc = check_evidence(args.evidence, args.max_age_hours, candidate) or rc
+        # For a rollout, rehearse exactly the migrations absent from the
+        # ledger. With no pending migrations, retain full-chain validation.
+        evidence_chain = pending or candidate
+        rc = check_evidence(args.evidence, args.max_age_hours, evidence_chain) or rc
     return rc
 
 

@@ -54,9 +54,12 @@ on:
         default: "0.346.0"
         type: string
       script-ref:
-        description: Pinned SHA of this repo to fetch the gate scripts from.
-        required: false
-        default: main
+        description: Required immutable 40-character commit SHA for gate scripts.
+        required: true
+        type: string
+      pending-tags:
+        description: Required comma-separated pending migration tags from the production ledger.
+        required: true
         type: string
       evidence-retention-days:
         description: Artifact retention for the evidence document.
@@ -70,8 +73,11 @@ on:
       rehearsal-pscale-db:
         description: PlanetScale database (existing caller principal).
         required: false
+      rehearsal-pscale-token-id:
+        description: PlanetScale service token ID (existing caller principal).
+        required: false
       rehearsal-pscale-token:
-        description: PlanetScale token (existing caller principal).
+        description: PlanetScale service token (existing caller principal).
         required: false
       rehearsal-pitr-endpoint:
         description: PITR endpoint (existing caller principal).
@@ -84,13 +90,18 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-      actions: write # evidence artifact upload
     steps:
       # Pinned: actions/checkout v4. Repin with the SHA, never a moving tag.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Validate immutable gate-script reference
+        env:
+          SCRIPT_REF: ${{ inputs.script-ref }}
+        run: |
+          [[ "$SCRIPT_REF" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "script-ref must be a full 40-character commit SHA"; exit 2; }
 
       - name: Fetch canonical gate scripts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -101,11 +112,17 @@ jobs:
           persist-credentials: false
 
       - name: Plan the pending chain (offline, always runs)
+        env:
+          ONLY_TAGS: ${{ inputs.pending-tags }}
+          PROVIDER: ${{ inputs.provider }}
+          MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
         run: |
           set -euo pipefail
+          [[ -n "$ONLY_TAGS" ]] || { echo "pending-tags must not be empty"; exit 2; }
           bash .paperclip-migration-gates/migration_rehearsal.sh plan \
-            --migrations-dir "${{ inputs.migrations-dir }}" \
-            --provider "${{ inputs.provider }}" \
+            --migrations-dir "$MIGRATIONS_DIR" \
+            --provider "$PROVIDER" \
+            --only "$ONLY_TAGS" \
             --out rehearsal-plan.json
           cat rehearsal-plan.json
 
@@ -141,25 +158,46 @@ jobs:
         env:
           REHEARSAL_PSCALE_ORG: ${{ secrets.rehearsal-pscale-org }}
           REHEARSAL_PSCALE_DB: ${{ secrets.rehearsal-pscale-db }}
-          REHEARSAL_PSCALE_TOKEN: ${{ secrets.rehearsal-pscale-token }}
+          PLANETSCALE_SERVICE_TOKEN_ID: ${{ secrets.rehearsal-pscale-token-id }}
+          PLANETSCALE_SERVICE_TOKEN: ${{ secrets.rehearsal-pscale-token }}
           REHEARSAL_PITR_ENDPOINT: ${{ secrets.rehearsal-pitr-endpoint }}
           REHEARSAL_RESTORE_CMD: ${{ inputs.restore-cmd != '' && inputs.restore-cmd || vars.REHEARSAL_RESTORE_CMD }}
           REHEARSAL_APPLY_CMD: ${{ inputs.apply-cmd != '' && inputs.apply-cmd || vars.REHEARSAL_APPLY_CMD }}
+          ONLY_TAGS: ${{ inputs.pending-tags }}
+          PROVIDER: ${{ inputs.provider }}
+          MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
         run: |
           set -euo pipefail
-          # Plan-only when no provider credential is usable: no token and no
-          # endpoint, and no logged-in pscale CLI either. The CLI being
-          # installed is NOT a credential — an installed-but-anonymous
-          # pscale must not turn into a failed rehearsal.
-          if [ -z "${REHEARSAL_PSCALE_TOKEN:-}" ] && [ -z "${REHEARSAL_PITR_ENDPOINT:-}" ]; then
-            if ! command -v pscale >/dev/null 2>&1 || ! pscale auth status >/dev/null 2>&1; then
-              echo "No provider credentials on this run: plan only, no rehearsal claimed."
-              exit 0
-            fi
-          fi
+          # Plan-only when the selected provider cannot be used. Credentials
+          # for a different provider do not authorize this rehearsal.
+          case "$PROVIDER" in
+            pitr)
+              if [ -z "${REHEARSAL_PITR_ENDPOINT:-}" ] || [ -z "${REHEARSAL_RESTORE_CMD:-}" ]; then
+                echo "No PITR credentials on this run: plan only, no rehearsal claimed."
+                exit 0
+              fi
+              ;;
+            planetscale)
+              if [ -z "${REHEARSAL_PSCALE_ORG:-}" ] || [ -z "${REHEARSAL_PSCALE_DB:-}" ]; then
+                echo "No PlanetScale org/database on this run: plan only, no rehearsal claimed."
+                exit 0
+              fi
+              if { [ -z "${PLANETSCALE_SERVICE_TOKEN_ID:-}" ] || [ -z "${PLANETSCALE_SERVICE_TOKEN:-}" ]; } \
+                && { ! command -v pscale >/dev/null 2>&1 || ! pscale auth check >/dev/null 2>&1; }; then
+                echo "No PlanetScale token or authenticated CLI on this run: plan only, no rehearsal claimed."
+                exit 0
+              fi
+              ;;
+            *)
+              echo "Unsupported rehearsal provider: $PROVIDER" >&2
+              exit 2
+              ;;
+          esac
+          [[ -n "$ONLY_TAGS" ]] || { echo "pending-tags must not be empty"; exit 2; }
           bash .paperclip-migration-gates/migration_rehearsal.sh run \
-            --migrations-dir "${{ inputs.migrations-dir }}" \
-            --provider "${{ inputs.provider }}" \
+            --migrations-dir "$MIGRATIONS_DIR" \
+            --provider "$PROVIDER" \
+            --only "$ONLY_TAGS" \
             --out rehearsal-evidence.json
 
       # Pinned: actions/upload-artifact v7.0.1. Repin with the SHA on updates.

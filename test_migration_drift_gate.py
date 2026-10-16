@@ -47,7 +47,7 @@ class DriftGateTest(unittest.TestCase):
     def evidence(self, status="passed", age_hours=1, migrations=(("0042_a", A),)):
         finished = (datetime.now(timezone.utc) - timedelta(hours=age_hours))
         doc = {"version": 1, "provider": "planetscale", "branch": "rehearsal/x",
-               "base": "prod",
+               "apply_target": "rehearsal/x", "base": "prod",
                "migrations": [{"tag": t, "sha256": h, "result": "applied"}
                                for t, h in migrations],
                "status": status,
@@ -69,11 +69,29 @@ class DriftGateTest(unittest.TestCase):
         self.assertIn("ok: all 2 candidate migrations", out)
         self.assertIn("ok: no out-of-band", out)
 
-    def test_pending_candidate_fails(self):
+    def test_pending_candidate_fails_without_rehearsal(self):
         rc, out = self.run_gate("--sql-hashes", self.hashes([("0042_a", A), ("0043_b", B)]),
                            "--ledger", self.ledger([A]))
         self.assertEqual(rc, 1, out)
         self.assertIn("0043_b", out)
+
+    def test_pending_subset_passes_with_bound_rehearsal(self):
+        rc, out = self.run_gate("--sql-hashes", self.hashes([("0042_a", A), ("0043_b", B)]),
+                           "--ledger", self.ledger([A]),
+                           "--evidence", self.evidence(migrations=(("0043_b", B),)))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("pending migration(s) require bound rehearsal", out)
+        self.assertIn("bound to the candidate chain (1 migration(s))", out)
+
+    def test_failed_cleanup_evidence_fails(self):
+        path = self.evidence()
+        doc = json.loads(Path(path).read_text())
+        doc["cleanup"] = "failed"
+        Path(path).write_text(json.dumps(doc))
+        rc, out = self.run_gate("--sql-hashes", self.hashes([("0042_a", A)]),
+                           "--ledger", self.ledger([A]), "--evidence", path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("cleanup is not confirmed deleted", out)
 
     def test_unknown_ledger_row_fails(self):
         rc, out = self.run_gate("--sql-hashes", self.hashes([("0042_a", A)]),

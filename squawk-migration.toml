@@ -10,9 +10,10 @@
 #
 # Everything else stays at squawk defaults on purpose: ban-drop-column,
 # require-concurrent-index-creation, constraint-missing-not-valid and the
-# rest still fire. A contract-phase DROP COLUMN is a reviewed exception and
-# carries its own `-- squawk-ignore ban-drop-column` line (see
-# docs/migration-standard.md), never a blanket exclusion.
+# rest still fire. `prefer-robust-stmts` is excluded because its blanket
+# IF NOT EXISTS recommendation conflicts with our stricter rule against
+# masking failed CONCURRENTLY builds. Contract DROP COLUMN exceptions use a
+# bare, statement-scoped `-- squawk-ignore ban-drop-column` directive.
 #
 # migration_squawk.sh passes this file to squawk via --config automatically
 # (override with --squawk-config). Callers pin squawk itself with the
@@ -20,4 +21,5 @@
 excluded_rules = [
   "require-lock-timeout",
   "require-statement-timeout",
+  "prefer-robust-stmts",
 ]

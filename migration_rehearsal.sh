@@ -37,7 +37,7 @@
 #
 # Provider credentials are read from the environment only and are NEVER
 # printed: `planetscale` needs REHEARSAL_PSCALE_ORG, REHEARSAL_PSCALE_DB and
-# a token via REHEARSAL_PSCALE_TOKEN or the `pscale` CLI auth; `pitr` needs
+# PLANETSCALE_SERVICE_TOKEN_ID/PLANETSCALE_SERVICE_TOKEN or pscale CLI auth; `pitr` needs
 # REHEARSAL_PITR_ENDPOINT plus REHEARSAL_RESTORE_CMD (the caller-owned
 # restore command, run with the branch name appended). Unknown providers
 # are refused.
@@ -145,9 +145,11 @@ EOF
           || die "planetscale rehearsal needs the pscale CLI on PATH"
         [[ -n "${REHEARSAL_PSCALE_ORG:-}" && -n "${REHEARSAL_PSCALE_DB:-}" ]] \
           || die "planetscale rehearsal needs REHEARSAL_PSCALE_ORG and REHEARSAL_PSCALE_DB"
-        [[ -n "${REHEARSAL_PSCALE_TOKEN:-}" ]] || pscale auth status >/dev/null 2>&1 \
-          || die "planetscale rehearsal needs REHEARSAL_PSCALE_TOKEN or a logged-in pscale CLI"
-        CREATE=(pscale branch create "$REHEARSAL_PSCALE_DB" "$BRANCH" --org "$REHEARSAL_PSCALE_ORG" --from prod)
+        if [[ -z "${PLANETSCALE_SERVICE_TOKEN_ID:-}" || -z "${PLANETSCALE_SERVICE_TOKEN:-}" ]]; then
+          pscale auth check >/dev/null 2>&1 \
+            || die "planetscale rehearsal needs PLANETSCALE_SERVICE_TOKEN_ID and PLANETSCALE_SERVICE_TOKEN or valid pscale CLI auth"
+        fi
+        CREATE=(pscale branch create "$REHEARSAL_PSCALE_DB" "$BRANCH" --org "$REHEARSAL_PSCALE_ORG" --from prod --wait)
         DELETE=(pscale branch delete "$REHEARSAL_PSCALE_DB" "$BRANCH" --org "$REHEARSAL_PSCALE_ORG" --force)
         ;;
       pitr)
@@ -163,29 +165,36 @@ EOF
     if ! "${CREATE[@]}" 2>&1 | redact >&2; then
       echo "FAIL: $ME: branch creation failed" >&2; exit 1
     fi
-    # Apply the pending chain exactly as production would: same files, same
-    # order, same timeout preamble. The caller-owned apply command reads
-    # REHEARSAL_APPLY_CMD (run with one wrapped SQL file path appended);
-    # without it the rehearsal refuses rather than simulating the apply.
-    # Each file is wrapped with the canonical preamble through
-    # migration_timeout_preamble.sh inject, so the rehearsal proves the
-    # production injection path, not the bare files.
+    # The branch name is the execution target contract. The caller command
+    # must include the literal {branch} placeholder so the exact clone created
+    # above is passed to the apply adapter, rather than silently targeting prod.
+    export REHEARSAL_BRANCH="$BRANCH"
     if [[ -z "${REHEARSAL_APPLY_CMD:-}" ]]; then
       echo "REFUSED: $ME: REHEARSAL_APPLY_CMD is not set" >&2
       APPLY_RC=2
       RESULTS="[]"
     else
       HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-      # shellcheck disable=SC2206
-      APPLY=( ${REHEARSAL_APPLY_CMD} )
       WRAPDIR="$(mktemp -d)"; trap 'rm -rf "$WRAPDIR"' EXIT
-      APPLY_RC=0; RESULTS="[]"
-      # Fail-fast: apply the planned chain in order; the first failure
-      # stops the chain and every later migration is recorded
-      # `not_attempted` — a later migration must never be applied after an
-      # earlier one failed, or the rehearsal would prove an order
-      # production can never reproduce.
-      mapfile -t CHAIN_FILES < <(python3 - "$DIR" "$CHAIN" <<'EOF'
+      if ! python3 - "$REHEARSAL_APPLY_CMD" "$BRANCH" > "$WRAPDIR/apply.argv0" <<'EOF'
+import shlex, sys
+try:
+    argv = shlex.split(sys.argv[1])
+except ValueError as exc:
+    sys.exit(f"invalid REHEARSAL_APPLY_CMD: {exc}")
+if not argv or not any("{branch}" in arg for arg in argv):
+    sys.exit("REHEARSAL_APPLY_CMD must include {branch} to bind apply to the clone")
+for arg in argv:
+    sys.stdout.buffer.write(arg.replace("{branch}", sys.argv[2]).encode() + b"\0")
+EOF
+      then
+        echo "REFUSED: $ME: apply command is not bound to the rehearsal branch" >&2
+        APPLY_RC=2; RESULTS="[]"
+      else
+        mapfile -d '' -t APPLY < "$WRAPDIR/apply.argv0"
+        APPLY_RC=0; RESULTS="[]"
+        # Fail-fast: later migrations are never applied after a failure.
+        mapfile -t CHAIN_FILES < <(python3 - "$DIR" "$CHAIN" <<'EOF'
 import json, sys
 from pathlib import Path
 chain = json.loads(sys.argv[2])
@@ -194,33 +203,37 @@ for m in chain:
     print(by_tag[m["tag"]])
 EOF
 )
-      [[ "${#CHAIN_FILES[@]}" -gt 0 ]] || { echo "FAIL: $ME: no *.sql files to apply in $DIR" >&2; APPLY_RC=1; }
-      FAILED=0
-      for f in "${CHAIN_FILES[@]}"; do
-        tag="$(basename "$f" .sql)"
-        if [[ "$FAILED" -eq 1 ]]; then
-          res=not_attempted
-        else
-          wrapped="$WRAPDIR/$tag.sql"
-          "$HERE/migration_timeout_preamble.sh" inject "$f" > "$wrapped"
-          if timeout 600 "${APPLY[@]}" "$wrapped" 2>&1 | redact >&2; then
-            res=applied
+        [[ "${#CHAIN_FILES[@]}" -gt 0 ]] || { echo "FAIL: $ME: no *.sql files to apply in $DIR" >&2; APPLY_RC=1; }
+        FAILED=0
+        for f in "${CHAIN_FILES[@]}"; do
+          tag="$(basename "$f" .sql)"
+          if [[ "$FAILED" -eq 1 ]]; then
+            res=not_attempted
           else
-            res=failed; APPLY_RC=1; FAILED=1
+            wrapped="$WRAPDIR/$tag.sql"
+            "$HERE/migration_timeout_preamble.sh" inject "$f" > "$wrapped"
+            if timeout 600 "${APPLY[@]}" "$wrapped" 2>&1 | redact >&2; then
+              res=applied
+            else
+              res=failed; APPLY_RC=1; FAILED=1
+            fi
           fi
-        fi
-        RESULTS="$(python3 -c 'import json,sys; a=json.loads(sys.argv[1]); a.append({"tag":sys.argv[2],"result":sys.argv[3]}); print(json.dumps(a))' "$RESULTS" "$tag" "$res")"
-        echo "rehearsal: $tag -> $res"
-      done
+          RESULTS="$(python3 -c 'import json,sys; a=json.loads(sys.argv[1]); a.append({"tag":sys.argv[2],"result":sys.argv[3]}); print(json.dumps(a))' "$RESULTS" "$tag" "$res")"
+          echo "rehearsal: $tag -> $res"
+        done
+      fi
     fi
     echo "rehearsal: deleting branch $BRANCH"
     if ! "${DELETE[@]}" 2>&1 | redact >&2; then
       echo "WARN: $ME: branch cleanup failed for $BRANCH — delete it manually" >&2
       CLEANUP="failed"
+    elif [[ "$PROVIDER" == "pitr" ]]; then
+      CLEANUP="delegated"
     else
       CLEANUP="deleted"
     fi
-    STATUS="passed"; [[ "$APPLY_RC" -eq 0 ]] || STATUS="failed"
+    STATUS="passed"
+    [[ "$APPLY_RC" -eq 0 && "$CLEANUP" != "failed" ]] || STATUS="failed"
     python3 - "$OUT" "$CHAIN" "$RESULTS" <<EOF
 import json, sys
 chain = {m["tag"]: m["sha256"] for m in json.loads(sys.argv[2])}
@@ -228,7 +241,7 @@ results = {m["tag"]: m["result"] for m in json.loads(sys.argv[3])}
 migs = [{"tag": t, "sha256": chain[t], "result": results.get(t, "not_attempted")}
         for t in sorted(chain)]
 doc = {"version": $EVIDENCE_VERSION, "provider": "$PROVIDER",
-       "branch": "$BRANCH", "base": "prod", "migrations": migs,
+       "branch": "$BRANCH", "apply_target": "$BRANCH", "base": "prod", "migrations": migs,
        "status": "$STATUS", "started_at": "$STARTED",
        "finished_at": "$(now_utc)", "cleanup": "$CLEANUP"}
 open(sys.argv[1], "w").write(json.dumps(doc, indent=2) + "\n")
@@ -257,6 +270,15 @@ except (OSError, ValueError) as exc:
     sys.exit(f"REFUSED: unreadable evidence: {exc.__class__.__name__}")
 if doc.get("status") != "passed":
     sys.exit(f"FAIL: rehearsal evidence status is {doc.get('status')!r}, want 'passed'")
+provider, cleanup = doc.get("provider"), doc.get("cleanup")
+if provider == "planetscale" and cleanup != "deleted":
+    sys.exit("FAIL: PlanetScale rehearsal branch cleanup is not confirmed deleted")
+if provider == "pitr" and cleanup != "delegated":
+    sys.exit("FAIL: PITR cleanup must be recorded as delegated expiration")
+if provider not in {"planetscale", "pitr"}:
+    sys.exit("FAIL: rehearsal evidence has an unknown provider")
+if not doc.get("branch") or doc.get("apply_target") != doc.get("branch"):
+    sys.exit("FAIL: rehearsal evidence target does not match its created branch")
 try:
     finished = datetime.datetime.strptime(doc["finished_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
 except (KeyError, TypeError, ValueError):

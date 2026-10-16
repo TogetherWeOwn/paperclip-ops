@@ -94,12 +94,12 @@ EOF
   && bad "red squawk fails the run" || ok "red squawk fails the run"
 # Without squawk the clean dir must SKIP-pass (exit 0), while --strict
 # still refuses the absent binary.
-if PATH="$WORK/bin:/usr/bin:/bin" "$GATE" --migrations-dir "$WORK/migs3" >/dev/null 2>&1; then
+if PATH="$WORK/bin:/usr/bin:/bin" SQUAWK_BIN="" "$GATE" --migrations-dir "$WORK/migs3" >/dev/null 2>&1; then
   ok "absent squawk SKIP-passes without --strict"
 else
   bad "absent squawk SKIP-passes without --strict"
 fi
-PATH="$WORK/bin:/usr/bin:/bin" "$GATE" --strict --migrations-dir "$WORK/migs3" >/dev/null 2>&1 \
+PATH="$WORK/bin:/usr/bin:/bin" SQUAWK_BIN="" "$GATE" --strict --migrations-dir "$WORK/migs3" >/dev/null 2>&1 \
   && bad "--strict refuses an absent squawk" || ok "--strict refuses an absent squawk"
 
 # 5. A comment mentioning CREATE INDEX neither fails nor excuses.
@@ -153,8 +153,20 @@ EOF
   && ok "ADD CONSTRAINT USING INDEX is exempt" \
   || bad "ADD CONSTRAINT USING INDEX is exempt"
 
-# 9. Squawk runs with the canonical config, which excludes only the two
-# timeout rules (timeouts are enforced by the injector, not pasted lines).
+# 9. Block comments and quoted semicolons are lexical, not statement text.
+cat > "$WORK/migs4/0052_block_comment.sql" <<'EOF'
+-- phase: expand
+/* Comment mentions CREATE INDEX CONCURRENTLY fake_idx ON t (x); */
+SELECT 'it''s; still inside', $$body; still quoted$$;
+CREATE INDEX real_idx ON members (email);
+EOF
+out="$($GATE --squawk-bin "$WORK/bin/squawk-ok" "$WORK/migs4/0052_block_comment.sql" 2>&1 || true)"
+grep -q "CREATE INDEX without CONCURRENTLY" <<< "$out" \
+  && ok "block comments and quoted semicolons cannot mask real statements" \
+  || bad "block comments and quoted semicolons cannot mask real statements"
+
+# 10. Squawk runs with the canonical config and excludes the timeout checks
+# plus the rule whose IF NOT EXISTS advice conflicts with our retry safety.
 cat > "$WORK/bin/squawk-argv" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >> "$SQUAWK_ARGV"
@@ -171,11 +183,44 @@ cfg="$HERE/squawk-migration.toml"
 # Scope to the excluded_rules array: prose comments elsewhere name other
 # rules on purpose, so a whole-file grep would prove nothing.
 array_rules="$(sed -n '/excluded_rules *= *\[/,/\]/p' "$cfg" | grep -o '"[^"]*"' | sort -u || true)"
-if [[ -r "$cfg" ]] && [[ "$array_rules" == '"require-lock-timeout"
+if [[ -r "$cfg" ]] && [[ "$array_rules" == '"prefer-robust-stmts"
+"require-lock-timeout"
 "require-statement-timeout"' ]]; then
-  ok "canonical config excludes only the two timeout rules"
+  ok "canonical config excludes timeout rules and conflicting robust-statement advice"
 else
-  bad "canonical config excludes only the two timeout rules"
+  bad "canonical config excludes timeout rules and conflicting robust-statement advice"
+fi
+
+# 11. Prove both documented templates against real Squawk when available.
+cat > "$WORK/template-expand.sql" <<'EOF'
+-- phase: expand
+-- Replaces nothing. Safe to run while the previous release is serving.
+-- No IF NOT EXISTS on the concurrent index: a failed CONCURRENTLY build
+-- leaves an INVALID index, and IF NOT EXISTS would make the retry report
+-- success while indisvalid stays false.
+CREATE INDEX CONCURRENTLY member_search_idx
+  ON members USING gin (to_tsvector('english', display_name));
+ALTER TABLE members
+  ADD CONSTRAINT members_email_format CHECK (email LIKE '%@%') NOT VALID;
+EOF
+cat > "$WORK/template-contract.sql" <<'EOF'
+-- phase: contract
+-- Previous release no longer reads the old column.
+ALTER TABLE members VALIDATE CONSTRAINT members_email_format;
+-- Contract phase: legacy_handle is unread since the previous release.
+-- squawk-ignore ban-drop-column
+ALTER TABLE members DROP COLUMN legacy_handle;
+EOF
+REAL_SQUAWK="${SQUAWK_BIN:-$(command -v squawk || true)}"
+if [[ -n "$REAL_SQUAWK" && -x "$REAL_SQUAWK" ]]; then
+  if "$REAL_SQUAWK" --config "$cfg" "$WORK/template-expand.sql" >/dev/null \
+    && "$REAL_SQUAWK" --config "$cfg" "$WORK/template-contract.sql" >/dev/null; then
+    ok "real squawk accepts both documented migration templates"
+  else
+    bad "real squawk accepts both documented migration templates"
+  fi
+else
+  printf '  SKIP real Squawk template check: squawk binary unavailable\n'
 fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

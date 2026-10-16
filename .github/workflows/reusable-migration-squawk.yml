@@ -32,9 +32,8 @@ on:
         default: "2.70.0"
         type: string
       script-ref:
-        description: Pinned SHA of this repo to fetch the gate scripts from.
-        required: false
-        default: main
+        description: Required immutable 40-character commit SHA for gate scripts.
+        required: true
         type: string
 
 jobs:
@@ -50,6 +49,12 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Validate immutable gate-script reference
+        env:
+          SCRIPT_REF: ${{ inputs.script-ref }}
+        run: |
+          [[ "$SCRIPT_REF" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "script-ref must be a full 40-character commit SHA"; exit 2; }
 
       - name: Fetch canonical gate scripts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -98,8 +103,9 @@ jobs:
       - name: Lint migrations (file standard + squawk)
         env:
           STRICT: ${{ inputs.strict && '--strict' || '' }}
+          MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
         run: |
           set -euo pipefail
           # shellcheck disable=SC2086
           bash .paperclip-migration-gates/migration_squawk.sh \
-            --migrations-dir "${{ inputs.migrations-dir }}" $STRICT
+            --migrations-dir "$MIGRATIONS_DIR" $STRICT

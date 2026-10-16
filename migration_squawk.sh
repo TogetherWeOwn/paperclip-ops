@@ -101,83 +101,17 @@ for f in "${FILES[@]}"; do
   # needs its own NOT VALID (USING INDEX constraints are exempt: valid by
   # construction, NOT VALID is not accepted there).
   FILE_FAIL="$FAIL"
+  HAS_ADD=0; HAS_VALIDATE=0
   while IFS='|' read -r level line text; do
     case "$level" in
       FAIL) fail "$f:$line: $text" ;;
-      WARN) warn "$f:$line: $text" ;;
+      META) [[ "$text" == ADD_CONSTRAINT ]] && HAS_ADD=1
+            [[ "$text" == VALIDATE_CONSTRAINT ]] && HAS_VALIDATE=1 ;;
     esac
-  done < <(python3 - "$f" <<'EOF'
-import re
-import sys
-
-path = sys.argv[1]
-src = open(path, encoding="utf-8", errors="replace").read()
-
-# Split into (start_line, statement): ';' outside single-quoted strings
-# ends a statement, '--' outside strings starts a comment to end of line.
-stmts, buf, start, line = [], [], 1, 1
-i, n, in_str = 0, len(src), False
-while i < n:
-    ch = src[i]
-    if in_str:
-        buf.append(ch)
-        if ch == "'":
-            if i + 1 < n and src[i + 1] == "'":
-                buf.append("'")
-                i += 2
-                continue
-            in_str = False
-        elif ch == "\n":
-            line += 1
-        i += 1
-        continue
-    if ch == "'":
-        in_str = True
-        buf.append(ch)
-        i += 1
-        continue
-    if ch == "-" and i + 1 < n and src[i + 1] == "-":
-        while i < n and src[i] != "\n":
-            i += 1
-        continue
-    if ch == ";":
-        stmts.append((start, "".join(buf)))
-        buf = []
-        start = line  # the next statement starts on the ';' line
-        i += 1
-        continue
-    if ch == "\n":
-        buf.append(ch)
-        line += 1
-        i += 1
-        continue
-    buf.append(ch)
-    i += 1
-tail = "".join(buf)
-if tail.strip():
-    stmts.append((start, tail))
-
-has_add = has_validate = False
-for start_line, stmt in stmts:
-    if not stmt.strip():
-        continue
-    if re.search(r"\bCREATE\s+(UNIQUE\s+)?INDEX\b", stmt, re.I):
-        if not re.search(r"\bCONCURRENTLY\b", stmt, re.I):
-            print(f"FAIL|{start_line}|CREATE INDEX without CONCURRENTLY")
-    if re.search(r"\bADD\s+CONSTRAINT\b", stmt, re.I):
-        has_add = True
-        if re.search(r"\bUSING\s+INDEX\b", stmt, re.I):
-            pass  # valid by construction; NOT VALID not accepted here
-        elif not re.search(r"\bNOT\s+VALID\b", stmt, re.I):
-            print("FAIL|%d|ADD CONSTRAINT without NOT VALID "
-                  "(add NOT VALID, VALIDATE in a later migration)" % start_line)
-    if re.search(r"\bVALIDATE\s+CONSTRAINT\b", stmt, re.I):
-        has_validate = True
-if has_add and has_validate:
-    print("WARN|1|same file both ADDs and VALIDATEs a constraint — "
-          "split across expand/contract migrations")
-EOF
-)
+  done < <(python3 "$HERE/migration_sql.py" check "$f")
+  if [[ "$HAS_ADD" -eq 1 && "$HAS_VALIDATE" -eq 1 ]]; then
+    warn "$f: same file both ADDs and VALIDATEs a constraint — split across expand/contract migrations"
+  fi
   # A file whose statements all pass keeps its green line for the log;
   # a file with findings already named them above.
   if [[ "$FAIL" -eq "$FILE_FAIL" ]]; then

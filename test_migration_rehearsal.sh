@@ -37,8 +37,9 @@ FAKE
 # Fake apply: records the wrapped file it received and its first line.
 cat > "$WORK/bin/fake-apply" <<'FAKE'
 #!/usr/bin/env bash
-printf '%s\n' "$1" >> "$REC/apply.argv"
-head -n 1 "$1" >> "$REC/apply.firstlines"
+printf '%s\n' "$1" >> "$REC/apply.branch"
+printf '%s\n' "$2" >> "$REC/apply.argv"
+head -n 1 "$2" >> "$REC/apply.firstlines"
 FAKE
 chmod +x "$WORK/bin/fake-pscale" "$WORK/bin/fake-restore" "$WORK/bin/fake-apply"
 export REC="$WORK/rec"; mkdir -p "$REC"
@@ -77,7 +78,7 @@ else
 fi
 export REHEARSAL_PITR_ENDPOINT="https://example.invalid"
 export REHEARSAL_RESTORE_CMD="$WORK/bin/fake-restore"
-export REHEARSAL_APPLY_CMD="$WORK/bin/fake-apply"
+export REHEARSAL_APPLY_CMD="$WORK/bin/fake-apply {branch}"
 run_out="$("$GATE" run --migrations-dir "$WORK/migs" --provider pitr \
   --branch "rehearsal/test-001" --out "$WORK/evidence.json" 2>&1)" \
   && ok "run applies the chain on the fake provider" \
@@ -88,6 +89,9 @@ grep -q "SENTINELTOKEN-must-never-reach-output" <<< "$run_out" \
 grep -q "rehearsal/test-001" "$REC/restore.argv" \
   && ok "run restores the named rehearsal branch" \
   || bad "run restores the named rehearsal branch"
+grep -q "^rehearsal/test-001$" "$REC/apply.branch" \
+  && ok "apply command receives the created branch as its explicit target" \
+  || bad "apply command receives the created branch as its explicit target"
 [[ "$(wc -l < "$REC/apply.argv")" -eq 2 ]] \
   && ok "run applies every migration in the chain" \
   || bad "run applies every migration in the chain"
@@ -99,7 +103,7 @@ if python3 - "$WORK/evidence.json" <<'EOF'
 import json, sys
 doc = json.load(open(sys.argv[1]))
 assert doc["status"] == "passed", doc
-assert doc["cleanup"] == "deleted", doc
+assert doc["cleanup"] == "delegated", doc
 assert doc["branch"] == "rehearsal/test-001", doc
 assert [m["result"] for m in doc["migrations"]] == ["applied", "applied"], doc
 EOF
@@ -138,13 +142,14 @@ printf -- '-- phase: expand\nSELECT 2;\n' > "$WORK/migs_fail/0051_boom.sql"
 printf -- '-- phase: expand\nSELECT 3;\n' > "$WORK/migs_fail/0052_never.sql"
 cat > "$WORK/bin/fake-apply-fail" <<'FAKE'
 #!/usr/bin/env bash
-printf '%s\n' "$1" >> "$REC/apply.argv"
-case "$1" in *0051_boom*) exit 1 ;; *) exit 0 ;; esac
+printf '%s\n' "$1" >> "$REC/apply.branch"
+printf '%s\n' "$2" >> "$REC/apply.argv"
+case "$2" in *0051_boom*) exit 1 ;; *) exit 0 ;; esac
 FAKE
 chmod +x "$WORK/bin/fake-apply-fail"
 export REC="$WORK/rec2"
 export REHEARSAL_RESTORE_CMD="$WORK/bin/fake-restore"
-export REHEARSAL_APPLY_CMD="$WORK/bin/fake-apply-fail"
+export REHEARSAL_APPLY_CMD="$WORK/bin/fake-apply-fail {branch}"
 if "$GATE" run --migrations-dir "$WORK/migs_fail" --provider pitr \
     --branch "rehearsal/fail-001" --out "$WORK/fail-evidence.json" >/dev/null 2>&1; then
   bad "run fails when an apply fails"
@@ -195,7 +200,7 @@ fi
 # 7. verify binds evidence to the candidate chain and rejects a future
 # finished_at. Fresh passing evidence for the two-migration dir first.
 export REC="$WORK/rec"; mkdir -p "$REC"
-export REHEARSAL_APPLY_CMD="$WORK/bin/fake-apply"
+export REHEARSAL_APPLY_CMD="$WORK/bin/fake-apply {branch}"
 "$GATE" run --migrations-dir "$WORK/migs" --provider pitr \
   --branch "rehearsal/verify-001" --out "$WORK/verify-evidence.json" >/dev/null 2>&1 \
   || bad "setup: fresh passing run for verify binding"

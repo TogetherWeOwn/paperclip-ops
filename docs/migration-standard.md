@@ -59,19 +59,21 @@ And the later contract/validate step:
 -- phase: contract
 -- Previous release no longer reads the old column. Validates the
 -- constraint added NOT VALID two releases ago, then drops the old column.
--- The DROP COLUMN is a reviewed contract-phase exception: squawk's
--- ban-drop-column still fires by default and this line carries its own
--- ignore with the reason, never a blanket exclusion.
+-- The DROP COLUMN is a reviewed contract-phase exception. Its reason is
+-- separate from the bare, statement-scoped squawk directive.
 
 ALTER TABLE members VALIDATE CONSTRAINT members_email_format;
--- squawk-ignore ban-drop-column: contract phase, column unread since the previous release
+-- Contract phase: legacy_handle is unread since the previous release.
+-- squawk-ignore ban-drop-column
 ALTER TABLE members DROP COLUMN legacy_handle;
 ```
 
 Timeouts are enforced by the injector, not by pasted lines, so squawk's
-`require-lock-timeout` / `require-statement-timeout` are the ONLY rules
-excluded in `squawk-migration.toml`. `ADD ... USING INDEX` needs no
-`NOT VALID` (valid by construction) and the file-standard gate exempts it.
+`require-lock-timeout` and `require-statement-timeout` are excluded. The
+`prefer-robust-stmts` rule is also excluded because its generic `IF NOT EXISTS`
+advice can mask an invalid concurrent index on retry; the migration standard
+intentionally forbids that clause. `ADD ... USING INDEX` needs no `NOT VALID`
+(valid by construction) and the file-standard gate exempts it.
 
 ## 2. Gate A — squawk in CI
 
@@ -88,6 +90,7 @@ jobs:
       migrations-dir: packages/db/src/migrations
       strict: true
       squawk-version: "2.70.0" # keep in sync with the workflow default
+      script-ref: <PINNED_SHA> # required immutable SHA (no main default)
 ```
 
 `strict: true` refuses when the squawk binary cannot run, so a job that
@@ -109,40 +112,44 @@ jobs:
     uses: TogetherWeOwn/paperclip-ops/.github/workflows/reusable-migration-rehearsal.yml@<PINNED_SHA>
     permissions:
       contents: read
-      actions: write # evidence artifact upload
     with:
       provider: planetscale # or: pitr
       migrations-dir: packages/db/src/migrations
-      apply-cmd: "psql $REHEARSAL_DATABASE_URL -v ON_ERROR_STOP=1 -f"
+      script-ref: <PINNED_SHA> # required immutable SHA for gate scripts
+      pending-tags: "0042_add_member_search_index" # exact pending tags from the ledger
+      # {branch} is replaced with the created clone name; adapter must target it.
+      apply-cmd: "./scripts/apply-to-rehearsal-branch.sh {branch}"
       # restore-cmd: "..." # pitr only, or the REHEARSAL_RESTORE_CMD variable
     secrets:
       rehearsal-pscale-org: ${{ secrets.REHEARSAL_PSCALE_ORG }}
       rehearsal-pscale-db: ${{ secrets.REHEARSAL_PSCALE_DB }}
-      rehearsal-pscale-token: ${{ secrets.REHEARSAL_PSCALE_TOKEN }}
+      rehearsal-pscale-token-id: ${{ secrets.PLANETSCALE_SERVICE_TOKEN_ID }}
+      rehearsal-pscale-token: ${{ secrets.PLANETSCALE_SERVICE_TOKEN }}
       # rehearsal-pitr-endpoint: ${{ secrets.REHEARSAL_PITR_ENDPOINT }} # pitr
 ```
 
 Secrets are declared one by one (a reusable workflow cannot receive an
-opaque secret bundle). Providers: `planetscale` branches off prod with the
-`pscale` CLI — installed automatically from the pinned `pscale-version`
-when missing — and deletes the branch afterwards; `pitr` runs the
-caller-owned restore command for a point-in-time branch (branches expire
-with the restore). Without credentials the job runs `plan` only — it
-enumerates and digests the chain but never claims a rehearsal happened,
-even when the CLI is installed. The `run` path applies through the
-caller-owned apply command (one wrapped file path appended, fail-fast:
-the first failure stops the chain and the rest record `not_attempted`)
-and writes the evidence document consumed below. Pass `--only` via a
-`plan`/`run` wrapper when the chain is a ledger-computed pending subset
-rather than the whole directory.
+opaque secret bundle). PlanetScale uses the standard service-token ID/token
+environment variables and waits for the created branch to be ready; without
+a token pair it requires valid `pscale auth check` credentials. PITR runs the
+caller-owned restore command for a point-in-time branch. The apply command
+must contain `{branch}`; the workflow substitutes the created branch name and
+passes it as an explicit argument, preventing a passing rehearsal against an
+unrelated target. The adapter must connect to that branch and apply each
+wrapped file. Failed cleanup fails the rehearsal; PITR expiration is recorded
+as `delegated`, not `deleted`. Without usable credentials the job plans only
+and never claims rehearsal evidence. The required `pending-tags` input narrows both planning
+and application to exactly the ledger-computed pending tags; the first apply
+failure stops the chain and later migrations record `not_attempted`.
 
 ## 4. Gate C — drift detector (preflight + nightly)
 
-**Preflight.** The deploy workflow refuses a candidate whose repo digests
-are ahead of the production ledger (unapplied migrations would ship) or
-whose ledger is ahead of the repo (out-of-band DDL happened). Zero pending
-and zero unknown are required; rollback and live-SHA redeploy paths waive
-this gate inside their own scripts so recovery never waits on it.
+**Preflight.** The deploy workflow refuses a candidate whose ledger contains
+unknown digests (possible out-of-band DDL). Candidate migrations already in
+the ledger need no rehearsal; candidate migrations absent from it may proceed
+only when fresh evidence is bound to exactly that pending subset. Without the
+evidence, any pending migration fails the gate. Rollback and live-SHA redeploy
+paths waive this gate inside their own scripts so recovery never waits on it.
 
 ```yaml
 jobs:
@@ -166,15 +173,18 @@ jobs:
       issues: write # auto-filed page cards only (page-on-failure)
     with:
       migrations-dir: packages/db/src/migrations
+      script-ref: <PINNED_SHA> # required immutable SHA for gate scripts
       ledger-artifact: prod-ledger
       evidence-artifact: rehearsal-evidence
       max-age-hours: 24
 ```
 
-The evidence is bound to the candidate chain (same tags, same digests):
-evidence for an unrelated chain fails, as does a `finished_at` in the
-future. The page step creates its `drift` / `automated-page` labels when
-missing, so the page is never lost to a missing-label error.
+The evidence artifact must contain `rehearsal-evidence.json` (selected by
+exact name, never filesystem order). Evidence is bound to exactly the pending
+candidate subset (same tags and digests); unrelated evidence and a future
+`finished_at` fail. PlanetScale evidence must confirm branch deletion; PITR
+evidence uses `cleanup: delegated` to represent provider-managed expiration.
+The page step creates its `drift` / `automated-page` labels when missing.
 
 **Nightly.** A scheduled caller runs the same gate and pages on mismatch:
 it auto-files an issue (`gh issue create` with a runbook link) and posts to

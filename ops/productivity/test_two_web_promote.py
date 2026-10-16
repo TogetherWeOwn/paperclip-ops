@@ -328,6 +328,66 @@ class LiveIdentity(unittest.TestCase):
         with self.assertRaisesRegex(LiveIdentityError, "non-numeric percentage"):
             derive_live_prod_identity(bad, builds())
 
+    def test_out_of_range_percentages_refuse(self):
+        # 150 + -50 totals 100, so only a per-entry range check refuses.
+        skewed = {
+            "result": {
+                "deployments": [
+                    {
+                        "versions": [
+                            {"version_id": ACTIVE_VERSION, "percentage": 150},
+                            {"version_id": "f" * 40, "percentage": -50},
+                        ]
+                    }
+                ]
+            }
+        }
+        with self.assertRaisesRegex(LiveIdentityError, "out-of-range percentage"):
+            derive_live_prod_identity(skewed, builds())
+        for bad_pct in (-1, 101, 150, float("inf"), float("-inf")):
+            with self.subTest(percentage=bad_pct):
+                bad = {
+                    "result": {
+                        "deployments": [
+                            {"versions": [{"version_id": ACTIVE_VERSION, "percentage": bad_pct}]}
+                        ]
+                    }
+                }
+                with self.assertRaisesRegex(LiveIdentityError, "out-of-range percentage"):
+                    derive_live_prod_identity(bad, builds())
+
+    def test_nan_percentage_refuses(self):
+        nan_pct = {
+            "result": {
+                "deployments": [
+                    {"versions": [{"version_id": ACTIVE_VERSION, "percentage": float("nan")}]}
+                ]
+            }
+        }
+        with self.assertRaisesRegex(LiveIdentityError, "out-of-range percentage"):
+            derive_live_prod_identity(nan_pct, builds())
+        # Through the CLI: json round-trips the NaN literal, which
+        # json.loads accepts, so the guard must hold end to end.
+        rc, _, err = run_cli(nan_pct, builds())
+        self.assertEqual(rc, 2)
+        self.assertIn("refused:", err)
+
+    def test_nan_percentage_does_not_shadow_null_serving(self):
+        shadowed = {
+            "result": {
+                "deployments": [
+                    {
+                        "versions": [
+                            {"version_id": ACTIVE_VERSION, "percentage": None},
+                            {"version_id": "f" * 40, "percentage": float("nan")},
+                        ]
+                    }
+                ]
+            }
+        }
+        with self.assertRaisesRegex(LiveIdentityError, "out-of-range percentage"):
+            derive_live_prod_identity(shadowed, builds())
+
     def test_percentages_must_total_100(self):
         short = {
             "result": {
@@ -387,6 +447,13 @@ class LiveIdentity(unittest.TestCase):
     def test_main_candidate_compare_is_case_insensitive(self):
         rc, out, _ = run_cli(
             deployments(), builds(), extra=("--candidate", ACTIVE_COMMIT.upper())
+        )
+        self.assertEqual(rc, 0)
+        self.assertIn("already-live", out)
+
+    def test_main_padded_candidate_matches_after_trim(self):
+        rc, out, _ = run_cli(
+            deployments(), builds(), extra=("--candidate", f"  {ACTIVE_COMMIT}  ")
         )
         self.assertEqual(rc, 0)
         self.assertIn("already-live", out)

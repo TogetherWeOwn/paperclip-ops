@@ -16,8 +16,9 @@ Fail-closed rules:
   - no deployments, or a first deployment with no versions -> refuse.
   - any version entry that is not an object with a version_id -> refuse
     (never silently drop an unidentified split).
-  - any non-numeric traffic percentage, or percentages that do not total
-    100 when all are known -> refuse.
+  - any non-numeric, non-finite (NaN/inf) or out-of-range traffic
+    percentage, or percentages that do not total 100 when all are
+    known -> refuse.
   - more than one version sharing live traffic -> refuse (no silent pick).
     Versions at 0% are staged, not serving, and do not block promotion.
   - live version with no known build, a build with no commit, or non-object
@@ -39,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -108,6 +110,11 @@ def _validate_versions(versions: list) -> list[tuple[str, float | None]]:
         elif isinstance(pct, bool) or not isinstance(pct, (int, float)):
             raise LiveIdentityError(
                 f"live version {version_id} has non-numeric percentage {pct!r}: "
+                "refusing to guess live version"
+            )
+        elif not math.isfinite(pct) or not 0 <= pct <= 100:
+            raise LiveIdentityError(
+                f"live version {version_id} has out-of-range percentage {pct!r}: "
                 "refusing to guess live version"
             )
         else:

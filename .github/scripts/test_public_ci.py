@@ -245,6 +245,59 @@ class PublicCI(unittest.TestCase):
         self.assertIn('"$SCANNER" dir /repo', scanner["run"])
         self.assertNotIn("--log-opts=--all", scanner["run"])
 
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-qb", "main", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email",
+                            "test@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"],
+                           check=True)
+            (repo / ".gitleaks.toml").write_text("[extend]\nuseDefault = true\n")
+            (repo / "seed.txt").write_text("seed\n")
+            subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "seed"], check=True)
+            base = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            (repo / "head.txt").write_text("head\n")
+            subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "head"], check=True)
+            foreign = root / "foreign"
+            foreign.mkdir()
+            subprocess.run(["git", "init", "-qb", "main", str(foreign)], check=True)
+            subprocess.run(["git", "-C", str(foreign), "config", "user.email",
+                            "test@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(foreign), "config", "user.name", "Test"],
+                           check=True)
+            (foreign / "other.txt").write_text("other\n")
+            subprocess.run(["git", "-C", str(foreign), "add", "-A"], check=True)
+            subprocess.run(["git", "-C", str(foreign), "commit", "-qm", "foreign"],
+                           check=True)
+            foreign_base = subprocess.check_output(
+                ["git", "-C", str(foreign), "rev-parse", "HEAD"], text=True).strip()
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            docker_log = root / "docker.log"
+            docker = bin_dir / "docker"
+            docker.write_text("#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$DOCKER_LOG\"\n")
+            docker.chmod(0o755)
+            script = root / "scan.sh"
+            script.write_text(scanner["run"])
+
+            for history_base, expected in (("", "HEAD"), (foreign_base, "HEAD"),
+                                           (base, f"{base}..HEAD")):
+                docker_log.write_text("")
+                env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                       "SCANNER": "test-scanner", "DOCKER_LOG": str(docker_log),
+                       "HISTORY_BASE": history_base, "BASH_ENV": "/dev/null"}
+                result = subprocess.run(["bash", str(script)], cwd=repo, env=env,
+                                         capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                calls = docker_log.read_text().splitlines()
+                history_call = next(line for line in calls if " git /repo " in line)
+                self.assertIn(f"--log-opts={expected}", history_call)
+
     def test_metadata_protocol_constant_does_not_exempt_private_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

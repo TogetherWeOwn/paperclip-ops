@@ -191,18 +191,39 @@ GEN_FAIL=0
 # its side, above, or anywhere else in the tree fails, as dangling.
 cargo_lock_current() { # $1: changed Cargo.toml path; inspect committed inputs only.
   command -v cargo >/dev/null 2>&1 || return 1
-  local snapshot manifest
+  local snapshot manifest dir lock_path lock_tracked result tracked_paths
   snapshot="$(mktemp -d 2>/dev/null)" || return 1
   if ! git archive HEAD 2>/dev/null | tar -x -C "$snapshot" 2>/dev/null; then
     rm -rf "$snapshot"
     return 1
   fi
-  # Cargo config is executable policy from the submitted tree (build.rustc,
-  # wrappers, source replacement). Do not load it during this gate check.
-  find "$snapshot" -type d -name .cargo -prune -exec rm -rf {} + 2>/dev/null || true
+  if ! tracked_paths="$(git ls-tree -r --name-only HEAD 2>/dev/null)"; then
+    rm -rf "$snapshot"
+    return 1
+  fi
+  # Remove every submitted .cargo entry, including symlinks. Cargo command-line
+  # overrides also neutralize compiler wrappers if another config source exists.
+  find "$snapshot" -name .cargo -prune -exec rm -rf {} + 2>/dev/null || true
   manifest="$snapshot/$1"
-  (cd "$snapshot" && CARGO_HOME="$snapshot/cargo-home" cargo metadata --locked --offline --format-version 1 --manifest-path "$manifest" >/dev/null 2>&1)
-  local result=$?
+  lock_tracked=0
+  dir="$(dirname "$1")"
+  while true; do
+    lock_path="${dir#./}"
+    [[ "$dir" == "." ]] && lock_path=""
+    if grep -Fxq -- "${lock_path:+$lock_path/}Cargo.lock" <<<"$tracked_paths"; then
+      lock_tracked=1
+      break
+    fi
+    [[ "$dir" == "." ]] && break
+    dir="$(dirname "$dir")"
+  done
+  local -a lock_args=()
+  [[ "$lock_tracked" -eq 1 ]] && lock_args+=(--locked)
+  (cd "$snapshot" && cargo --config 'build.rustc="rustc"' \
+    --config 'build.rustc-wrapper=""' \
+    --config 'build.rustc-workspace-wrapper=""' \
+    metadata "${lock_args[@]}" --offline --format-version 1 --manifest-path "$manifest" >/dev/null 2>&1)
+  result=$?
   rm -rf "$snapshot"
   return "$result"
 }
@@ -225,7 +246,7 @@ gen_pair() { # $1: manifest basename; $2...: lockfile basenames.
         continue
       fi
       if [[ "$m" == Cargo.toml ]]; then
-        fail "generated-drift" "$f changed without a lockfile update; offline cargo metadata could not verify the lock"
+        fail "generated-drift" "$f changed without a lockfile update; offline Cargo metadata could not verify dependency state"
       else
         fail "generated-drift" "$f changed without its lockfile in $d or above"
       fi

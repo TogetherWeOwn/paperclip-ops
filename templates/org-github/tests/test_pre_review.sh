@@ -48,9 +48,14 @@ FAKE_CARGO_LOG="$WORK/cargo.log"
 export FAKE_CARGO_LOG
 cat > "$WORK/bin/cargo" <<'EOF'
 #!/usr/bin/env bash
-printf 'cwd=%s config=%s lock=%s args=%s\n' "$PWD" \
+printf 'cwd=%s config=%s cargo_home=%s lock=%s args=%s\n' "$PWD" \
   "$([[ -e .cargo/config.toml ]] && echo present || echo absent)" \
+  "${CARGO_HOME:-unset}" \
   "$(grep -E '^version' Cargo.lock 2>/dev/null | head -n 1 || echo missing)" "$*" >> "$FAKE_CARGO_LOG"
+if [[ " $* " == *" --locked "* && ! -f Cargo.lock ]]; then
+  echo 'error: cannot create the lock file because --locked was passed' >&2
+  exit 101
+fi
 if [[ "${FAKE_CARGO_STATUS:-0}" -ne 0 ]]; then
   echo 'error: lock file needs to be updated but --locked was passed' >&2
   exit "$FAKE_CARGO_STATUS"
@@ -184,8 +189,9 @@ run_check
 # manifest edit from one that needs a Cargo.lock change.
 new_repo
 printf 'Cargo.lock\n' > "$REPO_DIR/.gitignore"
-mkdir -p "$REPO_DIR/.cargo"
-printf 'build.rustc = "/tmp/untrusted-compiler-wrapper"\n' > "$REPO_DIR/.cargo/config.toml"
+mkdir -p "$REPO_DIR/cfg"
+printf 'build.rustc = "/tmp/untrusted-compiler-wrapper"\n' > "$REPO_DIR/cfg/config.toml"
+ln -s cfg "$REPO_DIR/.cargo"
 printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[lib]\ncrate-type = ["rlib"]\n' > "$REPO_DIR/Cargo.toml"
 $GIT -C "$REPO_DIR" add -A >&2
 $GIT -C "$REPO_DIR" commit -qm "chore(cargo): seed manifest"
@@ -196,12 +202,16 @@ commit_change "chore(cargo): add crate type"
 FAKE_CARGO_STATUS=0 run_check
 [[ "$RC" -eq 0 ]] && ! has_row FAIL generated-drift \
   && $GIT -C "$REPO_DIR" check-ignore -q Cargo.lock \
-  && grep -q 'metadata --locked --offline --format-version 1 --manifest-path .*Cargo.toml' "$FAKE_CARGO_LOG" \
+  && grep -q 'metadata --offline --format-version 1 --manifest-path .*Cargo.toml' "$FAKE_CARGO_LOG" \
+  && ! grep -q 'metadata --locked' "$FAKE_CARGO_LOG" \
   && grep -Eq -- '--manifest-path /[^[:space:]]+/Cargo.toml' "$FAKE_CARGO_LOG" \
   && grep -q '^cwd=' "$FAKE_CARGO_LOG" \
   && ! grep -Fq "cwd=$REPO_DIR config=" "$FAKE_CARGO_LOG" \
   && ! grep -Fq -- "--manifest-path $REPO_DIR/" "$FAKE_CARGO_LOG" \
+  && ! grep -q 'cargo_home=.*/cargo-home' "$FAKE_CARGO_LOG" \
   && grep -q 'config=absent' "$FAKE_CARGO_LOG" \
+  && grep -q 'build.rustc="rustc"' "$FAKE_CARGO_LOG" \
+  && grep -q 'build.rustc-wrapper=""' "$FAKE_CARGO_LOG" \
   && ok "dependency-neutral Cargo manifest uses isolated committed snapshot" \
   || bad "dependency-neutral Cargo manifest passes with ignored lockfile (rc=$RC)"
 
@@ -217,6 +227,7 @@ $GIT -C "$REPO_DIR" add Cargo.toml >&2
 $GIT -C "$REPO_DIR" commit -qm "feat(cargo): add dependency without saved lock update"
 FAKE_CARGO_STATUS=1 run_check
 if [[ "$RC" -eq 1 ]] && has_row FAIL generated-drift \
+  && grep -q 'metadata --locked --offline --format-version 1' "$FAKE_CARGO_LOG" \
   && grep -q 'lock=version = 3' "$FAKE_CARGO_LOG" \
   && grep -q '^version = 4$' "$REPO_DIR/Cargo.lock"; then
   ok "Cargo metadata validates committed lock, not unsaved worktree lock"
@@ -233,7 +244,8 @@ printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1"\
 commit_change "feat(cargo): add dependency"
 FAKE_CARGO_STATUS=1 run_check
 [[ "$RC" -eq 1 ]] && has_row FAIL generated-drift \
-  && grep -q 'metadata --locked --offline --format-version 1' "$FAKE_CARGO_LOG" \
+  && grep -q 'metadata --offline --format-version 1' "$FAKE_CARGO_LOG" \
+  && ! grep -q 'metadata --locked' "$FAKE_CARGO_LOG" \
   && ok "Cargo dependency change without lockfile fails" \
   || bad "Cargo dependency change without lockfile fails (rc=$RC)"
 

@@ -44,12 +44,12 @@ class DriftGateTest(unittest.TestCase):
     def ledger(self, hashes):
         return self.write("ledger.txt", "".join(h + "\n" for h in hashes))
 
-    def evidence(self, status="passed", age_hours=1, count=2):
+    def evidence(self, status="passed", age_hours=1, migrations=(("0042_a", A),)):
         finished = (datetime.now(timezone.utc) - timedelta(hours=age_hours))
         doc = {"version": 1, "provider": "planetscale", "branch": "rehearsal/x",
                "base": "prod",
-               "migrations": [{"tag": f"004{i}", "sha256": A, "result": "applied"}
-                               for i in range(count)],
+               "migrations": [{"tag": t, "sha256": h, "result": "applied"}
+                               for t, h in migrations],
                "status": status,
                "started_at": finished.strftime("%Y-%m-%dT%H:%M:%SZ"),
                "finished_at": finished.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -87,6 +87,7 @@ class DriftGateTest(unittest.TestCase):
                            "--evidence", self.evidence(age_hours=1))
         self.assertEqual(rc, 0, out)
         self.assertIn("ok: rehearsal evidence fresh", out)
+        self.assertIn("bound to the candidate chain", out)
 
     def test_stale_evidence_fails(self):
         rc, out = self.run_gate("--sql-hashes", self.hashes([("0042_a", A)]),
@@ -101,6 +102,31 @@ class DriftGateTest(unittest.TestCase):
                            "--evidence", self.evidence(status="failed"))
         self.assertEqual(rc, 1, out)
         self.assertIn("'failed'", out)
+
+    def test_unbound_evidence_fails(self):
+        # Evidence for an unrelated chain cannot pass, even when fresh.
+        rc, out = self.run_gate("--sql-hashes", self.hashes([("0042_a", A)]),
+                           "--ledger", self.ledger([A]),
+                           "--evidence", self.evidence(migrations=(("0099_other", B),)))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("not bound", out)
+
+    def test_digest_mismatch_evidence_fails(self):
+        # Same tags, different digests: the chain moved since rehearsal.
+        rc, out = self.run_gate("--sql-hashes", self.hashes([("0042_a", A)]),
+                           "--ledger", self.ledger([A]),
+                           "--evidence", self.evidence(migrations=(("0042_a", B),)))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("not bound", out)
+
+    def test_future_evidence_fails(self):
+        # A finished_at in the future (forged freshness) fails instead of
+        # printing a negative age as ok.
+        rc, out = self.run_gate("--sql-hashes", self.hashes([("0042_a", A)]),
+                           "--ledger", self.ledger([A]),
+                           "--evidence", self.evidence(age_hours=-2))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("in the future", out)
 
     def test_empty_ledger_is_refused(self):
         with self.assertRaises(SystemExit) as cm:

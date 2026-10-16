@@ -61,5 +61,39 @@ grep -q "SET lock_timeout" <<<"$wrapped_first_line" \
   && ok "inject is idempotent (no doubled preamble)" \
   || bad "inject is idempotent (no doubled preamble)"
 
+# 5. CREATE INDEX CONCURRENTLY is wrapped: statement_timeout is lifted for
+# that statement only (a 120s bound would cancel the build on large tables
+# and leave an INVALID index), then restored; lock_timeout stays on.
+cat > "$WORK/cic.sql" <<'EOF'
+-- phase: expand
+CREATE INDEX CONCURRENTLY member_search_idx ON members (email);
+ALTER TABLE members ADD CONSTRAINT c CHECK (email LIKE '%@%') NOT VALID;
+EOF
+"$GATE" inject "$WORK/cic.sql" > "$WORK/cic.wrapped.sql"
+if grep -q "SET statement_timeout = '0';" "$WORK/cic.wrapped.sql" \
+  && grep -q "SET statement_timeout = '120s';" "$WORK/cic.wrapped.sql" \
+  && grep -q "SET lock_timeout = '10s';" "$WORK/cic.wrapped.sql"; then
+  # The lift must come before the CIC statement and a restore after it
+  # (the first 120s line is the preamble itself, so search past the CIC).
+  lift_line="$(grep -n "SET statement_timeout = '0';" "$WORK/cic.wrapped.sql" | head -n 1 | cut -d: -f1)"
+  cic_line="$(grep -n "CREATE INDEX CONCURRENTLY" "$WORK/cic.wrapped.sql" | head -n 1 | cut -d: -f1)"
+  if [[ "$lift_line" -lt "$cic_line" ]] \
+    && tail -n +"$cic_line" "$WORK/cic.wrapped.sql" | grep -q "SET statement_timeout = '120s';"; then
+    ok "inject lifts statement_timeout around CONCURRENTLY builds only"
+  else
+    bad "inject lifts statement_timeout around CONCURRENTLY builds only"
+  fi
+else
+  bad "inject lifts statement_timeout around CONCURRENTLY builds only"
+fi
+# A plain statement keeps the bounded timeout (no lift, no restore noise).
+"$GATE" inject "$WORK/bare.sql" > "$WORK/bare.wrapped.sql"
+if ! grep -q "statement_timeout = '0'" "$WORK/bare.wrapped.sql" \
+  && [[ "$(grep -c "SET statement_timeout" "$WORK/bare.wrapped.sql")" -eq 1 ]]; then
+  ok "inject leaves non-concurrent statements under the bound"
+else
+  bad "inject leaves non-concurrent statements under the bound"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

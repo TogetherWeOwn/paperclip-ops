@@ -11,16 +11,27 @@
 #
 # Subcommands (all offline unless stated):
 #   plan --migrations-dir DIR --provider planetscale|pitr --out evidence.json
-#       Enumerate the pending chain (sorted *.sql), digest each file
-#       (sha256), and write a `planned` evidence document. No cloud calls.
+#       [--only tag,tag...]
+#       Enumerate the pending chain (sorted *.sql, or exactly the --only
+#       tags when the caller computed the pending subset from the ledger),
+#       digest each file (sha256), and write a `planned` evidence document.
+#       No cloud calls.
 #   run --migrations-dir DIR --provider P --out evidence.json [--branch NAME]
+#       [--only tag,tag...]
 #       Full rehearsal against the provider. Requires the provider CLI and
 #       credentials in the environment (see below); refuses (exit 2) when
 #       they are absent, so CI without secrets plans but never pretends.
-#   verify --evidence FILE [--max-age-hours 24]
-#       The production preflight check: evidence status must be `passed`
-#       and younger than the max age. Exit 0 fresh-and-passed, 1 stale or
-#       failed, 2 unreadable evidence.
+#       Fail-fast: the first failed apply stops the chain and every later
+#       migration is recorded `not_attempted`, never applied after a
+#       failure.
+#   verify --evidence FILE [--max-age-hours 24] [--sql-hashes FILE]
+#       The production preflight check: evidence status must be `passed`,
+#       younger than the max age, and — when --sql-hashes is given — bound
+#       to exactly the candidate chain (same tags, same digests), so
+#       evidence for an unrelated chain cannot pass. A finished_at in the
+#       future (beyond 5 minutes of clock skew) fails. Exit 0
+#       fresh-and-passed-and-bound, 1 stale/failed/unbound, 2 unreadable
+#       evidence.
 #   clean --branch NAME --provider P
 #       Delete the rehearsal branch (also attempted automatically by `run`).
 #
@@ -51,21 +62,36 @@ sha256_of() { sha256sum "$1" | awk '{print $1}'; }
 
 default_branch() { printf 'rehearsal/%s' "$(date -u +%Y%m%dT%H%M%SZ)"; }
 
-# chain_json DIR: JSON array of {"tag","sha256"} sorted by file name.
+# chain_json DIR [ONLY]: JSON array of {"tag","sha256"} sorted by file
+# name. When ONLY (comma-separated tags) is given, exactly those tags form
+# the chain and an unknown tag is refused — this is how a caller rehearses
+# the ledger-computed pending subset instead of the whole directory.
 chain_json() {
-  local dir="$1" f tag
+  local dir="$1" only="${2:-}"
   [[ -d "$dir" ]] || die "no such migrations dir: $dir"
-  python3 - "$dir" <<'EOF'
+  python3 - "$dir" "$only" <<'EOF'
 import hashlib, json, sys
 from pathlib import Path
+want = None
+if sys.argv[2]:
+    want = sys.argv[2].split(",")
+    if any(not t for t in want):
+        sys.exit("--only holds an empty tag")
 items = []
 for p in sorted(Path(sys.argv[1]).glob("*.sql")):
     if not p.is_file():
         continue
+    if want is not None and p.stem not in want:
+        continue
     items.append({"tag": p.stem,
                   "sha256": hashlib.sha256(p.read_bytes()).hexdigest()})
+if want is not None:
+    missing = [t for t in want if t not in {m["tag"] for m in items}]
+    if missing:
+        sys.exit(f"--only names migrations not in the dir: {','.join(sorted(missing))}")
+    items.sort(key=lambda m: want.index(m["tag"]))
 if not items:
-    sys.exit("no *.sql files in migrations dir")
+    sys.exit("no *.sql files in migrations dir (or --only matched none)")
 print(json.dumps(items))
 EOF
 }
@@ -73,17 +99,18 @@ EOF
 cmd="${1:-}"; shift || true
 case "$cmd" in
   plan)
-    DIR="migrations"; PROVIDER=""; OUT=""
+    DIR="migrations"; PROVIDER=""; OUT=""; ONLY=""
     while [[ $# -gt 0 ]]; do case "$1" in
       --migrations-dir) DIR="${2:-}"; shift 2 ;;
       --provider) PROVIDER="${2:-}"; shift 2 ;;
       --out) OUT="${2:-}"; shift 2 ;;
+      --only) ONLY="${2:-}"; shift 2 ;;
       *) die "unknown flag: $1" ;;
     esac; done
     [[ "$PROVIDER" == "planetscale" || "$PROVIDER" == "pitr" ]] \
       || die "--provider must be planetscale or pitr"
     [[ -n "$OUT" ]] || die "--out is required"
-    CHAIN="$(chain_json "$DIR")" || die "cannot enumerate $DIR"
+    CHAIN="$(chain_json "$DIR" "$ONLY")" || die "cannot enumerate $DIR"
     COUNT="$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])))' "$CHAIN")" \
       || die "cannot digest the pending chain in $DIR"
     python3 - "$OUT" "$CHAIN" <<EOF
@@ -98,19 +125,20 @@ EOF
     echo "ok: rehearsal planned: $COUNT migration(s), provider $PROVIDER -> $OUT"
     ;;
   run)
-    DIR="migrations"; PROVIDER=""; OUT=""; BRANCH=""
+    DIR="migrations"; PROVIDER=""; OUT=""; BRANCH=""; ONLY=""
     while [[ $# -gt 0 ]]; do case "$1" in
       --migrations-dir) DIR="${2:-}"; shift 2 ;;
       --provider) PROVIDER="${2:-}"; shift 2 ;;
       --out) OUT="${2:-}"; shift 2 ;;
       --branch) BRANCH="${2:-}"; shift 2 ;;
+      --only) ONLY="${2:-}"; shift 2 ;;
       *) die "unknown flag: $1" ;;
     esac; done
     [[ "$PROVIDER" == "planetscale" || "$PROVIDER" == "pitr" ]] \
       || die "--provider must be planetscale or pitr"
     [[ -n "$OUT" ]] || die "--out is required"
     [[ -z "$BRANCH" ]] && BRANCH="$(default_branch)"
-    CHAIN="$(chain_json "$DIR")" || die "cannot enumerate $DIR"
+    CHAIN="$(chain_json "$DIR" "$ONLY")" || die "cannot enumerate $DIR"
     case "$PROVIDER" in
       planetscale)
         command -v pscale >/dev/null 2>&1 \
@@ -152,19 +180,38 @@ EOF
       APPLY=( ${REHEARSAL_APPLY_CMD} )
       WRAPDIR="$(mktemp -d)"; trap 'rm -rf "$WRAPDIR"' EXIT
       APPLY_RC=0; RESULTS="[]"
-      while IFS= read -r -d '' f; do
+      # Fail-fast: apply the planned chain in order; the first failure
+      # stops the chain and every later migration is recorded
+      # `not_attempted` — a later migration must never be applied after an
+      # earlier one failed, or the rehearsal would prove an order
+      # production can never reproduce.
+      mapfile -t CHAIN_FILES < <(python3 - "$DIR" "$CHAIN" <<'EOF'
+import json, sys
+from pathlib import Path
+chain = json.loads(sys.argv[2])
+by_tag = {p.stem: str(p) for p in Path(sys.argv[1]).glob("*.sql")}
+for m in chain:
+    print(by_tag[m["tag"]])
+EOF
+)
+      [[ "${#CHAIN_FILES[@]}" -gt 0 ]] || { echo "FAIL: $ME: no *.sql files to apply in $DIR" >&2; APPLY_RC=1; }
+      FAILED=0
+      for f in "${CHAIN_FILES[@]}"; do
         tag="$(basename "$f" .sql)"
-        wrapped="$WRAPDIR/$tag.sql"
-        "$HERE/migration_timeout_preamble.sh" inject "$f" > "$wrapped"
-        if timeout 600 "${APPLY[@]}" "$wrapped" 2>&1 | redact >&2; then
-          res=applied
+        if [[ "$FAILED" -eq 1 ]]; then
+          res=not_attempted
         else
-          res=failed; APPLY_RC=1
+          wrapped="$WRAPDIR/$tag.sql"
+          "$HERE/migration_timeout_preamble.sh" inject "$f" > "$wrapped"
+          if timeout 600 "${APPLY[@]}" "$wrapped" 2>&1 | redact >&2; then
+            res=applied
+          else
+            res=failed; APPLY_RC=1; FAILED=1
+          fi
         fi
         RESULTS="$(python3 -c 'import json,sys; a=json.loads(sys.argv[1]); a.append({"tag":sys.argv[2],"result":sys.argv[3]}); print(json.dumps(a))' "$RESULTS" "$tag" "$res")"
         echo "rehearsal: $tag -> $res"
-      done < <(find "$DIR" -maxdepth 1 -name '*.sql' -print0 | sort -z)
-      [[ "$RESULTS" != "[]" ]] || { echo "FAIL: $ME: no *.sql files applied in $DIR" >&2; APPLY_RC=1; }
+      done
     fi
     echo "rehearsal: deleting branch $BRANCH"
     if ! "${DELETE[@]}" 2>&1 | redact >&2; then
@@ -190,16 +237,20 @@ EOF
     [[ "$STATUS" == "passed" ]] || exit 1
     ;;
   verify)
-    EV=""; MAX_AGE=24
+    EV=""; MAX_AGE=24; HASHES=""
     while [[ $# -gt 0 ]]; do case "$1" in
       --evidence) EV="${2:-}"; shift 2 ;;
       --max-age-hours) MAX_AGE="${2:-}"; shift 2 ;;
+      --sql-hashes) HASHES="${2:-}"; shift 2 ;;
       *) die "unknown flag: $1" ;;
     esac; done
     [[ -r "${EV:-}" ]] || die "--evidence must be a readable file"
     [[ "$MAX_AGE" =~ ^[0-9]+$ ]] || die "--max-age-hours must be an integer"
-    python3 - "$EV" "$MAX_AGE" <<'EOF'
-import datetime, json, sys
+    if [[ -n "$HASHES" ]]; then
+      [[ -r "$HASHES" ]] || die "--sql-hashes must be a readable file"
+    fi
+    python3 - "$EV" "$MAX_AGE" "$HASHES" <<'EOF'
+import datetime, json, re, sys
 try:
     doc = json.load(open(sys.argv[1]))
 except (OSError, ValueError) as exc:
@@ -211,10 +262,36 @@ try:
 except (KeyError, TypeError, ValueError):
     sys.exit("FAIL: rehearsal evidence has no parseable finished_at")
 age = (datetime.datetime.now(datetime.timezone.utc) - finished).total_seconds() / 3600
+if age < -5 / 60:
+    sys.exit(f"FAIL: rehearsal evidence finished_at is in the future ({-age:.1f}h ahead)")
 limit = int(sys.argv[2])
 if age > limit:
     sys.exit(f"FAIL: rehearsal evidence is {age:.1f}h old, older than {limit}h")
 migs = doc.get("migrations", [])
+not_applied = [m.get("tag") for m in migs if m.get("result") != "applied"]
+if not_applied:
+    sys.exit(f"FAIL: rehearsal evidence claims passed but {len(not_applied)} migration(s) "
+             f"were not applied; first: {sorted(not_applied)[0]}")
+if sys.argv[3]:
+    pat = re.compile(r"([0-9a-f]{64})\s+\*?(?:.*/)?([^/\s]+)\.sql")
+    candidate = {}
+    for raw in open(sys.argv[3], encoding="utf-8"):
+        line = raw.strip()
+        if not line:
+            continue
+        m = pat.fullmatch(line)
+        if not m:
+            sys.exit(f"REFUSED: unparseable --sql-hashes line: {line[:80]}")
+        candidate[m.group(2)] = m.group(1)
+    evidenced = {m["tag"]: m.get("sha256") for m in migs}
+    if evidenced != candidate:
+        only_ev = sorted(set(evidenced) - set(candidate))
+        only_cand = sorted(set(candidate) - set(evidenced))
+        mism = sorted(t for t in set(evidenced) & set(candidate) if evidenced[t] != candidate[t])
+        detail = only_ev[:1] + only_cand[:1] + mism[:1]
+        sys.exit("FAIL: rehearsal evidence is not bound to this candidate chain "
+                 f"(first divergence: {detail[0] if detail else 'empty evidence'})")
+    print(f"ok: rehearsal evidence bound to the candidate chain ({len(migs)} migration(s))")
 print(f"ok: rehearsal evidence fresh ({age:.1f}h < {limit}h), {len(migs)} migration(s) passed")
 EOF
     ;;
@@ -240,9 +317,9 @@ EOF
     ;;
   *) cat >&2 <<EOF
 Usage: $ME {plan|run|verify|clean} [options]
-  plan   --migrations-dir DIR --provider planetscale|pitr --out evidence.json
-  run    --migrations-dir DIR --provider P --out evidence.json [--branch NAME]
-  verify --evidence FILE [--max-age-hours 24]
+  plan   --migrations-dir DIR --provider planetscale|pitr --out evidence.json [--only tag,...]
+  run    --migrations-dir DIR --provider P --out evidence.json [--branch NAME] [--only tag,...]
+  verify --evidence FILE [--max-age-hours 24] [--sql-hashes FILE]
   clean  --provider planetscale --branch NAME
 EOF
     exit 2

@@ -11,20 +11,32 @@
 #      `-- phase: expand` or `-- phase: contract` (other phases allowed,
 #      but a phase must be declared).
 #   3. CREATE INDEX uses CONCURRENTLY (a non-concurrent index build takes
-#      a write lock for the whole build).
+#      a write lock for the whole build). Checked PER STATEMENT: one
+#      CONCURRENTLY build in a file never excuses a locking build in
+#      another statement of the same file.
 #   4. ADD CONSTRAINT uses NOT VALID; the matching VALIDATE CONSTRAINT is
 #      expected in a later migration (expand/contract), never in the same
 #      lock window — so VALIDATE in the same file is a warning, not a pass.
+#      Also per statement, so multi-line constraint definitions are joined
+#      before the check. `ADD ... USING INDEX` is exempt: a constraint built
+#      from an existing index is valid by construction and takes no NOT
+#      VALID clause.
 # Then, when a `squawk` binary is available (SQUAWK_BIN or PATH), each file
-# is also linted by squawk itself and any squawk error fails the run. When
-# squawk is absent the file-standard checks still run; the squawk step
-# reports SKIP (exit 0) unless --strict, which refuses (exit 2) so a CI job
-# that promised squawk cannot silently run without it.
+# is also linted by squawk itself and any squawk error fails the run.
+# Squawk runs with the canonical squawk-migration.toml next to this script
+# (override with --squawk-config), which excludes ONLY require-lock-timeout
+# and require-statement-timeout: timeout policy is enforced structurally by
+# the preamble injector, not by pasted SET lines. When squawk is absent the
+# file-standard checks still run; the squawk step reports SKIP (exit 0)
+# unless --strict, which refuses (exit 2) so a CI job that promised squawk
+# cannot silently run without it.
 #
 # Usage:
-#   migration_squawk.sh [--migrations-dir DIR] [--strict] [--squawk-bin PATH] [file.sql ...]
+#   migration_squawk.sh [--migrations-dir DIR] [--strict] [--squawk-bin PATH]
+#     [--squawk-config PATH] [file.sql ...]
 # With explicit files, only those are checked. Otherwise every *.sql under
 # the migrations dir is checked. Default dir: ./migrations.
+# --squawk-config "" disables the canonical config (raw squawk defaults).
 #
 # Exit: 0 all pass (squawk SKIP allowed) | 1 a file-standard or squawk
 # finding failed | 2 bad input / strict refusal (squawk missing).
@@ -32,10 +44,12 @@
 # offending line and its number.
 set -euo pipefail
 ME="$(basename "${BASH_SOURCE[0]}")"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 DIR="migrations"
 STRICT=0
 SQUAWK_BIN="${SQUAWK_BIN:-}"
+SQUAWK_CONFIG="__default__"
 
 die() { echo "REFUSED: $ME: $*" >&2; exit 2; }
 
@@ -44,6 +58,7 @@ while [[ $# -gt 0 ]]; do
     --migrations-dir) DIR="${2:-}"; shift 2 ;;
     --strict) STRICT=1; shift ;;
     --squawk-bin) SQUAWK_BIN="${2:-}"; shift 2 ;;
+    --squawk-config) SQUAWK_CONFIG="${2:-}"; shift 2 ;;
     --) shift; break ;;
     -*) die "unknown flag: $1" ;;
     *) break ;;
@@ -78,27 +93,96 @@ for f in "${FILES[@]}"; do
     fail "$f: missing expand/contract phase header (e.g. '-- phase: expand')"
   fi
 
-  # CREATE INDEX without CONCURRENTLY. Comment lines are excluded first so a
-  # comment mentioning an index cannot fail or excuse a real statement.
-  code="$(grep -viE '^[[:space:]]*--' "$f" || true)"
-  if grep -qiE 'CREATE[[:space:]]+(UNIQUE[[:space:]]+)?INDEX' <<< "$code" \
-    && ! grep -qiE 'CREATE[[:space:]]+(UNIQUE[[:space:]]+)?INDEX[[:space:]]+CONCURRENTLY' <<< "$code"; then
-    bad_lines="$(grep -niE 'CREATE[[:space:]]+(UNIQUE[[:space:]]+)?INDEX' <<< "$code" | grep -vi 'concurrently' || true)"
-    fail "$f: CREATE INDEX without CONCURRENTLY: ${bad_lines%%:*}"
-  fi
+  # Per-statement checks. Statements are split on semicolons outside
+  # single-quoted strings with -- comments stripped first, so a comment
+  # mentioning an index can neither fail nor excuse a real statement, and a
+  # multi-line constraint definition is judged whole. Each CREATE INDEX
+  # statement needs its own CONCURRENTLY; each ADD CONSTRAINT statement
+  # needs its own NOT VALID (USING INDEX constraints are exempt: valid by
+  # construction, NOT VALID is not accepted there).
+  FILE_FAIL="$FAIL"
+  while IFS='|' read -r level line text; do
+    case "$level" in
+      FAIL) fail "$f:$line: $text" ;;
+      WARN) warn "$f:$line: $text" ;;
+    esac
+  done < <(python3 - "$f" <<'EOF'
+import re
+import sys
 
-  # ADD CONSTRAINT without NOT VALID (applies to FK / CHECK / UNIQUE /
-  # EXCLUDE constraints added via ALTER TABLE ... ADD CONSTRAINT).
-  if grep -qiE 'ADD[[:space:]]+CONSTRAINT' <<< "$code" \
-    && ! grep -qiE 'ADD[[:space:]]+CONSTRAINT[^;]*NOT[[:space:]]+VALID' <<< "$code"; then
-    fail "$f: ADD CONSTRAINT without NOT VALID (add NOT VALID, VALIDATE in a later migration)"
-  fi
-  if grep -qiE 'VALIDATE[[:space:]]+CONSTRAINT' <<< "$code" \
-    && grep -qiE 'ADD[[:space:]]+CONSTRAINT' <<< "$code"; then
-    warn "$f: same file both ADDs and VALIDATEs a constraint — split across expand/contract migrations"
-  fi
+path = sys.argv[1]
+src = open(path, encoding="utf-8", errors="replace").read()
 
-  echo "ok: file standard: $f"
+# Split into (start_line, statement): ';' outside single-quoted strings
+# ends a statement, '--' outside strings starts a comment to end of line.
+stmts, buf, start, line = [], [], 1, 1
+i, n, in_str = 0, len(src), False
+while i < n:
+    ch = src[i]
+    if in_str:
+        buf.append(ch)
+        if ch == "'":
+            if i + 1 < n and src[i + 1] == "'":
+                buf.append("'")
+                i += 2
+                continue
+            in_str = False
+        elif ch == "\n":
+            line += 1
+        i += 1
+        continue
+    if ch == "'":
+        in_str = True
+        buf.append(ch)
+        i += 1
+        continue
+    if ch == "-" and i + 1 < n and src[i + 1] == "-":
+        while i < n and src[i] != "\n":
+            i += 1
+        continue
+    if ch == ";":
+        stmts.append((start, "".join(buf)))
+        buf = []
+        start = line  # the next statement starts on the ';' line
+        i += 1
+        continue
+    if ch == "\n":
+        buf.append(ch)
+        line += 1
+        i += 1
+        continue
+    buf.append(ch)
+    i += 1
+tail = "".join(buf)
+if tail.strip():
+    stmts.append((start, tail))
+
+has_add = has_validate = False
+for start_line, stmt in stmts:
+    if not stmt.strip():
+        continue
+    if re.search(r"\bCREATE\s+(UNIQUE\s+)?INDEX\b", stmt, re.I):
+        if not re.search(r"\bCONCURRENTLY\b", stmt, re.I):
+            print(f"FAIL|{start_line}|CREATE INDEX without CONCURRENTLY")
+    if re.search(r"\bADD\s+CONSTRAINT\b", stmt, re.I):
+        has_add = True
+        if re.search(r"\bUSING\s+INDEX\b", stmt, re.I):
+            pass  # valid by construction; NOT VALID not accepted here
+        elif not re.search(r"\bNOT\s+VALID\b", stmt, re.I):
+            print("FAIL|%d|ADD CONSTRAINT without NOT VALID "
+                  "(add NOT VALID, VALIDATE in a later migration)" % start_line)
+    if re.search(r"\bVALIDATE\s+CONSTRAINT\b", stmt, re.I):
+        has_validate = True
+if has_add and has_validate:
+    print("WARN|1|same file both ADDs and VALIDATEs a constraint — "
+          "split across expand/contract migrations")
+EOF
+)
+  # A file whose statements all pass keeps its green line for the log;
+  # a file with findings already named them above.
+  if [[ "$FAIL" -eq "$FILE_FAIL" ]]; then
+    echo "ok: file standard: $f"
+  fi
 done
 
 # Squawk itself, when available.
@@ -110,6 +194,17 @@ elif command -v squawk >/dev/null 2>&1; then
   SQUAWK="squawk"
 fi
 
+if [[ "$SQUAWK_CONFIG" == "__default__" ]]; then
+  if [[ -r "$HERE/squawk-migration.toml" ]]; then
+    SQUAWK_CONFIG="$HERE/squawk-migration.toml"
+  else
+    SQUAWK_CONFIG=""
+  fi
+fi
+if [[ -n "$SQUAWK_CONFIG" && ! -r "$SQUAWK_CONFIG" ]]; then
+  die "--squawk-config is not readable: $SQUAWK_CONFIG"
+fi
+
 if [[ -z "$SQUAWK" ]]; then
   if [[ "$STRICT" -eq 1 ]]; then
     echo "REFUSED: $ME: --strict with no squawk binary (SQUAWK_BIN or PATH)" >&2
@@ -117,8 +212,17 @@ if [[ -z "$SQUAWK" ]]; then
   fi
   echo "SKIP: squawk binary absent — file-standard checks only"
 else
+  SQUAWK_ARGS=()
+  if [[ -n "$SQUAWK_CONFIG" ]]; then
+    SQUAWK_ARGS=(--config "$SQUAWK_CONFIG")
+  fi
+  if [[ -n "$SQUAWK_CONFIG" ]]; then
+    echo "squawk config: $SQUAWK_CONFIG"
+  else
+    echo "squawk config: none (raw squawk defaults)"
+  fi
   for f in "${FILES[@]}"; do
-    if out="$("$SQUAWK" "$f" 2>&1)"; then
+    if out="$("$SQUAWK" "${SQUAWK_ARGS[@]}" "$f" 2>&1)"; then
       echo "ok: squawk: $f"
     else
       fail "squawk reported on $f: $(head -n 3 <<< "$out" | tr '\n' ' ')"

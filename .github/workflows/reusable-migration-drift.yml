@@ -5,19 +5,28 @@
 #
 # Two uses, one gate:
 #   1. Preflight (pull_request / pre-deploy): the caller fetches its
-#      production ledger(s) with its EXISTING read-only principal into
-#      `ledger-file`, then this gate requires zero pending and zero unknown
-#      migrations plus rehearsal evidence fresher than `max-age-hours`.
-#      Rollback and live-SHA redeploy paths waive this gate inside their own
-#      scripts so recovery never waits on it.
+#      production ledger(s) with its EXISTING read-only principal, uploads
+#      the export as an artifact, and passes the artifact name in
+#      `ledger-artifact`. This gate downloads it, then requires zero
+#      pending and zero unknown migrations plus rehearsal evidence fresher
+#      than `max-age-hours`. Rollback and live-SHA redeploy paths waive
+#      this gate inside their own scripts so recovery never waits on it.
 #   2. Nightly sweep (schedule): the same gate runs on a timer with
 #      `page-on-failure: true`, which auto-files an issue and posts to
 #      Discord ONLY when the gate fails — quiet nights stay quiet.
 #
-# This workflow never touches the network or a database itself: digests come
-# from the caller's checkout, the ledger from the caller's `ledger-file`,
-# evidence from the caller's `evidence-file`. It fails closed when any input
-# file is missing.
+# CROSS-JOB HANDOFF. A reusable workflow is its own job on a fresh runner,
+# so a file the caller wrote to /tmp in another job is NOT visible here.
+# The ledger and the rehearsal evidence therefore travel as run artifacts:
+# the caller's earlier job uploads them (actions/upload-artifact) and this
+# gate downloads them with `gh run download` (no extra action pin needed).
+# `ledger-file` / `evidence-file` remain as paths for single-job use, but
+# the documented caller pattern is artifacts. The gate fails closed when
+# neither path resolves to a readable file.
+#
+# CALLER PERMISSIONS (on the calling job — without these the run cannot
+# start or page): contents: read, actions: read (artifact download),
+# issues: write (auto-filed page cards only, page-on-failure).
 name: migration-drift (reusable)
 
 on:
@@ -30,12 +39,31 @@ on:
         type: string
       ledger-file:
         description: >-
-          Path to the production ledger export (one sha256 per line),
-          fetched by the caller with its read-only principal.
-        required: true
+          Path to the production ledger export (one sha256 per line) when
+          the caller already holds it as a file in THIS job. Cross-job
+          callers use ledger-artifact instead.
+        required: false
+        default: ""
+        type: string
+      ledger-artifact:
+        description: >-
+          Name of the run artifact holding the production ledger export
+          (uploaded by the caller's earlier job). Preferred over
+          ledger-file: exactly one of the two must resolve.
+        required: false
+        default: ""
         type: string
       evidence-file:
-        description: Rehearsal evidence document (or empty to skip freshness).
+        description: Rehearsal evidence document path (or empty to skip freshness).
+        required: false
+        default: ""
+        type: string
+      evidence-artifact:
+        description: >-
+          Name of the run artifact holding the rehearsal evidence
+          (e.g. the rehearsal-evidence artifact uploaded by
+          reusable-migration-rehearsal). Downloaded here because the
+          uploader job's files are not visible on this runner.
         required: false
         default: ""
         type: string
@@ -66,6 +94,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      actions: read # gh run download of the ledger/evidence artifacts
       issues: write # auto-filed page cards only (page-on-failure)
     steps:
       # Pinned: actions/checkout v4. Repin with the SHA, never a moving tag.
@@ -82,26 +111,57 @@ jobs:
           path: .paperclip-migration-gates
           persist-credentials: false
 
-      - name: Build candidate digests and run the drift gate
-        id: gate
+      - name: Fetch ledger and evidence artifacts (cross-job handoff)
         env:
-          EVIDENCE_ARG: ${{ inputs.evidence-file != '' && inputs.evidence-file || '' }}
+          GH_TOKEN: ${{ github.token }}
+          LEDGER_ARTIFACT: ${{ inputs.ledger-artifact }}
+          EVIDENCE_ARTIFACT: ${{ inputs.evidence-artifact }}
         run: |
           set -euo pipefail
-          test -r "${{ inputs.ledger-file }}" \
-            || { echo "drift gate needs a readable ledger-file (fetch it with the read-only principal first)"; exit 2; }
-          if [ -n "$EVIDENCE_ARG" ]; then
-            test -r "$EVIDENCE_ARG" \
-              || { echo "drift gate: evidence-file is set but unreadable: $EVIDENCE_ARG"; exit 2; }
+          mkdir -p .paperclip-drift-inputs/ledger .paperclip-drift-inputs/evidence
+          if [ -n "$LEDGER_ARTIFACT" ]; then
+            gh run download "$GITHUB_RUN_ID" -n "$LEDGER_ARTIFACT" -D .paperclip-drift-inputs/ledger
+            count="$(find .paperclip-drift-inputs/ledger -type f | wc -l)"
+            [ "$count" -eq 1 ] || { echo "ledger-artifact '$LEDGER_ARTIFACT' must hold exactly one file (found $count)"; exit 2; }
+            find .paperclip-drift-inputs/ledger -type f -print -quit > .paperclip-drift-inputs/ledger.path
+          fi
+          if [ -n "$EVIDENCE_ARTIFACT" ]; then
+            gh run download "$GITHUB_RUN_ID" -n "$EVIDENCE_ARTIFACT" -D .paperclip-drift-inputs/evidence
+            ev="$(find .paperclip-drift-inputs/evidence -type f -name '*.json' -print -quit)"
+            [ -n "$ev" ] || { echo "evidence-artifact '$EVIDENCE_ARTIFACT' holds no JSON evidence document"; exit 2; }
+            printf '%s' "$ev" > .paperclip-drift-inputs/evidence.path
+          fi
+          {
+            if [ -f .paperclip-drift-inputs/ledger.path ]; then
+              printf 'DRIFT_LEDGER_FILE=%s\n' "$(cat .paperclip-drift-inputs/ledger.path)"
+            else
+              printf 'DRIFT_LEDGER_FILE=%s\n' "${{ inputs.ledger-file }}"
+            fi
+            if [ -f .paperclip-drift-inputs/evidence.path ]; then
+              printf 'DRIFT_EVIDENCE_FILE=%s\n' "$(cat .paperclip-drift-inputs/evidence.path)"
+            else
+              printf 'DRIFT_EVIDENCE_FILE=%s\n' "${{ inputs.evidence-file }}"
+            fi
+          } >> "$GITHUB_ENV"
+
+      - name: Build candidate digests and run the drift gate
+        id: gate
+        run: |
+          set -euo pipefail
+          test -r "${DRIFT_LEDGER_FILE:-}" \
+            || { echo "drift gate needs a ledger: pass ledger-artifact (preferred) or ledger-file"; exit 2; }
+          if [ -n "${DRIFT_EVIDENCE_FILE:-}" ]; then
+            test -r "$DRIFT_EVIDENCE_FILE" \
+              || { echo "drift gate: evidence input is set but unreadable: $DRIFT_EVIDENCE_FILE"; exit 2; }
           fi
           (cd "${{ inputs.migrations-dir }}" && sha256sum ./*.sql) > /tmp/candidate-hashes.txt
           EXTRA=()
-          if [ -n "$EVIDENCE_ARG" ]; then
-            EXTRA=(--evidence "$EVIDENCE_ARG" --max-age-hours "${{ inputs.max-age-hours }}")
+          if [ -n "${DRIFT_EVIDENCE_FILE:-}" ]; then
+            EXTRA=(--evidence "$DRIFT_EVIDENCE_FILE" --max-age-hours "${{ inputs.max-age-hours }}")
           fi
           python3 .paperclip-migration-gates/migration_drift_gate.py \
             --sql-hashes /tmp/candidate-hashes.txt \
-            --ledger "${{ inputs.ledger-file }}" "${EXTRA[@]}"
+            --ledger "$DRIFT_LEDGER_FILE" "${EXTRA[@]}"
 
       - name: Page on drift (auto-filed card)
         if: failure() && inputs.page-on-failure && steps.gate.outcome == 'failure'
@@ -109,6 +169,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # Labels may not exist in the caller repo yet: create-then-use so
+          # the page is never lost to a missing-label error.
+          gh label create drift --color B60205 --description "schema drift pages" 2>/dev/null || true
+          gh label create automated-page --color 0E8A16 --description "automatically filed pages" 2>/dev/null || true
           gh issue create \
             --title "schema drift: production ledger vs ${{ github.ref_name }} ($(date -u +%Y-%m-%d))" \
             --label "drift,automated-page" \

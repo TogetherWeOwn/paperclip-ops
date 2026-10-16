@@ -85,7 +85,10 @@ def load_ledger(path):
     return hashes
 
 
-def check_evidence(path, max_age_hours):
+def check_evidence(path, max_age_hours, candidate=None):
+    """Evidence freshness plus binding: when the candidate chain is given,
+    the evidence must rehearse exactly that chain (same tags, same
+    digests) — evidence for an unrelated chain never passes."""
     try:
         with open(path, encoding="utf-8") as fh:
             doc = json.load(fh)
@@ -101,12 +104,32 @@ def check_evidence(path, max_age_hours):
         print("FAIL: rehearsal evidence has no parseable finished_at")
         return 1
     age_hours = (datetime.datetime.now(datetime.timezone.utc) - finished).total_seconds() / 3600
+    if age_hours < -5 / 60:
+        print(f"FAIL: rehearsal evidence finished_at is in the future ({-age_hours:.1f}h ahead)")
+        return 1
     if age_hours > max_age_hours:
         print(f"FAIL: rehearsal evidence is {age_hours:.1f}h old, older than {max_age_hours}h")
         return 1
-    count = len(doc.get("migrations", []))
+    migs = doc.get("migrations", [])
+    not_applied = sorted(m.get("tag", "?") for m in migs if m.get("result") != "applied")
+    if not_applied:
+        print(f"FAIL: rehearsal evidence claims passed but {len(not_applied)} migration(s) "
+              f"were not applied; first: {not_applied[0]}")
+        return 1
+    if candidate is not None:
+        evidenced = {m.get("tag"): m.get("sha256") for m in migs}
+        if evidenced != candidate:
+            only_ev = sorted(set(evidenced) - set(candidate))
+            only_cand = sorted(set(candidate) - set(evidenced))
+            mism = sorted(t for t in set(evidenced) & set(candidate)
+                          if evidenced[t] != candidate[t])
+            detail = (only_ev[:1] + only_cand[:1] + mism[:1]) or ["empty evidence"]
+            print("FAIL: rehearsal evidence is not bound to this candidate chain "
+                  f"(first divergence: {detail[0]})")
+            return 1
+        print(f"ok: rehearsal evidence bound to the candidate chain ({len(migs)} migration(s))")
     print(f"ok: rehearsal evidence fresh ({age_hours:.1f}h < {max_age_hours}h), "
-          f"{count} migration(s) passed")
+          f"{len(migs)} migration(s) passed")
     return 0
 
 
@@ -142,7 +165,7 @@ def main(argv):
         print("ok: no out-of-band production migrations (ledger matches candidate)")
 
     if args.evidence:
-        rc = check_evidence(args.evidence, args.max_age_hours) or rc
+        rc = check_evidence(args.evidence, args.max_age_hours, candidate) or rc
     return rc
 
 

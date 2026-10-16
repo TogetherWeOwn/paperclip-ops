@@ -24,11 +24,12 @@ on:
         type: boolean
       squawk-version:
         description: >-
-          Optional squawk release to install from crates.io
-          (e.g. "2.9.0"). Empty means no install: the file-standard checks
-          always run and squawk runs only when preinstalled.
+          Squawk release to install when no squawk binary is present
+          (e.g. "2.70.0"). The install is skipped when a binary is already
+          on PATH, so preinstalled runners pay nothing; strict callers on a
+          bare ubuntu-latest get a real squawk instead of a refusal.
         required: false
-        default: ""
+        default: "2.70.0"
         type: string
       script-ref:
         description: Pinned SHA of this repo to fetch the gate scripts from.
@@ -58,14 +59,38 @@ jobs:
           path: .paperclip-migration-gates
           persist-credentials: false
 
-      - name: Install squawk (optional, pinned version only)
-        if: inputs.squawk-version != ''
+      - name: Check for a squawk binary
+        id: squawk
+        run: |
+          set -euo pipefail
+          if command -v squawk >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            squawk --version
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install squawk (pinned release binary, when missing)
+        if: steps.squawk.outputs.exists != 'true'
         env:
           SQUAWK_VERSION: ${{ inputs.squawk-version }}
         run: |
           set -euo pipefail
-          cargo install squawk --locked --version "$SQUAWK_VERSION"
-          squawk --version
+          test -n "$SQUAWK_VERSION" \
+            || { echo "no squawk on PATH and squawk-version is empty: set a pinned version or pre-install squawk"; exit 2; }
+          case "$(uname -m)" in
+            x86_64) GOARCH=x64 ;;
+            aarch64) GOARCH=arm64 ;;
+            *) echo "unsupported architecture: $(uname -m)"; exit 2 ;;
+          esac
+          tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL -o "$tmp/squawk" \
+            "https://github.com/sbdchd/squawk/releases/download/v${SQUAWK_VERSION}/squawk-linux-${GOARCH}"
+          chmod +x "$tmp/squawk"
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 "$tmp/squawk" "$HOME/.local/bin/squawk"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/squawk" --version
 
       - name: Prove the timeout preamble injector parses
         run: bash -n .paperclip-migration-gates/migration_timeout_preamble.sh

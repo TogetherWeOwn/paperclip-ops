@@ -19,6 +19,18 @@
 #       Emit <file.sql> with the preamble prepended. Idempotent: a file that
 #       already carries the preamble is passed through unchanged.
 #
+# CONCURRENTLY EXEMPTION. A bounded statement_timeout cancels CREATE INDEX
+# CONCURRENTLY on large tables mid-build and leaves an INVALID index behind;
+# worse, an `IF NOT EXISTS` on the retry then reports success while
+# indisvalid stays false (reproduced on Postgres 18). So inject wraps every
+# concurrent index build: statement_timeout is lifted to '0' (disabled) for
+# that statement only and restored to the configured value right after.
+# lock_timeout stays in force throughout — failing fast on lock contention
+# is exactly what a concurrent build should do. Authors must NOT write
+# `IF NOT EXISTS` on concurrent indexes (the file standard rejects nothing
+# here, but docs/migration-standard.md bans it) precisely so a retry can
+# never mask a failed build.
+#
 # Exit: 0 ok | 1 check failed | 2 bad input / unreadable file (REFUSED).
 # Offline: reads files only, never touches a database, prints no secrets.
 set -euo pipefail
@@ -89,7 +101,55 @@ case "$cmd" in
       cat "$1"
     else
       print_preamble
-      cat "$1"
+      python3 - "$1" <<EOF
+import re
+import sys
+stmt = "$STATEMENT_TIMEOUT"
+src = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+# Split on ';' outside single-quoted strings (same statement rule as
+# migration_squawk.sh); comments ride along inside their statement.
+parts, buf = [], []
+i, n, in_str = 0, len(src), False
+while i < n:
+    ch = src[i]
+    if in_str:
+        buf.append(ch)
+        if ch == "'":
+            if i + 1 < n and src[i + 1] == "'":
+                buf.append("'")
+                i += 2
+                continue
+            in_str = False
+        i += 1
+        continue
+    if ch == "'":
+        in_str = True
+        buf.append(ch)
+        i += 1
+        continue
+    if ch == ";":
+        buf.append(ch)
+        parts.append("".join(buf))
+        buf = []
+        i += 1
+        continue
+    buf.append(ch)
+    i += 1
+tail = "".join(buf)
+if tail:
+    parts.append(tail)
+out = []
+for part in parts:
+    if re.search(r"\bCREATE\s+(UNIQUE\s+)?INDEX\s+CONCURRENTLY\b", part, re.I):
+        out.append("SET statement_timeout = '0';\n")
+        out.append(part)
+        if not part.rstrip().endswith(";"):
+            out.append(";")
+        out.append("\nSET statement_timeout = '%s';\n" % stmt)
+    else:
+        out.append(part)
+sys.stdout.write("".join(out))
+EOF
     fi
     ;;
   *) cat >&2 <<EOF

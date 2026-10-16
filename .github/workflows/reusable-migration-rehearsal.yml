@@ -10,9 +10,11 @@
 # the job plans but never claims a rehearsal happened. Evidence uploads as
 # an artifact for the production preflight gate (freshness < 24h).
 #
-# The caller owns its principals: pass the provider token and any
-# caller-owned apply/restore commands through `env`. This workflow never
-# invents credentials and prints none (provider output is redacted).
+# The caller owns its principals: it maps its EXISTING provider secrets
+# into the declared `secrets` below and passes its caller-owned
+# apply/restore commands as `restore-cmd` / `apply-cmd` inputs (commands
+# are not secret). This workflow never invents credentials and prints none
+# (provider output is redacted).
 name: migration-rehearsal (reusable)
 
 on:
@@ -28,6 +30,29 @@ on:
         required: false
         default: packages/db/src/migrations
         type: string
+      restore-cmd:
+        description: >-
+          Caller-owned restore command for the pitr provider (run with the
+          branch name appended). Empty falls back to the caller's
+          REHEARSAL_RESTORE_CMD repo variable.
+        required: false
+        default: ""
+        type: string
+      apply-cmd:
+        description: >-
+          Caller-owned apply command (run with one wrapped SQL file path
+          appended). Empty falls back to the caller's REHEARSAL_APPLY_CMD
+          repo variable.
+        required: false
+        default: ""
+        type: string
+      pscale-version:
+        description: >-
+          Pinned pscale CLI release installed when provider is planetscale
+          and no pscale binary is present (e.g. "0.346.0").
+        required: false
+        default: "0.346.0"
+        type: string
       script-ref:
         description: Pinned SHA of this repo to fetch the gate scripts from.
         required: false
@@ -38,6 +63,19 @@ on:
         required: false
         default: 7
         type: number
+    secrets:
+      rehearsal-pscale-org:
+        description: PlanetScale org (existing caller principal).
+        required: false
+      rehearsal-pscale-db:
+        description: PlanetScale database (existing caller principal).
+        required: false
+      rehearsal-pscale-token:
+        description: PlanetScale token (existing caller principal).
+        required: false
+      rehearsal-pitr-endpoint:
+        description: PITR endpoint (existing caller principal).
+        required: false
 
 jobs:
   rehearse:
@@ -71,22 +109,53 @@ jobs:
             --out rehearsal-plan.json
           cat rehearsal-plan.json
 
-      # Full rehearsal only when the caller wired its provider credentials.
-      # The caller maps its EXISTING secrets here; no new principals.
-      - name: Run the rehearsal on a throwaway prod clone
+      - name: Install pscale CLI (planetscale only, when missing)
+        if: inputs.provider == 'planetscale'
         env:
-          REHEARSAL_PSCALE_ORG: ${{ secrets.REHEARSAL_PSCALE_ORG }}
-          REHEARSAL_PSCALE_DB: ${{ secrets.REHEARSAL_PSCALE_DB }}
-          REHEARSAL_PSCALE_TOKEN: ${{ secrets.REHEARSAL_PSCALE_TOKEN }}
-          REHEARSAL_PITR_ENDPOINT: ${{ secrets.REHEARSAL_PITR_ENDPOINT }}
-          REHEARSAL_RESTORE_CMD: ${{ vars.REHEARSAL_RESTORE_CMD }}
-          REHEARSAL_APPLY_CMD: ${{ vars.REHEARSAL_APPLY_CMD }}
+          PSCALE_VERSION: ${{ inputs.pscale-version }}
         run: |
           set -euo pipefail
-          if [ -z "${REHEARSAL_PSCALE_TOKEN:-}${REHEARSAL_PITR_ENDPOINT:-}" ] \
-            && ! command -v pscale >/dev/null 2>&1; then
-            echo "No provider credentials on this run: plan only, no rehearsal claimed."
+          if command -v pscale >/dev/null 2>&1; then
+            echo "pscale already present: $(pscale version 2>/dev/null || echo unknown)"
             exit 0
+          fi
+          case "$(uname -m)" in
+            x86_64) GOARCH=amd64 ;;
+            aarch64) GOARCH=arm64 ;;
+            *) echo "unsupported architecture: $(uname -m)"; exit 2 ;;
+          esac
+          base="https://github.com/planetscale/cli/releases/download/v${PSCALE_VERSION}"
+          tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL -o "$tmp/pscale.tar.gz" "$base/pscale_${PSCALE_VERSION}_linux_${GOARCH}.tar.gz"
+          curl -fsSL -o "$tmp/checksums.txt" "$base/pscale_${PSCALE_VERSION}_checksums.txt"
+          (cd "$tmp" && grep "linux_${GOARCH}.tar.gz" checksums.txt | sha256sum -c -)
+          tar -xzf "$tmp/pscale.tar.gz" -C "$tmp"
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 "$tmp/pscale" "$HOME/.local/bin/pscale"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/pscale" version
+
+      # Full rehearsal only when the caller wired its provider credentials.
+      # The caller maps its EXISTING secrets above; no new principals.
+      - name: Run the rehearsal on a throwaway prod clone
+        env:
+          REHEARSAL_PSCALE_ORG: ${{ secrets.rehearsal-pscale-org }}
+          REHEARSAL_PSCALE_DB: ${{ secrets.rehearsal-pscale-db }}
+          REHEARSAL_PSCALE_TOKEN: ${{ secrets.rehearsal-pscale-token }}
+          REHEARSAL_PITR_ENDPOINT: ${{ secrets.rehearsal-pitr-endpoint }}
+          REHEARSAL_RESTORE_CMD: ${{ inputs.restore-cmd != '' && inputs.restore-cmd || vars.REHEARSAL_RESTORE_CMD }}
+          REHEARSAL_APPLY_CMD: ${{ inputs.apply-cmd != '' && inputs.apply-cmd || vars.REHEARSAL_APPLY_CMD }}
+        run: |
+          set -euo pipefail
+          # Plan-only when no provider credential is usable: no token and no
+          # endpoint, and no logged-in pscale CLI either. The CLI being
+          # installed is NOT a credential — an installed-but-anonymous
+          # pscale must not turn into a failed rehearsal.
+          if [ -z "${REHEARSAL_PSCALE_TOKEN:-}" ] && [ -z "${REHEARSAL_PITR_ENDPOINT:-}" ]; then
+            if ! command -v pscale >/dev/null 2>&1 || ! pscale auth status >/dev/null 2>&1; then
+              echo "No provider credentials on this run: plan only, no rehearsal claimed."
+              exit 0
+            fi
           fi
           bash .paperclip-migration-gates/migration_rehearsal.sh run \
             --migrations-dir "${{ inputs.migrations-dir }}" \

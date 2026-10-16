@@ -1,0 +1,23 @@
+# Canonical squawk configuration for the shared migration safety gates.
+#
+# WHY ONLY THESE TWO EXCLUSIONS. This pipeline enforces timeout policy
+# structurally instead of textually: the deploy runner prepends the canonical
+# lock_timeout/statement_timeout preamble from migration_timeout_preamble.sh
+# at apply time, and the prod-clone rehearsal proves the injected path (not
+# the bare files). Requiring authors to paste SET lines into migration files
+# would fork the policy into every file, so require-lock-timeout and
+# require-statement-timeout are excluded here and enforced by the injector.
+#
+# Everything else stays at squawk defaults on purpose: ban-drop-column,
+# require-concurrent-index-creation, constraint-missing-not-valid and the
+# rest still fire. A contract-phase DROP COLUMN is a reviewed exception and
+# carries its own `-- squawk-ignore ban-drop-column` line (see
+# docs/migration-standard.md), never a blanket exclusion.
+#
+# migration_squawk.sh passes this file to squawk via --config automatically
+# (override with --squawk-config). Callers pin squawk itself with the
+# `squawk-version` input of reusable-migration-squawk.yml.
+excluded_rules = [
+  "require-lock-timeout",
+  "require-statement-timeout",
+]

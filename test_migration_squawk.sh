@@ -107,5 +107,76 @@ PATH="$WORK/bin:/usr/bin:/bin" "$GATE" --strict --migrations-dir "$WORK/migs3" >
   && ok "index mention in a comment is not a finding" \
   || bad "index mention in a comment is not a finding"
 
+# 6. Per-statement checks: one CONCURRENTLY build never excuses a locking
+# build in another statement of the same file.
+mkdir -p "$WORK/migs4"
+cat > "$WORK/migs4/0048_mixed_indexes.sql" <<'EOF'
+-- phase: expand
+CREATE INDEX CONCURRENTLY good_idx ON members (email);
+CREATE INDEX bad_idx ON members (nickname);
+EOF
+out="$("$GATE" --squawk-bin "$WORK/bin/squawk-ok" "$WORK/migs4/0048_mixed_indexes.sql" 2>&1 || true)"
+grep -q "0048_mixed_indexes.sql" <<< "$out" && grep -q "CONCURRENTLY" <<< "$out" \
+  && ok "locking index fails despite a concurrent sibling" \
+  || bad "locking index fails despite a concurrent sibling"
+
+# 7. Per-statement constraints: NOT VALID in one statement never excuses a
+# plain ADD CONSTRAINT in another; multi-line definitions are joined first.
+cat > "$WORK/migs4/0049_mixed_constraints.sql" <<'EOF'
+-- phase: expand
+ALTER TABLE members
+  ADD CONSTRAINT members_email_format CHECK (email LIKE '%@%') NOT VALID;
+ALTER TABLE members ADD CONSTRAINT members_nick_unique UNIQUE (nickname);
+EOF
+out="$("$GATE" --squawk-bin "$WORK/bin/squawk-ok" "$WORK/migs4/0049_mixed_constraints.sql" 2>&1 || true)"
+grep -q "0049_mixed_constraints.sql" <<< "$out" && grep -q "NOT VALID" <<< "$out" \
+  && ok "plain ADD CONSTRAINT fails despite a NOT VALID sibling" \
+  || bad "plain ADD CONSTRAINT fails despite a NOT VALID sibling"
+cat > "$WORK/migs4/0050_multiline_fk.sql" <<'EOF'
+-- phase: expand
+ALTER TABLE orders
+  ADD CONSTRAINT orders_member_fk
+  FOREIGN KEY (member_id)
+  REFERENCES members (id)
+  NOT VALID;
+EOF
+"$GATE" --squawk-bin "$WORK/bin/squawk-ok" "$WORK/migs4/0050_multiline_fk.sql" >/dev/null 2>&1 \
+  && ok "multi-line NOT VALID foreign key passes" \
+  || bad "multi-line NOT VALID foreign key passes"
+
+# 8. USING INDEX constraints are exempt (valid by construction).
+cat > "$WORK/migs4/0051_using_index.sql" <<'EOF'
+-- phase: expand
+ALTER TABLE members ADD CONSTRAINT members_email_unique UNIQUE USING INDEX members_email_idx;
+EOF
+"$GATE" --squawk-bin "$WORK/bin/squawk-ok" "$WORK/migs4/0051_using_index.sql" >/dev/null 2>&1 \
+  && ok "ADD CONSTRAINT USING INDEX is exempt" \
+  || bad "ADD CONSTRAINT USING INDEX is exempt"
+
+# 9. Squawk runs with the canonical config, which excludes only the two
+# timeout rules (timeouts are enforced by the injector, not pasted lines).
+cat > "$WORK/bin/squawk-argv" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$SQUAWK_ARGV"
+exit 0
+FAKE
+chmod +x "$WORK/bin/squawk-argv"
+export SQUAWK_ARGV="$WORK/squawk.argv"
+rm -f "$SQUAWK_ARGV"
+"$GATE" --squawk-bin "$WORK/bin/squawk-argv" "$WORK/migs/0042_add_search_index.sql" >/dev/null 2>&1 \
+  && grep -q -- "--config" "$SQUAWK_ARGV" && grep -q "squawk-migration.toml" "$SQUAWK_ARGV" \
+  && ok "squawk is invoked with the canonical config" \
+  || bad "squawk is invoked with the canonical config"
+cfg="$HERE/squawk-migration.toml"
+# Scope to the excluded_rules array: prose comments elsewhere name other
+# rules on purpose, so a whole-file grep would prove nothing.
+array_rules="$(sed -n '/excluded_rules *= *\[/,/\]/p' "$cfg" | grep -o '"[^"]*"' | sort -u || true)"
+if [[ -r "$cfg" ]] && [[ "$array_rules" == '"require-lock-timeout"
+"require-statement-timeout"' ]]; then
+  ok "canonical config excludes only the two timeout rules"
+else
+  bad "canonical config excludes only the two timeout rules"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

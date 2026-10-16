@@ -98,6 +98,7 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
         # the suites job at PR time by intent, not by fallthrough.
         "migration_timeout_preamble.sh",
         "migration_squawk.sh",
+        "squawk-migration.toml",
         "migration_rehearsal.sh",
         "migration_drift_gate.py",
         "test_migration_timeout_preamble.sh",

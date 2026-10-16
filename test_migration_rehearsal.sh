@@ -130,5 +130,97 @@ EOF
  "$GATE" run --migrations-dir "$WORK/migs" --provider pitr --out "$WORK/p.json" >/dev/null 2>&1) \
   && bad "pitr refuses without a restore command" || ok "pitr refuses without a restore command"
 
+# 5. Fail-fast: the first failed apply stops the chain. 0052 must never be
+# applied after 0051 fails; it records not_attempted and the run fails.
+mkdir -p "$WORK/migs_fail" "$WORK/rec2"
+printf -- '-- phase: expand\nSELECT 1;\n' > "$WORK/migs_fail/0050_ok.sql"
+printf -- '-- phase: expand\nSELECT 2;\n' > "$WORK/migs_fail/0051_boom.sql"
+printf -- '-- phase: expand\nSELECT 3;\n' > "$WORK/migs_fail/0052_never.sql"
+cat > "$WORK/bin/fake-apply-fail" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$REC/apply.argv"
+case "$1" in *0051_boom*) exit 1 ;; *) exit 0 ;; esac
+FAKE
+chmod +x "$WORK/bin/fake-apply-fail"
+export REC="$WORK/rec2"
+export REHEARSAL_RESTORE_CMD="$WORK/bin/fake-restore"
+export REHEARSAL_APPLY_CMD="$WORK/bin/fake-apply-fail"
+if "$GATE" run --migrations-dir "$WORK/migs_fail" --provider pitr \
+    --branch "rehearsal/fail-001" --out "$WORK/fail-evidence.json" >/dev/null 2>&1; then
+  bad "run fails when an apply fails"
+else
+  ok "run fails when an apply fails"
+fi
+if grep -q "0052_never" "$REC/apply.argv"; then
+  bad "no migration is applied after a failure"
+else
+  [[ "$(wc -l < "$REC/apply.argv")" -eq 2 ]] \
+    && ok "no migration is applied after a failure" \
+    || bad "no migration is applied after a failure"
+fi
+if python3 - "$WORK/fail-evidence.json" <<'EOF'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+assert doc["status"] == "failed", doc
+assert [(m["tag"], m["result"]) for m in doc["migrations"]] == [
+    ("0050_ok", "applied"), ("0051_boom", "failed"), ("0052_never", "not_attempted")], doc
+EOF
+then
+  ok "failed run records failed/not_attempted per migration"
+else
+  bad "failed run records failed/not_attempted per migration"
+fi
+
+# 6. --only rehearses exactly the named subset (the ledger-computed pending
+# chain), in the requested order; unknown tags are refused.
+"$GATE" plan --migrations-dir "$WORK/migs" --provider pitr --only "0043_b" \
+  --out "$WORK/plan-only.json" >/dev/null 2>&1 \
+  && ok "plan accepts an --only subset" \
+  || bad "plan accepts an --only subset"
+if python3 - "$WORK/plan-only.json" <<'EOF'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+assert [m["tag"] for m in doc["migrations"]] == ["0043_b"], doc
+EOF
+then
+  ok "plan --only keeps exactly the named migration"
+else
+  bad "plan --only keeps exactly the named migration"
+fi
+"$GATE" plan --migrations-dir "$WORK/migs" --provider pitr --only "0099_nope" \
+  --out "$WORK/x.json" >/dev/null 2>&1 \
+  && bad "plan refuses an --only tag outside the dir" \
+  || ok "plan refuses an --only tag outside the dir"
+
+# 7. verify binds evidence to the candidate chain and rejects a future
+# finished_at. Fresh passing evidence for the two-migration dir first.
+export REC="$WORK/rec"; mkdir -p "$REC"
+export REHEARSAL_APPLY_CMD="$WORK/bin/fake-apply"
+"$GATE" run --migrations-dir "$WORK/migs" --provider pitr \
+  --branch "rehearsal/verify-001" --out "$WORK/verify-evidence.json" >/dev/null 2>&1 \
+  || bad "setup: fresh passing run for verify binding"
+(cd "$WORK/migs" && sha256sum ./*.sql) > "$WORK/candidate-hashes.txt"
+"$GATE" verify --evidence "$WORK/verify-evidence.json" \
+  --sql-hashes "$WORK/candidate-hashes.txt" --max-age-hours 24 >/dev/null 2>&1 \
+  && ok "verify passes evidence bound to the candidate chain" \
+  || bad "verify passes evidence bound to the candidate chain"
+# Same evidence against an unrelated chain must fail.
+(cd "$WORK/migs_fail" && sha256sum ./*.sql) > "$WORK/other-hashes.txt"
+"$GATE" verify --evidence "$WORK/verify-evidence.json" \
+  --sql-hashes "$WORK/other-hashes.txt" --max-age-hours 24 >/dev/null 2>&1 \
+  && bad "verify fails evidence for an unrelated chain" \
+  || ok "verify fails evidence for an unrelated chain"
+# A finished_at in the future (forged freshness) must fail, not print a
+# negative age as ok.
+python3 - "$WORK/verify-evidence.json" "$WORK/future-evidence.json" <<'EOF'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["finished_at"] = "2099-01-01T00:00:00Z"
+json.dump(doc, open(sys.argv[2], "w"))
+EOF
+"$GATE" verify --evidence "$WORK/future-evidence.json" --max-age-hours 24 >/dev/null 2>&1 \
+  && bad "verify fails a future finished_at" \
+  || ok "verify fails a future finished_at"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

@@ -25,10 +25,23 @@ jobs:
           persist-credentials: false
       - name: Reject private artifacts and deployment identifiers
         run: python3 .github/scripts/public_safety.py
-      - name: Scan working tree and fetched history with reviewed fixture exceptions
+      - name: Scan working tree and introduced history with reviewed fixture exceptions
         env:
           SCANNER: ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          HISTORY_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: |
           docker pull "$SCANNER"
           docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" dir /repo --config /repo/.gitleaks.toml --redact=100 --no-banner
-          docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts=--all --config /repo/.gitleaks.toml --redact=100 --no-banner
+          # Scan only commits introduced by this event. --all also includes
+          # unrelated branches fetched by checkout and can fail on their history.
+          BASE="${HISTORY_BASE:-origin/main}"
+          if ! git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1 || \
+             ! git merge-base --is-ancestor "$BASE" HEAD 2>/dev/null; then
+            BASE="$(git merge-base origin/main HEAD 2>/dev/null || true)"
+          fi
+          RANGE="HEAD"
+          if [[ -n "$BASE" ]]; then
+            RANGE="$BASE..HEAD"
+            [[ "$(git rev-list "$RANGE" --count 2>/dev/null || echo 0)" -gt 0 ]] || RANGE="-1 HEAD"
+          fi
+          docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts="$RANGE" --config /repo/.gitleaks.toml --redact=100 --no-banner

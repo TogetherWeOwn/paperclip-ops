@@ -224,9 +224,25 @@ class PublicCI(unittest.TestCase):
         scan = text.split("      - name: Scan tracked files for committed secrets\n", 1)[1].split("      - ", 1)[0]
         self.assertIn("./verification/secret-scan.sh", scan)
         self.assertNotRegex(scan, r"(?m)^\s*if:")
-        safety = (ROOT / ".github/workflows/public-safety.yml").read_text()
-        self.assertIn("gitleaks", safety)
-        self.assertIn("public_safety.py", safety)
+        safety = yaml.safe_load((ROOT / ".github/workflows/public-safety.yml").read_text())
+        self.assertIn("public_safety.py", (ROOT / ".github/workflows/public-safety.yml").read_text())
+        steps = safety["jobs"]["public-safety"]["steps"]
+        checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
+        self.assertEqual(checkout["with"]["fetch-depth"], 0)
+        scanner = next(step for step in steps if step.get("name", "").startswith("Scan working tree"))
+        self.assertIn("github.event.pull_request.base.sha", scanner["env"]["HISTORY_BASE"])
+        self.assertIn("github.event.merge_group.base_sha", scanner["env"]["HISTORY_BASE"])
+        self.assertIn("github.event.before", scanner["env"]["HISTORY_BASE"])
+        self.assertIn('BASE="${HISTORY_BASE:-origin/main}"', scanner["run"])
+        self.assertIn('RANGE="HEAD"', scanner["run"])
+        self.assertIn('git merge-base --is-ancestor "$BASE" HEAD', scanner["run"])
+        self.assertIn('git merge-base origin/main HEAD', scanner["run"])
+        self.assertIn('RANGE="$BASE..HEAD"', scanner["run"])
+        self.assertIn('git rev-list "$RANGE" --count', scanner["run"])
+        self.assertIn('RANGE="-1 HEAD"', scanner["run"])
+        self.assertIn('git /repo --log-opts="$RANGE"', scanner["run"])
+        self.assertIn('"$SCANNER" dir /repo', scanner["run"])
+        self.assertNotIn("--log-opts=--all", scanner["run"])
 
     def test_metadata_protocol_constant_does_not_exempt_private_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:

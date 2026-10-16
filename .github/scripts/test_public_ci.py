@@ -237,7 +237,7 @@ class PublicCI(unittest.TestCase):
         self.assertIn("github.event.before", safety)
         self.assertIn('git cat-file -e "$BEFORE^{commit}"', safety)
         self.assertIn('git rev-list --count "$RANGE"', safety)
-        self.assertIn("covers 0 commits; failing closed", safety)
+        self.assertIn("pull-request history range", safety)
 
     def test_history_range_survives_advanced_main(self):
         # Pins the range logic against a scratch repo shaped like the review
@@ -315,35 +315,45 @@ class PublicCI(unittest.TestCase):
         script = run.replace(
             "${{ github.event_name }}", "${EVENT_NAME}").replace(
             "${{ github.event.before }}", "${BEFORE}")
-        out_lines = []
-        for line in script.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("docker pull"):
-                out_lines.append(": docker-pull stubbed")
-            elif stripped.startswith("docker run") and " dir /repo" in stripped:
-                out_lines.append(": dir-scan stubbed")
-            elif stripped.startswith("docker run") and " git /repo" in stripped:
-                out_lines.append('echo "SCAN_RANGE=$RANGE"')
-            else:
-                out_lines.append(line)
-        return "\n".join(out_lines) + "\n"
+        docker_stub = (
+            'docker() { python3 -c "import json, sys; '
+            'print(json.dumps(sys.argv[1:]))" "$@" >> "$DOCKER_LOG"; }\n')
+        return docker_stub + script + "\n"
 
     def _run_history_scan(self, tmp, base_env, event_name, before):
         script = self._history_scan_shell()
+        log_path = Path(tmp, "docker-invocations.jsonl")
+        log_path.unlink(missing_ok=True)
         env = dict(base_env, EVENT_NAME=event_name,
-                   BEFORE=before or "", SCANNER="stub")
+                   BEFORE=before or "", SCANNER="stub",
+                   DOCKER_LOG=str(log_path))
         return subprocess.run(
             ["bash", "-e", "-c", script], cwd=tmp, env=env,
             capture_output=True, text=True)
 
+    def _assert_scanned_range(self, tmp, expected):
+        invocations = [json.loads(line) for line in
+                       Path(tmp, "docker-invocations.jsonl").read_text().splitlines()]
+        git_scans = [args for args in invocations if "git" in args]
+        self.assertEqual(len(git_scans), 1, invocations)
+        scan_args = git_scans[0]
+        log_opts = next((arg for arg in scan_args if arg.startswith("--log-opts=")), None)
+        self.assertEqual(log_opts, "--log-opts=" + expected, scan_args)
+        return expected
+
+    def _assert_no_history_scan(self, tmp):
+        invocations = [json.loads(line) for line in
+                       Path(tmp, "docker-invocations.jsonl").read_text().splitlines()]
+        self.assertFalse(any("git" in args for args in invocations), invocations)
+
     def test_history_scan_script_uses_fail_closed_ranges(self):
         # Executes the workflow's actual range block in scratch repos for:
         # pull_request with and without an advanced main, push with a real
-        # before, push with a zero before (new branch), push with an
-        # unreachable before (force-push), plus the fail-closed empty range.
-        # Asserts on the printed RANGE and that the secret-bearing commits
-        # are inside it. Mutating the workflow's RANGE, the cat-file guard,
-        # or either exit-1 arm breaks this test.
+        # before, zero before (new branch), and unreachable before (force-push),
+        # plus empty PR, dispatch, and zero-before push ranges. The docker
+        # function records argv so the gitleaks --log-opts argument itself is
+        # asserted, not merely the RANGE variable. Range and failure mutations
+        # must break this test.
         try:
             subprocess.run(["git", "--version"], capture_output=True,
                            check=True)
@@ -414,11 +424,8 @@ class PublicCI(unittest.TestCase):
             git("checkout", "-q", "merge-ref")
             r = self._run_history_scan(tmp, env, "pull_request", "")
             self.assertEqual(r.returncode, 0, r.stderr)
-            m = next((l for l in r.stdout.splitlines()
-                      if l.startswith("SCAN_RANGE=")), None)
-            self.assertIsNotNone(m, r.stdout + r.stderr)
-            rng = m.split("=", 1)[1]
-            self.assertIn("..HEAD", rng)
+            rng = out("merge-base", "origin/main", "HEAD") + "..HEAD"
+            self._assert_scanned_range(tmp, rng)
             self.assertIn("secret.txt", range_log(rng))
 
             # 2. pull_request with main advanced after the merge ref.
@@ -426,8 +433,8 @@ class PublicCI(unittest.TestCase):
             git("checkout", "-q", "merge-ref")
             r = self._run_history_scan(tmp, env, "pull_request", "")
             self.assertEqual(r.returncode, 0, r.stderr)
-            rng = next(l for l in r.stdout.splitlines()
-                       if l.startswith("SCAN_RANGE=")).split("=", 1)[1]
+            rng = out("merge-base", "origin/main", "HEAD") + "..HEAD"
+            self._assert_scanned_range(tmp, rng)
             self.assertIn("secret.txt", range_log(rng),
                           "merge-base range lost PR history after advance")
 
@@ -436,9 +443,8 @@ class PublicCI(unittest.TestCase):
             git("checkout", "-q", "pr")
             r = self._run_history_scan(tmp, env, "push", first_pr)
             self.assertEqual(r.returncode, 0, r.stderr)
-            rng = next(l for l in r.stdout.splitlines()
-                       if l.startswith("SCAN_RANGE=")).split("=", 1)[1]
-            self.assertEqual(rng, first_pr + "..HEAD")
+            rng = first_pr + "..HEAD"
+            self._assert_scanned_range(tmp, rng)
 
             # 4. push with a zero before (new branch) falls back to
             # merge-base instead of exiting 1.
@@ -446,9 +452,8 @@ class PublicCI(unittest.TestCase):
             git("checkout", "-q", "pr")
             r = self._run_history_scan(tmp, env, "push", zero)
             self.assertEqual(r.returncode, 0, r.stderr)
-            rng = next(l for l in r.stdout.splitlines()
-                       if l.startswith("SCAN_RANGE=")).split("=", 1)[1]
-            self.assertIn("..HEAD", rng)
+            rng = out("merge-base", "origin/main", "HEAD") + "..HEAD"
+            self._assert_scanned_range(tmp, rng)
             self.assertIn("secret.txt", range_log(rng))
 
             # 5. push with an unreachable before (force-push) falls back
@@ -457,17 +462,31 @@ class PublicCI(unittest.TestCase):
             git("checkout", "-q", "pr")
             r = self._run_history_scan(tmp, env, "push", bogus)
             self.assertEqual(r.returncode, 0, r.stderr)
-            rng = next(l for l in r.stdout.splitlines()
-                       if l.startswith("SCAN_RANGE=")).split("=", 1)[1]
+            rng = out("merge-base", "origin/main", "HEAD") + "..HEAD"
+            self._assert_scanned_range(tmp, rng)
             self.assertIn("secret.txt", range_log(rng))
 
-            # 6. fail closed on a range covering 0 commits.
-            set_origin(base0)
-            git("checkout", "-q", "pr")
-            r = self._run_history_scan(tmp, env, "push", pr_tip)
+            # 6. Fail closed on an empty pull-request range.
+            set_origin(main2)
+            git("checkout", "-q", "main")
+            r = self._run_history_scan(tmp, env, "pull_request", "")
             self.assertNotEqual(r.returncode, 0,
-                                "empty history range must fail closed")
-            self.assertIn("covers 0 commits", r.stderr)
+                                "empty pull-request history must fail closed")
+            self.assertIn("pull-request history range", r.stderr)
+            self._assert_no_history_scan(tmp)
+
+            # 7. A workflow_dispatch at main scans the tree without invoking
+            # gitleaks on an empty history range.
+            r = self._run_history_scan(tmp, env, "workflow_dispatch", "")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("no new commits", r.stdout)
+            self._assert_no_history_scan(tmp)
+
+            # 8. A zero-before push at the main tip also has no new commits.
+            r = self._run_history_scan(tmp, env, "push", zero)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("no new commits", r.stdout)
+            self._assert_no_history_scan(tmp)
 
     def test_metadata_protocol_constant_does_not_exempt_private_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:

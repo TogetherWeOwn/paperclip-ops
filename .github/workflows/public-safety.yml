@@ -46,9 +46,9 @@ jobs:
           # scans every pushed commit, not just the tip; new branches/tags
           # (empty or zero BEFORE) or force-pushes whose old tip is absent
           # from this clone fall back to the merge-base range, exactly as
-          # pull-request runs do. Ranges git would silently scan as empty
-          # (gitleaks exits 0 on `0 commits scanned`) fail closed via the
-          # rev-list validation below.
+          # pull-request runs do. Unresolvable ranges fail closed via the
+          # rev-list validation below. An empty pull-request range also fails
+          # closed; other events with no new commits need only the tree scan.
           if [ "${{ github.event_name }}" = "push" ]; then
             BEFORE="${{ github.event.before }}"
             if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
@@ -72,7 +72,11 @@ jobs:
             exit 1
           }
           if [ "$COUNT" = "0" ]; then
-            echo "history range $RANGE covers 0 commits; failing closed" >&2
-            exit 1
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              echo "pull-request history range $RANGE covers 0 commits; failing closed" >&2
+              exit 1
+            fi
+            echo "no new commits in $RANGE; working-tree scan covers this event"
+            exit 0
           fi
           docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts="$RANGE" --config /repo/.gitleaks.toml --redact=100 --no-banner

@@ -18,8 +18,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: public-safety-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: public-safety-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   public-safety:
@@ -35,49 +35,61 @@ jobs:
       - name: Scan working tree and fetched history with reviewed fixture exceptions
         env:
           SCANNER: ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
-          PUSH_BEFORE: ${{ github.event.before }}
-          EVENT_NAME: ${{ github.event_name }}
-          REF: ${{ github.ref }}
         run: |
           docker pull "$SCANNER"
           docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" dir /repo --config /repo/.gitleaks.toml --redact=100 --no-banner
           # Scope the history scan to commits introduced here. actions/checkout
           # with fetch-depth 0 fetches every branch, so --all scans unrelated
-          # branches against this commit's allowlist and reds every PR for
-          # another branch's finding. The dir scan above already covers the
-          # checked-out tree.
+          # branches (e.g. vendor/offline-ci-contract.json churn elsewhere)
+          # against this commit's allowlist and reds every PR for another
+          # branch's fixtures. The dir scan above already covers the tree.
           #
-          # The range is derived from the merge base so it covers the PR's own
-          # commits even when origin/main is not an ancestor of HEAD (stale
-          # merge ref, branch behind main). Pushes to main use the push's
-          # before..HEAD instead. The fallback is the full history with a loud
-          # warning -- never a silent single-commit scan: for a merge commit
-          # `git log -1` prints no patch, so a secret added and removed inside
-          # the PR would be missed.
-          BASE="origin/main"
-          RANGE=""
-          if [ "${EVENT_NAME:-}" = "push" ] && [ "${REF:-}" = "refs/heads/main" ] \
-             && [ -n "${PUSH_BEFORE:-}" ] \
-             && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ] \
-             && git cat-file -e "$PUSH_BEFORE" 2>/dev/null; then
-            RANGE="$PUSH_BEFORE..HEAD"
-          elif git rev-parse --verify "$BASE" >/dev/null 2>&1 \
-             && MB="$(git merge-base "$BASE" HEAD 2>/dev/null)" && [ -n "$MB" ]; then
-            RANGE="$MB..HEAD"
-          fi
-          if [ -z "$RANGE" ]; then
-            echo "::warning::public-safety: no merge-base with $BASE; scanning full history"
-            LOGOPTS="--all"
-          else
-            COUNT="$(git rev-list "$RANGE" --count 2>/dev/null || true)"
-            if [ -z "$COUNT" ]; then
-              echo "::warning::public-safety: cannot list range $RANGE; scanning full history"
-              LOGOPTS="--all"
-            elif [ "$COUNT" = "0" ]; then
-              echo "::warning::public-safety: empty history range $RANGE; scanning full history"
-              LOGOPTS="--all"
+          # Fail closed: there is no narrowed single-commit fallback. A
+          # merge-base range stays correct when main advances after the
+          # pull-request merge ref is created (origin/main..HEAD would then
+          # fail its ancestor check, and scanning just the synthetic merge
+          # commit with -p -U0 prints no patch, passing vacuously). Pushes
+          # with a usable base scan before..HEAD so a multi-commit push
+          # scans every pushed commit, not just the tip; new branches/tags
+          # (empty or zero BEFORE) fall back to the merge-base range,
+          # exactly as pull-request runs do. A push whose BEFORE is non-zero
+          # but absent from this clone (force-push with a missing old tip)
+          # has unknown rewritten history: scanning the merge-base range
+          # would be empty on main (merge-base equals HEAD) and skip every
+          # rewritten commit, so scan all reachable history instead (HEAD).
+          # Unresolvable ranges fail closed via the rev-list validation
+          # below. An empty pull-request range also fails closed; other
+          # events with no new commits need only the tree scan.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BEFORE="${{ github.event.before }}"
+            if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              RANGE="$BEFORE..HEAD"
+            elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              BASE_SHA="$(git merge-base origin/main HEAD)" || {
+                echo "no merge-base with origin/main; failing closed" >&2
+                exit 1
+              }
+              RANGE="$BASE_SHA..HEAD"
             else
-              LOGOPTS="$RANGE"
+              RANGE="HEAD"
             fi
+          else
+            BASE_SHA="$(git merge-base origin/main HEAD)" || {
+              echo "no merge-base with origin/main; failing closed" >&2
+              exit 1
+            }
+            RANGE="$BASE_SHA..HEAD"
           fi
-          docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts="$LOGOPTS" --config /repo/.gitleaks.toml --redact=100 --no-banner
+          COUNT="$(git rev-list --count "$RANGE")" || {
+            echo "unresolvable history range $RANGE; failing closed" >&2
+            exit 1
+          }
+          if [ "$COUNT" = "0" ]; then
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              echo "pull-request history range $RANGE covers 0 commits; failing closed" >&2
+              exit 1
+            fi
+            echo "no new commits in $RANGE; working-tree scan covers this event"
+            exit 0
+          fi
+          docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts="$RANGE" --config /repo/.gitleaks.toml --redact=100 --no-banner

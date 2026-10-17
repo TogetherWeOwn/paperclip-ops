@@ -2,9 +2,9 @@
   "schema_version": 1,
   "baseline_commit": "12e71bcb92c484c880b6d457ab4d3ff546dd04ae",
   "toolkit": {
-    "tag": "main-533c7ae2",
-    "commit": "533c7ae2b013340bfae20cfcc711220048295855",
-    "sha256": "3f88a7325590b81250ed6779d87ee13def109ea3e64ca1afa80f539ada215092"
+    "tag": "main-d0324d0",
+    "commit": "d0324d0e5dd5a604a375e63a45eb5aa00e507059",
+    "sha256": "390032e7032e9041e82497b4fa90be086fea12df791653c0d5e6818a83d7f791"
   },
   "baseline_ids": [
     "Prove the private runner selected this job:1",
@@ -306,7 +306,8 @@
     "project regen prune manifest atomic suite:1",
     "sweep-auto node7b1ff338 pressure-gate suite:1",
     "host regenerable cache reclaim hostile suite:1",
-    "migration safety gates suites:1"
+    "migration safety gates suites:1",
+    "pr6 acceptance suite:1"
   ],
   "retained": [
     {
@@ -501,7 +502,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "ae5b0667c5ad81ec08e4474187ccfe231d86a7e9d871ee4fec58d21f31195ed5",
+      "definition_sha256": "9f5d17bde8cde6ab4236463376e459a839b5ed128de346816643a8e429cf7050",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1713,6 +1714,11 @@
       "name": "migration safety gates suites",
       "definition_sha256": "fce3b348e7f6f7519516081f58fc644adfccc9ce70ed91bf543880a3a88d5369",
       "id": "migration safety gates suites:1"
+    },
+    {
+      "name": "pr6 acceptance suite",
+      "definition_sha256": "63a04269075c57e92a96db6e55ba7bffb4f910e69a222a44cfd186d930e369f4",
+      "id": "pr6 acceptance suite:1"
     }
   ],
   "removed": [
@@ -2276,7 +2282,7 @@
     "scripts/storage_audit.sh": "777c4f7fbfc55172a3234c5bdbc62046e2b0ec7449a9c32f12ed8046b04a67a8",
     "scripts/case_e20effbb-mapping-guard-calibration.mjs": "523b48e26c1f6bf3210dcc12e853dc92756c211a758a02b1a6606cbfc8c36b01",
     "secret_exposure_audit.sh": "67cc775efb5619ff808a6bfe6ace6aded91113237d25635d8314b26e41771539",
-    "sibling_guard.sh": "93b14debe4cfb5fd7a059103a431cc87afbc36e66fa0705d0e4ba77cf3019874",
+    "sibling_guard.sh": "40fdea4eebad62c5ed20293fdb5913f3664daac06dae6584b757f6bf2272bb76",
     "skills.sh": "91f0c7f0180f0ec4a04193fcea6ebf1f58f7765554f2817dc4819301c51d5258",
     "test/external-disclosure.test.mjs": "dac15e46b073cef74b3b8e13f34e4b24e55e91612c6aba450550d6c6a907470d",
     "test/fixtures/gh_ci_status/RECORDED.md": "b7951de6c585400a35ef15613afa29f3f967c9b263b272a9c52e5b7f41a49544",
@@ -2336,7 +2342,7 @@
     "test_render_binding_normalization.sh": "c69bdb5104d90c449e7ece7e9137ef31e0def8fc4496ff7e84a48833df00748a",
     "test_responsible_leader.sh": "7467fd1ede05afa043db6c977fcc3be4cf1a177f5c0ed2d72e83b61a6649cb27",
     "test_secret_exposure_audit.sh": "399703e781a26a6c2555f16da37c9968c386eeb7b91f938bef53208db04601cc",
-    "test_sibling_guard.sh": "4cd01817407cec8a4ab78f0a890098a6c2521129133327fc7434191094ec3c62",
+    "test_sibling_guard.sh": "f19b6beecb68ff319935b45970bd1c507d14149ced7fbc455284b633e18c3659",
     "test_stale_descriptor_sweep.sh": "0d8022b586bbb8300b7b72c6b8b3a7da13dcd01c259df2f49cad6341514ad2af",
     "test_suite_preconditions.sh": "86f91b5ff13e906ca21c661df5282e445199dee0eb06b7a875e5a5ba47587259",
     "test_case_1ba58d26_acceptance.py": "98140b4eea6b52ec15f02b0279fcda0a9ad15cb020f93e55e29b023d16866f7c",

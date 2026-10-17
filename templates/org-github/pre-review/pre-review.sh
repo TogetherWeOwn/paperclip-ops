@@ -290,9 +290,12 @@ echo "$ADDED_LINES" | grep -E 'catch\s*(\([^)]*\))?\s*\{\s*\}' >/dev/null \
 # a full 12+ run ending at a value boundary (space, comma, semicolon,
 # quote, comment hash, or end of line) — parens and dots after the run
 # mark calls or attribute access (e.g. match.group(1)), not a credential.
-# Angle brackets also end the run, so generic type shapes such as
-# Option<String> read as declarations, not literals.
-SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[bap]-[A-Za-z0-9-]{8,}|api[_-]?key["'"'"' ]*[:=]["'"'"' ]+[A-Za-z0-9_.-]{12,}|(token|secret|password)["'"'"' ]*[:=](["'"'"' ]*["'"'"'][^"'"'"' ]{12,}|["'"'"' ]+[^"'"'"' ().<>]{12,}(["'"'"' ,;#<>]|$)))'
+# Angle brackets are excluded from the bare-value run so generic type shapes
+# such as Option<String> read as declarations, not literals. They are not a
+# trailing boundary: a 12+ type-path run before `<` (long generics such as
+# CredentialEnvelope<String>, turbofish `from_str::<T>`) is a type, not a
+# credential, so a bare secret glued to a bracket is left unflagged.
+SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[bap]-[A-Za-z0-9-]{8,}|api[_-]?key["'"'"' ]*[:=]["'"'"' ]+[A-Za-z0-9_.-]{12,}|(token|secret|password)["'"'"' ]*[:=](["'"'"' ]*["'"'"'][^"'"'"' ]{12,}|["'"'"' ]+[^"'"'"' ().<>]{12,}(["'"'"' ,;#]|$)))'
 
 if grep -Eq "$SECRET_RE" <<<"$ADDED_LINES"; then
   fail "authz" "possible secret in added lines — move to a credential store"

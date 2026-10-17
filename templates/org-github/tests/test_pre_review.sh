@@ -494,6 +494,24 @@ commit_change "feat(auth): read credentials at runtime"
 run_check
 [[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "rust getter chains pass authz" \
   || bad "rust getter chains pass authz (rc=$RC)"
+# Long generic names hold no literal: the `<` after a 12+ type-path run is a
+# type argument list, not a credential boundary.
+new_repo
+printf 'password: CredentialEnvelope<String>\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): add credential envelope field"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "long generic type passes authz" \
+  || bad "long generic type passes authz (rc=$RC)"
+# Turbofish deserialisation paths hold no literal: `::from_str::<T>` after a
+# credential-named binding is a type-parameterised call, not a value.
+new_repo
+printf 'let token = serde_json::from_str::<TokenResponse>\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): parse token response"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "turbofish path passes authz" \
+  || bad "turbofish path passes authz (rc=$RC)"
 # Cloud and private-key literals still fail. Split across adjacent
 # strings so this file never holds a contiguous scanner pattern; bash
 # concatenates them at runtime into the real fixture.

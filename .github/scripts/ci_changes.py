@@ -91,6 +91,21 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
         # the suites job at PR time by intent, not by fallthrough.
         "test_flap_guard.py",
         "ops/case_658bf6b9/flap_guard.py",
+        # Shared migration safety gates (docs/migration-standard.md) wired
+        # into the suites job as `migration safety gates suites`. The suite
+        # files would fall through to core as root test_* and the gates as
+        # root scripts, but pin explicitly so a change to any of them wakes
+        # the suites job at PR time by intent, not by fallthrough.
+        "migration_timeout_preamble.sh",
+        "migration_squawk.sh",
+        "migration_sql.py",
+        "squawk-migration.toml",
+        "migration_rehearsal.sh",
+        "migration_drift_gate.py",
+        "test_migration_timeout_preamble.sh",
+        "test_migration_squawk.sh",
+        "test_migration_rehearsal.sh",
+        "test_migration_drift_gate.py",
         # Harness code, fixtures and scored tables are offline suite inputs.
         "eval/review-bakeoff/",
     ),

@@ -20,6 +20,13 @@ Inputs:
                        (repeatable)
   --allow-pending      do not fail on image migrations missing from the ledger
                        (pre-boot inspection only)
+  --expect-pending-exact / --expect-pending PREFIX
+                       the set of 4-digit prefixes among image migrations
+                       missing from the ledger must equal exactly the
+                       --expect-pending set (empty when the flag is given
+                       with no prefix). Pre-boot admission check: proves a
+                       declared pending set (e.g. 'none') against the image
+                       and ledger instead of trusting the declaration.
   --max-unknown N      ledger hashes the image does not ship that are
                        tolerated (default 0). Unknown rows mean the database is
                        AHEAD of the image (or a shipped file was edited);
@@ -99,6 +106,8 @@ def main(argv):
     ap.add_argument("--ledger", required=True)
     ap.add_argument("--require", action="append", default=[])
     ap.add_argument("--allow-pending", action="store_true")
+    ap.add_argument("--expect-pending", action="append", default=[])
+    ap.add_argument("--expect-pending-exact", action="store_true")
     ap.add_argument("--max-unknown", type=int, default=0)
     ap.add_argument("--known-ahead")
     args = ap.parse_args(argv)
@@ -106,6 +115,13 @@ def main(argv):
     for p in args.require:
         if not re.fullmatch(r"[0-9]{4}", p):
             refuse(f"--require must be a 4-digit migration prefix: {p}")
+    for p in args.expect_pending:
+        if not re.fullmatch(r"[0-9]{4}", p):
+            refuse(f"--expect-pending must be a 4-digit migration prefix: {p}")
+    if args.expect_pending and not args.expect_pending_exact:
+        refuse("--expect-pending requires --expect-pending-exact")
+    if args.expect_pending_exact and args.allow_pending:
+        refuse("--expect-pending-exact cannot combine with --allow-pending")
     if args.max_unknown < 0:
         refuse("--max-unknown must be >= 0")
 
@@ -127,7 +143,29 @@ def main(argv):
         print(f"ok: migration applied: {tag} (sha256 verified)")
 
     pending = sorted(t for t, h in image.items() if h not in applied)
-    if pending and not args.allow_pending:
+    if args.expect_pending_exact:
+        prefixes = set()
+        unjudgeable = False
+        for tag in pending:
+            head = tag.split("_", 1)[0]
+            if not re.fullmatch(r"[0-9]{4}", head):
+                print(f"FAIL: pending migration {tag} has no 4-digit prefix; cannot judge it against the declared set")
+                rc = 1
+                unjudgeable = True
+                continue
+            prefixes.add(head)
+        if unjudgeable:
+            pass  # already FAILed above; never print a matching-set ok
+        elif prefixes == set(args.expect_pending):
+            print(f"ok: pending migration prefixes exactly match the declared set ({','.join(sorted(prefixes)) or 'none'})")
+        else:
+            print(
+                "FAIL: pending migration prefixes "
+                f"({','.join(sorted(prefixes)) or 'none'}) do not match the declared set "
+                f"({','.join(sorted(set(args.expect_pending))) or 'none'})"
+            )
+            rc = 1
+    elif pending and not args.allow_pending:
         print(f"FAIL: {len(pending)} image migration(s) not applied; first: {pending[0]}")
         rc = 1
     elif pending:

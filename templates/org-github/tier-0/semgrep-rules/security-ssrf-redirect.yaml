@@ -1,0 +1,193 @@
+# Org SSRF / open-redirect pack (case_f3ff4554, blocker-ledger 'security' class).
+#
+# Blocker-ledger gap: server-side fetches aimed at user-influenced URLs and
+# redirects to user-controlled targets had no deterministic rule — every
+# finding needed the expensive reviewer. These four WARN-first rules flag
+# the direct shape (a fetch/redirect call whose URL expression is
+# dynamically built or carries an input-ish name). Indirect flows (URL
+# laundered through two+ assignments, allowlist-validated URLs) are out of
+# scope for the deterministic slice and stay with the reviewer.
+#
+# FP BUDGET (case_5789b2d5 rollout rule): report-only first via the gate `mode`
+# input (ADOPTION.md: the whole gate flips report-only -> enforcing
+# together; severity WARNING is a triage hint only and changes nothing at
+# the gate). Promotion is all-or-nothing today; per-rule severity promotion
+# needs a gate change upstream (PR #824). Plain string literals never match
+# (pattern-not guards exclude a literal first argument on every call form),
+# and the redirect rules skip literal targets in either argument position,
+# plus literal-URL constructions, via pattern-not. Dynamically built URLs
+# fire only when they carry an input-ish fragment; a template/concatenation
+# that merely contains a bare fragment word (query, params, ...) can still
+# fire without direct user influence — triage per the FP budget.
+rules:
+  - id: tier0-ssrf-dynamic-fetch-js
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: "Server-side fetch of a dynamically built URL — allowlist scheme+host, resolve all DNS records and reject private/reserved addresses, forbid redirects (SSRF)."
+    metadata:
+      tier0: "live"
+    patterns:
+      - pattern-either:
+          - pattern: fetch($URL, ...)
+          - patterns:
+              - pattern: axios.$METHOD($URL, ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head|request)$
+          - patterns:
+              - pattern: $HTTP.$METHOD($URL, ...)
+              - metavariable-regex:
+                  metavariable: $HTTP
+                  regex: ^(http|https)$
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head|request)$
+      # Pure literals never reach the regex: a literal first argument is a
+      # fixed endpoint even when its path contains a fragment word
+      # ("/api/params", "https://api.example.com/v1/query").
+      - pattern-not: fetch("...", ...)
+      - pattern-not: axios.$METHOD("...", ...)
+      - pattern-not: $HTTP.$METHOD("...", ...)
+      # Unanchored on purpose: metavariable-regex matches from the start of
+      # the metavariable text, so without `.*` only a URL expression that
+      # BEGINS with an input-ish fragment fires, and wrapped (String(),
+      # decodeURIComponent), templated (`...${req.query.u}...`),
+      # concatenated ("https://x/" + req.query.path) and accessor
+      # (url.searchParams.get("u"), body.callbackUrl, new URL(req.query.u))
+      # shapes all miss.
+      - metavariable-regex:
+          metavariable: $URL
+          regex: (?is).*(req\.|request\.|query|params|searchParams|userInput|untrusted|externalUrl|callbackUrl|redirectUrl|returnUrl|targetUrl|destUrl|webhookUrl|nextUrl|inputUrl)
+    paths:
+      exclude:
+        - "*.test.*"
+        - "*.spec.*"
+        - test/*
+        - tests/*
+        - __tests__/*
+        - spec/*
+        - e2e/*
+        - vendor/*
+        - fixtures/*
+        - "*.fixture.*"
+
+  - id: tier0-ssrf-dynamic-url-py
+    languages: [python]
+    severity: WARNING
+    message: "Server-side request to a dynamically built URL — allowlist scheme+host, resolve all DNS records and reject private/reserved addresses, forbid redirects (SSRF)."
+    metadata:
+      tier0: "live"
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: requests.$METHOD($URL, ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head|request)$
+          - patterns:
+              - pattern: httpx.$METHOD($URL, ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head|request)$
+          - pattern: urllib.request.urlopen($URL, ...)
+      # Pure literals never reach the regex (see the JS rule); the fragment
+      # list stays narrow — request accessors only — so configured constants
+      # (SLACK_WEBHOOK_URL, settings.EXTERNAL_API_URL) stay silent.
+      - pattern-not: requests.$METHOD("...", ...)
+      - pattern-not: httpx.$METHOD("...", ...)
+      - pattern-not: urllib.request.urlopen("...", ...)
+      # Unanchored (see the JS rule): f-string, concat and str()-wrapped
+      # request shapes must fire, not just the bare request.args["u"] form.
+      # The $METHOD constraints live inside their own branches so the
+      # method-less urllib branch is not gated on an unbound metavariable.
+      - metavariable-regex:
+          metavariable: $URL
+          regex: (?is).*(request\.|user_input|untrusted|input_url|return_url)
+    paths:
+      exclude:
+        - "*.test.*"
+        - "*.spec.*"
+        - test/*
+        - tests/*
+        - __tests__/*
+        - spec/*
+        - e2e/*
+        - vendor/*
+        - fixtures/*
+        - "*.fixture.*"
+
+  - id: tier0-open-redirect-js
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: "Redirect to a non-literal target — validate against an allowlist of paths/hosts; a user-controlled target is an open redirect."
+    metadata:
+      tier0: "live"
+    patterns:
+      - pattern-either:
+          - pattern: $RES.redirect($URL)
+          - pattern: $RES.redirect($STATUS, $URL)
+          - pattern: NextResponse.redirect($URL)
+          # SvelteKit: throw redirect(302, <target>) — two args, no receiver.
+          - pattern: redirect($URL)
+          - pattern: redirect($STATUS, $URL)
+      - pattern-not: $RES.redirect("...", ...)
+      - pattern-not: $RES.redirect($S, "...")
+      - pattern-not: NextResponse.redirect("...")
+      - pattern-not: NextResponse.redirect(new URL("...", ...))
+      - pattern-not: redirect("...")
+      - pattern-not: redirect($S, "...")
+      # Only user-influenced targets fire: literals and safe builders
+      # (url_for, literal-URL constructions) carry no input-ish fragment.
+      - metavariable-regex:
+          metavariable: $URL
+          regex: (?is).*(req\.|request\.|query|params|searchParams|userInput|untrusted|externalUrl|callbackUrl|redirectUrl|returnUrl|targetUrl|destUrl|webhookUrl|nextUrl|inputUrl)
+    paths:
+      exclude:
+        - "*.test.*"
+        - "*.spec.*"
+        - test/*
+        - tests/*
+        - __tests__/*
+        - spec/*
+        - e2e/*
+        - vendor/*
+        - fixtures/*
+        - "*.fixture.*"
+
+  - id: tier0-open-redirect-py
+    languages: [python]
+    severity: WARNING
+    message: "Redirect to a non-literal target — validate against an allowlist of paths/hosts; a user-controlled target is an open redirect."
+    metadata:
+      tier0: "live"
+    patterns:
+      - pattern-either:
+          - pattern: redirect($URL)
+          - pattern: redirect($URL, ...)
+          - pattern: HttpResponseRedirect($URL)
+          # FastAPI/Starlette: RedirectResponse(<target>, ...).
+          - pattern: RedirectResponse($URL)
+          - pattern: RedirectResponse($URL, ...)
+      - pattern-not: redirect("...")
+      - pattern-not: redirect($S, "...")
+      - pattern-not: redirect(url_for(...))
+      - pattern-not: HttpResponseRedirect("...")
+      - pattern-not: RedirectResponse("...")
+      # Only user-influenced targets fire (see the JS redirect rule); the
+      # fragment list stays narrow — request accessors only — so configured
+      # constants stay silent here too.
+      - metavariable-regex:
+          metavariable: $URL
+          regex: (?is).*(request\.|user_input|untrusted|input_url|return_url)
+    paths:
+      exclude:
+        - "*.test.*"
+        - "*.spec.*"
+        - test/*
+        - tests/*
+        - __tests__/*
+        - spec/*
+        - e2e/*
+        - vendor/*
+        - fixtures/*
+        - "*.fixture.*"

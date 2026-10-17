@@ -39,6 +39,15 @@ class PublicCI(unittest.TestCase):
         for workflow in workflows:
             data = yaml.safe_load(workflow.read_text())
             self.assertIsInstance(data, dict, str(workflow))
+            # Fail closed on workflow-level permission widening: job-level
+            # absent inherits from here, so a top-level write-all would
+            # widen the token handed to the callee. Live workflows are
+            # read-only or empty; anything else needs inspection.
+            top_perms = data.get("permissions")
+            if top_perms is not None:
+                self.assertIsInstance(top_perms, dict, str(workflow))
+                for scope, access in top_perms.items():
+                    self.assertEqual(access, "read", f"{workflow.name}: {scope}")
             jobs = data.get("jobs")
             self.assertIsInstance(jobs, dict, str(workflow))
             self.assertTrue(jobs, str(workflow))
@@ -137,17 +146,17 @@ class PublicCI(unittest.TestCase):
             "reusable-expression": "    uses: " + HOSTED_TEST_GUARD
                 + "\n    with:\n      runs-on-json: ${{ inputs.runner }}\n",
             "review-rules-enforce": "    uses: " + REVIEW_RULES_GUARD
-                + "\n    with:\n      packs: ts\n      mode: enforce\n",
+                + "\n    permissions:\n      contents: read\n    with:\n      packs: ts\n      mode: enforce\n",
             "review-rules-moving-ref": "    uses: TogetherWeOwn/.github/.github/workflows/review-rules.yml@v1"
                 + "\n    with:\n      packs: ts\n      mode: warn\n",
             "review-rules-unknown-pack": "    uses: " + REVIEW_RULES_GUARD
-                + "\n    with:\n      packs: ts,unreviewed-pack\n      mode: warn\n",
+                + "\n    permissions:\n      contents: read\n    with:\n      packs: ts,unreviewed-pack\n      mode: warn\n",
             "review-rules-expression-packs": "    uses: " + REVIEW_RULES_GUARD
-                + "\n    with:\n      packs: ${{ inputs.packs }}\n      mode: warn\n",
+                + "\n    permissions:\n      contents: read\n    with:\n      packs: ${{ inputs.packs }}\n      mode: warn\n",
             "review-rules-private-runner": "    uses: " + REVIEW_RULES_GUARD
-                + "\n    with:\n      packs: ts\n      mode: warn\n      runs-on-json: '[\"self-hosted\"]'\n",
+                + "\n    permissions:\n      contents: read\n    with:\n      packs: ts\n      mode: warn\n      runs-on-json: '[\"self-hosted\"]'\n",
             "review-rules-unknown-input": "    uses: " + REVIEW_RULES_GUARD
-                + "\n    with:\n      packs: ts\n      mode: warn\n      unreviewed-input: 'yes'\n",
+                + "\n    permissions:\n      contents: read\n    with:\n      packs: ts\n      mode: warn\n      unreviewed-input: 'yes'\n",
             "review-rules-secrets-inherit": "    uses: " + REVIEW_RULES_GUARD
                 + "\n    permissions:\n      contents: read\n    secrets: inherit\n    with:\n      packs: ts\n      mode: warn\n",
             "review-rules-env": "    uses: " + REVIEW_RULES_GUARD
@@ -182,6 +191,34 @@ class PublicCI(unittest.TestCase):
                         "jobs:\n  green:\n    runs-on: ubuntu-latest\n  unsafe:\n" + job)
                     with self.assertRaises(AssertionError):
                         self.assert_public_hosted_routes(directory)
+
+    def test_public_routing_guard_rejects_widening_top_level_permissions(self):
+        # Job-level absent inherits workflow-level, so a top-level write
+        # would widen the token handed to the callee. Live workflows are
+        # read-only or empty; anything wider must fail closed.
+        bad_tops = {
+            "top-write-all": "permissions: write-all\n",
+            "top-contents-write": "permissions:\n  contents: write\n",
+            "top-extra-write": "permissions:\n  contents: read\n  issues: write\n",
+        }
+        for name, top in bad_tops.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                directory = Path(tmp)
+                (directory / "workflow.yml").write_text(
+                    top + "jobs:\n  green:\n    runs-on: ubuntu-latest\n")
+                with self.assertRaises(AssertionError):
+                    self.assert_public_hosted_routes(directory)
+        # Read-only and empty tops stay green.
+        for name, top in {
+            "top-read": "permissions:\n  contents: read\n",
+            "top-multi-read": "permissions:\n  contents: read\n  pull-requests: read\n",
+            "top-empty": "permissions: {}\n",
+        }.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                directory = Path(tmp)
+                (directory / "workflow.yml").write_text(
+                    top + "jobs:\n  green:\n    runs-on: ubuntu-latest\n")
+                self.assert_public_hosted_routes(directory)
 
     def test_drift_gate_runs_public_semantics_without_private_provenance(self):
         import hashlib

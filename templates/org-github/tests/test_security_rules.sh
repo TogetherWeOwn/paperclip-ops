@@ -61,9 +61,24 @@ for name, doc in (("ssrf", ssrf), ("secrets", secrets)):
           f"{name} pack has a rules list")
 
 ssrf_ids = {r.get("id") for r in ssrf.get("rules", [])}
-for rid in ("tier0-ssrf-dynamic-fetch-js", "tier0-ssrf-dynamic-url-py",
+for rid in ("tier0-ssrf-dynamic-fetch-js", "tier0-ssrf-generic-fetch-ts",
+            "tier0-ssrf-dynamic-url-py",
             "tier0-open-redirect-js", "tier0-open-redirect-py"):
     check(rid in ssrf_ids, f"ssrf pack pins rule {rid}")
+
+# Pin each rule's declared languages structurally. Semgrep's `javascript`
+# target also parses .ts files, so dropping `typescript` from a JS rule
+# changes no behavioural hit and only this declaration check notices; the
+# pack header promises TypeScript coverage, so the declaration is part of
+# the contract (the .ts fixtures below pin the behavioural side).
+ssrf_by_id = {r.get("id"): r for r in ssrf.get("rules", [])}
+for rid, langs in (("tier0-ssrf-dynamic-fetch-js", ["javascript", "typescript"]),
+                   ("tier0-ssrf-generic-fetch-ts", ["typescript"]),
+                   ("tier0-ssrf-dynamic-url-py", ["python"]),
+                   ("tier0-open-redirect-js", ["javascript", "typescript"]),
+                   ("tier0-open-redirect-py", ["python"])):
+    check((ssrf_by_id.get(rid) or {}).get("languages") == langs,
+          f"ssrf/{rid} declares languages {langs}")
 
 secret_ids = {r.get("id") for r in secrets.get("rules", [])}
 for rid in ("tier0-secret-discord-webhook", "tier0-secret-slack-token",
@@ -187,7 +202,11 @@ else
     # every dynamically built shape (bare, String()-wrapped, decoded,
     # templated, concatenated, accessor, callback, new URL) fires. The
     # axios config forms fire on a dynamic url, baseURL or spread source
-    # (bare and .request alike) and stay silent on literal ones.
+    # (bare and .request alike) and stay silent on literal ones. The
+    # (url, config) spelling fires on a dynamic baseURL/spread in the
+    # config argument even when the url itself is a literal, and the .ts
+    # fixture pins the TypeScript language path plus the generic-call
+    # regex rule (axios.get<T>(...)), which no call pattern can bind.
     cat > "$FX/fx-ssrf.js" <<'EOF'
 async function h(req, searchParams, url, body) {
   await fetch("https://api.example.com/health");
@@ -221,6 +240,48 @@ async function h(req, searchParams, url, body) {
   await axios.request({ baseURL: req.query.host, url: "/x" });
   await axios.request({ baseURL: "https://api.example.com/v1/query", url: "/x" });
   await axios.request({ ...req.body });
+  await axios.get("/x", { baseURL: req.query.host });
+  await axios.get("/x", { ...req.body });
+  await axios.get("/x", { baseURL: "https://api.example.com/v1/query" });
+  await axios("/x", { baseURL: req.query.host });
+  await axios("/x", { ...req.body });
+  await axios("/x", { baseURL: "https://api.example.com/v1/query" });
+  await axios.post("/x", data, { baseURL: req.query.host });
+  await axios.post("/x", data, { ...req.body });
+  await axios.post("/x", data, { baseURL: "https://api.example.com/v1/query" });
+}
+EOF
+    cat > "$FX/fx-ssrf.ts" <<'EOF'
+type User = { id: number };
+async function h(req: any, data: any, url: any) {
+  await axios.get(req.query.url);
+  await fetch(req.query.url);
+  await got(req.query.url);
+  await axios.get<User>(req.query.url);
+  await axios.post<User>(req.body.url, data);
+  await axios<User>(req.query.url);
+  await axios<User>({ baseURL: req.query.host, url: "/x" });
+  await axios<User>({ url: req.query.url });
+  await axios<User>({ ...req.body, method: "get" });
+  await axios.request<User>({ url: req.query.url });
+  await got<User>(req.query.url);
+  await got.get<User>(req.query.url);
+  await axios.get<User>(url.searchParams.get("u"));
+  await axios.get<User>("/x", { baseURL: req.query.host });
+  await axios.get<User>("/x", { ...req.body });
+  await axios.get<User>(`https://api.x/items/${req.query.url}`);
+  await axios.get<User>("https://x/" + req.query.path);
+  await axios<User>({ url: `https://api.x/items/${req.query.url}` });
+  await axios<User>({ url: "https://x/" + req.query.path });
+  await axios.get<User> (req.query.url);
+  await axios.get<User>("https://api.example.com/v1/query");
+  await axios<User>({ url: "https://api.example.com/v1/query", params: req.query });
+  await axios<User>({ baseURL: "https://api.example.com/v1/query", url: "/x" });
+  await axios.get<User>(API_URL);
+  await axios.get<User>("/x", { baseURL: "https://api.example.com/v1/query" });
+  await axios.get<User>(`https://api.example.com/v1/query`);
+  await axios.get<User>("https://api.example.com/" + "v1/query");
+  await axios.get("https://api.example.com/v1/query");
 }
 EOF
     cat > "$FX/fx-ssrf.py" <<'EOF'
@@ -266,8 +327,10 @@ def h(request):
 EOF
     # Redirect fixtures: literal targets and safe builders stay silent
     # (both argument positions, literal-URL construction, url_for), while
-    # user-influenced targets fire — including the SvelteKit two-arg form
-    # and Starlette RedirectResponse. The fragment-carrying literals
+    # user-influenced targets fire — including the SvelteKit (status, url)
+    # form, the url-first (url, status/init) forms, Starlette
+    # RedirectResponse in positional and url= keyword spellings, and the
+    # TypeScript language path (.ts fixture). The fragment-carrying literals
     # ("/search?query=x", "/request.html", url_for with request.args) pin
     # each literal/safe-builder guard: without the guard the fragment
     # regex alone would fire on them.
@@ -287,6 +350,20 @@ export function h(res, url, request, req) {
   res.redirect(302, "/search?query=x");
   throw redirect("/search?query=x");
   throw redirect(302, "/search?query=x");
+  NextResponse.redirect(req.nextUrl.searchParams.get("next"), 302);
+  res.redirect(req.query.next, 301);
+  NextResponse.redirect("/search?query=x", 302);
+  res.redirect("/search?query=x", 301);
+  Response.redirect(request.query.next, 302);
+}
+EOF
+    cat > "$FX/fx-redirect.ts" <<'EOF'
+import { NextResponse } from "next/server";
+export function h(res: any, req: any) {
+  res.redirect(req.query.next);
+  NextResponse.redirect(req.nextUrl.searchParams.get("next"), 302);
+  res.redirect("/search?query=x");
+  res.redirect("/search?query=x", 301);
 }
 EOF
     # Import-free copy: with the SvelteKit import present, Semgrep's
@@ -298,6 +375,8 @@ export function h(url) {
   throw redirect(url.searchParams.get("next"));
   throw redirect("/search?query=x");
   throw redirect(302, "/search?query=x");
+  throw redirect(url.searchParams.get("next"), { headers });
+  throw redirect("/search?query=x", { headers });
 }
 EOF
     cat > "$FX/fx-redirect.py" <<'EOF'
@@ -317,6 +396,14 @@ def h(request):
     HttpResponseRedirect("/request.html")
     RedirectResponse("/request.html")
     redirect("/request.html", "/home")
+    RedirectResponse(url=request.query_params["next"])
+    RedirectResponse(url=request.query_params["next"], status_code=302)
+    RedirectResponse(url="/request.html")
+    redirect(location=request.args["next"])
+    redirect(to=request.args["next"])
+    redirect(location="/request.html")
+    redirect(to="/request.html")
+    redirect(location=url_for("login", next=request.args["next"]))
 EOF
     # Secrets fixtures: credential positives are assembled from split
     # fragments (never committed as literals); kebab-case words and
@@ -364,7 +451,7 @@ EOF
         printf 's=%s%s\n' "$SK_P" "$SK_EX_BODY"
         printf 't=%s%s\n' "$SK_P" "$SK_REP_BODY"
     } > "$FX/fx-secrets.txt"
-    "$SEMGREP" scan --config "$ROOT/$SSRF" --json "$FX/fx-ssrf.js" "$FX/fx-ssrf.py" "$FX/fx-redirect.js" "$FX/fx-redirect-bare.js" "$FX/fx-redirect.py" > "$FX/ssrf.json" 2>/dev/null \
+    "$SEMGREP" scan --config "$ROOT/$SSRF" --json "$FX/fx-ssrf.js" "$FX/fx-ssrf.ts" "$FX/fx-ssrf.py" "$FX/fx-redirect.js" "$FX/fx-redirect.ts" "$FX/fx-redirect-bare.js" "$FX/fx-redirect.py" > "$FX/ssrf.json" 2>/dev/null \
         || fail "semgrep scan of SSRF/redirect fixtures failed to run"
     "$SEMGREP" scan --config "$ROOT/$SECRETS" --json "$FX/fx-secrets.txt" > "$FX/secrets.json" 2>/dev/null \
         || fail "semgrep scan of secrets fixtures failed to run"
@@ -392,13 +479,20 @@ def expect_silent(fname, rid):
     got = hits.get((fname, rid), set())
     check(not got, f"behavioural {fname} stays silent for {rid} (got lines {sorted(got)})")
 
-expect_hit("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16, 17, 21, 25, 26, 28, 30, 32))
+expect_hit("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16, 17, 21, 25, 26, 28, 30, 32, 33, 34, 36, 37, 39, 40))
 check(2 not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
       "behavioural fx-ssrf.js:2 literal fetch stays silent")
-for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24, 27, 29, 31):
+for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24, 27, 29, 31, 35, 38, 41):
     check(ln not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
           f"behavioural fx-ssrf.js:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.js", "tier0-open-redirect-js")
+expect_hit("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5))
+expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22))
+for ln in (23, 24, 25, 26, 27, 28, 29, 30):
+    check(ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts"), set())
+          and ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js"), set()),
+          f"behavioural fx-ssrf.ts:{ln} literal/constant URL stays silent")
+expect_silent("fx-ssrf.ts", "tier0-open-redirect-js")
 expect_hit("fx-ssrf.py", "tier0-ssrf-dynamic-url-py", (4, 5, 6, 7, 8, 13, 15, 17, 18, 19, 21, 22, 23))
 check(3 not in hits.get(("fx-ssrf.py", "tier0-ssrf-dynamic-url-py"), set()),
       "behavioural fx-ssrf.py:3 literal request stays silent")
@@ -406,17 +500,21 @@ for ln in (9, 10, 11, 12, 14, 16, 20, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34
     check(ln not in hits.get(("fx-ssrf.py", "tier0-ssrf-dynamic-url-py"), set()),
           f"behavioural fx-ssrf.py:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.py", "tier0-open-redirect-py")
-expect_hit("fx-redirect.js", "tier0-open-redirect-js", (5, 8, 9, 10, 11))
-for ln in (4, 6, 7, 12, 13, 14, 15):
+expect_hit("fx-redirect.js", "tier0-open-redirect-js", (5, 8, 9, 10, 11, 16, 17, 20))
+for ln in (4, 6, 7, 12, 13, 14, 15, 18, 19):
     check(ln not in hits.get(("fx-redirect.js", "tier0-open-redirect-js"), set()),
           f"behavioural fx-redirect.js:{ln} literal target stays silent")
-expect_hit("fx-redirect-bare.js", "tier0-open-redirect-js", (2,))
-for ln in (3, 4):
+expect_hit("fx-redirect.ts", "tier0-open-redirect-js", (3, 4))
+for ln in (5, 6):
+    check(ln not in hits.get(("fx-redirect.ts", "tier0-open-redirect-js"), set()),
+          f"behavioural fx-redirect.ts:{ln} literal target stays silent")
+expect_hit("fx-redirect-bare.js", "tier0-open-redirect-js", (2, 5))
+for ln in (3, 4, 6):
     check(ln not in hits.get(("fx-redirect-bare.js", "tier0-open-redirect-js"), set()),
           f"behavioural fx-redirect-bare.js:{ln} literal target stays silent")
 expect_silent("fx-redirect-bare.js", "tier0-ssrf-dynamic-fetch-js")
-expect_hit("fx-redirect.py", "tier0-open-redirect-py", (5, 6, 8, 10, 11))
-for ln in (4, 7, 9, 12, 13, 14, 15, 16):
+expect_hit("fx-redirect.py", "tier0-open-redirect-py", (5, 6, 8, 10, 11, 17, 18, 20, 21))
+for ln in (4, 7, 9, 12, 13, 14, 15, 16, 19, 22, 23, 24):
     check(ln not in hits.get(("fx-redirect.py", "tier0-open-redirect-py"), set()),
           f"behavioural fx-redirect.py:{ln} safe/literal target stays silent")
 

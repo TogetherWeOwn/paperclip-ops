@@ -1,0 +1,29 @@
+{
+  "_comment": [
+    "The subscription gh-event-capture is supposed to have. scripts/check-subscription.sh",
+    "compares GET /app against this and exits non-zero on any difference.",
+    "",
+    "This file is the ONLY partial answer we have to the limit stated in README",
+    "§ 1: an actor holding organization_administration can unsubscribe the events",
+    "or repoint the URL, and GitHub records nothing when they do. The drift check",
+    "does not prevent that and cannot. It notices, if it is still running.",
+    "",
+    "Event set: the six scoped by the owner at App creation, plus installation_repositories,",
+    "which is the event that fires when a repository joins or leaves the org-admin",
+    "installation. The owner's stated rationale was catching exactly that",
+    "transition, and it does NOT arrive on `installation` (which covers the whole",
+    "installation being created, deleted, suspended or unsuspended). Widening this",
+    "list is an owner action on the App settings UI — update this file in the same",
+    "change, or the check goes red on a legitimate subscription."
+  ],
+  "events": [
+    "installation",
+    "installation_repositories",
+    "member",
+    "membership",
+    "organization",
+    "push",
+    "repository"
+  ],
+  "hook_url": ""
+}

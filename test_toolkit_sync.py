@@ -20,16 +20,11 @@ COMMIT = TOOLKIT["commit"]
 FIX_COMMIT = "d0324d0e5dd5a604a375e63a45eb5aa00e507059"
 FIX_ARCHIVE_SHA256 = "390032e7032e9041e82497b4fa90be086fea12df791653c0d5e6818a83d7f791"
 FIX_GUARD_SHA256 = "40fdea4eebad62c5ed20293fdb5913f3664daac06dae6584b757f6bf2272bb76"
-# Immutable public dependency bytes, not replacement implementations.
-# Run scripts/sync-toolkit.sh before this suite, as the CI setup does. Do not
-# republish excluded historical archives merely to reconstruct a test subject.
-GUARD_SUBJECTS = {
-    "637aff8ead6766016ca830fc726a0c91a58df02a":
-        "9c6d54ac6d2ee64afaeb504ebd56be35bb29cec78803db659399f71be249d46b",
-    "533c7ae2b013340bfae20cfcc711220048295855":
-        "93b14debe4cfb5fd7a059103a431cc87afbc36e66fa0705d0e4ba77cf3019874",
-    FIX_COMMIT: FIX_GUARD_SHA256,
-}
+# sibling_guard.sh is tracked in this repo (toolkit-tracked allowlist
+# survivor, canonical for the default-branch resolution fix), so the guard
+# subject below is the tracked bytes, no longer the pinned toolkit copy.
+# FIX_GUARD_SHA256 still records the pinned toolkit bytes at FIX_COMMIT for
+# the pin-history assertions above.
 
 
 class ToolkitSyncTest(unittest.TestCase):
@@ -228,14 +223,15 @@ cp "$source" "$dest"
                          [[TAG, FIX_COMMIT, FIX_ARCHIVE_SHA256]])
 
     def prepare_guard(self):
-        self.assertIn(COMMIT, GUARD_SUBJECTS, "add a verified immutable test subject for this pin")
         fixture = ROOT / "sibling_guard.sh"
-        self.assertTrue(fixture.is_file(), "restore pinned public dependencies with scripts/sync-toolkit.sh")
+        self.assertTrue(fixture.is_file(), "sibling_guard.sh is tracked in this repo")
         subject = fixture.read_bytes()
-        self.assertEqual(hashlib.sha256(subject).hexdigest(), GUARD_SUBJECTS[COMMIT])
+        # Tracked survivor: allowlisted here, absent from the restored-input
+        # closure there — sync must restore around it in a real checkout.
+        allowlist = (ROOT / "vendor/toolkit-tracked-allowlist.txt").read_text().splitlines()
+        self.assertIn("sibling_guard.sh", allowlist)
         contract = json.loads((ROOT / "vendor/offline-ci-contract.json").read_text())
-        self.assertEqual(contract["restored_files_sha256"]["sibling_guard.sh"],
-                         GUARD_SUBJECTS[COMMIT])
+        self.assertNotIn("sibling_guard.sh", contract["restored_files_sha256"])
         # Repack only the needed immutable bytes, with a fixture checksum. The
         # real archive checksum is asserted separately, not relabelled as this tar.
         self.pack({"LICENSE": b"fixture license\n", "sibling_guard.sh": subject})
@@ -249,10 +245,12 @@ cp "$source" "$dest"
         self.guard = self.root / "sibling_guard.sh"
         self.assertEqual(self.guard.read_bytes(), subject)
 
-    def test_default_pin_restores_body_attribution_fix_bytes(self):
+    def test_sync_restores_tracked_guard_subject_bytes(self):
         self.prepare_guard()
-        self.assertEqual(hashlib.sha256(self.guard.read_bytes()).hexdigest(), FIX_GUARD_SHA256,
-                         "default sync still restores the pre-fix sibling guard")
+        subject = (ROOT / "sibling_guard.sh").read_bytes()
+        self.assertEqual(hashlib.sha256(self.guard.read_bytes()).hexdigest(),
+                         hashlib.sha256(subject).hexdigest(),
+                         "sync must restore the guard subject bytes unchanged")
 
     def prepare_guard_world(self):
         self.prepare_guard()

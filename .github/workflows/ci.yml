@@ -2537,6 +2537,13 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_cold_start_detector.sh
 
+      # The sibling-run guard is tracked in this repo (toolkit-tracked
+      # allowlist survivor), so its offline regression suite runs here
+      # against the tree, not the pinned toolkit bytes.
+      - name: sibling-run guard suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_sibling_guard.sh
+
       # case_e77a1e99. The measuring half of the watchdog red-main detector
       # (case_311c4d5b item 6): poll company-repo mains through the fail-closed
       # reader, key the red signature per the case_9abb3daa triage contract

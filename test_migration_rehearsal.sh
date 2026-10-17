@@ -27,6 +27,19 @@ printf -- '-- phase: expand\nCREATE INDEX CONCURRENTLY b_idx ON t (b);\n' > "$WO
 cat > "$WORK/bin/fake-pscale" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >> "$REC/pscale.argv"
+# Verified against planetscale/cli source (internal/cmd/branch/show.go @
+# 89498e2): genuine 404 prints `branch <B> does not exist in database <D>
+# (organization: <O>)` with cobra's `Error: ` prefix. The fake reproduces
+# that exact shape (stderr, exit 1) so the gate's substring match is tested
+# against honest text.
+if [[ "$1 $2" == "branch show" ]]; then
+  if [[ "${FAKE_PSCALE_BRANCH_EXISTS:-}" == 1 ]]; then
+    echo "fake-pscale: branch $4 exists"
+    exit 0
+  fi
+  echo "Error: branch $4 does not exist in database $3 (organization: fake)" >&2
+  exit 1
+fi
 if [[ "$1 $2" == "branch create" ]]; then
   [[ "${FAKE_PSCALE_FAIL_CREATE:-}" != 1 ]] || exit 1
   if [[ "${FAKE_PSCALE_BLOCK_CREATE:-}" == 1 ]]; then
@@ -36,6 +49,10 @@ if [[ "$1 $2" == "branch create" ]]; then
 fi
 if [[ "$1 $2" == "branch delete" && "${FAKE_PSCALE_MISSING_DELETE:-}" == 1 ]]; then
   echo "branch '$4' not found" >&2
+  exit 1
+fi
+if [[ "$1 $2" == "branch delete" && "${FAKE_PSCALE_FAIL_DELETE:-}" == 1 ]]; then
+  echo "fake-pscale: delete failed for $4" >&2
   exit 1
 fi
 echo "fake-pscale: $* (token=SENTINELTOKEN-must-never-reach-output)"
@@ -242,6 +259,25 @@ else
   bad "failed branch creation does not delete an unowned branch"
 fi
 
+# Existing PlanetScale branches are refused before create/cleanup can touch them.
+export REC="$WORK/rec-branch-exists"; mkdir -p "$REC"
+set +e
+FAKE_PSCALE_BRANCH_EXISTS=1 env \
+  REHEARSAL_PSCALE_ORG=fake REHEARSAL_PSCALE_DB=fake \
+  PLANETSCALE_SERVICE_TOKEN_ID= PLANETSCALE_SERVICE_TOKEN= \
+  PSCALE_BIN="$WORK/bin/fake-pscale" \
+  "$GATE" run --migrations-dir "$WORK/migs" --provider planetscale \
+    --branch "rehearsal-existing-002" --out "$WORK/branch-exists.json" \
+    >"$WORK/branch-exists-output" 2>&1
+branch_exists_rc=$?
+set -e
+if [[ "$branch_exists_rc" -ne 0 ]] && ! grep -q '^create$' "$REC/pscale.argv" \
+    && ! grep -q '^delete$' "$REC/pscale.argv"; then
+  ok "existing PlanetScale branch is refused without deletion"
+else
+  bad "existing PlanetScale branch is refused without deletion"
+fi
+
 FAKE_PSCALE_MISSING_DELETE=1 REHEARSAL_PSCALE_ORG=fake REHEARSAL_PSCALE_DB=fake \
   PLANETSCALE_SERVICE_TOKEN_ID= PLANETSCALE_SERVICE_TOKEN= \
   PSCALE_BIN="$WORK/bin/fake-pscale" \
@@ -282,6 +318,60 @@ if command -v setsid >/dev/null 2>&1; then
   fi
 else
   bad "setsid is required to test SIGTERM during branch creation"
+fi
+
+# REHEARSAL_CLEANUP_MARKER lifecycle: exists while apply runs, removed after
+# a passed run, retained when branch delete fails.
+cat > "$WORK/bin/fake-apply-marker" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$REC/apply.branch"
+printf '%s\n' "$2" >> "$REC/apply.argv"
+if [[ -n "${REHEARSAL_CLEANUP_MARKER:-}" && -e "$REHEARSAL_CLEANUP_MARKER" ]]; then
+  echo "marker-present" >> "$REC/marker.seen"
+else
+  echo "marker-missing" >> "$REC/marker.seen"
+fi
+head -n 1 "$2" >> "$REC/apply.firstlines"
+FAKE
+chmod +x "$WORK/bin/fake-apply-marker"
+export REC="$WORK/rec-marker-pass"; mkdir -p "$REC"
+MARKER_PASS="$WORK/marker-pass"
+rm -f "$MARKER_PASS"
+REHEARSAL_CLEANUP_MARKER="$MARKER_PASS" REHEARSAL_PSCALE_ORG=fake REHEARSAL_PSCALE_DB=fake \
+  PLANETSCALE_SERVICE_TOKEN_ID= PLANETSCALE_SERVICE_TOKEN= \
+  PSCALE_BIN="$WORK/bin/fake-pscale" \
+  REHEARSAL_APPLY_CMD="$WORK/bin/fake-apply-marker {branch}" \
+  "$GATE" run --migrations-dir "$WORK/migs" --provider planetscale \
+    --branch "rehearsal-marker-001" --out "$WORK/marker-pass.json" \
+    >"$WORK/marker-pass-output" 2>&1 \
+  && ok "marker run completes on the fake provider" \
+  || bad "marker run completes on the fake provider"
+grep -qx "marker-present" "$REC/marker.seen" 2>/dev/null \
+  && ! grep -qx "marker-missing" "$REC/marker.seen" 2>/dev/null \
+  && ok "cleanup marker exists while apply runs" \
+  || bad "cleanup marker exists while apply runs"
+[[ ! -e "$MARKER_PASS" ]] \
+  && ok "cleanup marker is removed after a passed run" \
+  || bad "cleanup marker is removed after a passed run"
+
+export REC="$WORK/rec-marker-fail"; mkdir -p "$REC"
+MARKER_FAIL="$WORK/marker-fail"
+rm -f "$MARKER_FAIL"
+set +e
+FAKE_PSCALE_FAIL_DELETE=1 REHEARSAL_CLEANUP_MARKER="$MARKER_FAIL" \
+  REHEARSAL_PSCALE_ORG=fake REHEARSAL_PSCALE_DB=fake \
+  PLANETSCALE_SERVICE_TOKEN_ID= PLANETSCALE_SERVICE_TOKEN= \
+  PSCALE_BIN="$WORK/bin/fake-pscale" \
+  REHEARSAL_APPLY_CMD="$WORK/bin/fake-apply-marker {branch}" \
+  "$GATE" run --migrations-dir "$WORK/migs" --provider planetscale \
+    --branch "rehearsal-marker-002" --out "$WORK/marker-fail.json" \
+    >"$WORK/marker-fail-output" 2>&1
+marker_fail_rc=$?
+set -e
+if [[ "$marker_fail_rc" -ne 0 ]] && [[ -e "$MARKER_FAIL" ]]; then
+  ok "cleanup marker is retained when branch delete fails"
+else
+  bad "cleanup marker is retained when branch delete fails"
 fi
 
 # 7. --only filters the pending set but applies it in migration filename order;

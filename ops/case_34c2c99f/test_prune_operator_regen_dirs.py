@@ -60,8 +60,16 @@ def write(path, text="x\n"):
 def backdate(path, seconds=7200):
     old = time.time() - seconds
     for dirpath, dirnames, filenames in os.walk(path):
+        # Tolerate transient files (e.g. git's .git/*.lock left behind
+        # `git commit`) vanishing between os.walk and os.utime: that raced
+        # 2/187 cases on CI with FileNotFoundError. .git internals stay
+        # covered on purpose: folder_idle_block uses find -maxdepth 3, so
+        # their mtimes are part of the idle signal.
         for name in dirnames + filenames:
-            os.utime(os.path.join(dirpath, name), (old, old), follow_symlinks=False)
+            try:
+                os.utime(os.path.join(dirpath, name), (old, old), follow_symlinks=False)
+            except OSError:
+                pass
     os.utime(path, (old, old))
 
 

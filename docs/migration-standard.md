@@ -135,10 +135,11 @@ opaque secret bundle). PlanetScale uses the standard service-token ID/token
 environment variables and waits for the created branch to be ready; without
 a token pair it requires valid `pscale auth check` credentials. Generated
 PlanetScale branch names use lowercase letters, digits, and hyphens (maximum
-48 characters). Generated names include a random suffix; caller-supplied names
-must be unique per run. The gate refuses an existing branch before creation.
-Cleanup is attempted on normal completion and unexpected shell exits. PITR
-parses the caller-owned restore command as arguments
+48 characters). Normal completion and unexpected shell exits use the script's
+cleanup trap; the reusable workflow also retries an `always()` cleanup step
+up to three times after cancellation or timeout when its unique-run marker
+shows clone creation began. A final failure names the exact branch to delete.
+PITR parses the caller-owned restore command as arguments
 (preserving quoted values) and appends the branch name. The apply command
 must contain `{branch}`; the workflow substitutes the created branch name and
 passes it as an explicit argument, preventing a passing rehearsal against an
@@ -186,8 +187,9 @@ jobs:
       max-age-hours: 24
 ```
 
-The evidence artifact must contain `rehearsal-evidence.json` (selected by
-exact name, never filesystem order). Evidence is bound to exactly the pending
+The evidence artifact must contain exactly one JSON document with
+`status: passed` (the `rehearsal-plan.json` planned document is ignored).
+Evidence is bound to exactly the pending
 candidate subset (same tags and digests); unrelated evidence and a future
 `finished_at` fail. PlanetScale evidence must confirm branch deletion; PITR
 evidence uses `cleanup: delegated` to represent provider-managed expiration.

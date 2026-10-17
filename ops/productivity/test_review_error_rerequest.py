@@ -480,6 +480,77 @@ class Wiring(unittest.TestCase):
         self.assertEqual(out['state'], {})
 
 
+class DedupGuard(unittest.TestCase):
+    """Error-kind heads consult review_dedup over the head's rows.
+
+    The stranded rows carry the head's recent server row states as a comma
+    blob (4th column); legacy 3-tuples carry no blob (no known states, hence
+    no cover, hence a wake like any other uncovered error head).
+    """
+    tick = Wiring.tick
+
+    def test_second_error_still_wakes_exactly_once(self):
+        # The host green gate retries errored heads on its own, so an outage
+        # leaves 2-3 error rows before this backstop tick runs. The wake is a
+        # card comment, not a review request, and the state key (not the error
+        # count) is what limits it to one wake per head.
+        out = self.tick(stranded=[[REPO, '7', SHA, 'error,error']], facts_now=facts())
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['comments'], [CARD_ID])
+        again = self.tick(stranded=[[REPO, '7', SHA, 'error,error']], facts_now=facts(),
+                          state=out['state'])
+        self.assertEqual(again['comments'], [])
+
+    def test_third_error_still_wakes(self):
+        out = self.tick(stranded=[[REPO, '7', SHA, 'error,error,error']], facts_now=facts())
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['comments'], [CARD_ID])
+
+    def test_superseded_rows_do_not_suppress_the_wake(self):
+        out = self.tick(stranded=[[REPO, '7', SHA, 'superseded,error']], facts_now=facts())
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['comments'], [CARD_ID])
+
+    def test_error_on_an_already_completed_head_suppresses_the_wake(self):
+        out = self.tick(stranded=[[REPO, '7', SHA, 'completed,error']], facts_now=facts())
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['comments'], [])
+        self.assertEqual(out['state'], {})
+
+    def test_error_behind_a_live_attempt_suppresses_the_wake(self):
+        out = self.tick(stranded=[[REPO, '7', SHA, 'running,error']], facts_now=facts())
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['comments'], [])
+        self.assertEqual(out['state'], {})
+
+    def test_first_error_still_wakes(self):
+        out = self.tick(stranded=[[REPO, '7', SHA, 'error']], facts_now=facts())
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['comments'], [CARD_ID])
+
+    def test_unrecognized_row_state_still_wakes(self):
+        # The reconciler suppresses only on a completed or live cover: an
+        # unknown row state must not strand an errored head with no wake.
+        # (head_decision stays fail-closed for actual new review requests.)
+        out = self.tick(stranded=[[REPO, '7', SHA, 'error,splines_reticulated']], facts_now=facts())
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['comments'], [CARD_ID])
+
+
+class HeadRowStates(unittest.TestCase):
+    def test_missing_blob_is_no_known_states(self):
+        # Predates the state-blob column: no known cover, so the head wakes.
+        # Pinned: mutating this fallback back to ['error'] must fail, because
+        # the reconciler no longer counts errors toward a retry budget.
+        self.assertEqual(r.head_row_states(None), [])
+        self.assertEqual(r.head_row_states(''), [])
+
+    def test_blob_splits_on_commas_and_drops_empties(self):
+        self.assertEqual(r.head_row_states('error,error'), ['error', 'error'])
+        self.assertEqual(r.head_row_states('superseded,error'), ['superseded', 'error'])
+        self.assertEqual(r.head_row_states('error,'), ['error'])
+
+
 class GhAndCurl(unittest.TestCase):
     def test_pr_head_is_none_when_gh_output_is_not_json(self):
         with mock.patch.object(r.subprocess, 'run', return_value=types.SimpleNamespace(stdout='HTTP 502')):

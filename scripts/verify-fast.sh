@@ -46,7 +46,7 @@ elif [[ "${1:-}" == "--list" ]]; then
   echo "      case_b2acfa5c-runner-contract, dropchannel-fixture, approval-timeout-probe, acceptance-transport reply, gh-access-dispatch,"
   echo "      upstream pre-push hook,"
   echo "      alert-queue, watchdog-snapshot-builder, fleet-run-stall, assignment-host-source,"
-  echo "      review-error-rerequest, backlog-promoter, board-jobs-bounds, focus-gate-bounds, pr-supply, flow-guard, host-ok, connection-intent-sweeper, hide-noop-reconcile,"
+  echo "      review-error-rerequest, backlog-promoter, board-jobs-bounds, focus-gate-bounds, pr-supply, flow-guard, host-ok, connection-intent-sweeper, hide-noop-reconcile, nongit-quarantine-custody,"
   echo "      guard-state (atomic-state, stuck-run-state, idle-waiter-state, owner-guard-state), feed-contract,"
   echo "      survival-atomic-write, corpus atomic-write, observational-collect-atomic-write, pr-hygiene owner-match, live-run guard, review-route, arm-import, merge-survival-atomic-write, operator-workspace reconciler and sweep, operator copy-risk gate,"
   echo "      translator-fixture (pinned tsc), deploy-window wrapper, deploy-window manifest gate, staged-tier0-drift gate,"
@@ -141,6 +141,7 @@ python3 -m unittest test_private_mutation_gates || fail "private mutation harnes
 ./test_upstream_prepush_hook.sh || fail "upstream pre-push hook suite failed"
 ./test_cliproxy_mgmt_recon_argv.sh || fail "cliproxy recon argv suite failed"
 ./test_case_b2acfa5c_selfhosted_runner.sh || fail "runner migration contract failed"
+python3 -m unittest test_pr6_acceptance || fail "pr6 acceptance failed"
 ./test_dropchannel_scan.sh || fail "dropchannel fixture suite failed"
 # case_77f64939/case_8d3070e3. Tool-approval deadline probe: synthetic bundle + fake
 # psql, so hermetic. Restored by the toolkit sync above in fresh checkouts.
@@ -158,8 +159,8 @@ python3 -m unittest test_alert_queue || fail "alert-queue suite failed"
 python3 -m unittest test_watchdog_snapshot_builder || fail "watchdog snapshot-builder suite failed"
 python3 -m unittest test_case_da79e241_fleet_run_stall || fail "fleet-run-stall suite failed"
 python3 -m unittest test_case_dcf07273_assignment_bundle || fail "assignment host-source suite failed"
-(cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile) \
-  || fail "review-error, PR-supply and flow-guard suites failed"
+(cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote) \
+  || fail "review-error, review-dedup, PR-supply and flow-guard suites failed"
 (cd ops/paperclip && python3 -B -m unittest test_focus_gate_bounds) || fail "focus-gate bounds suite failed"
 (cd ops/lib && python3 -m unittest test_atomic_state) || fail "atomic state suite failed"
 (cd ops/productivity && python3 -m unittest test_stuck_run_state) || fail "stuck-run state suite failed"
@@ -171,6 +172,7 @@ python3 -m unittest test_case_dcf07273_assignment_bundle || fail "assignment hos
 (cd ops/case_1ccef1dc/reviewer-eval/observational && python3 -m unittest test_collect_atomic) || fail "observational-collect atomic-write suite failed"
 (cd ops/pr-hygiene && python3 -m unittest test_owner_match) || fail "pr-hygiene owner-match suite failed"
 (cd ops/lib && python3 -m unittest test_live_run_guard) || fail "live-run guard suite failed"
+(cd ops/productivity && python3 -m unittest test_nongit_quarantine_custody) || fail "nongit quarantine custody suite failed"
 ./test_review_route.sh || fail "review-route suite failed"
 (cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_arm_import) || fail "arm-import suite failed"
 (cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_build_corpus_atomic) || fail "corpus atomic-write suite failed"

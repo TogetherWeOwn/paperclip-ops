@@ -998,7 +998,12 @@ class Batch(Base):
 
 
 def git(cwd, *args):
-    return subprocess.run([os.environ.get("GIT_BIN", "git"), "-C", cwd, *args], capture_output=True, text=True, check=True,
+    # gc.auto=0 / maintenance.auto=false: commit/reset churn crosses git's
+    # loose-object estimate, and a detached auto-gc then writes a pack into
+    # the throwaway repo while TemporaryDirectory cleanup removes it.
+    return subprocess.run([os.environ.get("GIT_BIN", "git"), "-C", cwd,
+                           "-c", "gc.auto=0", "-c", "maintenance.auto=false", *args],
+                          capture_output=True, text=True, check=True,
                           env=dict(os.environ, GIT_AUTHOR_NAME="A", GIT_AUTHOR_EMAIL="a@example.com",
                                    GIT_COMMITTER_NAME="A", GIT_COMMITTER_EMAIL="a@example.com")).stdout
 

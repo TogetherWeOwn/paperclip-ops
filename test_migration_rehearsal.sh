@@ -27,20 +27,16 @@ printf -- '-- phase: expand\nCREATE INDEX CONCURRENTLY b_idx ON t (b);\n' > "$WO
 cat > "$WORK/bin/fake-pscale" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >> "$REC/pscale.argv"
-if [[ "$1 $2" == "branch show" ]]; then
-  if [[ "${FAKE_PSCALE_BRANCH_EXISTS:-}" == 1 ]]; then
-    echo "branch exists"
-    exit 0
-  fi
-  echo "branch $4 does not exist in database $3 (organization: fake)" >&2
-  exit 1
-fi
 if [[ "$1 $2" == "branch create" ]]; then
   [[ "${FAKE_PSCALE_FAIL_CREATE:-}" != 1 ]] || exit 1
   if [[ "${FAKE_PSCALE_BLOCK_CREATE:-}" == 1 ]]; then
     : > "$REC/create-started"
     while :; do sleep 1; done
   fi
+fi
+if [[ "$1 $2" == "branch delete" && "${FAKE_PSCALE_MISSING_DELETE:-}" == 1 ]]; then
+  echo "branch '$4' not found" >&2
+  exit 1
 fi
 echo "fake-pscale: $* (token=SENTINELTOKEN-must-never-reach-output)"
 FAKE
@@ -228,25 +224,6 @@ else
     || bad "PSCALE_BIN authenticates and deletes the branch on unexpected exit"
 fi
 
-# Existing PlanetScale branches are refused before create/cleanup can touch them.
-export REC="$WORK/rec-branch-exists"; mkdir -p "$REC"
-set +e
-FAKE_PSCALE_BRANCH_EXISTS=1 env \
-  REHEARSAL_PSCALE_ORG=fake REHEARSAL_PSCALE_DB=fake \
-  PLANETSCALE_SERVICE_TOKEN_ID= PLANETSCALE_SERVICE_TOKEN= \
-  PSCALE_BIN="$WORK/bin/fake-pscale" \
-  "$GATE" run --migrations-dir "$WORK/migs" --provider planetscale \
-    --branch "rehearsal-existing-002" --out "$WORK/branch-exists.json" \
-    >"$WORK/branch-exists-output" 2>&1
-branch_exists_rc=$?
-set -e
-if [[ "$branch_exists_rc" -ne 0 ]] && ! grep -q '^create$' "$REC/pscale.argv" \
-    && ! grep -q '^delete$' "$REC/pscale.argv"; then
-  ok "existing PlanetScale branch is refused without deletion"
-else
-  bad "existing PlanetScale branch is refused without deletion"
-fi
-
 # A normal branch-create failure must not delete a branch the run did not create.
 export REC="$WORK/rec-create-fail"; mkdir -p "$REC"
 set +e
@@ -264,6 +241,15 @@ if [[ "$create_fail_rc" -ne 0 ]] && ! grep -q '^delete$' "$REC/pscale.argv"; the
 else
   bad "failed branch creation does not delete an unowned branch"
 fi
+
+FAKE_PSCALE_MISSING_DELETE=1 REHEARSAL_PSCALE_ORG=fake REHEARSAL_PSCALE_DB=fake \
+  PLANETSCALE_SERVICE_TOKEN_ID= PLANETSCALE_SERVICE_TOKEN= \
+  PSCALE_BIN="$WORK/bin/fake-pscale" \
+  "$GATE" clean --provider planetscale --branch "rehearsal-gone-001" \
+  >"$WORK/clean-missing-output" 2>&1 \
+  && grep -q "branch already absent" "$WORK/clean-missing-output" \
+  && ok "clean tolerates an already-deleted PlanetScale branch" \
+  || bad "clean tolerates an already-deleted PlanetScale branch"
 
 # SIGTERM during PlanetScale branch creation must still attempt cleanup.
 if command -v setsid >/dev/null 2>&1; then

@@ -6,7 +6,7 @@ name: CI
 # green badge anywhere: a CI that looks like it tests everything while testing
 # part of it is worse than one that says which part.
 #
-#   REPO SPLIT (C5e cutover): default restoration is immutable toolkit main-533c7ae2.
+#   REPO SPLIT (C5e cutover): default restoration is immutable toolkit main-d0324d0.
 #   Only 19 complete portable producers with exact-pin suite, dependency and
 #   hosted-command proof are removed from 247 accepted runnable suites steps.
 #   The 228 retained producers include private/diverged/unproved behavior;
@@ -1288,6 +1288,11 @@ jobs:
       # (no network/creds).
       - name: queue forecast gatus module suite
         run: ./test_case_60330d6f_queue_forecast.sh
+      # case_658bf6b9. CI queue-age measurement and healthy/failing push
+      # contracts. Hermetic offline suite (no network/creds).
+      - name: queue age depth contract suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_queue_age_depth.sh
 
       # case_b24794c2. GARM pool-health module: strict per-pool evaluator
       # (absent fields fail closed) + endpoint renderer. Hermetic: synthetic
@@ -1355,7 +1360,7 @@ jobs:
       # Reconciler holds and hide-noop predicates, backlog-promoter, board-jobs, orphan-PRs and focus-gate fail-closed timeouts, PR-supply card text, flow-guard stages and host-pressure gate fail-closed contract. Offline: temp files and stubs.
       - name: review reconciler and ops guard suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile) && (cd ops/paperclip && python3 -m unittest -v test_focus_gate_bounds)
+        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody) && (cd ops/paperclip && python3 -m unittest -v test_focus_gate_bounds)
       # case_0d0fab73. reviewer-eval survival report atomic write: the eval
       # report persists through write_json_atomic (same-dir temp, fsync,
       # atomic rename) and a failing write exits non-zero with the previous
@@ -1541,6 +1546,17 @@ jobs:
       # the red/green mutants. Offline, stdlib only.
       - name: gatus module wiring gate
         run: python3 -m unittest -v test_module_wiring.py test_pr2_acceptance.py
+
+      # PR #6 acceptance: the freeze-list, toolkit-restore, runner-proof and
+      # ci-ok graph contracts test_pr6_acceptance pins must execute in CI.
+      # verify-fast.sh --parse-only (the CI fast tier) never reaches its
+      # full-tier registration, so it gets its own step like the pr2 suite
+      # above. Runs after the toolkit restore above, which this suite needs
+      # for its gate files. Offline, stdlib only.
+      - name: pr6 acceptance suite
+        env:
+          PR6_FREEZE_BASE: ${{ github.event.pull_request.base.sha }}
+        run: python3 -m unittest -v test_pr6_acceptance.py
 
       # case_e6def006. Balancer-silence notification binding Gatus module:
       # dedicated platform_balancer-silence key, fail-closed stale/missing,
@@ -2525,6 +2541,13 @@ jobs:
       - name: cold-start detector suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_cold_start_detector.sh
+
+      # The sibling-run guard is tracked in this repo (toolkit-tracked
+      # allowlist survivor), so its offline regression suite runs here
+      # against the tree, not the pinned toolkit bytes.
+      - name: sibling-run guard suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_sibling_guard.sh
 
       # case_e77a1e99. The measuring half of the watchdog red-main detector
       # (case_311c4d5b item 6): poll company-repo mains through the fail-closed

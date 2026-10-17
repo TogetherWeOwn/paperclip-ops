@@ -11,7 +11,7 @@ Endpoint keys use `group_name`; endpoint identities use `group/name`.
 ## Core
 
 Source: `gatus-config.yaml`, `_gatus_push.sh`, `module_wiring_allowlist.json`.
-Suites: `test_case_60330d6f_status_pilot.sh`.
+Suites: `test_case_60330d6f_status_pilot.sh`, `test_queue_age_depth.sh`.
 
 - `two/two-web-prod`, `two/two-web-staging`
 - `platform/paperclip-api`, `platform/discord-bot`

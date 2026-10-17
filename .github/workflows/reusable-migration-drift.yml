@@ -200,6 +200,7 @@ jobs:
         if: failure() && inputs.page-on-failure && (steps.gate.outcome == 'failure' || steps.inputs.outcome == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           # Labels may not exist in the caller repo yet: create-then-use so
@@ -207,9 +208,9 @@ jobs:
           gh label create drift --color B60205 --description "schema drift pages" 2>/dev/null || true
           gh label create automated-page --color 0E8A16 --description "automatically filed pages" 2>/dev/null || true
           gh issue create \
-            --title "schema drift: production ledger vs ${{ github.ref_name }} ($(date -u +%Y-%m-%d))" \
+            --title "schema drift: production ledger vs $REF_NAME ($(date -u +%Y-%m-%d))" \
             --label "drift,automated-page" \
-            --body "The nightly schema-drift gate failed on ${{ github.ref_name }} at ${{ github.sha }}. See the failing run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Runbook: docs/migration-standard.md."
+            --body "The nightly schema-drift gate failed on $REF_NAME at $GITHUB_SHA. See the failing run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Runbook: docs/migration-standard.md."
 
       - name: Page on drift (Discord)
         if: failure() && inputs.page-on-failure && (steps.gate.outcome == 'failure' || steps.inputs.outcome == 'failure')

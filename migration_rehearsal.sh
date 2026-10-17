@@ -57,14 +57,27 @@ PSCALE_BIN="${PSCALE_BIN:-pscale}"
 die() { echo "REFUSED: $ME: $*" >&2; exit 2; }
 redact() { sed -E 's/(token|secret|password|passwd|key)=[^[:space:]"]+/\\1=<redacted>/gi'; }
 
+delete_planetscale_branch() {
+  local output rc lower_output
+  if output="$(timeout 60 "$@" 2>&1)"; then
+    printf '%s\n' "$output" | redact >&2
+  else
+    rc=$?
+    lower_output="${output,,}"
+    if [[ "$lower_output" =~ branch.*(not[[:space:]]+found|does[[:space:]]+not[[:space:]]+exist) ]]; then
+      echo "ok: branch already absent"
+    else
+      printf '%s\n' "$output" | redact >&2
+      return "$rc"
+    fi
+  fi
+}
+
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 sha256_of() { sha256sum "$1" | awk '{print $1}'; }
 
-default_branch() {
-  printf 'rehearsal-%s-%s' "$(date -u +%Y%m%dt%H%M%Sz)" \
-    "$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
-}
+default_branch() { printf 'rehearsal-%s' "$(date -u +%Y%m%dt%H%M%Sz)"; }
 
 # chain_json DIR [ONLY]: JSON array of {"tag","sha256"} sorted by file
 # name. When ONLY (comma-separated tags) is given, exactly those tags form
@@ -154,12 +167,6 @@ EOF
           "$PSCALE_BIN" auth check >/dev/null 2>&1 \
             || die "planetscale rehearsal needs PLANETSCALE_SERVICE_TOKEN_ID and PLANETSCALE_SERVICE_TOKEN or valid pscale CLI auth"
         fi
-        if branch_output="$("$PSCALE_BIN" branch show "$REHEARSAL_PSCALE_DB" "$BRANCH" \
-            --org "$REHEARSAL_PSCALE_ORG" 2>&1)"; then
-          die "branch $BRANCH already exists; refusing to reuse or delete it"
-        fi
-        [[ "$branch_output" == *"branch "*" does not exist in database "* ]] \
-          || die "could not confirm PlanetScale branch $BRANCH is absent"
         CREATE=("$PSCALE_BIN" branch create "$REHEARSAL_PSCALE_DB" "$BRANCH" --org "$REHEARSAL_PSCALE_ORG" --from prod --wait)
         DELETE=("$PSCALE_BIN" branch delete "$REHEARSAL_PSCALE_DB" "$BRANCH" --org "$REHEARSAL_PSCALE_ORG" --force)
         ;;
@@ -189,13 +196,17 @@ EOF
     CLONE_CREATED=0
     CLONE_CREATE_IN_PROGRESS=0
     CLONE_CLEANED=0
+    CLEANUP_MARKER=""
+    [[ "$PROVIDER" != "planetscale" ]] || CLEANUP_MARKER="${REHEARSAL_CLEANUP_MARKER:-}"
     cleanup_on_exit() {
       local exit_code=$?
       trap - EXIT INT TERM HUP
       if [[ ("$CLONE_CREATED" -eq 1 || "$CLONE_CREATE_IN_PROGRESS" -eq 1) \
             && "$CLONE_CLEANED" -eq 0 && "$PROVIDER" == planetscale ]]; then
-        if ! timeout 60 "${DELETE[@]}" 2>&1 | redact >&2; then
+        if ! delete_planetscale_branch "${DELETE[@]}"; then
           echo "WARN: $ME: exit cleanup failed for $BRANCH — delete it manually" >&2
+        else
+          [[ -z "$CLEANUP_MARKER" ]] || rm -f "$CLEANUP_MARKER"
         fi
       fi
       if [[ -n "${WRAPDIR:-}" ]]; then rm -rf "$WRAPDIR"; fi
@@ -209,8 +220,12 @@ EOF
     echo "rehearsal: creating branch $BRANCH (provider $PROVIDER)"
     # --wait can be interrupted after remote creation but before CLI success.
     CLONE_CREATE_IN_PROGRESS=1
+    if [[ -n "$CLEANUP_MARKER" ]]; then
+      : > "$CLEANUP_MARKER"
+    fi
     if ! "${CREATE[@]}" 2>&1 | redact >&2; then
       CLONE_CREATE_IN_PROGRESS=0
+      [[ -z "$CLEANUP_MARKER" ]] || rm -f "$CLEANUP_MARKER"
       echo "FAIL: $ME: branch creation failed" >&2; exit 1
     fi
     CLONE_CREATED=1
@@ -279,6 +294,7 @@ EOF
       CLEANUP="failed"
     else
       CLONE_CLEANED=1
+      [[ -z "$CLEANUP_MARKER" ]] || rm -f "$CLEANUP_MARKER"
       if [[ "$PROVIDER" == "pitr" ]]; then
         CLEANUP="delegated"
       else
@@ -386,8 +402,9 @@ EOF
         command -v "$PSCALE_BIN" >/dev/null 2>&1 || die "needs the pscale CLI on PATH (or PSCALE_BIN)"
         [[ -n "${REHEARSAL_PSCALE_ORG:-}" && -n "${REHEARSAL_PSCALE_DB:-}" ]] \
           || die "needs REHEARSAL_PSCALE_ORG and REHEARSAL_PSCALE_DB"
-        "$PSCALE_BIN" branch delete "$REHEARSAL_PSCALE_DB" "$BRANCH" \
-          --org "$REHEARSAL_PSCALE_ORG" --force 2>&1 | redact >&2
+        delete_planetscale_branch "$PSCALE_BIN" branch delete "$REHEARSAL_PSCALE_DB" "$BRANCH" \
+          --org "$REHEARSAL_PSCALE_ORG" --force \
+          || exit $?
         ;;
       *) die "--provider must be planetscale or pitr (pitr branches expire with the restore)" ;;
     esac

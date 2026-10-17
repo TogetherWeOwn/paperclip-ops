@@ -33,6 +33,10 @@ printf '%s\n' "$@" >> "$REC/pscale.argv"
 # that exact shape (stderr, exit 1) so the gate's substring match is tested
 # against honest text.
 if [[ "$1 $2" == "branch show" ]]; then
+  if [[ -n "${FAKE_PSCALE_SHOW_OUTPUT:-}" ]]; then
+    printf '%s\n' "$FAKE_PSCALE_SHOW_OUTPUT" >&2
+    exit "${FAKE_PSCALE_SHOW_RC:-1}"
+  fi
   if [[ "${FAKE_PSCALE_BRANCH_EXISTS:-}" == 1 ]]; then
     echo "fake-pscale: branch $4 exists"
     exit 0
@@ -276,6 +280,49 @@ if [[ "$branch_exists_rc" -ne 0 ]] && ! grep -q '^create$' "$REC/pscale.argv" \
   ok "existing PlanetScale branch is refused without deletion"
 else
   bad "existing PlanetScale branch is refused without deletion"
+fi
+
+# Branch-ownership guard fails closed on an unrelated `branch show` error.
+export REC="$WORK/rec-show-unrelated"; mkdir -p "$REC"
+set +e
+FAKE_PSCALE_SHOW_OUTPUT="Error: unauthorized" FAKE_PSCALE_SHOW_RC=1 env \
+  REHEARSAL_PSCALE_ORG=fake REHEARSAL_PSCALE_DB=fake \
+  PLANETSCALE_SERVICE_TOKEN_ID= PLANETSCALE_SERVICE_TOKEN= \
+  PSCALE_BIN="$WORK/bin/fake-pscale" \
+  "$GATE" run --migrations-dir "$WORK/migs" --provider planetscale \
+    --branch "rehearsal-guard-001" --out "$WORK/guard-unrelated.json" \
+    >"$WORK/guard-unrelated-output" 2>&1
+guard_unrelated_rc=$?
+set -e
+guard_unrelated_out="$(cat "$WORK/guard-unrelated-output")"
+if [[ "$guard_unrelated_rc" -eq 2 ]] && grep -q "could not confirm" <<< "$guard_unrelated_out" \
+    && ! grep -q '^create$' "$REC/pscale.argv" \
+    && ! grep -q '^delete$' "$REC/pscale.argv"; then
+  ok "guard refuses an unrelated branch show error without mutation"
+else
+  bad "guard refuses an unrelated branch show error without mutation"
+fi
+
+# Branch-ownership guard fails closed when the 404 names another branch.
+export REC="$WORK/rec-show-mismatch"; mkdir -p "$REC"
+set +e
+FAKE_PSCALE_SHOW_OUTPUT="Error: branch other-branch does not exist in database fake (organization: fake)" \
+FAKE_PSCALE_SHOW_RC=1 env \
+  REHEARSAL_PSCALE_ORG=fake REHEARSAL_PSCALE_DB=fake \
+  PLANETSCALE_SERVICE_TOKEN_ID= PLANETSCALE_SERVICE_TOKEN= \
+  PSCALE_BIN="$WORK/bin/fake-pscale" \
+  "$GATE" run --migrations-dir "$WORK/migs" --provider planetscale \
+    --branch "rehearsal-guard-002" --out "$WORK/guard-mismatch.json" \
+    >"$WORK/guard-mismatch-output" 2>&1
+guard_mismatch_rc=$?
+set -e
+guard_mismatch_out="$(cat "$WORK/guard-mismatch-output")"
+if [[ "$guard_mismatch_rc" -eq 2 ]] && grep -q "could not confirm" <<< "$guard_mismatch_out" \
+    && ! grep -q '^create$' "$REC/pscale.argv" \
+    && ! grep -q '^delete$' "$REC/pscale.argv"; then
+  ok "guard refuses a not-found reply for another branch without mutation"
+else
+  bad "guard refuses a not-found reply for another branch without mutation"
 fi
 
 FAKE_PSCALE_MISSING_DELETE=1 REHEARSAL_PSCALE_ORG=fake REHEARSAL_PSCALE_DB=fake \

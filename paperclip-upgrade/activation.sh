@@ -63,7 +63,8 @@
 # helper set: PAPERCLIP_ACTIVATION_DRAIN, PAPERCLIP_UPGRADE_HELPERS_DIR,
 # DOCKER.
 #
-# Exit: 0 ok | 1 a gate/phase failed (hold preserved) | 2 refused
+# Exit: 0 ok | 1 a gate/phase failed (hold preserved) | 2 refused |
+#       3 drain.sh partial/deferred (completed with warnings, rerun safe)
 # ===========================================================================
 set -uo pipefail
 umask 077
@@ -296,6 +297,10 @@ export PAPERCLIP_UPGRADE_SERVER_CONTAINER="$(mv_ SERVER_CONTAINER)"
 export PAPERCLIP_DATA="$(mv_ DATA_DIR)"
 export PAPERCLIP_UPGRADE_EXPECT_OWNER="$(mv_ EXPECT_PROTECTED_OWNER)"
 export PAPERCLIP_UPGRADE_REQUIRE_CARGO_POOL="$(mv_ REQUIRE_CARGO_POOL)"
+# drain.sh restart verifies this declaration against the candidate image's
+# migration hashes and the backup-time ledger before any recreate; the
+# manifest value alone never admits (or skips) a schema-changing boot.
+export PAPERCLIP_ACTIVATION_PENDING_MIGRATIONS="$(mv_ PENDING_MIGRATIONS)"
 export DOCKER
 
 OWNER_FILE="$STATE_DIR.activation-owner"
@@ -536,7 +541,23 @@ run_drain() { # SUBCOMMAND [args...] — child of the lock holder (fd inherited)
 phase() { # DESC SUBCOMMAND [args...]
   local desc="$1"; shift
   log "phase: $desc"
-  if ! run_drain "$@"; then
+  local prc=0
+  run_drain "$@" || prc=$?
+  if ((prc == 3)); then
+    # drain.sh exit 3 = partial/deferred (rerun is safe): the phase's main
+    # effect COMPLETED with warnings (e.g. undrain opened admission, then a
+    # rewake call warned). Reporting that as a held-drain failure would be
+    # false — rollback/abort both refuse after undrain; the recovery is
+    # rewake. Mirror drain.sh's distinct status instead of exit 1.
+    printf 'PARTIAL: %s: phase %s completed with warnings (drain.sh exit 3: partial/deferred, rerun is safe)\n' "$ME" "$desc" >&2
+    if have undrained_at; then
+      printf 'next (owned rewake): activation.sh rewake --manifest %s --state-dir %s --live\n' "$MANIFEST" "$STATE_DIR" >&2
+    else
+      printf 'next: inspect the drain log in %s, then rerun the same owned command\n' "$STATE_DIR" >&2
+    fi
+    exit 3
+  fi
+  if ((prc != 0)); then
     printf 'FAIL: %s: phase %s failed; the drain/hold is preserved exactly as drain.sh left it (nothing cancelled, nothing undrained)\n' "$ME" "$desc" >&2
     rollback_hint
     exit 1
@@ -611,6 +632,11 @@ case "$CMD" in
     have restarted_at && expected_running="$(mv_ EXPECT_IMAGE_ID)"
     have rolledback_at && expected_running="$(mv_ ROLLBACK_IMAGE_ID)"
     bindings_gate candidate "$expected_running"
+    # A resume whose next phase would START the drain (the first attempt
+    # died after write_owner but before drain-started) must re-judge the
+    # same pre-drain gates as run: an owner record proves which manifest
+    # started the attempt, not that window/pressure/baseline still hold.
+    have drain-started || { window_gate; pressure_gate; baseline_gate; }
     run_phases
     ;;
   rollback)

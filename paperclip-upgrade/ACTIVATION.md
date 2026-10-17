@@ -70,8 +70,10 @@ roll back another activation's drain.
 - `drain.sh` refuses every mutating subcommand unless the caller
   proves descent from the holder: lock path + token in the
   environment, the token matching the holder's record inside the
-  lock file, an inherited open fd resolving to that file, and a
-  failed non-blocking re-lock attempt. `drain.sh status` is exempt
+  lock file, an inherited open fd on that same file (compared by
+  device+inode, so a symlinked path ancestor cannot false-refuse a
+  genuine holder), and a failed non-blocking re-lock attempt.
+  `drain.sh status` is exempt
   (read-only). Installed legacy scripts that bypass this wrapper are
   a host removal item, not something source can enforce remotely;
   once these sources are installed, the bypass refuses before any
@@ -86,7 +88,7 @@ scheduling hold before undrain.
 
 | Old operation | Preserved invariant | Pre/post check now | Failure action |
 |---|---|---|---|
-| Recursive root `chown` of `.local`, `.gitconfig`, plugin root after restart | Agent uid cannot write launcher, gitconfig or plugin roots | Pre + post (inside `drain.sh verify`): `post-restart-reharden.sh` stat-verifies owner `EXPECT_PROTECTED_OWNER` and no group/other write, then probes write denial as the agent uid. No ownership is changed | Verify/baseline FAIL; server stays under the hold; resolve ownership out of band under separate authority |
+| Recursive root `chown` of `.local`, `.gitconfig`, plugin root after restart | Agent uid cannot write launcher, gitconfig or plugin roots | Pre + post (inside `drain.sh verify`): `post-restart-reharden.sh` stat-verifies owner `EXPECT_PROTECTED_OWNER` and no group/other write on the roots **and every descendant** (symlinks fail unless their resolved target also passes), then probes write denial as the agent uid with sentinel answers — an inconclusive `docker exec` FAILs, never reads as denied. No ownership is changed | Verify/baseline FAIL; server stays under the hold; resolve ownership out of band under separate authority |
 | Non-recursive root `chown`+`chmod` of Cargo pool root + `policy.json` | Pool policy is operator-controlled while slot dirs stay agent-writable | Root and `policy.json` stat-verified non-recursively; slot directories are never tightened or inspected for tightening; pool required iff `REQUIRE_CARGO_POOL=1`, still judged when present | FAIL, hold preserved; slots untouched either way |
 | `chmod -R go-w` metadata repair | Protected paths are not group/other writable | Same stat check proves it instead of applying it: a writable mode is a failed gate, byte-for-byte left as found | FAIL, no repair attempted |
 | Image entrypoint root branch re-owning the data mount | Nothing in the launch path changes ownership under the mounts | Pre: entrypoint argv pin + entrypoint file hash pin + content scan refusing any ownership-change command; pinned non-root `EXPECT_USER` in image and compose; post: PID 1 uid re-read from `/proc/1/status` | Refuse before drain (pre) or hold + rollback argv (post) |
@@ -101,7 +103,7 @@ scheduling hold before undrain.
 | Installed pre-restart check run before restart | The restart only proceeds on the reviewed pre-restart gates (drained marker, verified backup, migrations present, orphans, disk) | `drain.sh restart` runs the helper-set `pre-restart-check.sh` (path pinned by the wrapper, helper overrides cannot substitute it) and the wrapper verifies that file's SHA-256 against `PRE_RESTART_CHECK_SHA256` at preflight and again immediately before restart. The check's backup-cover test matches the standard `sha256sum` format `drain.sh backup` actually writes | Digest mismatch refuses before drain/restart; a failing check stops restart with the old server still running under the drain |
 | (new) pending-decision safety | No pending decision continuation crosses a restart onto a paused/terminated origin agent | Pre (inside `pre-restart-check.sh`, fresh in the drained transaction): `pending-decisions.sql` counts `wake_origin_agent` decisions with `metadata.continuationPending=true` whose origin agent is `paused` **or** `terminated` — deliberately no age/expiry narrowing. Must be exactly 0; there is no ack flag and rows are never repaired by the check | Restart FAIL before recreate; reconcile through the product, then re-run |
 | Fresh backup taken ad hoc before an upgrade | A restorable, validated backup exists before anything can change schema or image | Phase order is drain → wait → **backup** → restart: `drain.sh backup` pg_dumps, TOC-checks and checksums the dump; `drain.sh restart` re-verifies the checksum and refuses a backup older than the manifest's `MAX_BACKUP_AGE_MINS` (no code default) — all before `compose_up`, i.e. before any migration the candidate boot applies | Backup or validation failure stops the run pre-recreate; admission stays closed; owned `abort` only |
-| Migrations applied implicitly by a new image's boot | A schema-changing boot happens only under an explicit out-of-band admission for exactly those migrations, with old-image rollback compatibility decided there | Manifest `PENDING_MIGRATIONS` (`none`, or the 4-digit prefixes the candidate will newly apply). Anything but `none` requires `MIGRATION_ADMISSION_RECEIPT` + its SHA-256 pin, verified at preflight and again immediately before restart. The wrapper consumes the receipt by hash only — it executes no migration, parses no decision and waives nothing. Rollback stays image-only through `drain.sh`'s known-ahead gate: additive schema and history are retained, never dropped, and no DB restore is exposed | Missing/mismatched receipt refuses before drain/restart; the admission decision itself stays with its issuing authority (host attestation) |
+| Migrations applied implicitly by a new image's boot | A schema-changing boot happens only under an explicit out-of-band admission for exactly those migrations, with old-image rollback compatibility decided there | Manifest `PENDING_MIGRATIONS` (`none`, or the 4-digit prefixes the candidate will newly apply). Anything but `none` requires `MIGRATION_ADMISSION_RECEIPT` + its SHA-256 pin, verified at preflight and again immediately before restart. The declaration is then **proved, not trusted**: `drain.sh restart` compares the candidate image's migration hashes against the backup-time ledger (`migration_gate.py --expect-pending-exact`) before any recreate, so a stale `none` cannot skip admission for an image carrying a new migration. The wrapper consumes the receipt by hash only — it executes no migration, parses no decision and waives nothing. Rollback stays image-only through `drain.sh`'s known-ahead gate: additive schema and history are retained, never dropped, and no DB restore is exposed | Missing/mismatched receipt refuses before drain/restart; declaration/image mismatch stops restart before recreate; the admission decision itself stays with its issuing authority (host attestation) |
 | Legacy 916 redaction overlay refusal | Upgraded server never runs the whole-file override | Unchanged `compose_no_legacy_overlay` + effective-build `--forbid-916-redaction`; private overlays in general are pinned via `EXPECT_HOST_FILES` when `PRIVATE_OVERLAY_REQUIRED=1` | Restart refused before the server is touched |
 
 ## Manifest
@@ -119,6 +121,13 @@ no secrets — it pins public digests and paths; credentials stay in
 ## Failure behaviour
 
 - Before the drain: any refusal exits 2 with the host untouched.
+  A `resume` whose next phase would start the drain re-judges
+  window, pressure and baseline exactly like `run` — the owner
+  record never inherits stale admission.
+- `drain.sh` exit 3 (partial/deferred: the phase completed with
+  warnings, e.g. undrain opened admission and a rewake warned) maps
+  to wrapper `PARTIAL` + exit 3 with the owned `rewake` argv — never
+  reported as a held-drain failure. Rerun is safe.
 - After the drain, before restart: admission stays closed; the only
   ways out are `resume` (same manifest) or owned `abort`.
 - After restart: the server stays under `drain.sh`'s scheduling

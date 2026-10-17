@@ -102,15 +102,24 @@ if [[ "$args" == *" inspect "* ]]; then
   printf '%s %s\n' "$(cat "$STUB_DIR/current_image_id")" "$(cat "$STUB_DIR/image_user")"; exit 0
 fi
 if [[ "$args" == *" exec "* ]]; then
+  if [[ -f "$STUB_DIR/exec_broken" ]]; then exit 125; fi
   if [[ "$args" == *"/proc/1/status"* ]]; then
     if [[ -f "$STUB_DIR/pid1_status" ]]; then cat "$STUB_DIR/pid1_status";
     else printf 'Uid:\t1000\t1000\t1000\t1000\nUmask:\t0077\n'; fi
     exit 0
   fi
-  # reharden write probes: writable only if the path is listed by the test
-  while IFS= read -r p; do
-    [[ -n "$p" && "$args" == *"$p"* ]] && exit 0
-  done < "$STUB_DIR/writable_paths"
+  # reharden write probes are sentinel-shaped: answer DENIED unless a
+  # listed writable path appears, then WRITABLE (test -w) / CREATED (create)
+  if [[ "$args" == *"DENIED"* ]]; then
+    while IFS= read -r p; do
+      if [[ -n "$p" && "$args" == *"$p"* ]]; then
+        if [[ "$args" == *"CREATED"* ]]; then echo CREATED; else echo WRITABLE; fi
+        exit 0
+      fi
+    done < "$STUB_DIR/writable_paths"
+    echo DENIED
+    exit 0
+  fi
   exit 1
 fi
 printf 'stub docker: unhandled: %s\n' "$*" >&2; exit 99
@@ -143,6 +152,8 @@ grep -qx "token=$PAPERCLIP_ACTIVATION_LOCK_TOKEN" "$PAPERCLIP_ACTIVATION_LOCK_PA
   || { echo "stub drain: lock token mismatch" >&2; exit 42; }
 printf '%s\n' "lock-proof-ok $cmd" >> "$STUB_DRAIN_LOG"
 printf 'helpers precheck=%s reharden=%s canary=%s\n' "${PAPERCLIP_UPGRADE_PRECHECK:-}" "${PAPERCLIP_UPGRADE_REHARDEN:-}" "${PAPERCLIP_UPGRADE_SANDBOX_CANARY:-}" >> "$STUB_DRAIN_LOG"
+printf 'pending-migrations=%s\n' "${PAPERCLIP_ACTIVATION_PENDING_MIGRATIONS:-}" >> "$STUB_DRAIN_LOG"
+[[ -n "${STUB_DRAIN_DRAIN_FAIL:-}" && "$cmd" == drain ]] && { echo "stub drain: drain forced fail (pre-state)" >&2; exit 1; }
 [[ -n "${STUB_DRAIN_SLEEP_SECS:-}" && "$cmd" == drain ]] && sleep "$STUB_DRAIN_SLEEP_SECS"
 [[ -n "${STUB_TAMPER_COMPOSE:-}" && "$cmd" == wait ]] && printf 'tampered\n' >> "$PAPERCLIP_UPGRADE_COMPOSE_FILE"
 [[ -n "${STUB_TAMPER_COMPOSE_VERIFY:-}" && "$cmd" == verify ]] && printf 'tampered\n' >> "$PAPERCLIP_UPGRADE_COMPOSE_FILE"
@@ -158,7 +169,8 @@ case "$cmd" in
     [[ -n "${STUB_DRAIN_VERIFY_FAIL:-}" ]] && { echo "stub drain: verify forced fail" >&2; exit 1; }
     printf 'x\n' > "$state/verified_at"; printf 'img id\n' > "$state/verified_image" ;;
   rollback) printf 'x\n' > "$state/verified_at"; printf 'x\n' > "$state/rolledback_at" ;;
-  undrain|abort) printf 'x\n' > "$state/undrained_at" ;;
+  undrain|abort) printf 'x\n' > "$state/undrained_at"
+    [[ -n "${STUB_DRAIN_UNDRAIN_RC3:-}" && "$cmd" == undrain ]] && exit 3 ;;
   *) echo "stub drain: unknown $cmd" >&2; exit 44 ;;
 esac
 exit 0
@@ -281,6 +293,20 @@ expect_refused "reharden fails when the agent uid can write a protected path" "F
 mv "$ROOT/data/plugin-packages-root" "$ROOT/data/plugin-packages-root.gone"
 expect_refused "reharden fails closed on a missing protected path" "FAIL" -- reharden_env
 mv "$ROOT/data/plugin-packages-root.gone" "$ROOT/data/plugin-packages-root"
+# descendants are judged, not only the three roots (the recursive repair
+# this replaces covered the whole trees)
+mkdir -p "$ROOT/data/plugin-packages-root/pkg"
+printf 'x\n' > "$ROOT/data/plugin-packages-root/pkg/index.js"; chmod 0666 "$ROOT/data/plugin-packages-root/pkg/index.js"
+expect_refused "reharden fails on a group/other-writable descendant of a protected root" "descendant" -- reharden_env
+chmod 0644 "$ROOT/data/plugin-packages-root/pkg/index.js"
+printf 'x\n' > "$ROOT/outside-target"; chmod 0666 "$ROOT/outside-target"
+ln -s "$ROOT/outside-target" "$ROOT/data/.local/bin/escape"
+expect_refused "reharden fails on a protected symlink resolving outside the baseline" "symlink" -- reharden_env
+rm -f "$ROOT/data/.local/bin/escape"
+# a broken docker exec must FAIL the probes, never read as "denied"
+: > "$STUB/exec_broken"
+expect_refused "reharden fails when docker exec cannot answer the write-denial probes" "inconclusive" -- reharden_env
+rm -f "$STUB/exec_broken"
 expect_refused "reharden fails closed on missing owner baseline" "REFUSED" -- \
   env PAPERCLIP_DATA="$ROOT/data" PAPERCLIP_UPGRADE_EXPECT_OWNER="" DOCKER="$ROOT/bin/docker" bash "$REHARDEN"
 [[ "$(stat -c %a "$ROOT/data/.cache/two-bot-next-bounded/slot-a")" == "$slot_mode_before" ]] \
@@ -438,6 +464,10 @@ grep -q 'compose_up() .*--no-build --pull never\|--no-build --pull never --force
 grep -qx -- '--max-backup-age-mins' "$STUB_DRAIN_LOG.args" && grep -qx '120' "$STUB_DRAIN_LOG.args" \
   && pass "restart argv carries the manifest backup-freshness bound" \
   || oops "restart argv lacks --max-backup-age-mins 120"
+grep -q '^pending-migrations=none$' "$STUB_DRAIN_LOG" \
+  && grep -q 'expect-pending-exact' "$DRAIN" \
+  && pass "declared pending migrations reach drain.sh and are verified against image+ledger pre-recreate" \
+  || oops "pending-migration declaration is not bound into drain.sh restart"
 
 # a second run over a finished state refuses instead of re-draining
 expect_refused "run over a completed state dir is refused" "REFUSED" -- \
@@ -450,6 +480,31 @@ expect_refused "verify failure fails the run and keeps the hold" "rollback" -- \
   env STUB_DRAIN_VERIFY_FAIL=1 bash "$ACT" run --manifest "$MAN" --state-dir "$ROOT/state-fail" --live
 grep -q '^lock-proof-ok undrain' "$STUB_DRAIN_LOG" \
   && oops "undrain ran after a failed verify" || pass "undrain never ran after a failed verify"
+
+# resume after a pre-drain refusal re-judges window/pressure/baseline: the
+# owner record exists but drain-started does not, so the next phase starts
+# the drain and must not inherit stale admission
+rm -rf "$ROOT/state-resume" "$ROOT/state-resume.activation-owner"
+STUB_DRAIN_DRAIN_FAIL=1 bash "$ACT" run --manifest "$MAN" --state-dir "$ROOT/state-resume" --live >/dev/null 2>&1 || true
+reset_logs
+expect_refused "resume that would start a fresh drain is refused inside the blocked window" "window" -- \
+  env PAPERCLIP_ACTIVATION_NOW_UTC="2026-01-01T10:00:00Z" \
+    bash "$ACT" resume --manifest "$MAN" --state-dir "$ROOT/state-resume" --live
+grep -q '^lock-proof-ok drain' "$STUB_DRAIN_LOG" \
+  && oops "resume started a drain inside the blocked window" || pass "blocked resume never reached the drain phase"
+expect_ok "resume outside the window completes the pre-drain-failed state" -- \
+  bash "$ACT" resume --manifest "$MAN" --state-dir "$ROOT/state-resume" --live
+
+# drain.sh exit 3 (undrain completed, rewake warned) is PARTIAL with a
+# rewake hint and wrapper exit 3 — never a held-drain failure
+rm -rf "$ROOT/state-partial" "$ROOT/state-partial.activation-owner"
+partial_out="$(STUB_DRAIN_UNDRAIN_RC3=1 bash "$ACT" run --manifest "$MAN" --state-dir "$ROOT/state-partial" --live 2>&1)"; partial_rc=$?
+if ((partial_rc == 3)) && grep -q 'PARTIAL' <<<"$partial_out" && grep -q 'rewake' <<<"$partial_out" \
+   && ! grep -q 'nothing undrained' <<<"$partial_out"; then
+  pass "undrain exit 3 maps to wrapper PARTIAL/exit 3 with a rewake hint"
+else
+  oops "undrain exit 3 mishandled (rc=$partial_rc: $(head -c 300 <<<"$partial_out"))"
+fi
 
 # foreign state (different manifest) cannot be aborted/rolled back by us
 manifest_with "$bad" EXPECT_COMMIT "$(printf 'f%.0s' $(seq 1 40))"
@@ -589,6 +644,40 @@ else
   oops "drain.sh lock-proof acceptance wrong (rc=$held_rc: $(head -c 200 <<<"$held_out"))"
 fi
 rm -f "$LOCKF"
+
+# the same proof through a symlinked ancestor must also be accepted:
+# identity (-ef), not the canonical path string, is what is compared
+mkdir -p -m 0700 "$ROOT/real-locks"
+ln -s "$ROOT/real-locks" "$ROOT/link-locks"
+LOCKF2="$ROOT/link-locks/service.deploy.lock"; : > "$ROOT/real-locks/service.deploy.lock"; chmod 0600 "$ROOT/real-locks/service.deploy.lock"
+held2_out="$(
+  exec 8>>"$LOCKF2"
+  flock -n 8 || exit 97
+  printf 'token=testtoken456\n' > "$LOCKF2"
+  PAPERCLIP_ACTIVATION_LOCK_PATH="$LOCKF2" PAPERCLIP_ACTIVATION_LOCK_TOKEN="testtoken456" \
+  PAPERCLIP_ACTIVATION_LOCK_FD=8 PAPERCLIP_UPGRADE_API_AUTH_FILE="$ROOT/board.curl" \
+  DOCKER="$ROOT/bin/docker" bash "$DRAIN" wait --state-dir "$ROOT/state-missing" --live 2>&1
+)"; held2_rc=$?
+if ((held2_rc == 2)) && grep -qF "state dir missing" <<<"$held2_out" && ! grep -qi "points at" <<<"$held2_out"; then
+  pass "drain.sh lock proof accepts a symlinked ancestor (device+inode identity)"
+else
+  oops "drain.sh lock proof refused a symlinked ancestor (rc=$held2_rc: $(head -c 200 <<<"$held2_out"))"
+fi
+
+# --- 7. migration_gate --expect-pending-exact: declaration proved, not trusted -
+MGH1="$(printf 'a%.0s' $(seq 1 64))"; MGH2="$(printf 'b%.0s' $(seq 1 64))"
+printf '%s  0293_applied.sql\n%s  0294_pending.sql\n' "$MGH1" "$MGH2" > "$ROOT/mig-hashes"
+printf '%s\n' "$MGH1" > "$ROOT/mig-ledger"
+expect_refused "declared 'none' fails when the image carries a pending migration" "declared" -- \
+  python3 "$HERE/migration_gate.py" --sql-hashes "$ROOT/mig-hashes" --ledger "$ROOT/mig-ledger" \
+    --max-unknown 0 --expect-pending-exact
+expect_ok "declared 0294 passes when exactly 0294 is pending" -- \
+  python3 "$HERE/migration_gate.py" --sql-hashes "$ROOT/mig-hashes" --ledger "$ROOT/mig-ledger" \
+    --max-unknown 0 --expect-pending-exact --expect-pending 0294
+printf '%s\n%s\n' "$MGH1" "$MGH2" > "$ROOT/mig-ledger"
+expect_ok "declared 'none' passes when every image migration is applied" -- \
+  python3 "$HERE/migration_gate.py" --sql-hashes "$ROOT/mig-hashes" --ledger "$ROOT/mig-ledger" \
+    --max-unknown 0 --expect-pending-exact
 
 say "test-activation-offline: $CHECKS checks, FAIL=$FAIL"
 ((FAIL == 0)) && say "ACTIVATION CONTRACT PASSED" || say "ACTIVATION CONTRACT FAILED"

@@ -269,9 +269,12 @@ require_activation_lock() {
     || refuse "activation lock token does not match the lock holder's record: $lock_path"
   [[ -e "/proc/self/fd/$lock_fd" ]] \
     || refuse "activation lock fd $lock_fd is not open in this process (not a child of the lock holder)"
-  local target; target="$(readlink "/proc/self/fd/$lock_fd" 2>/dev/null)" \
-    || refuse "cannot resolve activation lock fd $lock_fd"
-  [[ "$target" == "$lock_path" ]] \
+  # Identity, not text: readlink returns the canonical path, $lock_path is
+  # the manifest path as written; a symlinked ancestor (/var/run -> /run)
+  # or a '//' would make a string compare refuse a genuine holder. -ef
+  # compares device+inode, which is the property this proof needs.
+  local target; target="$(readlink "/proc/self/fd/$lock_fd" 2>/dev/null || true)"
+  [[ "/proc/self/fd/$lock_fd" -ef "$lock_path" ]] \
     || refuse "activation lock fd $lock_fd points at '$target', not the lock file '$lock_path'"
   # The holder really holds it: a fresh non-blocking lock attempt must fail.
   # flock(1) on a distinct open file description conflicts with the holder's
@@ -945,6 +948,28 @@ cmd_restart() {
   ((PIPESTATUS[0] == 0)) || fail "pre-restart-check failed; restart NOT started"
   mark hashes-ahead-src "$EXPECT_IMAGE_ID"
   image_mig_hashes "$EXPECT_IMAGE_ID" "$(st hashes-ahead)" || fail "cannot read the target image's migrations"
+  # The manifest's declared pending set is verified against reality, not
+  # trusted: image migration hashes absent from the backup-time ledger are
+  # exactly what this boot will apply. A stale 'none' (or a wrong prefix
+  # list) must stop here, before preserve/hold/recreate — otherwise the
+  # admission receipt the wrapper consumed could be skipped by declaring
+  # 'none' for an image that carries a new migration.
+  local declared_pending="${PAPERCLIP_ACTIVATION_PENDING_MIGRATIONS:-}"
+  [[ -n "$declared_pending" ]] \
+    || fail "declared pending migrations missing (PAPERCLIP_ACTIVATION_PENDING_MIGRATIONS, set by activation.sh from the manifest); restart NOT started"
+  local -a pmig=(--sql-hashes "$(st hashes-ahead)" --ledger "$(st ledger-backup)" --max-unknown 0 --expect-pending-exact)
+  if [[ "$declared_pending" != none ]]; then
+    local -a declared_list=()
+    IFS=',' read -r -a declared_list <<<"$declared_pending"
+    local dp
+    for dp in "${declared_list[@]}"; do
+      [[ "$dp" =~ ^[0-9]{4}$ ]] || fail "declared pending migration is not a 4-digit prefix: $dp; restart NOT started"
+      pmig+=(--expect-pending "$dp")
+    done
+  fi
+  python3 "$HELPERS_DIR/migration_gate.py" "${pmig[@]}" 2>&1 | tee -a "$LOG"
+  ((PIPESTATUS[0] == 0)) \
+    || fail "candidate image pending migrations do not match the manifest declaration ($declared_pending); restart NOT started"
 
   # Pin the effective-build expectations to the state dir (verify reads these
   # back, so the flags passed to a later `verify` cannot drift from what the

@@ -191,6 +191,13 @@ class PublicCI(unittest.TestCase):
         self.assertEqual(rule["paths"], [
             r"(^|/)vendor/offline\-ci\-contract\.json$"])
         self.assertEqual(rule["regexTarget"], "line")
+        # gitleaks defaults to OR when `condition` is absent, so paths-alone
+        # would suppress unrelated findings. Pin AND on the target rule and
+        # sweep every allowlist so a flipped or deleted condition fails.
+        self.assertEqual(rule.get("condition"), "AND")
+        for allow in config["allowlists"]:
+            self.assertEqual(allow.get("condition"), "AND",
+                             allow.get("description"))
         expected_files = {
             "gh_embedded_token_remediate.py",
             "git_remote_credential_scan.sh",
@@ -209,8 +216,10 @@ class PublicCI(unittest.TestCase):
             self.assertTrue(pattern.endswith("$"), pattern)
             parts = pattern.split('"')
             self.assertEqual(len(parts), 5, pattern)
+            self.assertEqual(parts[0], r"(?m)^\s*", pattern)
             self.assertEqual(parts[2], r":\s*", pattern)
             self.assertRegex(parts[3], r"^[0-9a-f]{64}$")
+            self.assertEqual(parts[4], ",?$", pattern)
             matched_files.add(parts[1].replace(r"\.", "."))
         self.assertEqual(matched_files, expected_files)
 

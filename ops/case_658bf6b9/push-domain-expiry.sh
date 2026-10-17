@@ -14,9 +14,9 @@
 # FAIL-CLOSED: any probe failure (HTTP not 200, oversized or unparseable
 # body, no `expiration` event, bad date) pushes success=false and exits 1 —
 # an unverifiable registration must never read green. No domain configured
-# at all refuses (exit 2): the 26h heartbeat miss then pages.
+# at all refuses (exit 2): the 12h heartbeat miss then pages.
 #
-# Domains come from RDAP_DOMAINS (space-separated registered domains, no
+# Domains come from RDAP_DOMAINS (space- or newline-separated registered domains, no
 # port). When unset, hostnames are derived from TWO_WEB_PROD_URL and
 # TWO_WEB_STAGING_URL and reduced to their last two labels — correct for
 # single-label public suffixes (.com, .io, …); a domain under a multi-part
@@ -35,7 +35,7 @@
 # TWO_WEB_PROD_URL, TWO_WEB_STAGING_URL, DOMAIN_WARN_DAYS (default 21),
 # DOMAIN_CRIT_DAYS (default 7), RDAP_TIMEOUT (default 15, seconds per
 # query), RDAP_BASE_URL, CURL_BIN (default curl).
-# Cron (operator): 23 4 * * * /opt/status-page/current/ops/case_658bf6b9/push-domain-expiry.sh
+# Cron (operator): 0 */6 * * * /opt/status-page/current/ops/case_658bf6b9/push-domain-expiry.sh
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_gatus_push.sh
@@ -97,7 +97,9 @@ fi
 [[ -n "${DOMAINS//[[:space:]]/}" ]] \
   || { echo "push-domain-expiry: refusing — no domains (set RDAP_DOMAINS or TWO_WEB_PROD_URL/TWO_WEB_STAGING_URL)" >&2; exit 2; }
 
-read -r -a NAMES <<<"$DOMAINS"
+read -r -a NAMES <<<"$(printf '%s' "$DOMAINS" | tr -d '\r' | tr '\n' ' ')"
+(( ${#NAMES[@]} > 0 )) \
+  || { echo "push-domain-expiry: refusing — no domains after splitting" >&2; exit 2; }
 for i in "${!NAMES[@]}"; do
   NAMES[i]="$(printf '%s' "${NAMES[i]}" | tr '[:upper:]' '[:lower:]')"
   [[ "${NAMES[i]}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}$ ]] \

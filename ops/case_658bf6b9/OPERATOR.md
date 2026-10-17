@@ -38,7 +38,7 @@ locations also belong in the protected environment, not in this repository.
 */5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-ci-queue-age.sh
 */5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-neon-reachability.sh
 17 4 * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-tls-expiry.sh
-23 4 * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-domain-expiry.sh
+0 */6 * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-domain-expiry.sh
 */5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-workers-error-rate.sh
 */5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-github-rate-limit.sh
 */5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-discord-bot.sh

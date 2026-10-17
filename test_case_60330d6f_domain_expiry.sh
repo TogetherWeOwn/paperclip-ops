@@ -4,8 +4,8 @@
 # (push-domain-expiry.sh, the RDAP complement to push-tls-expiry.sh).
 #
 # What is pinned here:
-#   1. CONFIG — the domain-expiry external endpoint declares token, its 26h
-#              heartbeat and discord+custom alerts (an endpoint-less mutant
+#   1. CONFIG — the domain-expiry external endpoint declares token, its 12h
+#              heartbeat, immediate alert thresholds and discord+custom alerts
 #              config goes red), and the module-wiring gate passes (script +
 #              cron + registry all present).
 #   2. SEMANTICS — stub RDAP server: far expiry pushes true; 10d pushes
@@ -129,9 +129,12 @@ ep_block() {
     f { print }' "$1"
 }
 blk="$(ep_block "$CFG" domain-expiry)"
-if grep -q 'token:' <<<"$blk" && grep -q 'interval: 26h' <<<"$blk" \
+if grep -q 'token:' <<<"$blk" && grep -q 'interval: 12h' <<<"$blk" \
+  && [[ "$(grep -c 'failure-threshold: 1' <<<"$blk")" -eq 2 ]] \
+  && [[ "$(grep -c 'success-threshold: 1' <<<"$blk")" -eq 2 ]] \
+  && grep -Fq 'no push in 12h (detection within 24h)' <<<"$blk" \
   && grep -q 'type: discord' <<<"$blk" && grep -q 'type: custom' <<<"$blk"; then
-  ok "1a. domain-expiry endpoint declares token, 26h heartbeat, discord+custom alerts"
+  ok "1a. endpoint declares token, 12h heartbeat, immediate discord+custom alerts"
 else bad "1a. domain-expiry endpoint" "$(ep_block "$CFG" domain-expiry || echo MISSING)"; fi
 mut="$WORK/nodomain.yaml"
 awk '/- name: domain-expiry/{skip=1} skip&&/^  - name: /&&!/- name: domain-expiry/{skip=0} !skip' "$CFG" > "$mut"
@@ -169,6 +172,19 @@ echo 'alpha.example=warn,beta.example=crit' > "$MODE_FILE"
 out="$(run_probe RDAP_DOMAINS='alpha.example beta.example')"; p="$(last_push)"
 [[ "$out" == "rc=1" ]] && grep -qi 'critical' <<<"$p" && grep -q 'beta' <<<"$p" \
   && ok "2f. worst domain wins (crit over warn)" || bad "2f. worst domain" "$out push=$p"
+
+echo far > "$MODE_FILE"
+out="$(run_probe RDAP_DOMAINS=$'alpha.example\nbeta.example')"
+got="$(sort -u "$RDAP_FILE" | tr '\n' ' ')"
+[[ "$out" == "rc=0" && "$got" == "alpha.example beta.example " ]] \
+  && ok "2g. newline-separated RDAP_DOMAINS checks every domain" \
+  || bad "2g. newline-separated domains" "$out rdap=$got"
+
+out="$(run_probe RDAP_DOMAINS=$'alpha.example\r\nbeta.example')"
+got="$(sort -u "$RDAP_FILE" | tr '\n' ' ')"
+[[ "$out" == "rc=0" && "$got" == "alpha.example beta.example " ]] \
+  && ok "2h. CRLF-separated RDAP_DOMAINS checks every domain" \
+  || bad "2h. CRLF-separated domains" "$out rdap=$got"
 
 # === 3. DERIVE ==================================================================
 echo far > "$MODE_FILE"

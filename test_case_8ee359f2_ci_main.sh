@@ -23,7 +23,9 @@
 #      unreadable API, garbage JSON, and unreadable/grossly-negative
 #      timestamps all push false, never healthy. A small negative span
 #      (-60s..0, a GitHub timestamp artefact on healthy mains) clamps to 0;
-#      exactly -60 clamps green while -61 fails closed (span and age alike).
+#      exactly -60 clamps green while -61 fails closed (span pins the exact
+#      edge; the live-check age pin uses -65s margin so it cannot flake on a
+#      wall-clock second ticking mid-run).
 #   5. RUNNER UNITS — one inactive unit pushes ci_runner-units false naming
 #      it, exit 1; all active pushes true.
 #   6. REFUSALS — missing GATUS_URL, missing GH_REPOS, a bad factor, an
@@ -282,17 +284,22 @@ rc="$(run_tool)"
 [[ "$rc" == "1" ]] && ok "4h4. span -61s fails closed" || bad "4h4. span -61 exit" "got $rc $(cat "$CFG_LOG")"
 [[ "$(pushes_for ci_runtime-o-r)" == "false" ]] && ok "4h5. span -61s runtime pushed false" || bad "4h5. span -61 runtime" "$(cat "$CFG_LOG")"
 cfg_has "unparseable check timestamps" && ok "4h6. span -61s reason names untimed checks" || bad "4h6. span -61 reason" "$(cat "$CFG_LOG")"
-# … and age: a live check started 60s in the future clamps green, 61s fails.
+# … and age: a live check started 60s in the future clamps green; the
+# fail-closed side pins with margin at 65s, not exactly 61s, so the pin is
+# wall-clock independent (fixture clock and the tool's date +%s are read
+# milliseconds apart; a second boundary ticking between them would turn an
+# exact -61 into -60 and flake green). The exact -61 edge stays covered by
+# the deterministic static span-minus-61 fixture (4h4/4h5/4h6) above.
 mk_inflight "$WORK/inflight-age-60.json" 60
 export GH_FIXTURE_FILE="$WORK/inflight-age-60.json"
 rc="$(run_tool)"
 [[ "$rc" == "0" ]] && ok "4h7. age -60s clamps green" || bad "4h7. age -60 exit" "got $rc $(cat "$CFG_LOG")"
 [[ "$(pushes_for ci_runtime-o-r)" == "true" ]] && ok "4h8. age -60s runtime pushed true" || bad "4h8. age -60 runtime" "$(cat "$CFG_LOG")"
-mk_inflight "$WORK/inflight-age-61.json" 61
-export GH_FIXTURE_FILE="$WORK/inflight-age-61.json"
+mk_inflight "$WORK/inflight-age-65.json" 65
+export GH_FIXTURE_FILE="$WORK/inflight-age-65.json"
 rc="$(run_tool)"
-[[ "$rc" == "1" ]] && ok "4h9. age -61s fails closed" || bad "4h9. age -61 exit" "got $rc $(cat "$CFG_LOG")"
-[[ "$(pushes_for ci_runtime-o-r)" == "false" ]] && ok "4h10. age -61s runtime pushed false" || bad "4h10. age -61 runtime" "$(cat "$CFG_LOG")"
+[[ "$rc" == "1" ]] && ok "4h9. age -65s fails closed" || bad "4h9. age -65 exit" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "false" ]] && ok "4h10. age -65s runtime pushed false" || bad "4h10. age -65 runtime" "$(cat "$CFG_LOG")"
 
 # --- §5 runner units --------------------------------------------------------------
 export GH_FIXTURE_FILE="$FIX/healthy.json" SYSTEMCTL_FIXTURE=one-dead
@@ -401,10 +408,9 @@ for s in slugs:
     assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", f"ci_main-{s}"), s
 assert len(names) == 2 * len(repos) + 1 and "runner-units" in names, names
 # OPERATOR-adjacent GH_REPOS agreement is pinned via the endpoint set above;
-# the host GH_REPOS list itself lives in the Operator install, not in this
-# source snapshot. The exact-equality check below guards the private
-# host-side wiring (endpoints, baselines, slugs, GH_REPOS must agree):
-# an endpoint without a matching push pages forever on heartbeat miss.
+# the host GH_REPOS list itself lives in the Operator install and is not
+# checked in this source tree. An endpoint without a matching push pages
+# on heartbeat miss (see OPERATOR.md).
 print("baselines ok")
 PY
 [[ $? -eq 0 ]] && ok "8f. synthetic baselines cover six public repos; slugs unique, keys in alphabet" || bad "8f. baselines shape"

@@ -247,7 +247,8 @@ reset_logs() { : > "$STUB_DRAIN_LOG"; : > "$STUB_DRAIN_LOG.args"; : > "$STUB/doc
 for f in "$ACT" "$REHARDEN" "$DRAIN"; do
   if bash -n "$f" 2>/dev/null; then pass "parses: ${f##*/}"; else oops "does not parse: ${f##*/}"; fi
 done
-if grep -Ev '^[[:space:]]*#' "$REHARDEN" | grep -Eq '(^|[^A-Za-z_])(chown|chmod|sudo)([[:space:]]|$)'; then
+reharden_body="$(grep -Ev '^[[:space:]]*#' "$REHARDEN" || true)"
+if grep -Eq '(^|[^A-Za-z_])(chown|chmod|sudo)([[:space:]]|$)' <<<"$reharden_body"; then
   oops "reharden still reaches chown/chmod/sudo"
 else
   pass "reharden reaches no chown/chmod/sudo (verify-only)"

@@ -1107,7 +1107,7 @@ fi
 # path), mirroring the ops/case_654dd2ec/gatus-endpoints.yaml pattern so the page
 # itself says what breached and who owns it.
 desc_lines="$(grep -cE '^\s*description: "' "$CFG")"
-if [[ "$desc_lines" == "36" ]]; then ok "9. thirty-six alert descriptions present (17 endpoints x discord+custom, plus the ci-queue-age escalation pair)"
+if [[ "$desc_lines" == "38" ]]; then ok "9. thirty-eight alert descriptions present (18 endpoints x discord+custom, plus the ci-queue-age escalation pair)"
 else bad "9. description count" "found $desc_lines, want 36"; fi
 missing_tor="$(grep -E '^\s*description: "' "$CFG" | grep -v 'THRESHOLD' || true)"
 if [[ -z "$missing_tor" ]]; then ok "9b. every description carries THRESHOLD"; else bad "9b. THRESHOLD missing" "$missing_tor"; fi

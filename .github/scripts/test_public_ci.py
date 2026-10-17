@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 
@@ -167,6 +168,60 @@ class PublicCI(unittest.TestCase):
             (ROOT / ".github/workflows/public-safety.yml").read_text())
         push = workflow[True]["push"]  # YAML 1.1 parses bare `on:` as True
         self.assertEqual(push["branches-ignore"], ["gh-readonly-queue/**"])
+
+    def test_public_safety_concurrency_isolated_by_event(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/public-safety.yml").read_text())
+        concurrency = workflow["concurrency"]
+        group = concurrency["group"]
+        self.assertIn("${{ github.event_name }}", group)
+        self.assertIn("github.event.pull_request.number", group)
+        self.assertIn("github.sha", group)
+        self.assertEqual(concurrency["cancel-in-progress"],
+                         "${{ github.event_name == 'pull_request' }}")
+
+    def test_gitleaks_digest_allowlist_is_narrowly_scoped(self):
+        config = tomllib.loads((ROOT / ".gitleaks.toml").read_text())
+        rules = [rule for rule in config["allowlists"]
+                 if rule.get("description", "").startswith(
+                     "Exact reviewed historical SHA-256 entries")]
+        self.assertEqual(len(rules), 1)
+        rule = rules[0]
+        self.assertEqual(set(rule["targetRules"]),
+                         {"generic-api-key", "discord-api-token"})
+        self.assertEqual(rule["paths"], [
+            r"(^|/)vendor/offline\-ci\-contract\.json$"])
+        self.assertEqual(rule["regexTarget"], "line")
+        # gitleaks defaults to OR when `condition` is absent, so paths-alone
+        # would suppress unrelated findings. Pin AND on the target rule and
+        # sweep every allowlist so a flipped or deleted condition fails.
+        self.assertEqual(rule.get("condition"), "AND")
+        for allow in config["allowlists"]:
+            self.assertEqual(allow.get("condition"), "AND",
+                             allow.get("description"))
+        expected_files = {
+            "gh_embedded_token_remediate.py",
+            "git_remote_credential_scan.sh",
+            "org_access_review.sh",
+            "scripts/discord_job_health.js",
+            "secret_exposure_audit.sh",
+            "test_credential_chain_audit.sh",
+            "test_credential_chain_pin_gate.sh",
+            "test_gh_token_api_body.sh",
+            "test_gh_token_dispatch.sh",
+        }
+        self.assertEqual(len(rule["regexes"]), len(expected_files))
+        matched_files = set()
+        for pattern in rule["regexes"]:
+            self.assertTrue(pattern.startswith("(?m)^"), pattern)
+            self.assertTrue(pattern.endswith("$"), pattern)
+            parts = pattern.split('"')
+            self.assertEqual(len(parts), 5, pattern)
+            self.assertEqual(parts[0], r"(?m)^\s*", pattern)
+            self.assertEqual(parts[2], r":\s*", pattern)
+            self.assertRegex(parts[3], r"^[0-9a-f]{64}$")
+            self.assertEqual(parts[4], ",?$", pattern)
+            matched_files.add(parts[1].replace(r"\.", "."))
+        self.assertEqual(matched_files, expected_files)
 
     def test_lint_attests_hosted_environment_not_runner_name(self):
         text = (ROOT / ".github/workflows/pr-lint.yml").read_text()

@@ -2373,6 +2373,17 @@ jobs:
       - name: review bot sandbox canary suite
         run: ./test_review_bot_sandbox_canary.sh
 
+      # Activation contract (paperclip-upgrade/activation.sh): one
+      # service-scoped deployment lock across drain phases, verify-only
+      # post-restart hardening with no reachable ownership change, and
+      # fail-closed identity/pressure/window bindings. Hermetic: stub
+      # docker and stub drain.sh over temp fixtures; no daemon, DB or
+      # network. Without this step the suite runs only in the full
+      # local verify-fast tier while CI runs --parse-only, so a lock or
+      # binding regression would merge green.
+      - name: activation contract suite
+        run: ./paperclip-upgrade/test-activation-offline.sh
+
       # case_9cc4c0ad: offline, recorded-model auth evidence. The real incident is
       # INSUFFICIENT; cross-model successes and pre-inference aborts are not
       # controls. Mutation kills require two named assertions, never errors.

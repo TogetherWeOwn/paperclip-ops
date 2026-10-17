@@ -301,6 +301,41 @@ class TestCollectFailClosed(unittest.TestCase):
             guard.git = orig
 
 
+class TestCollectNoRenames(unittest.TestCase):
+    # Paperclip Review round 1: git detects renames by default, so
+    # `git mv test_x.py checks.py` reports R100 and a D-only filter misses
+    # the deletion. Both diffs must pass --no-renames so the move shows as
+    # D + A (mutmut_changed.sh already does this).
+    def test_diffs_disable_rename_detection(self):
+        seen = []
+
+        def fake(args, allowed_returncodes=(0,)):
+            seen.append(args)
+            if args and args[0] == "merge-base":
+                return "abc123\n"
+            if args and args[0] == "ls-files":
+                return ""
+            return ""
+
+        orig, guard.git = guard.git, fake
+        try:
+            guard.collect("origin/main")
+        finally:
+            guard.git = orig
+        diff_calls = [a for a in seen if a and a[0] == "diff"]
+        self.assertEqual(len(diff_calls), 2)
+        for call in diff_calls:
+            self.assertIn("--no-renames", call)
+
+    def test_rename_to_non_test_name_flags_deleted_test(self):
+        # With --no-renames the rename surfaces as a D row for the old
+        # test path: that must produce test-deleted (plus assertion
+        # handling stays on the old path via parse_diff).
+        findings = guard.check([], [], "D\ttest_widget.py", [])
+        self.assertTrue(any(f[0] == "test-deleted" and f[1] == "test_widget.py"
+                            for f in findings))
+
+
 class TestIgnoreBroadening(unittest.TestCase):
     # A glob added to the ignore file in the same branch would exempt its
     # own checks; exact paths stay silent (reviewed like code).

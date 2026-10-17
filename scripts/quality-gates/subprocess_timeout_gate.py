@@ -6,8 +6,14 @@ sg-rules/python/py-subprocess-timeout.yml (see sg-rules/VENDORED.md), then
 diffs the per-file finding counts against the committed backlog
 (docs/quality-gates/subprocess-timeout-backlog.txt, one `path: count` row
 per file). New files with findings, or files whose count grew past the
-backlog, are emitted as GitHub `::warning::` annotations. Exit is ALWAYS 0:
-this gate warns, never fails (WARN mode per the card).
+backlog, are emitted as GitHub `::warning::` annotations. Exit is ALWAYS 0
+in warn mode: this gate warns, never fails (WARN mode per the card).
+--write-backlog exits nonzero when the scan fails, so a failed scan never
+wipes the backlog to a header-only file.
+
+Requires sgconfig.yml, sg-rules/python/py-subprocess-timeout.yml and the
+backlog to be present; until they land the gate reports scan-unavailable
+(rc 0, no findings) and --write-backlog refuses.
 
 Backlog regeneration (after a deliberate fix sweep, reviewed like code):
     python3 scripts/quality-gates/subprocess_timeout_gate.py --write-backlog
@@ -56,26 +62,35 @@ def read_backlog(backlog: Path) -> dict:
     return counts
 
 
-def scan(ast_grep: str) -> dict:
+def scan(ast_grep: str) -> dict | None:
+    # Returns None when the scan could not run (binary missing, timeout,
+    # non-0/1 exit, unparseable output): callers must not treat that as a
+    # clean empty result. A failed scan wiping the backlog (or reading as
+    # clean) would hide every finding on the next run.
     # ast-grep skips hidden dirs by default: --no-ignore hidden keeps the
     # gha-* rules over .github/workflows and .github/scripts running.
-    proc = subprocess.run(
-        [ast_grep, "scan", "--config", "sgconfig.yml",
-         "--no-ignore", "hidden", "--json"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    try:
+        proc = subprocess.run(
+            [ast_grep, "scan", "--config", "sgconfig.yml",
+             "--no-ignore", "hidden", "--json"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"::warning::ast-grep scan failed ({type(exc).__name__}): "
+              f"{str(exc)[:500]}")
+        return None
     if proc.returncode not in (0, 1):
         print(f"::warning::ast-grep scan failed (exit {proc.returncode}): "
               f"{proc.stderr.strip()[:500]}")
-        return {}
+        return None
     try:
         findings = json.loads(proc.stdout or "[]")
     except json.JSONDecodeError as exc:
         print(f"::warning::ast-grep output unparseable: {exc}")
-        return {}
+        return None
     counts = {}
     for finding in findings:
         if finding.get("ruleId") != RULE_ID:
@@ -118,6 +133,11 @@ def main(argv=None) -> int:
 
     current = scan(args.ast_grep)
     if args.write_backlog:
+        if current is None:
+            print("::error::subprocess-timeout gate: scan failed, "
+                  "refusing to rewrite backlog",
+                  file=sys.stderr)
+            return 2
         backlog_path = Path(args.backlog)
         backlog_path.parent.mkdir(parents=True, exist_ok=True)
         lines = ["# subprocess-timeout gate backlog: tracked non-test files with",
@@ -129,6 +149,12 @@ def main(argv=None) -> int:
         print(f"wrote {len(current)} backlog rows to {backlog_path}")
         return 0
 
+    if current is None:
+        # WARN mode stays rc 0, but never present a failed scan as clean:
+        # skip the backlog comparison entirely (scan() already warned).
+        print("subprocess-timeout gate: scan unavailable, "
+              "skipping backlog comparison")
+        return 0
     backlog = read_backlog(Path(args.backlog))
     warnings = compare(current, backlog)
     print(f"subprocess-timeout gate: {len(current)} files with findings, "

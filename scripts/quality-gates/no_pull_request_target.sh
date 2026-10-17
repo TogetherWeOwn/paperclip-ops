@@ -8,9 +8,13 @@
 # count: the top-level `on:` block is extracted (quoted "on" included, inline
 # or next-line flow lists included, zero-indent `- ` sequences included, and
 # uniformly indented files handled by matching `on:` at any indent and ending
-# the block at the first line at or above its indent that is not a `- ` item)
-# and searched for the token. YAML comments, step names and script paths that
-# merely contain the token pass because they live outside the trigger block.
+# the block at the first line at or above its indent that is not a `- ` item
+# while flow brackets are balanced) and searched for the token. YAML comments,
+# step names and script paths that merely contain the token pass because they
+# live outside the trigger block. Fail-closed extras: a YAML alias (`*name`)
+# inside the trigger block is a hit (it may resolve to the banned trigger;
+# GitHub Actions expands anchors/aliases), as is an unclosed flow bracket at
+# the block end (truncated extraction must not read as clean).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -25,6 +29,7 @@ TOKEN = re.compile(r"(?<![A-Za-z0-9_])pull_request_target(?![A-Za-z0-9_])")
 TOP_ON = re.compile(r"""^([ \t]*)["']?on["']?\s*:""")
 SEQ_ITEM = re.compile(r"^[ \t]*-(?:[ \t]|$)")
 INDENT = re.compile(r"^[ \t]*")
+ALIAS = re.compile(r"(?<![A-Za-z0-9_])\*[A-Za-z0-9_-]+")
 
 
 def strip_comment(line):
@@ -49,16 +54,44 @@ def _indent_of(code):
     return len(INDENT.match(code).group(0).expandtabs(8))
 
 
+def _bracket_delta(code):
+    # Net [{-open minus }]-close outside single/double quotes. Comment
+    # already stripped by the caller. Quote-aware so a bracket inside a
+    # step name (outside the block anyway) cannot unbalance the count.
+    in_single = in_double = False
+    delta = 0
+    i = 0
+    while i < len(code):
+        ch = code[i]
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            if i > 0 and code[i - 1] == "\\":
+                i += 1
+                continue
+            in_double = not in_double
+        elif not in_single and not in_double:
+            if ch in "{[":
+                delta += 1
+            elif ch in "}]":
+                delta -= 1
+        i += 1
+    return delta
+
+
 def find_on_block(text):
     """Return 1-based line numbers inside the top-level `on:` trigger block.
 
     The `on:` line with the smallest indent wins, so a uniformly indented
     file still resolves its one top-level mapping. Collection ends at the
     first later line at or above that indent that is not a `- ` sequence
-    item: in YAML a block sequence may sit at the same indent as its key, so
-    `- push` at column 0 continues the block while `jobs:` ends it. Blank
-    and comment-only lines never end the block. Fail-closed by construction:
-    anything still inside the region counts as a trigger position.
+    item and arrives with flow brackets balanced: in YAML a block sequence
+    may sit at the same indent as its key, so `- push` at column 0
+    continues the block while `jobs:` ends it, and a top-level flow mapping
+    (`on: {push: {},` + `pull_request_target: {}}` with the continuation at
+    column 0) stays inside until its brackets close. Blank and comment-only
+    lines never end the block. Fail-closed by construction: anything still
+    inside the region counts as a trigger position.
     """
     lines = text.splitlines()
     best = None
@@ -72,14 +105,16 @@ def find_on_block(text):
         return set()
     start, indent = best
     member = {start + 1}
+    depth = _bracket_delta(strip_comment(lines[start]))
     for idx in range(start + 1, len(lines)):
         code = strip_comment(lines[idx])
         if code.strip() == "":
             member.add(idx + 1)
             continue
-        if _indent_of(code) <= indent and not SEQ_ITEM.match(code):
+        if depth <= 0 and _indent_of(code) <= indent and not SEQ_ITEM.match(code):
             break
         member.add(idx + 1)
+        depth += _bracket_delta(code)
     return member
 
 
@@ -124,6 +159,30 @@ def main():
                     break
             else:
                 hits.append(f"{path}: trigger block contains pull_request_target")
+        elif block and ALIAS.search(block):
+            # Fail closed: GitHub Actions expands YAML anchors/aliases, so
+            # `on: *trig` may resolve to the banned trigger even though the
+            # literal token is absent. Any alias in the trigger block is a
+            # hit; safe aliases must be inlined instead.
+            for lineno in sorted(member):
+                raw = lines[lineno - 1]
+                if ALIAS.search(strip_comment(raw)):
+                    hits.append(f"{path}:{lineno}: trigger block uses YAML "
+                                f"alias (may resolve to pull_request_target): "
+                                f"{raw.strip()[:120]}")
+                    break
+            else:
+                hits.append(f"{path}: trigger block uses YAML alias "
+                            f"(may resolve to pull_request_target)")
+        elif block:
+            depth = 0
+            for chunk in block.splitlines():
+                depth += _bracket_delta(chunk)
+            if depth != 0:
+                # Fail closed: truncated flow extraction must not read as
+                # clean (e.g. an unclosed `{`/`[` at the block end).
+                hits.append(f"{path}: trigger block has unclosed flow "
+                            f"bracket (fail-closed)")
     for hit in hits:
         print(hit)
 

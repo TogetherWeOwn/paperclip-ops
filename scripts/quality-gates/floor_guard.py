@@ -242,11 +242,16 @@ def collect(base: str) -> tuple | None:
     # Fail closed: a failed/timed-out collection (None) is not an empty
     # diff -- it is an unknown tree, so the guard must report rc 2 rather
     # than print `floor-guard: clean`.
-    tracked = git(["diff", "--unified=0", merge_base, "--"])
+    # --no-renames on both diffs: git detects renames by default, so
+    # `git mv test_x.py checks.py` reports R100 and a D-only filter never
+    # sees the deletion (same reason mutmut_changed.sh passes --no-renames).
+    # With renames off the move shows as D + A, so the deleted test is
+    # flagged and removed assertion lines stay attributed to the old path.
+    tracked = git(["diff", "--no-renames", "--unified=0", merge_base, "--"])
     if tracked is None:
         return None
     added, removed = parse_diff(tracked)
-    name_status = git(["diff", "--name-status", "--diff-filter=D", merge_base, "--"])
+    name_status = git(["diff", "--no-renames", "--name-status", "--diff-filter=D", merge_base, "--"])
     if name_status is None:
         return None
     untracked = git(["ls-files", "-z", "--others", "--exclude-standard"])

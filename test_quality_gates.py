@@ -130,12 +130,33 @@ class TestScan(unittest.TestCase):
                                                rule="subprocess-no-timeout")])
         self.assertEqual(counts, {})
 
-    def test_failed_scan_warns_and_returns_empty(self):
+    def test_failed_scan_warns_and_returns_none(self):
+        # Paperclip Review round 1: a failed scan must not read as clean
+        # ({} would let --write-backlog wipe the backlog to a header).
         proc = mock.Mock()
         proc.returncode = 2
         proc.stderr = "boom"
         with mock.patch.object(gate.subprocess, "run", return_value=proc):
-            self.assertEqual(gate.scan("ast-grep"), {})
+            self.assertIsNone(gate.scan("ast-grep"))
+
+    def test_missing_binary_returns_none(self):
+        with mock.patch.object(gate.subprocess, "run",
+                               side_effect=FileNotFoundError("no ast-grep")):
+            self.assertIsNone(gate.scan("ast-grep"))
+
+    def test_timeout_returns_none(self):
+        import subprocess as sp
+        with mock.patch.object(gate.subprocess, "run",
+                               side_effect=sp.TimeoutExpired("ast-grep", 300)):
+            self.assertIsNone(gate.scan("ast-grep"))
+
+    def test_unparseable_output_returns_none(self):
+        proc = mock.Mock()
+        proc.returncode = 0
+        proc.stdout = "not json"
+        proc.stderr = ""
+        with mock.patch.object(gate.subprocess, "run", return_value=proc):
+            self.assertIsNone(gate.scan("ast-grep"))
 
     def test_scan_includes_hidden_dirs(self):
         # ast-grep skips .github/ by default, so the gha-* rules never run
@@ -149,6 +170,31 @@ class TestScan(unittest.TestCase):
         argv = run.call_args[0][0]
         self.assertIn("--no-ignore", argv)
         self.assertIn("hidden", argv)
+
+
+class TestMainFailClosed(unittest.TestCase):
+    # Paperclip Review round 1: --write-backlog must refuse (nonzero)
+    # when the scan fails, never truncate the backlog to a header; warn
+    # mode must stay rc 0 without presenting the failure as clean.
+    def test_write_backlog_refuses_on_failed_scan(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            backlog = Path(tmp) / "backlog.txt"
+            backlog.write_text("# header\na.py: 2\n")
+            with mock.patch.object(gate, "scan", return_value=None):
+                rc = gate.main(["--backlog", str(backlog),
+                                "--write-backlog"])
+            self.assertNotEqual(rc, 0)
+            self.assertEqual(backlog.read_text(), "# header\na.py: 2\n")
+
+    def test_warn_mode_stays_zero_on_failed_scan(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            backlog = Path(tmp) / "backlog.txt"
+            backlog.write_text("a.py: 3\n")
+            with mock.patch.object(gate, "scan", return_value=None):
+                rc = gate.main(["--backlog", str(backlog)])
+            self.assertEqual(rc, 0)
 
 
 if __name__ == "__main__":

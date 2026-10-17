@@ -85,6 +85,13 @@ FAIL = {
         "  on:\n  - push\n  - pull_request_target\n"
         "  jobs:\n    probe:\n      runs-on: ubuntu-latest\n"
         "      steps:\n        - run: echo probe\n"),
+    # Paperclip Review round 1: YAML anchors/aliases are live triggers
+    # (GitHub Actions expands them), and a top-level flow mapping may
+    # continue at column 0. Both must fail (fail-closed).
+    "anchor alias trigger": (
+        "name: &trig pull_request_target\non: *trig\n" + JOB),
+    "flow mapping continuation at column 0": (
+        "on: {push: {},\npull_request_target: {}}\n" + JOB),
 }
 
 

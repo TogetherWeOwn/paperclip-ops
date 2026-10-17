@@ -19,6 +19,17 @@ HOSTED_TEST_GUARD = (
     "TogetherWeOwn/.github/.github/workflows/test-guard.yml@"
     "866275517a9875f02110f946411401db8907ec8a"
 )
+# Reviewed immutable shadow review engine (TogetherWeOwn/.github#26, merged):
+# warn-only changed-file signals; on this public repo its runner input
+# defaults to ubuntu-latest when runs-on-json is omitted.
+REVIEW_RULES_GUARD = (
+    "TogetherWeOwn/.github/.github/workflows/review-rules.yml@"
+    "63699075b492914c137281acffd4c89e51cc1c4c"
+)
+# Pack names accepted by the pinned review-rules reusable at REVIEW_RULES_GUARD.
+REVIEW_RULES_PACKS = frozenset({"rust", "ts", "python-shell-ci", "php", "security"})
+# Input keys accepted by the pinned review-rules reusable at REVIEW_RULES_GUARD.
+REVIEW_RULES_INPUTS = frozenset({"packs", "mode", "runs-on-json"})
 
 
 class PublicCI(unittest.TestCase):
@@ -35,20 +46,47 @@ class PublicCI(unittest.TestCase):
                 label = f"{workflow.name}: {name}"
                 self.assertIsInstance(job, dict, label)
                 if "uses" in job:
-                    self.assertEqual(job["uses"], HOSTED_TEST_GUARD, label)
+                    self.assertIn(job["uses"],
+                                  (HOSTED_TEST_GUARD, REVIEW_RULES_GUARD), label)
                     self.assertNotIn("runs-on", job, label)
                     inputs = job.get("with", {})
                     self.assertIsInstance(inputs, dict, label)
-                    try:
-                        route = json.loads(inputs.get("runs-on-json", "null"))
-                    except (TypeError, ValueError):
-                        self.fail(f"{label}: runner input must be literal JSON")
-                    self.assertEqual(route, ["ubuntu-latest"], label)
+                    if job["uses"] == REVIEW_RULES_GUARD:
+                        self.assert_review_rules_inputs(inputs, label)
+                    else:
+                        try:
+                            route = json.loads(inputs.get("runs-on-json", "null"))
+                        except (TypeError, ValueError):
+                            self.fail(f"{label}: runner input must be literal JSON")
+                        self.assertEqual(route, ["ubuntu-latest"], label)
                 else:
                     # Fail closed on expressions, matrices, groups, aliases to
                     # private labels, and missing routes. This public snapshot
                     # needs no private branch in its routing expression.
                     self.assertEqual(job.get("runs-on"), "ubuntu-latest", label)
+
+    def assert_review_rules_inputs(self, inputs, label):
+        # Fail closed on unknown inputs, expressions, enforcement mode,
+        # unknown packs, and non-hosted runner overrides. The pinned
+        # reusable only accepts packs/mode/runs-on-json; anything else
+        # needs inspection, not a silent pass.
+        self.assertFalse(set(inputs) - REVIEW_RULES_INPUTS, label)
+        self.assertEqual(inputs.get("mode"), "warn", label)
+        packs = inputs.get("packs", "")
+        self.assertIsInstance(packs, str, label)
+        self.assertTrue(packs and "${{" not in packs, label)
+        selected = {pack.strip() for pack in packs.split(",")}
+        self.assertTrue(selected and all(selected), label)
+        self.assertFalse(selected - REVIEW_RULES_PACKS, label)
+        for key, value in inputs.items():
+            self.assertNotIn("${{", str(value), label)
+        runner = inputs.get("runs-on-json", "")
+        if runner:
+            try:
+                route = json.loads(runner)
+            except (TypeError, ValueError):
+                self.fail(f"{label}: runner input must be literal JSON")
+            self.assertEqual(route, ["ubuntu-latest"], label)
 
     def test_all_runner_routes_are_standard_hosted(self):
         self.assert_public_hosted_routes(ROOT / ".github/workflows")
@@ -61,6 +99,9 @@ class PublicCI(unittest.TestCase):
             (directory / "reusable.yml").write_text(
                 "on: pull_request\njobs:\n  guard:\n    uses: " + HOSTED_TEST_GUARD
                 + "\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n")
+            (directory / "review.yml").write_text(
+                "on: pull_request\njobs:\n  review-rules:\n    uses: " + REVIEW_RULES_GUARD
+                + "\n    with:\n      packs: python-shell-ci,security,ts\n      mode: warn\n")
             self.assert_public_hosted_routes(directory)
 
     def test_public_routing_guard_rejects_private_dynamic_and_unreviewed_jobs(self):
@@ -78,6 +119,18 @@ class PublicCI(unittest.TestCase):
                 + "\n    with:\n      runs-on-json: '[\"self-hosted\", \"two-ephemeral\"]'\n",
             "reusable-expression": "    uses: " + HOSTED_TEST_GUARD
                 + "\n    with:\n      runs-on-json: ${{ inputs.runner }}\n",
+            "review-rules-enforce": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    with:\n      packs: ts\n      mode: enforce\n",
+            "review-rules-moving-ref": "    uses: TogetherWeOwn/.github/.github/workflows/review-rules.yml@v1"
+                + "\n    with:\n      packs: ts\n      mode: warn\n",
+            "review-rules-unknown-pack": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    with:\n      packs: ts,unreviewed-pack\n      mode: warn\n",
+            "review-rules-expression-packs": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    with:\n      packs: ${{ inputs.packs }}\n      mode: warn\n",
+            "review-rules-private-runner": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    with:\n      packs: ts\n      mode: warn\n      runs-on-json: '[\"self-hosted\"]'\n",
+            "review-rules-unknown-input": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    with:\n      packs: ts\n      mode: warn\n      unreviewed-input: 'yes'\n",
         }
         for name, job in bad_jobs.items():
             for suffix in (".yml", ".yaml"):

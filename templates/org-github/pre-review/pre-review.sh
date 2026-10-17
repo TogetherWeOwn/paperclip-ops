@@ -67,22 +67,39 @@ if [[ -z "$BASE" ]]; then
 fi
 BASE="$(git rev-parse "$BASE" 2>/dev/null || echo "")"
 [[ -z "$BASE" ]] && { echo "cannot resolve diff base" >&2; exit 2; }
+SCRATCH_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pre-review.XXXXXX")" || { echo "cannot create scratch directory" >&2; exit 2; }
+trap 'rm -rf -- "$SCRATCH_DIR"' EXIT
 
-mapfile -t CHANGED < <(git diff --name-only -z "$BASE"...HEAD -- 2>/dev/null | tr '\0' '\n' | grep -v '^$' || true)
-mapfile -t ADDED_FILES < <(git diff --name-status "$BASE"...HEAD -- 2>/dev/null | awk '$1=="A"{print $2}' || true)
-ADDED_LINES="$(git diff -U0 "$BASE"...HEAD -- 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
+CHANGED=() ADDED_FILES=() UNTRACKED=()
+if ! git diff --name-only -z "$BASE"...HEAD -- >"$SCRATCH_DIR/changed-paths" 2>/dev/null; then
+  echo "cannot collect changed paths" >&2; exit 2
+fi
+while IFS= read -r -d '' path; do CHANGED+=("$path"); done <"$SCRATCH_DIR/changed-paths"
+if ! git diff --diff-filter=A --name-only -z "$BASE"...HEAD -- >"$SCRATCH_DIR/added-paths" 2>/dev/null; then
+  echo "cannot collect added paths" >&2; exit 2
+fi
+while IFS= read -r -d '' path; do ADDED_FILES+=("$path"); done <"$SCRATCH_DIR/added-paths"
+if ! git diff -U0 "$BASE"...HEAD -- >"$SCRATCH_DIR/added.diff" 2>/dev/null; then
+  echo "cannot collect added content" >&2; exit 2
+fi
+ADDED_LINES="$(grep -E '^\+' "$SCRATCH_DIR/added.diff" | grep -vE '^\+\+\+' || true)"
 # Untracked files are invisible to git diff but fully part of the change:
 # review their whole content as added lines (new files count as Added).
-UNTRACKED=()
-while IFS= read -r u; do
+if ! git ls-files --others --exclude-standard -z >"$SCRATCH_DIR/untracked-paths" 2>/dev/null; then
+  echo "cannot collect untracked paths" >&2; exit 2
+fi
+while IFS= read -r -d '' u; do
   [[ -n "$u" ]] || continue
   CHANGED+=("$u")
   ADDED_FILES+=("$u")
   UNTRACKED+=("$u")
-  if [[ -f "$u" ]] && grep -Iq . "$u" 2>/dev/null; then
-    ADDED_LINES+=$'\n'"$(sed 's/^/+/' "$u" || true)"
+  if [[ -f "$u" ]] && grep -Iq . -- "$u" 2>/dev/null; then
+    if ! sed 's/^/+/' -- "$u" >"$SCRATCH_DIR/untracked-content" 2>/dev/null; then
+      echo "cannot read untracked file: $u" >&2; exit 2
+    fi
+    ADDED_LINES+=$'\n'"$(<"$SCRATCH_DIR/untracked-content")"
   fi
-done < <(git ls-files --others --exclude-standard -z 2>/dev/null | tr '\0' '\n' || true)
+done <"$SCRATCH_DIR/untracked-paths"
 
 printf '%-4s  %-15s  %s\n' "STAT" "BUCKET" "DETAIL"
 echo "---  ---------------  ------------------------------------------------"
@@ -330,18 +347,217 @@ echo "$ADDED_LINES" | grep -E 'catch\s*(\([^)]*\))?\s*\{\s*\}' >/dev/null \
   && warn "unhandled-errors" "empty catch block in added JS/TS — handle or explain"
 
 # --- 7. authz ----------------------------------------------------------------
-# Quoted values need a 12+ non-space, non-quote run; bare values must be
-# a full 12+ run ending at a value boundary (space, comma, semicolon,
-# quote, comment hash, or end of line) — parens and dots after the run
-# mark calls or attribute access (e.g. match.group(1)), not a credential.
-# Angle brackets are excluded from the bare-value run so generic type shapes
-# such as Option<String> read as declarations, not literals. They are not a
-# trailing boundary: a 12+ type-path run before `<` (long generics such as
-# CredentialEnvelope<String>, turbofish `from_str::<T>`) is a type, not a
-# credential, so a bare secret glued to a bracket is left unflagged.
+# Keep the canonical literal checks, while recognizing values immediately
+# before delimiters the bare-value branch intentionally excludes. A narrowly
+# recognized Rust type span may suppress only a match wholly inside that span;
+# strong credential families are checked first against original added lines.
 SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[bap]-[A-Za-z0-9-]{8,}|api[_-]?key["'"'"' ]*[:=]["'"'"' ]+[A-Za-z0-9_.-]{12,}|(token|secret|password)["'"'"' ]*[:=](["'"'"' ]*["'"'"'][^"'"'"' ]{12,}|["'"'"' ]+[^"'"'"' ().<>]{12,}(["'"'"' ,;#]|$)))'
-
-if grep -Eq "$SECRET_RE" <<<"$ADDED_LINES"; then
+# Strong credential families are always checked against the original added
+# bytes, before any language-specific match-span classification.
+STRONG_SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[bap]-[A-Za-z0-9-]{8,}|api[_-]?key["'"'"' ]*[:=]["'"'"' ]+[A-Za-z0-9_.-]{12,})'
+RUST_TYPE_NAME='(Option|String|str|Arc|Result|Vec|HashMap|HashSet|Box|Cow|SecretString|SensitiveString|PasswordHash|SecretWrapper|bool|char|f32|f64|[iu](8|16|32|64|128|size)|[A-Z][A-Za-z0-9_]*(Type|Envelope[0-9]*|Response|Error))'
+API_KEY_SECRET_RE="api[_-]?key[\"'[:space:]]*[:=][\"'[:space:]]*[A-Za-z0-9_.-]{12,}"
+RUST_TYPE_PATH="(([A-Za-z_][A-Za-z0-9_]*::)*${RUST_TYPE_NAME})"
+RUST_TYPE_GENERIC_REF="(&[[:space:]]*(mut[[:space:]]+)?('[[:alpha:]_][[:alnum:]_]*[[:space:]]*)?)?"
+RUST_TYPE_GENERIC_ARG1="${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}([[:space:]]*<${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}(,[[:space:]]*${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH})*[[:space:]]*>)?"
+RUST_TYPE_GENERIC_ARG2="${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}([[:space:]]*<${RUST_TYPE_GENERIC_ARG1}(,[[:space:]]*${RUST_TYPE_GENERIC_ARG1})*[[:space:]]*>)?"
+RUST_TYPE_GENERIC_ARG3="${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}([[:space:]]*<${RUST_TYPE_GENERIC_ARG2}(,[[:space:]]*${RUST_TYPE_GENERIC_ARG2})*[[:space:]]*>)?"
+RUST_TYPE_GENERIC="([[:space:]]*<${RUST_TYPE_GENERIC_ARG3}(,[[:space:]]*${RUST_TYPE_GENERIC_ARG3})*[[:space:]]*>)?"
+RUST_TYPE_SPAN_RE="^[+][[:space:]]*(pub([[:space:]]*[(][^)]*[)])?[[:space:]]+)?(let[[:space:]]+(mut[[:space:]]+)?)?[[:alnum:]_]*([Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])[[:space:]]*:[[:space:]]*(&[[:space:]]*(mut[[:space:]]+)?('[[:alpha:]_][[:alnum:]_]*[[:space:]]*)?|[*](const|mut)[[:space:]]+|dyn[[:space:]]+|impl[[:space:]]+)?([[][^]]+;[[:space:]]*[0-9]+[]]|${RUST_TYPE_PATH}${RUST_TYPE_GENERIC})[[:space:]]*([,;=]|$)"
+EDGE_VALUE_RE="(token|secret|password)[\"'[:space:]]*[:=][\"'[:space:]]*[A-Za-z0-9_-]{12,}([\"'[:space:],;#=.]|$)"
+EDGE_ANGLE_RE="(token|secret|password)[\"'[:space:]]*[:=][\"'[:space:]]*<?[A-Za-z0-9_-]{12,}(<[A-Za-z0-9_][A-Za-z0-9_]*>|>)"
+EDGE_PAREN_RE="(token|secret|password)[\"'[:space:]]*[:=][\"'[:space:]]*[(]?[\"'[:space:]]*[A-Za-z0-9_.-]{12,}[)]"
+EDGE_CALL_RE="(token|secret|password)[\"'[:space:]]*[(][\"'[:space:]]*[A-Za-z0-9_.-]{12,}={0,}[\"'[:space:]]*[)]"
+RUST_LITERAL_RE="(token|secret|password)[^;\"/]*[:=][^;\"/]*\"[^\"[:space:]]{12,}\""
+authz_file_lines() {
+  local file="$1" untracked=0 path
+  for path in "${UNTRACKED[@]}"; do [[ "$path" == "$file" ]] && { untracked=1; break; }; done
+  if [[ "$untracked" -eq 1 ]]; then
+    [[ -f "$file" ]] || return 1
+    if [[ -s "$file" ]] && ! grep -Iq . -- "$file" 2>/dev/null; then
+      return 1
+    fi
+    awk '{ print NR "|+" $0 }' -- "$file"
+  else
+    if ! git --literal-pathspecs diff -U0 "$BASE"...HEAD -- "$file" >"$SCRATCH_DIR/file.diff" 2>/dev/null; then
+      return 1
+    fi
+    if grep -q '^Binary files ' "$SCRATCH_DIR/file.diff"; then
+      return 1
+    fi
+    awk '
+      /^@@ / {
+        if (!match($0, /\+[0-9]+(,[0-9]+)?/)) exit 1
+        range = substr($0, RSTART + 1, RLENGTH - 1)
+        split(range, parts, ",")
+        line = parts[1]
+        next
+      }
+      /^\+\+\+/ { next }
+      /^\+/ { print line "|+" substr($0, 2); line++; next }
+      /^ / { line++; next }
+    ' "$SCRATCH_DIR/file.diff"
+  fi
+}
+rust_plain_code_lines() {
+  awk '
+    function raw_open(rest,    prefix, hashes) {
+      if (!match(rest, /^(br|r)#*"/)) return 0
+      prefix = substr(rest, 1, RLENGTH)
+      hashes = prefix
+      sub(/^(br|r)/, "", hashes)
+      sub(/"$/, "", hashes)
+      raw_end = "\"" hashes
+      return RLENGTH
+    }
+    {
+      text = $0
+      safe = 1
+      i = 1
+      while (i <= length(text)) {
+        rest = substr(text, i)
+        ch = substr(text, i, 1)
+        if (raw_end != "") {
+          safe = 0
+          if (substr(text, i, length(raw_end)) == raw_end) {
+            i += length(raw_end)
+            raw_end = ""
+          } else i++
+          continue
+        }
+        if (string_state) {
+          safe = 0
+          if (escaped) { escaped = 0; i++; continue }
+          if (ch == "\\") { escaped = 1; i++; continue }
+          if (ch == "\"") string_state = 0
+          i++
+          continue
+        }
+        if (block_depth > 0) {
+          safe = 0
+          if (substr(text, i, 2) == "/*") { block_depth++; i += 2; continue }
+          if (substr(text, i, 2) == "*/") { block_depth--; i += 2; continue }
+          i++
+          continue
+        }
+        if (substr(text, i, 2) == "//") { safe = 0; break }
+        if (substr(text, i, 2) == "/*") { safe = 0; block_depth = 1; i += 2; continue }
+        consumed = raw_open(rest)
+        if (consumed > 0) { safe = 0; i += consumed; continue }
+        if (ch == "\"") { safe = 0; string_state = 1; i++; continue }
+        if (ch == sprintf("%c", 39)) {
+          safe = 0
+          if (substr(text, i + 1, 1) == "\\") i += 4
+          else if (substr(text, i + 2, 1) == sprintf("%c", 39)) i += 3
+          else { safe = 1; i++ }
+          continue
+        }
+        i++
+      }
+      if (safe && raw_end == "" && block_depth == 0 && !string_state) print NR
+      if (string_state && escaped) escaped = 0
+    }
+  ' "$1"
+}
+rust_line_has_secret_match() {
+  local LC_ALL=C
+  local line="$1" line_number="$2" safe_lines="$3" pattern offset candidate lexical=0
+  local type_end=-1 type_key_start=-1 type_key_match type_shape=0
+  grep -Fxq "$line_number" <<<"$safe_lines" && lexical=1
+  if [[ "+$line" =~ $RUST_TYPE_SPAN_RE ]]; then
+    type_shape=1
+    if [[ "$lexical" -eq 1 ]]; then
+      type_end=$((${#BASH_REMATCH[0]} - 1))
+      while IFS=: read -r offset type_key_match; do
+        [[ -n "$type_key_match" ]] || continue
+        type_key_start="$offset"
+        break
+      done < <(grep -Eboi '(token|secret|password)[[:space:]]*:' <<<"$line" || true)
+    fi
+  fi
+  if [[ "$type_shape" -eq 0 ]] && grep -Eiq "$RUST_CREDENTIAL_GENERIC_RE" <<<"$line"; then
+    return 0
+  fi
+  for pattern in "$SECRET_RE" "$EDGE_VALUE_RE" "$EDGE_ANGLE_RE" "$EDGE_PAREN_RE" "$EDGE_CALL_RE" "$RUST_LITERAL_RE"; do
+    while IFS=: read -r offset candidate; do
+      [[ -n "$candidate" ]] || continue
+      if [[ "$lexical" -eq 1 && "$type_key_start" -ge 0 \
+        && "$offset" -ge "$type_key_start" \
+        && $((offset + ${#candidate})) -le "$type_end" ]]; then
+        continue
+      fi
+      return 0
+    done < <(LC_ALL=C grep -Eboi "$pattern" <<<"$line" || true)
+  done
+  return 1
+}
+RUST_TYPED_VALUE_RE='(token|secret|password)[[:space:]]*:[^=;]*=([A-Za-z0-9_-]{12,}[=),;[:space:].:/+]|[^;]*[[:space:](,.:/+=][A-Za-z0-9_-]{12,}[=),;[:space:].:/+])'
+RUST_CREDENTIAL_GENERIC_RE='(token|secret|password)([[:space:]]|/\*([^*]|\*+[^*/])*\*/)*:[^=;]*<'
+AUTHZ_NON_RUST_LINES=""
+AUTHZ_RUST_PATTERN_HIT=0
+AUTHZ_COLLECTION_FAILED=0
+STRONG_SECRET_HIT=0
+if grep -Eiq "$STRONG_SECRET_RE" <<<"$ADDED_LINES" \
+  || grep -Eiq "$API_KEY_SECRET_RE" <<<"$ADDED_LINES"; then
+  STRONG_SECRET_HIT=1
+fi
+for file in "${CHANGED[@]}"; do
+  if ! file_lines="$(authz_file_lines "$file")"; then
+    fail "authz" "cannot collect added lines for changed file: $file"
+    AUTHZ_COLLECTION_FAILED=1
+    continue
+  fi
+  if [[ "$file" == *.rs ]]; then
+    if [[ -n "$file_lines" ]]; then
+      is_untracked=0
+      for path in "${UNTRACKED[@]}"; do [[ "$path" == "$file" ]] && { is_untracked=1; break; }; done
+      if [[ "$is_untracked" -eq 1 ]]; then
+        if ! cp -- "$file" "$SCRATCH_DIR/rust-source" 2>/dev/null; then
+          fail "authz" "cannot read Rust lexical context: $file"
+          AUTHZ_COLLECTION_FAILED=1
+          continue
+        fi
+      elif ! git cat-file blob "HEAD:$file" >"$SCRATCH_DIR/rust-source" 2>/dev/null; then
+        fail "authz" "cannot collect committed Rust lexical context: $file"
+        AUTHZ_COLLECTION_FAILED=1
+        continue
+      fi
+      if ! safe_lines="$(rust_plain_code_lines "$SCRATCH_DIR/rust-source")"; then
+        fail "authz" "cannot classify Rust lexical context: $file"
+        AUTHZ_COLLECTION_FAILED=1
+        continue
+      fi
+    else
+      safe_lines=""
+    fi
+    while IFS= read -r numbered; do
+      [[ -n "$numbered" ]] || continue
+      line_number="${numbered%%|*}"
+      added_line="${numbered#*|}"
+      if rust_line_has_secret_match "${added_line#+}" "$line_number" "$safe_lines" \
+        || grep -Eiq "$RUST_TYPED_VALUE_RE" <<<"$added_line"; then
+        AUTHZ_RUST_PATTERN_HIT=1
+      fi
+    done <<<"$file_lines"
+  else
+    non_rust_lines=""
+    while IFS= read -r numbered; do
+      [[ -n "$numbered" ]] || continue
+      non_rust_lines+=$'\n'"${numbered#*|}"
+    done <<<"$file_lines"
+    AUTHZ_NON_RUST_LINES+=$'\n'"$non_rust_lines"
+  fi
+done
+EDGE_ANGLE_MATCHES="$(grep -Eio "$EDGE_ANGLE_RE" <<<"$AUTHZ_NON_RUST_LINES" || true)"
+if [[ "$AUTHZ_COLLECTION_FAILED" -eq 1 ]] \
+  || [[ "$STRONG_SECRET_HIT" -eq 1 ]] \
+  || grep -Eiq "$SECRET_RE" <<<"$AUTHZ_NON_RUST_LINES" \
+  || grep -Eiq "$EDGE_VALUE_RE" <<<"$AUTHZ_NON_RUST_LINES" \
+  || [[ -n "$EDGE_ANGLE_MATCHES" ]] \
+  || grep -Eiq "$EDGE_PAREN_RE" <<<"$AUTHZ_NON_RUST_LINES" \
+  || grep -Eiq "$EDGE_CALL_RE" <<<"$AUTHZ_NON_RUST_LINES" \
+  || [[ "$AUTHZ_RUST_PATTERN_HIT" -eq 1 ]];
+then
   fail "authz" "possible secret in added lines — move to a credential store"
 else
   pass "authz" "no secret patterns in added lines"

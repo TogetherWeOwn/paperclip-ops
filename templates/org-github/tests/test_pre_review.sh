@@ -37,7 +37,18 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin"
 export PATH="$WORK/bin:$PATH"
 if REALGIT="$(PATH="$(getconf PATH)" command -v git 2>/dev/null)" && [[ -n "$REALGIT" ]]; then
-  ln -sf "$REALGIT" "$WORK/bin/git"
+  export REAL_GIT_BIN="$REALGIT"
+  cat > "$WORK/bin/git" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${FAIL_AUTHZ_DIFF:-0}" == 1 && "${1:-}" == --literal-pathspecs && "${2:-}" == diff ]]; then
+  exit 73
+fi
+if [[ "${FAIL_AUTHZ_READ:-0}" == 1 && "${1:-}" == cat-file && "${2:-}" == blob ]]; then
+  exit 74
+fi
+exec "$REAL_GIT_BIN" "$@"
+EOF
+  chmod +x "$WORK/bin/git"
 fi
 # Stop BASH_ENV from re-prepending the credential shim on child shells,
 # which would bury the shadow above (BASH_ENV= + real git first).
@@ -432,6 +443,14 @@ printf 'token = "ghp_%s"\n' "$FAKE_CORE" > "$REPO_DIR/sneaky.py"
 OUT="$(cd "$REPO_DIR" && bash "$PRE" --base "$CHANGE_BASE" 2>&1)" && RC=0 || RC=$?
 [[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "untracked secret fails" \
   || bad "untracked secret fails (rc=$RC)"
+new_repo
+printf 'def test_binary(): pass\n' > "$REPO_DIR/test_binary.py"
+commit_change "test(auth): seed binary scanning fixture"
+printf 'x\000token_payload\000' > "$REPO_DIR/binary.dat"
+OUT="$(cd "$REPO_DIR" && bash "$PRE" --base "$CHANGE_BASE" 2>&1)" && RC=0 || RC=$?
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "untracked binary fails closed" \
+  || bad "untracked binary fails closed (rc=$RC)"
 
 # --- 16. self-scan: the script stays clean under its own detectors -----------
 new_repo
@@ -613,7 +632,7 @@ run_check
 # Long generic names hold no literal: the `<` after a 12+ type-path run is a
 # type argument list, not a credential boundary.
 new_repo
-printf 'password: CredentialEnvelope<String>\n' > "$REPO_DIR/auth.rs"
+printf 'password: %s<%s>\n' CredentialEnvelope String > "$REPO_DIR/auth.rs"
 printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
 commit_change "feat(auth): add credential envelope field"
 run_check
@@ -628,6 +647,370 @@ commit_change "feat(auth): parse token response"
 run_check
 [[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "turbofish path passes authz" \
   || bad "turbofish path passes authz (rc=$RC)"
+# Rust type detection is structural and file-scoped: prefixed fields, nested
+# generic wrappers, restricted visibility and trailing comments remain clean.
+new_repo
+printf 'pub(crate) access_token: Arc<Option<String>>, // runtime-owned\n' > "$REPO_DIR/auth.rs"
+printf 'pub raw_%s: %s<%s>,\n' password CredentialEnvelope String >> "$REPO_DIR/auth.rs"
+printf 'pub password: CredentialEnvelope <Vec<HashMap<String, String>>>,\n' >> "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): add wrapped credential fields"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz \
+  && ok "nested Rust credential types pass authz" \
+  || bad "nested Rust credential types pass authz (rc=$RC)"
+# Generic arguments must themselves be recognized type syntax; arbitrary
+# credential-shaped contents are not excused by a type-shaped wrapper.
+new_repo
+printf 'pub password: SecretString<super_secret_value_12345>,\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): scan ambiguous generic arguments"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "credential-shaped Rust generic argument fails authz" \
+  || bad "credential-shaped Rust generic argument fails authz (rc=$RC)"
+new_repo
+printf 'pub password: Option<supermansecret99>,\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): reject credential-shaped short generic argument"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "credential-shaped short generic argument fails authz" \
+  || bad "credential-shaped short generic argument fails authz (rc=$RC)"
+for credential_field in TOKEN SECRET Token Secret; do
+  new_repo
+  printf 'pub %s: Option<supermansecret99>,\n' "$credential_field" > "$REPO_DIR/auth.rs"
+  printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+  commit_change "test(auth): reject mixed-case generic credential field"
+  run_check
+  [[ "$RC" -eq 1 ]] && has_row FAIL authz \
+    && ok "generic credential field fails regardless of case: $credential_field" \
+    || bad "generic credential field fails regardless of case: $credential_field (rc=$RC)"
+done
+new_repo
+printf 'pub password /*c*/ : Option<supermansecret99>,\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): reject commented generic credential field"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "comment between credential field and colon fails closed" \
+  || bad "comment between credential field and colon fails closed (rc=$RC)"
+# A one-segment function turbofish is runtime code too.
+new_repo
+printf 'let raw_token = parse::<TokenResponse>();\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): parse one-segment token type"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz \
+  && ok "single-segment turbofish passes authz" \
+  || bad "single-segment turbofish passes authz (rc=$RC)"
+# Numeric suffixes are valid identifiers in Rust types and must not make
+# runtime type syntax look like a credential literal.
+new_repo
+printf 'pub password: %s<%s>,\n' CredentialEnvelope2 String > "$REPO_DIR/auth.rs"
+printf 'pub raw_%s: %s,\n' password VeryLongPasswordType >> "$REPO_DIR/auth.rs"
+printf 'pub access_token: crate::auth::%s<%s>,\n' CredentialEnvelope String >> "$REPO_DIR/auth.rs"
+printf 'pub ref_%s: &%s,\n' password VeryLongType >> "$REPO_DIR/auth.rs"
+printf 'pub raw_%s: [%s; 32],\n' secret VeryLongType >> "$REPO_DIR/auth.rs"
+printf '// a generic type note, with no credential-shaped value\n' >> "$REPO_DIR/auth.rs"
+printf 'let password: %s<%s> = get_password();\n' CredentialEnvelope String >> "$REPO_DIR/auth.rs"
+printf 'let token = parse::<Token2>();\n' >> "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): use numbered credential types"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz \
+  && ok "numbered Rust types pass authz" \
+  || bad "numbered Rust types pass authz (rc=$RC)"
+# Long lowercase identifiers remain suspicious rather than being treated as types.
+new_repo
+printf 'pub password: %s,\n' secrettypewithlongname > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): reject lowercase Rust credential-shaped value"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "lowercase Rust credential-shaped value fails" \
+  || bad "lowercase Rust credential-shaped value fails (rc=$RC)"
+# Common secret-wrapper and hash types are declarations, not credentials.
+new_repo
+printf 'pub password: %s,\n' SecretString > "$REPO_DIR/auth.rs"
+printf 'pub raw_password: %s,\n' PasswordHash >> "$REPO_DIR/auth.rs"
+printf 'pub secret: %s,\n' SensitiveString >> "$REPO_DIR/auth.rs"
+printf 'pub password: %s,\n' crate::secrecy::SecretString >> "$REPO_DIR/auth.rs"
+printf 'pub PASSWORD: Option<String>,\n' >> "$REPO_DIR/auth.rs"
+printf 'let password: %s = get_password();\n' SecretWrapper >> "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): support standard credential wrapper types"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz \
+  && ok "Rust wrapper types and initialized bindings pass authz" \
+  || bad "Rust wrapper types and initialized bindings pass authz (rc=$RC)"
+# Attribute access is code, not a bare credential value.
+new_repo
+printf 'password = %s\n' config.password > "$REPO_DIR/app.py"
+printf 'pub password: %s,\n' self.password > "$REPO_DIR/auth.rs"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): allow dotted runtime field access"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz \
+  && ok "dotted runtime field access passes authz" \
+  || bad "dotted runtime field access passes authz (rc=$RC)"
+# Lowercase alpha strings before angle suffixes are not generic types.
+new_repo
+FIXTURE_VALUE="xxmyhostname"
+FIXTURE_SUFFIX="local"
+printf 'password: %s<%s>\n' "$FIXTURE_VALUE" "$FIXTURE_SUFFIX" > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): reject lowercase credential with angle suffix"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "lowercase Rust angle credential still fails" \
+  || bad "lowercase Rust angle credential still fails (rc=$RC)"
+# Trailing comments on a type field remain in the secret scan.
+new_repo
+FAKE_AKIA="AKIA""IOSFODNN7EXAMPLE"
+FIXTURE_VALUE="abcdefghijklmnop"
+printf 'pub password: String, // %s\n' "$FAKE_AKIA" > "$REPO_DIR/auth.rs"
+printf 'pub raw_secret: String, // password: %s\n' "$FIXTURE_VALUE" >> "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): scan Rust trailing comments"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "Rust type comments still detect credentials" \
+  || bad "Rust type comments still detect credentials (rc=$RC)"
+# Type-shaped text in a Rust comment remains part of the scan, not a type exemption.
+new_repo
+printf '// password: %s<%s> in a comment\n' CredentialEnvelope String > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): retain Rust comment match spans"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "type-shaped Rust comment remains scanned" \
+  || bad "type-shaped Rust comment remains scanned (rc=$RC)"
+# Escaped configuration text is not Rust type syntax and must stay detectable.
+new_repo
+printf 'const CFG: &str = "password: \\\"AbcdefghijklType\\\"";\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): scan escaped Rust configuration"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "escaped Rust configuration fails authz" \
+  || bad "escaped Rust configuration fails authz (rc=$RC)"
+# Prose in a Rust comment is not a quoted credential literal.
+new_repo
+printf 'pub password: Option<String>, // note \\"runtime-owned credential value\\"\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): ignore quoted Rust comment prose"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz \
+  && ok "quoted Rust comment prose passes authz" \
+  || bad "quoted Rust comment prose passes authz (rc=$RC)"
+# A CamelCase value ending in generic-looking syntax outside Rust is not a type.
+new_repo
+printf 'password: %s<%s>\n' Abcdefghijkl String > "$REPO_DIR/app.py"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "test(auth): scan non-Rust angle values"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "non-Rust angle value still fails authz" \
+  || bad "non-Rust angle value still fails authz (rc=$RC)"
+# A quoted value in Rust source remains a credential literal, not a type.
+new_repo
+FIXTURE_VALUE="Q7m2V9z4L6p8R1s3"
+printf 'let password = "%s";\n' "$FIXTURE_VALUE" > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): reject literal Rust credential"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "quoted Rust credential still fails" \
+  || bad "quoted Rust credential still fails (rc=$RC)"
+# Typed Rust bindings and string constructors still expose the literal value.
+new_repo
+FIXTURE_VALUE="Q7m2V9z4L6p8R1s3"
+printf 'let password: String = "%s";\n' "$FIXTURE_VALUE" > "$REPO_DIR/auth.rs"
+printf 'let password = String::from("%s");\n' "$FIXTURE_VALUE" >> "$REPO_DIR/auth.rs"
+printf 'let password: Option<String> = Some("%s");\n' "$FIXTURE_VALUE" >> "$REPO_DIR/auth.rs"
+printf 'const PASSWORD: &str = "%s";\n' "$FIXTURE_VALUE" >> "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): reject typed Rust string credentials"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "typed Rust string credentials still fail" \
+  || bad "typed Rust string credentials still fail (rc=$RC)"
+new_repo
+FIXTURE_VALUE="abcdefghijklmnop"
+printf 'let password: String = %s;\n' "$FIXTURE_VALUE" > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): detect typed binding value"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "credential-shaped typed binding value fails" \
+  || bad "credential-shaped typed binding value fails (rc=$RC)"
+new_repo
+printf 'let password: SecretString =foo.hunter2password12345;\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): scan credential in typed initializer"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "credential in dotted typed initializer fails" \
+  || bad "credential in dotted typed initializer fails (rc=$RC)"
+new_repo
+printf 'let password: SecretString =foo::hunter2password12345;\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): scan credential in typed path initializer"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "credential in path typed initializer fails" \
+  || bad "credential in path typed initializer fails (rc=$RC)"
+new_repo
+printf 'let token: String =abcdefghijklm;\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): scan adjacent typed initializer value"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "adjacent typed initializer value fails" \
+  || bad "adjacent typed initializer value fails (rc=$RC)"
+new_repo
+printf 'let token: String = abcdefghijkl==;\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): scan padded typed initializer value"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "padded typed initializer value fails" \
+  || bad "padded typed initializer value fails (rc=$RC)"
+new_repo
+PADDED_VALUE="abcdefghijkl=="
+printf 'token=%s;\n' "$PADDED_VALUE" > "$REPO_DIR/config.txt"
+commit_change "test(auth): scan padded non-Rust value"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "padded non-Rust value fails" \
+  || bad "padded non-Rust value fails (rc=$RC)"
+new_repo
+printf 'password: abcdefghijklmnop.\n' > "$REPO_DIR/config.txt"
+commit_change "test(auth): scan sentence-terminated value"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "sentence-terminated value fails" \
+  || bad "sentence-terminated value fails (rc=$RC)"
+new_repo
+printf 'password("abcdefghijklmnop")\n' > "$REPO_DIR/config.txt"
+commit_change "test(auth): scan credential passed as call argument"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "credential passed to named call fails" \
+  || bad "credential passed to named call fails (rc=$RC)"
+new_repo
+printf 'password("abcdefghijkl==")\n' > "$REPO_DIR/config.txt"
+commit_change "test(auth): scan padded credential call argument"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "padded credential call argument fails" \
+  || bad "padded credential call argument fails (rc=$RC)"
+new_repo
+printf 'password("abcdefghijklmnop");\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): scan Rust credential call argument"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "Rust credential call argument fails" \
+  || bad "Rust credential call argument fails (rc=$RC)"
+for fixture in \
+  $'password:\tabcdefghijklmnop' \
+  $'password\t=\tabcdefghijklmnop' \
+  $'password:\t"secretvalue12345"' \
+  $'api_key\t=\tsecretvalue12345' \
+  'api_key=secretvalue12345' \
+  'api_key:secretvalue12345'; do
+  new_repo
+  printf '%s\n' "$fixture" > "$REPO_DIR/config.txt"
+  commit_change "test(auth): scan tab-separated credential value"
+  run_check
+  [[ "$RC" -eq 1 ]] && has_row FAIL authz \
+    && ok "tab-separated credential fails: ${fixture//$'\t'/<TAB>}" \
+    || bad "tab-separated credential fails: ${fixture//$'\t'/<TAB>} (rc=$RC)"
+done
+# Credential-shaped bare Rust values are not whitelisted as type declarations.
+new_repo
+FIXTURE_VALUE="Q7m2V9z4L6p8R1s3"
+printf 'pub password: %s,\n' "$FIXTURE_VALUE" > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): reject bare Rust credential value"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "bare Rust credential value still fails" \
+  || bad "bare Rust credential value still fails (rc=$RC)"
+new_repo
+FIXTURE_VALUE="Abcdefghijklmnop"
+printf 'pub password: %s,\n' "$FIXTURE_VALUE" > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): reject CamelCase Rust credential"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "CamelCase Rust credential still fails" \
+  || bad "CamelCase Rust credential still fails (rc=$RC)"
+new_repo
+FIXTURE_VALUE="SecretValueLong"
+printf 'pub password: %s,\n' "$FIXTURE_VALUE" > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): reject title case Rust credential"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "title-case Rust credential still fails" \
+  || bad "title-case Rust credential still fails (rc=$RC)"
+for rust_credential in xxmyhostname myuserdataxx somealiasxxx AbcdefghName AbcdefghData MyCredentials; do
+  new_repo
+  printf 'pub password: %s,\n' "$rust_credential" > "$REPO_DIR/auth.rs"
+  printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+  commit_change "test(auth): reject suffix-shaped Rust value"
+  run_check
+  [[ "$RC" -eq 1 ]] && has_row FAIL authz \
+    && ok "suffix-shaped Rust value fails: $rust_credential" \
+    || bad "suffix-shaped Rust value fails: $rust_credential (rc=$RC)"
+done
+new_repo
+FAKE_AKIA="AKIA""IOSFODNN7EXAMPLE"
+printf 'pub token: %s,\n' "$FAKE_AKIA" > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): reject cloud credential identifier"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "cloud credential identifier still fails" \
+  || bad "cloud credential identifier still fails (rc=$RC)"
+# Regression controls: raw scalars containing angle brackets and call-argument
+# literals (including an embedded config string) must remain detectable.
+FIXTURE_VALUE="Q7m2V9z4L6p8R1s3"
+for fixture_format in \
+  'password:%s' \
+  'password: %s<local>' \
+  'password: %s<123>' \
+  'password: %s>' \
+  'password: <%s>' \
+  'password: (%s)' \
+  'configure(password: %s)' \
+  'cfg = "configure(password: %s)"'; do
+  fixture="$(printf "$fixture_format" "$FIXTURE_VALUE")"
+  new_repo
+  printf '%s\n' "$fixture" > "$REPO_DIR/app.py"
+  printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+  commit_change "feat(app): add synthetic credential fixture"
+  run_check
+  [[ "$RC" -eq 1 ]] && has_row FAIL authz \
+    && ok "credential shape still fails: $fixture" \
+    || bad "credential shape still fails: $fixture (rc=$RC)"
+done
+# Credential material need not contain digits; delimiter-edge detection must
+# still reject alphabetic values.
+ALPHA_VALUE="abcdefghijklmnop"
+for fixture_format in 'password:%s' 'Password=%s' 'password: %s<local>' 'configure(password: %s)'; do
+  fixture="$(printf "$fixture_format" "$ALPHA_VALUE")"
+  new_repo
+  printf '%s\n' "$fixture" > "$REPO_DIR/app.py"
+  printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+  commit_change "feat(app): reject alphabetic credential fixture"
+  run_check
+  [[ "$RC" -eq 1 ]] && has_row FAIL authz \
+    && ok "alphabetic credential shape still fails: $fixture" \
+    || bad "alphabetic credential shape still fails: $fixture (rc=$RC)"
+done
 # Cloud and private-key literals still fail. Split across adjacent
 # strings so this file never holds a contiguous scanner pattern; bash
 # concatenates them at runtime into the real fixture.
@@ -640,6 +1023,30 @@ run_check
 [[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "akia literal still fails" \
   || bad "akia literal still fails (rc=$RC)"
 new_repo
+FAKE_PAT="github_pat_""abcdefghijklmnopqrstuvwxyz"
+printf 'token = "%s"\n' "$FAKE_PAT" > "$REPO_DIR/app.py"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "feat(app): add synthetic PAT"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "GitHub PAT literal still fails" \
+  || bad "GitHub PAT literal still fails (rc=$RC)"
+new_repo
+FAKE_XOX="xoxb-""abcdefghijklmnop"
+printf 'token = "%s"\n' "$FAKE_XOX" > "$REPO_DIR/app.py"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "feat(app): add synthetic chat token"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "chat token literal still fails" \
+  || bad "chat token literal still fails (rc=$RC)"
+new_repo
+API_VALUE="abcdefghijklmnop"
+printf 'api_key = "%s"\n' "$API_VALUE" > "$REPO_DIR/app.py"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "feat(app): add synthetic API key"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "API key literal still fails" \
+  || bad "API key literal still fails (rc=$RC)"
+new_repo
 KEY_HEAD="-----BEGIN RSA ""PRIVATE KEY-----"
 printf -- "%s\n" "$KEY_HEAD" > "$REPO_DIR/app.py"
 printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
@@ -647,6 +1054,83 @@ commit_change "feat(app): add app with key header"
 run_check
 [[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "private key still fails" \
   || bad "private key still fails (rc=$RC)"
+
+# Credential families inside Rust-shaped lines and multiline literals must never
+# be removed by type recognition before the strong-pattern scan.
+new_repo
+FAKE_PAT="ghp_""AAAAAAAAAAAAAAAAAAAAAAAA"
+printf 'pub token: Option</* %s */String,\n' "$FAKE_PAT" > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): detect token inside Rust generic"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "strong token in Rust generic comment fails" \
+  || bad "strong token in Rust generic comment fails (rc=$RC)"
+new_repo
+printf 'const CFG: &str = r#"\npassword: AbcdefghijklType\n"#;\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): scan Rust raw configuration"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "password value in Rust raw string fails" \
+  || bad "password value in Rust raw string fails (rc=$RC)"
+new_repo
+printf 'const CFG: &str = r##"\npassword: CredentialEnvelope<String>,\n"##;\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): scan Rust raw type-shaped configuration"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "type-shaped content in Rust raw string fails" \
+  || bad "type-shaped content in Rust raw string fails (rc=$RC)"
+new_repo
+printf 'const CFG: &str = r##"embedded quote: "\npassword: CredentialEnvelope<String>,\n"##;\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): retain Rust raw string delimiter hashes"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "internal quote does not end Rust raw string" \
+  || bad "internal quote does not end Rust raw string (rc=$RC)"
+new_repo
+printf '/* outer /* nested */ comment\npassword: CredentialEnvelope<String>,\n*/\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): scan nested Rust comments"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "type-shaped content in nested Rust comment fails" \
+  || bad "type-shaped content in nested Rust comment fails (rc=$RC)"
+new_repo
+FIXTURE_VALUE="Q7m2V9z4L6p8R1s3"
+NEWLINE_NAME=$'line\nbreak.txt'
+printf 'password: %s\n' "$FIXTURE_VALUE" > "$REPO_DIR/$NEWLINE_NAME"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "test(auth): scan newline filename"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "credential in newline filename fails" \
+  || bad "credential in newline filename fails (rc=$RC)"
+new_repo
+FIXTURE_VALUE="Q7m2V9z4L6p8R1s3"
+printf 'password: %s\n' "$FIXTURE_VALUE" > "$REPO_DIR/:(literal)payload.txt"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "test(auth): scan pathspec magic filename"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "credential in magic filename fails" \
+  || bad "credential in magic filename fails (rc=$RC)"
+# Per-file diff failures must fail the gate rather than silently omit content.
+new_repo
+printf 'password: %s\n' "$FIXTURE_VALUE" > "$REPO_DIR/payload.txt"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "test(auth): fail closed on per-file diff errors"
+FAIL_AUTHZ_DIFF=1 run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "per-file diff error fails closed" \
+  || bad "per-file diff error fails closed (rc=$RC)"
+# A committed Rust source read failure must fail closed before any lexical exemption.
+new_repo
+printf 'pub password: Option<String>,\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): fail closed on Rust context read errors"
+FAIL_AUTHZ_READ=1 run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "Rust lexical context read error fails closed" \
+  || bad "Rust lexical context read error fails closed (rc=$RC)"
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

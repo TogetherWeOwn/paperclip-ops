@@ -1288,6 +1288,11 @@ jobs:
       # (no network/creds).
       - name: queue forecast gatus module suite
         run: ./test_case_60330d6f_queue_forecast.sh
+      # case_658bf6b9. CI queue-age measurement and healthy/failing push
+      # contracts. Hermetic offline suite (no network/creds).
+      - name: queue age depth contract suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_queue_age_depth.sh
 
       # case_b24794c2. GARM pool-health module: strict per-pool evaluator
       # (absent fields fail closed) + endpoint renderer. Hermetic: synthetic

@@ -31,6 +31,10 @@
 # younger runs cannot breach, and skipping them keeps the per-run jobs calls
 # bounded as repos are added.
 #
+# Triage context: the failure text also reports how many old queued runs were
+# listed. In-progress runs are excluded because they may be healthy executing
+# work; the count is a run-level signal, not a count of individual waiting jobs.
+#
 # Server-side age filter (case_6bb27f43): the run list sorts newest-first, so a
 # client-side `--limit 50` kept the 50 NEWEST runs and dropped the oldest.
 # On 2026-10-02 two-bot-next held 116 queued runs; the page read 99m while a
@@ -56,7 +60,10 @@
 # lookup needs the same `actions:read` class as the run list itself, for every
 # listed repo.
 # Cron (operator): */5 * * * * /opt/status-page/current/ops/case_658bf6b9/push-ci-queue-age.sh
-set -uo pipefail
+# -e is safe here: every expected failure below (the measurement call, the
+# timestamp parse, a failing failure-push) is guarded with `||`, so those
+# paths still reach their exact exit codes instead of dying mid-handler.
+set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_gatus_push.sh
 . "$HERE/_gatus_push.sh"
@@ -89,27 +96,28 @@ command -v jq >/dev/null 2>&1 \
 # QUEUE_AGE_IGNORE_JOB and QUEUE_AGE_RUN_LIMIT from this environment. Only
 # runs older than the threshold are inspected: a younger job cannot breach.
 ci_oldest_waiting_job "$THRESHOLD_MIN" "${REPOS[@]}" \
-  || { gatus_push platform_ci-queue-age false "$CQA_ERROR"; exit 1; }
+  || { gatus_push platform_ci-queue-age false "$CQA_ERROR" || true; exit 1; }
 now="$CQA_NOW"
 oldest="$CQA_OLDEST"
 oldest_repo="$CQA_OLDEST_REPO"
 jobs_unreadable="$CQA_JOBS_UNREADABLE"
+runs_inspected="${CQA_RUNS_INSPECTED:-0}"
 
 if [[ -z "$oldest" ]]; then
   if (( jobs_unreadable > 0 )); then
-    gatus_push platform_ci-queue-age false "jobs API unreadable for $jobs_unreadable run(s)"
+    gatus_push platform_ci-queue-age false "jobs API unreadable for $jobs_unreadable run(s)" || true
     exit 1
   fi
-  gatus_push platform_ci-queue-age true   # nothing waiting: nothing stale
+  gatus_push platform_ci-queue-age true            # push failures must reach cron
   exit 0
 fi
 
 then="$(date -d "$oldest" +%s 2>/dev/null)" \
-  || { gatus_push platform_ci-queue-age false "unparseable timestamp $oldest"; exit 1; }
+  || { gatus_push platform_ci-queue-age false "unparseable timestamp $oldest" || true; exit 1; }
 age_min=$(( (now - then) / 60 ))
 
 if (( age_min > 10#$THRESHOLD_MIN )); then
-  gatus_push platform_ci-queue-age false "oldest runner-waiting job ${age_min}m old in ${oldest_repo} (threshold ${THRESHOLD_MIN}m)"
+  gatus_push platform_ci-queue-age false "oldest runner-waiting job ${age_min}m old in ${oldest_repo} (threshold ${THRESHOLD_MIN}m; ${runs_inspected} old queued run(s))"
 else
   gatus_push platform_ci-queue-age true
 fi

@@ -159,6 +159,15 @@ class PublicCI(unittest.TestCase):
             text = (ROOT / ".github/workflows" / name).read_text()
             self.assertRegex(text, r"(?m)^  merge_group:", name)
 
+    def test_public_safety_push_ignores_merge_queue_branches(self):
+        # A push run and a merge_group run for the same queue commit share
+        # the workflow's concurrency group; cancel-in-progress cancels one
+        # and the cancelled required check ejects the queue entry.
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/public-safety.yml").read_text())
+        push = workflow[True]["push"]  # YAML 1.1 parses bare `on:` as True
+        self.assertEqual(push["branches-ignore"], ["gh-readonly-queue/**"])
+
     def test_lint_attests_hosted_environment_not_runner_name(self):
         text = (ROOT / ".github/workflows/pr-lint.yml").read_text()
         self.assertIn('"${RUNNER_ENVIRONMENT:-}" == github-hosted', text)
@@ -230,18 +239,24 @@ class PublicCI(unittest.TestCase):
         checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
         self.assertEqual(checkout["with"]["fetch-depth"], 0)
         scanner = next(step for step in steps if step.get("name", "").startswith("Scan working tree"))
-        self.assertIn("github.event.pull_request.base.sha", scanner["env"]["HISTORY_BASE"])
-        self.assertIn("github.event.merge_group.base_sha", scanner["env"]["HISTORY_BASE"])
-        self.assertIn("github.event.before", scanner["env"]["HISTORY_BASE"])
-        self.assertIn('BASE="${HISTORY_BASE:-}"', scanner["run"])
-        self.assertIn('RANGE="HEAD"', scanner["run"])
-        self.assertIn('git merge-base --is-ancestor "$BASE" HEAD', scanner["run"])
-        self.assertIn('RANGE="$BASE..HEAD"', scanner["run"])
+        # The history range is the one landed on main: push-to-main uses the
+        # push's before..HEAD, everything else uses merge-base(origin/main,
+        # HEAD)..HEAD (covers PR commits even when the branch is behind
+        # main), and any unusable/empty range falls back to a loud --all
+        # scan -- never a silent single-commit scan.
+        self.assertIn("github.event.before", scanner["env"]["PUSH_BEFORE"])
+        self.assertIn("github.event_name", scanner["env"]["EVENT_NAME"])
+        self.assertIn("github.ref", scanner["env"]["REF"])
+        self.assertIn('BASE="origin/main"', scanner["run"])
+        self.assertIn('RANGE="$PUSH_BEFORE..HEAD"', scanner["run"])
+        self.assertIn("0000000000000000000000000000000000000000", scanner["run"])
+        self.assertIn('git merge-base "$BASE" HEAD', scanner["run"])
+        self.assertIn('RANGE="$MB..HEAD"', scanner["run"])
         self.assertIn('git rev-list "$RANGE" --count', scanner["run"])
-        self.assertIn('|| RANGE="HEAD"', scanner["run"])
-        self.assertNotIn('git merge-base origin/main HEAD', scanner["run"])
+        self.assertIn('LOGOPTS="--all"', scanner["run"])
+        self.assertIn("::warning::public-safety:", scanner["run"])
         self.assertNotIn('RANGE="-1 HEAD"', scanner["run"])
-        self.assertIn('git /repo --log-opts="$RANGE"', scanner["run"])
+        self.assertIn('git /repo --log-opts="$LOGOPTS"', scanner["run"])
         self.assertIn('"$SCANNER" dir /repo', scanner["run"])
         self.assertNotIn("--log-opts=--all", scanner["run"])
 
@@ -285,12 +300,37 @@ class PublicCI(unittest.TestCase):
             script = root / "scan.sh"
             script.write_text(scanner["run"])
 
-            for history_base, expected in (("", "HEAD"), (foreign_base, "HEAD"),
-                                           (base, f"{base}..HEAD")):
+            head = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            cases = (
+                # (env overrides, origin/main target or None to delete, expected)
+                ({"EVENT_NAME": "pull_request", "REF": "refs/pull/1/merge",
+                  "PUSH_BEFORE": ""}, base, f"{base}..HEAD"),
+                ({"EVENT_NAME": "push", "REF": "refs/heads/main",
+                  "PUSH_BEFORE": base}, base, f"{base}..HEAD"),
+                # A before-sha absent from this repo falls through to the
+                # merge-base range instead of scanning nothing.
+                ({"EVENT_NAME": "push", "REF": "refs/heads/main",
+                  "PUSH_BEFORE": foreign_base}, base, f"{base}..HEAD"),
+                # origin/main already at HEAD: empty range -> loud --all.
+                ({"EVENT_NAME": "workflow_dispatch", "REF": "refs/heads/main",
+                  "PUSH_BEFORE": ""}, head, "--all"),
+                # No origin/main at all: no merge-base -> loud --all.
+                ({"EVENT_NAME": "pull_request", "REF": "refs/pull/1/merge",
+                  "PUSH_BEFORE": ""}, None, "--all"),
+            )
+            for overrides, origin_main, expected in cases:
+                if origin_main is None:
+                    subprocess.run(["git", "-C", str(repo), "update-ref", "-d",
+                                    "refs/remotes/origin/main"], check=True)
+                else:
+                    subprocess.run(["git", "-C", str(repo), "update-ref",
+                                    "refs/remotes/origin/main", origin_main],
+                                   check=True)
                 docker_log.write_text("")
                 env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
                        "SCANNER": "test-scanner", "DOCKER_LOG": str(docker_log),
-                       "HISTORY_BASE": history_base, "BASH_ENV": "/dev/null"}
+                       "BASH_ENV": "/dev/null", **overrides}
                 result = subprocess.run(["bash", str(script)], cwd=repo, env=env,
                                          capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

@@ -13,15 +13,22 @@ jobs:
       contents: read
     # Known central limitation (Paperclip Review on #27): the pinned reusable
     # checks its engine out at 60af3686, which predates the merged
-    # review-rules/ tree from TogetherWeOwn/.github#26 and carries a
-    # quadratic-time svelte scan (~30 min on a 2 MiB .svelte file, past the
-    # job's 20-min timeout). Step continue-on-error does NOT stop the
-    # job-level timeout, and "no .svelte in repo" does NOT bound it (the PR
-    # itself can add the file; ts+security packs scan .svelte). Real bound:
-    # mode warn + non-required keeps it from blocking merges; cost of a
-    # crafted PR is a wasted 20-min hosted run + non-green advisory check.
-    # Follow-up: re-pin once central merges an engine-ref bump matching the
-    # merged tree, then remove this note. Rollback: delete this file.
+    # review-rules/ tree from TogetherWeOwn/.github#26 (12 fix commits).
+    # Stale scans are quadratic-time: the svelte scan (~30 min on a 2 MiB
+    # .svelte file) AND shell_checks on .sh/.bash files and workflow run:
+    # bodies (232 KB .sh = 26.7 s stale vs 0.04 s merged; ~2 MiB hits the
+    # job's 20-min timeout; run.py has no in-process budget, blob cap 2 MiB).
+    # Step continue-on-error does NOT stop the job-level timeout, and "no
+    # .svelte in repo" does NOT bound it (the PR itself can add the file;
+    # ts+security packs scan .svelte, python-shell-ci+security run
+    # shell_checks). This repo's own 309 .sh files total 0.43 s stale, so
+    # only adversarial/oversized inputs are affected. Real bound: mode warn
+    # + non-required keeps it from blocking merges; cost of a crafted PR is
+    # a wasted 20-min hosted run + non-green advisory check. Residual risk
+    # accepted (warn-only, non-required, contents:read, free public
+    # runners). Follow-up: re-pin once central merges an engine-ref bump
+    # matching the merged tree, then remove this note. Rollback: delete
+    # this file.
     uses: TogetherWeOwn/.github/.github/workflows/review-rules.yml@63699075b492914c137281acffd4c89e51cc1c4c
     with:
       packs: python-shell-ci,security,ts

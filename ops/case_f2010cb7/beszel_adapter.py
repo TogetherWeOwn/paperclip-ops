@@ -158,7 +158,7 @@ def build_host(system, latest, history_by_system, now, max_age):
     if total_gib is not None and total_gib > 0:
         record["disk_total_bytes"] = round(total_gib * GIB)
         points = []
-        for created_h, rec_h in sorted(history_by_system.get(system.get("id"), [])):
+        for created_h, rec_h in sorted(history_by_system.get(system.get("id"), []), key=lambda p: p[0]):
             used = num(as_obj(rec_h.get("stats")).get("du"))
             if used is not None:
                 points.append({"t": int(created_h), "used_bytes": round(used * GIB)})

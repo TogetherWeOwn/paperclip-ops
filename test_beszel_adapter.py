@@ -84,6 +84,14 @@ class TestMapping(AdapterCase):
                          [round(42.3 * GIB), round(42.4 * GIB), round(42.5 * GIB)])
         self.assertEqual([p["t"] for p in hist], sorted(p["t"] for p in hist))
 
+    def test_duplicate_history_timestamps_do_not_crash(self):
+        def dup(d):
+            d["items"].append(dict(d["items"][0], id="hist00000000099"))
+        self.mutate("stats-history.json", dup)
+        proc, out = self.run_adapter()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(self.host(out, "node7b1ff338")["disk_history"]), 4)
+
     def test_single_history_point_omits_history(self):
         self.mutate("stats-history.json", lambda d: d.__setitem__("items", d["items"][:1]))
         _proc, out = self.run_adapter()

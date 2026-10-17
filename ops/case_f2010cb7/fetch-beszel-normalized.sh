@@ -53,8 +53,10 @@ trap "rm -rf '$work'" EXIT
 chmod 0700 "$work"
 
 # --- authenticate (password in a 0600 data file, token into a variable) -----
-jq -n --arg i "$BESZEL_IDENTITY" --arg p "$BESZEL_PASSWORD" \
-  '{identity: $i, password: $p}' > "$work/auth.json" || refuse "cannot build auth body"
+# Password via jq's env, never --arg: --arg values are argv and would sit
+# in /proc/<pid>/cmdline for the life of the jq process.
+jq -n '{identity: env.BESZEL_IDENTITY, password: env.BESZEL_PASSWORD}' \
+  > "$work/auth.json" || refuse "cannot build auth body"
 chmod 0600 "$work/auth.json"
 {
   printf 'url = "%s/api/collections/users/auth-with-password"\n' "$HUB"
@@ -101,11 +103,13 @@ jq -s '{items: .}' "$work/stats-parts.jsonl" > "$work/stats-latest.json" \
 
 # Coarse history for the disk forecast (480m buckets; the adapter tolerates
 # any type, and perPage=500 covers HISTORY_DAYS at 3 points/day/host for a
-# small fleet — a truncated window only weakens the forecast, never scores).
+# small fleet — newest-first sort keeps the freshest window on truncation;
+# the adapter re-sorts by time). A truncated window only weakens the
+# forecast, never scores.
 since="$(date -u -d "-${HISTORY_DAYS} days" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" \
   || refuse "cannot compute history window"
 enc_since="$(jq -rn --arg v "$since" '$v | @uri')"
-fetch "/api/collections/system_stats/records?perPage=500&sort=created&filter=type%3D%27480m%27%26%26created%3E%3D%27${enc_since}%27" \
+fetch "/api/collections/system_stats/records?perPage=500&sort=-created&filter=type%3D%27480m%27%26%26created%3E%3D%27${enc_since}%27" \
   "$work/stats-history.json" || refuse "history fetch failed"
 
 python3 "$HERE/beszel_adapter.py" --max-age "$MAX_AGE" "$work" \

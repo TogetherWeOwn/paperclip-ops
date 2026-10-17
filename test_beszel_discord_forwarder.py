@@ -143,6 +143,14 @@ class TestRefusals(ForwarderCase):
         proc, _ = self.dry_run("")
         self.assert_refusal(proc)
 
+    def test_non_json_alert_refuses(self):
+        bad = self.dir / "bad.json"
+        bad.write_text("not json{{{")
+        proc = subprocess.run(
+            [sys.executable, str(FWD), "--dry-run", str(bad)],
+            capture_output=True, text=True, timeout=30)
+        self.assert_refusal(proc)
+
     def test_unset_webhook_env_refuses_live_send(self):
         env = {k: v for k, v in os.environ.items() if k != "DISCORD_WEBHOOK_URL"}
         proc = subprocess.run(

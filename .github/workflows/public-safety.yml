@@ -2,6 +2,13 @@ name: public-safety
 
 on:
   push:
+    # Merge-queue commits are covered by merge_group below. Without this
+    # ignore, creating the queue branch also fires a push run for the same
+    # commit; both runs share the concurrency group below (no pull_request
+    # number, same ref), cancel-in-progress kills one instantly, and the
+    # cancelled required check ejects the entry from the merge queue.
+    branches-ignore:
+      - 'gh-readonly-queue/**'
   pull_request:
   merge_group:
     types: [checks_requested]

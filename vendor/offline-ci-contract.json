@@ -306,9 +306,11 @@
     "project regen prune manifest atomic suite:1",
     "sweep-auto node7b1ff338 pressure-gate suite:1",
     "host regenerable cache reclaim hostile suite:1",
+    "migration safety gates suites:1",
     "queue age depth contract suite:1",
     "pr6 acceptance suite:1",
-    "Beszel adapter and Discord forwarder suites:1"
+    "Beszel adapter and Discord forwarder suites:1",
+    "activation contract suite:1"
   ],
   "retained": [
     {
@@ -1712,6 +1714,11 @@
       "id": "host regenerable cache reclaim hostile suite:1"
     },
     {
+      "name": "migration safety gates suites",
+      "definition_sha256": "fce3b348e7f6f7519516081f58fc644adfccc9ce70ed91bf543880a3a88d5369",
+      "id": "migration safety gates suites:1"
+    },
+    {
       "name": "queue age depth contract suite",
       "definition_sha256": "8ca1e2a63ba97130c428665099c43db06c748272bb96882606596bdc8f197a92",
       "id": "queue age depth contract suite:1"
@@ -1725,6 +1732,11 @@
       "name": "Beszel adapter and Discord forwarder suites",
       "definition_sha256": "95e64baa6bd280f6743477a1ad970c30b44eb74961ffb5f92aa519bf25f114c6",
       "id": "Beszel adapter and Discord forwarder suites:1"
+    },
+    {
+      "name": "activation contract suite",
+      "definition_sha256": "d3b4541f93b61ebe7cbba7cb1ed7bc82d721b6974c8a888f42bb8d35a413d203",
+      "id": "activation contract suite:1"
     },
     {
       "name": "sibling-run guard suite",

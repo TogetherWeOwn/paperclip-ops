@@ -11,12 +11,14 @@
 # Gate 5 folder scan is the engine in prod; here we pin the pack structure,
 # the rule ids, the FP guards, and the scan behaviour).
 # The behavioural section at the end additionally EXECUTES the staged rules
-# with the pinned Semgrep 1.138.0: the CI suites step installs it from a
-# hash-locked wheel closure in a venv and sets SEMGREP to that binary (without
-# shadowing system python3/PyYAML). A missing binary fails hard under CI.
-# A local run without SEMGREP or semgrep on PATH SKIPs
-# the behavioural section only, so a dead rule shape fails in CI instead of
-# nowhere.
+# with Semgrep (verified at 1.138.0 and the gate pin 1.128.1). This repo's
+# ci.yml does NOT install Semgrep or run this suite: run it with SEMGREP set
+# to an existing binary (an absolute path, so the suite keeps system
+# python3/PyYAML). When the suite is invoked with CI set, a missing binary
+# fails hard instead of skipping. A local run without SEMGREP or semgrep on
+# PATH SKIPs the behavioural section only. The drift-exemption regression
+# does not depend on this section: the CI-wired test_staged_drift.py
+# (SyntheticDrift) pins the PORT-ADDITIONS cases on every run.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -171,7 +173,7 @@ pass "secret-scan stays clean on the short test-fixture canary"
 SEMGREP="${SEMGREP:-semgrep}"
 if ! command -v "$SEMGREP" >/dev/null 2>&1; then
     if [[ -n "${CI:-}${GITHUB_ACTIONS:-}" ]]; then
-        fail "semgrep unavailable under CI — the suites step must install Semgrep 1.138.0 first"
+        fail "semgrep unavailable with CI set — point SEMGREP at an installed Semgrep binary (this repo's CI does not install one)"
     fi
     echo "SKIP: semgrep unavailable — behavioural rule fixtures skipped"
 else
@@ -197,10 +199,18 @@ async function h(req, searchParams, url, body) {
   await fetch(new URL(req.query.u));
   await fetch("https://api.example.com/v1/query");
   await fetch("/api/params");
+  await axios.get(req.query.url);
+  await axios.get("https://api.example.com/v1/query");
+  await axios(req.query.url);
+  await got(req.query.url);
+  await https.request(req.query.url);
+  await https.get("https://api.example.com/v1/query");
+  await axios("https://api.example.com/v1/query");
+  await got("https://api.example.com/v1/query");
 }
 EOF
     cat > "$FX/fx-ssrf.py" <<'EOF'
-import requests, urllib.request
+import requests, httpx, urllib.request
 def h(request):
     requests.get("https://api.example.com/health")
     requests.get(request.args["u"])
@@ -211,6 +221,21 @@ def h(request):
     requests.post("https://hooks.slack.com/services/webhook")
     requests.post(SLACK_WEBHOOK_URL, json=p)
     requests.get(settings.EXTERNAL_API_URL)
+    requests.get("https://x/request.html")
+    requests.request("GET", request.args["u"])
+    requests.request("GET", "https://x/request.html")
+    requests.get(url=request.args["u"])
+    requests.get(url="https://x/request.html")
+    httpx.get(request.args["u"])
+    httpx.request("GET", request.args["u"])
+    httpx.get(url=request.args["u"])
+    httpx.get("https://x/request.html")
+    requests.Session().get(request.args["u"])
+    httpx.AsyncClient().get(request.args["u"])
+    httpx.Client().get(request.args["u"])
+    httpx.request("GET", "https://x/request.html")
+    urllib.request.urlopen("https://x/request.html")
+    requests.Session().get("https://x/request.html")
 EOF
     # Redirect fixtures: literal targets and safe builders stay silent
     # (both argument positions, literal-URL construction, url_for), while
@@ -219,12 +244,15 @@ EOF
     cat > "$FX/fx-redirect.js" <<'EOF'
 import { redirect } from "@sveltejs/kit";
 import { NextResponse } from "next/server";
-export function h(res, url, request) {
+export function h(res, url, request, req) {
   res.redirect(302, "/home");
   throw redirect(302, url.searchParams.get("next"));
   throw redirect(302, "/home");
   NextResponse.redirect(new URL("/login", request.url));
   NextResponse.redirect(request.query.next);
+  res.redirect(302, req.query.next);
+  res.redirect(req.query.next);
+  throw redirect(url.searchParams.get("next"));
 }
 EOF
     cat > "$FX/fx-redirect.py" <<'EOF'
@@ -235,6 +263,10 @@ def h(request):
     redirect(request.args["next"])
     RedirectResponse(request.query_params["next"])
     RedirectResponse("/home")
+    HttpResponseRedirect(request.GET["next"])
+    HttpResponseRedirect("/home")
+    redirect(request.args["next"], code=302)
+    RedirectResponse(request.query_params["next"], status_code=302)
 EOF
     # Secrets fixtures: credential positives are assembled from split
     # fragments (never committed as literals); kebab-case words and
@@ -243,8 +275,20 @@ EOF
     SK_PROJ="proj-"
     SK_SVC="svcacct-"
     SK_BODY="AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEfGhIjKlMn"
+    SK_SHORT="AbCdEfGh-12345678-IjKlMnOpQrStUv"
     SL_P="xoxb-"
     SL_BODY="4827364927364-5827364927364-2hWdFy7ejxVuN3P8F6aZbCdE9"
+    SL_CANARY="4827shy2-abcdefghijklmnop"
+    AWS_A="AK"
+    AWS_B="IA"
+    AWS_BODY="1A2B3C4D5E6F7G8H"
+    AWS_EX="IOSFODNN7EXAMPLE"
+    GH_A="gh"
+    GH_B="p_"
+    GH_BODY="AbCdEfGh1234567890IjKl"
+    GH_PAT_A="github_"
+    GH_PAT_B="pat_"
+    GH_PAT_BODY="AbCdEfGh_1234567890_IjKlMn"
     {
         printf 'a=%s%s\n' "$SK_P" "$SK_BODY"
         printf 'b=%s%s%s\n' "$SK_P" "$SK_PROJ" "$SK_BODY"
@@ -255,6 +299,14 @@ EOF
         printf 'g=xoxb-EXAMPLE-TOKEN-FOR-DOCS-12345\n'
         printf 'h=url = "https://%s%s%s%s%s/%s%s"\n' "$DISC_A" "$DISC_B" "$DISC_C" "$CHAN_A" "$CHAN_B" "$TOK_A" "$TOK_B"
         printf 'i=key = "%s%s%s"\n' "$STRIPE_A" "$STRIPE_B" "$STRIPE_C"
+        printf 'j=%s%s%s\n' "$AWS_A" "$AWS_B" "$AWS_BODY"
+        printf 'k=%s%s%s\n' "$AWS_A" "$AWS_B" "$AWS_EX"
+        printf 'l=%s%s%s\n' "$GH_A" "$GH_B" "$GH_BODY"
+        printf 'm=%s%s%s\n' "$GH_PAT_A" "$GH_PAT_B" "$GH_PAT_BODY"
+        printf 'n=key = "%s%s%s"\n' "$STRIPE_R" "$STRIPE_B" "$STRIPE_C"
+        printf 'o=url = "https://%s%s%s%s%s/%s%s"\n' "$DISC_D" "$DISC_B" "$DISC_C" "$CHAN_A" "$CHAN_B" "$TOK_A" "$TOK_B"
+        printf 'p=%s%s\n' "$SL_P" "$SL_CANARY"
+        printf 'q=%s%s\n' "$SK_P" "$SK_SHORT"
     } > "$FX/fx-secrets.txt"
     "$SEMGREP" scan --config "$ROOT/$SSRF" --json "$FX/fx-ssrf.js" "$FX/fx-ssrf.py" "$FX/fx-redirect.js" "$FX/fx-redirect.py" > "$FX/ssrf.json" 2>/dev/null \
         || fail "semgrep scan of SSRF/redirect fixtures failed to run"
@@ -284,26 +336,26 @@ def expect_silent(fname, rid):
     got = hits.get((fname, rid), set())
     check(not got, f"behavioural {fname} stays silent for {rid} (got lines {sorted(got)})")
 
-expect_hit("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5, 6, 7, 8, 9, 10))
+expect_hit("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16, 17))
 check(2 not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
       "behavioural fx-ssrf.js:2 literal fetch stays silent")
-for ln in (11, 12):
+for ln in (11, 12, 14, 18, 19, 20):
     check(ln not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
           f"behavioural fx-ssrf.js:{ln} literal URL with a fragment word stays silent")
 expect_silent("fx-ssrf.js", "tier0-open-redirect-js")
-expect_hit("fx-ssrf.py", "tier0-ssrf-dynamic-url-py", (4, 5, 6, 7, 8))
+expect_hit("fx-ssrf.py", "tier0-ssrf-dynamic-url-py", (4, 5, 6, 7, 8, 13, 15, 17, 18, 19, 21, 22, 23))
 check(3 not in hits.get(("fx-ssrf.py", "tier0-ssrf-dynamic-url-py"), set()),
       "behavioural fx-ssrf.py:3 literal request stays silent")
-for ln in (9, 10, 11):
+for ln in (9, 10, 11, 12, 14, 16, 20, 24, 25, 26):
     check(ln not in hits.get(("fx-ssrf.py", "tier0-ssrf-dynamic-url-py"), set()),
           f"behavioural fx-ssrf.py:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.py", "tier0-open-redirect-py")
-expect_hit("fx-redirect.js", "tier0-open-redirect-js", (5, 8))
+expect_hit("fx-redirect.js", "tier0-open-redirect-js", (5, 8, 9, 10, 11))
 for ln in (4, 6, 7):
     check(ln not in hits.get(("fx-redirect.js", "tier0-open-redirect-js"), set()),
           f"behavioural fx-redirect.js:{ln} literal target stays silent")
-expect_hit("fx-redirect.py", "tier0-open-redirect-py", (5, 6))
-for ln in (4, 7):
+expect_hit("fx-redirect.py", "tier0-open-redirect-py", (5, 6, 8, 10, 11))
+for ln in (4, 7, 9):
     check(ln not in hits.get(("fx-redirect.py", "tier0-open-redirect-py"), set()),
           f"behavioural fx-redirect.py:{ln} safe/literal target stays silent")
 
@@ -327,6 +379,22 @@ check(8 in shits.get("tier0-secret-discord-webhook", set()),
       "behavioural fx-secrets.txt:8 discord webhook fires")
 check(9 in shits.get("tier0-secret-stripe-live-key", set()),
       "behavioural fx-secrets.txt:9 stripe live key fires")
+check(10 in shits.get("tier0-secret-aws-key", set()),
+      "behavioural fx-secrets.txt:10 aws key fires")
+check(11 not in shits.get("tier0-secret-aws-key", set()),
+      "behavioural fx-secrets.txt:11 aws EXAMPLE placeholder stays silent")
+check(12 in shits.get("tier0-secret-github-token", set()),
+      "behavioural fx-secrets.txt:12 ghp_ token fires")
+check(13 in shits.get("tier0-secret-github-token", set()),
+      "behavioural fx-secrets.txt:13 github_pat_ token fires")
+check(14 in shits.get("tier0-secret-stripe-live-key", set()),
+      "behavioural fx-secrets.txt:14 stripe rk_live key fires")
+check(15 in shits.get("tier0-secret-discord-webhook", set()),
+      "behavioural fx-secrets.txt:15 discordapp webhook fires")
+check(16 not in shits.get("tier0-secret-slack-token", set()),
+      "behavioural fx-secrets.txt:16 slack short canary stays silent")
+check(17 not in shits.get("tier0-secret-openai-key", set()),
+      "behavioural fx-secrets.txt:17 openai short-tail canary stays silent")
 
 if errors:
     raise SystemExit(1)

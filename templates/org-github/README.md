@@ -60,11 +60,15 @@ Operator applies these files there after this PR merges.
 
 ## Security-rule fixture verification
 
-`tests/test_security_rules.sh` runs the staged rules with Semgrep 1.138.0.
-CI passes the absolute engine path in `SEMGREP`; it does not prepend the venv
-to `PATH`, so the suite retains system Python/PyYAML. Local runs can set the
-same variable to an existing installation. Missing Semgrep is fatal in CI;
-local runs without it explicitly skip engine fixtures.
+`tests/test_security_rules.sh` runs the staged rules with Semgrep (verified
+at 1.138.0 and the gate pin 1.128.1). This repo's CI does not install Semgrep
+or run that suite; run it locally with `SEMGREP` set to the absolute path of
+an existing binary (not via a venv on `PATH`, so the suite retains system
+Python/PyYAML). When the suite is invoked with `CI` set, a missing binary is
+fatal; local runs without it explicitly skip engine fixtures. The
+drift-exemption cases are pinned on every CI run by
+`python3 test_staged_drift.py` (SyntheticDrift), so they do not depend on
+this suite's engine fixtures or on the recorded source pin.
 
 ## Operator adoption wiring (required, not delivered by copying scripts)
 

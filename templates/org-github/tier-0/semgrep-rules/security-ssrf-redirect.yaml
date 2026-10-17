@@ -6,7 +6,9 @@
 # the direct shape (a fetch/redirect call whose URL expression is
 # dynamically built or carries an input-ish name). Indirect flows (URL
 # laundered through two+ assignments, allowlist-validated URLs) are out of
-# scope for the deterministic slice and stay with the reviewer.
+# scope for the deterministic slice and stay with the reviewer, as are
+# Python Session/Client objects assigned to a variable before the call
+# (direct constructor chains are covered; see the Python rule).
 #
 # FP BUDGET (case_5789b2d5 rollout rule): report-only first via the gate `mode`
 # input (ADOPTION.md: the whole gate flips report-only -> enforcing
@@ -29,6 +31,10 @@ rules:
     patterns:
       - pattern-either:
           - pattern: fetch($URL, ...)
+          # Bare callable forms: axios(url) / got(url) are the same direct
+          # shape as their method forms.
+          - pattern: axios($URL, ...)
+          - pattern: got($URL, ...)
           - patterns:
               - pattern: axios.$METHOD($URL, ...)
               - metavariable-regex:
@@ -46,6 +52,8 @@ rules:
       # fixed endpoint even when its path contains a fragment word
       # ("/api/params", "https://api.example.com/v1/query").
       - pattern-not: fetch("...", ...)
+      - pattern-not: axios("...", ...)
+      - pattern-not: got("...", ...)
       - pattern-not: axios.$METHOD("...", ...)
       - pattern-not: $HTTP.$METHOD("...", ...)
       # Unanchored on purpose: metavariable-regex matches from the start of
@@ -79,22 +87,80 @@ rules:
       tier0: "live"
     patterns:
       - pattern-either:
+          # Verb-method forms: the URL is the first argument. `request` is
+          # NOT in this alternation — for requests.request/httpx.request
+          # the first argument is the HTTP method string, so binding it to
+          # $URL (and then dropping literals) made that branch dead.
           - patterns:
               - pattern: requests.$METHOD($URL, ...)
               - metavariable-regex:
                   metavariable: $METHOD
-                  regex: (?i)^(get|post|put|patch|delete|head|request)$
+                  regex: (?i)^(get|post|put|patch|delete|head)$
           - patterns:
               - pattern: httpx.$METHOD($URL, ...)
               - metavariable-regex:
                   metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head)$
+          # Two-argument request(method, url): the URL is second.
+          - pattern: requests.request($M, $URL, ...)
+          - pattern: httpx.request($M, $URL, ...)
+          # Keyword form: requests.get(url=...).
+          - patterns:
+              - pattern: requests.$METHOD(..., url=$URL, ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
                   regex: (?i)^(get|post|put|patch|delete|head|request)$
+          - patterns:
+              - pattern: httpx.$METHOD(..., url=$URL, ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head|request)$
+          # Direct constructor chains only. A Session/Client assigned to a
+          # variable first (`s = requests.Session(); s.get(...)`) cannot be
+          # named without matching every `.get(` in a codebase, so it stays
+          # with the reviewer, like other indirect flows (see the header).
+          - patterns:
+              - pattern: requests.Session().$METHOD($URL, ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head)$
+          - patterns:
+              - pattern: httpx.Client().$METHOD($URL, ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head)$
+          - patterns:
+              - pattern: httpx.AsyncClient().$METHOD($URL, ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head)$
           - pattern: urllib.request.urlopen($URL, ...)
       # Pure literals never reach the regex (see the JS rule); the fragment
       # list stays narrow — request accessors only — so configured constants
-      # (SLACK_WEBHOOK_URL, settings.EXTERNAL_API_URL) stay silent.
-      - pattern-not: requests.$METHOD("...", ...)
-      - pattern-not: httpx.$METHOD("...", ...)
+      # (SLACK_WEBHOOK_URL, settings.EXTERNAL_API_URL) stay silent. The
+      # literal guards enumerate each verb method instead of one generic
+      # `requests.$METHOD("...", ...)` guard: the generic form also matches
+      # `requests.request("GET", <dynamic>)` (the literal is the method, not
+      # the URL) and would silently kill the two-argument form above.
+      - pattern-not: requests.get("...", ...)
+      - pattern-not: requests.post("...", ...)
+      - pattern-not: requests.put("...", ...)
+      - pattern-not: requests.patch("...", ...)
+      - pattern-not: requests.delete("...", ...)
+      - pattern-not: requests.head("...", ...)
+      - pattern-not: httpx.get("...", ...)
+      - pattern-not: httpx.post("...", ...)
+      - pattern-not: httpx.put("...", ...)
+      - pattern-not: httpx.patch("...", ...)
+      - pattern-not: httpx.delete("...", ...)
+      - pattern-not: httpx.head("...", ...)
+      - pattern-not: requests.request($M, "...", ...)
+      - pattern-not: httpx.request($M, "...", ...)
+      - pattern-not: requests.$METHOD(..., url="...", ...)
+      - pattern-not: httpx.$METHOD(..., url="...", ...)
+      - pattern-not: requests.Session().$METHOD("...", ...)
+      - pattern-not: httpx.Client().$METHOD("...", ...)
+      - pattern-not: httpx.AsyncClient().$METHOD("...", ...)
       - pattern-not: urllib.request.urlopen("...", ...)
       # Unanchored (see the JS rule): f-string, concat and str()-wrapped
       # request shapes must fire, not just the bare request.args["u"] form.

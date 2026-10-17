@@ -186,7 +186,7 @@ else
     # templated, concatenated, accessor, callback, new URL) fires.
     cat > "$FX/fx-ssrf.js" <<'EOF'
 async function h(req, searchParams, url, body) {
-  await fetch("https://api.internal/health");
+  await fetch("https://api.example.com/health");
   await fetch(req.query.url);
   await fetch(String(req.query.url));
   await fetch(decodeURIComponent(req.query.url));
@@ -195,14 +195,14 @@ async function h(req, searchParams, url, body) {
   await fetch(url.searchParams.get("u"));
   await fetch(body.callbackUrl);
   await fetch(new URL(req.query.u));
-  await fetch("https://api.internal/v1/query");
+  await fetch("https://api.example.com/v1/query");
   await fetch("/api/params");
 }
 EOF
     cat > "$FX/fx-ssrf.py" <<'EOF'
 import requests, urllib.request
 def h(request):
-    requests.get("https://api.internal/health")
+    requests.get("https://api.example.com/health")
     requests.get(request.args["u"])
     requests.get(f"https://x/{request.args['u']}")
     requests.get("https://x/" + request.args["u"])

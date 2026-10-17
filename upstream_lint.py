@@ -1473,7 +1473,10 @@ def layout_from_dir(d: str) -> dict:
 def git(repo_dir: str, *args: str) -> str:
     # GIT_BIN is a seam: on agent hosts the PATH git is a credential-injecting
     # shim that costs seconds per call, so the call count here is kept small.
-    proc = subprocess.run([os.environ.get("GIT_BIN") or "git", "-C", repo_dir, "-c", "core.quotepath=off", *args],
+    # gc.auto=0 / maintenance.auto=false: linting only reads the repo, so it
+    # must never detach a background gc/maintenance writer into it.
+    proc = subprocess.run([os.environ.get("GIT_BIN") or "git", "-C", repo_dir, "-c", "core.quotepath=off",
+                           "-c", "gc.auto=0", "-c", "maintenance.auto=false", *args],
                           capture_output=True)
     if proc.returncode != 0:
         stderr = proc.stderr.decode("utf-8", "replace").strip()

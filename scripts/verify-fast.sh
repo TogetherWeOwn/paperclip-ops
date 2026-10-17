@@ -134,6 +134,9 @@ python3 -m unittest test_deploy_window_manifest || fail "deploy-window manifest 
 ./test_credential_chain_lockdown.sh || fail "credential-chain lockdown fixture suite failed"
 python3 -m unittest test_ci_required_checks_audit || fail "required-checks audit failed"
 python3 -m unittest test_private_mutation_gates || fail "private mutation harness failed"
+python3 -m unittest test_quality_gates test_floor_guard test_no_pull_request_target \
+  || fail "quality-gate helper suites failed"
+./test_mutmut_changed.sh || fail "mutmut budget-kill fixture suite failed"
 ./test_ci_gating.sh || fail "change-gating contract failed"
 ./test_readme_script_index.sh || fail "readme script-index gate failed"
 ./test_public_comment_hygiene_gate.sh || fail "public-comment hygiene gate suite failed"

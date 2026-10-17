@@ -17,8 +17,10 @@
 #   4. CONFIG REFUSALS — bad domain, domain with a port, inverted
 #              thresholds, non-loopback http RDAP base, loopback-lookalike
 #              http RDAP bases (127.evil.com, localhost.evil.com,
-#              127.0.0.1.evil.com), no domains at all and a missing curl
-#              binary all exit 2 and push NOTHING.
+#              127.0.0.1.evil.com) and userinfo http RDAP bases
+#              (localhost@evil, localhost:x@evil, 127.0.0.1:x@evil),
+#              no domains at all and a missing curl binary all exit 2
+#              and push NOTHING.
 #   5. NON-DISCLOSURE — the Gatus token never appears in curl argv.
 #   6. MUTANTS — parse-anchor, HTTP-gate and warn-default mutants of the
 #              probe each break the far-expiry green, proving the suite is
@@ -211,6 +213,9 @@ refuse httpremote RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://rdap.example.
 refuse loopbackprefix127 RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://127.evil.com/domain/'
 refuse loopbackprefixlocal RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://localhost.evil.com/domain/'
 refuse loopbackprefixip RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://127.0.0.1.evil.com/domain/'
+refuse userinfoat RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://localhost@evil.example.net/domain/'
+refuse userinfoport RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://localhost:x@evil.example.net/domain/'
+refuse userinfoipport RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://127.0.0.1:x@evil.example.net/domain/'
 refuse nodomains TWO_WEB_PROD_URL='' TWO_WEB_STAGING_URL=''
 refuse nocurl RDAP_DOMAINS='example.com' CURL_BIN="$WORK/bin/no-such-curl"
 

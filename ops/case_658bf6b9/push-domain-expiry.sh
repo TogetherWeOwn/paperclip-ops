@@ -60,15 +60,29 @@ command -v python3 >/dev/null 2>&1 \
   || { echo "push-domain-expiry: refusing — DOMAIN_CRIT_DAYS ($CRIT_DAYS) must be below DOMAIN_WARN_DAYS ($WARN_DAYS)" >&2; exit 2; }
 [[ "$TIMEOUT_S" =~ ^[1-9][0-9]*$ ]] \
   || { echo "push-domain-expiry: refusing — RDAP_TIMEOUT must be a positive integer" >&2; exit 2; }
-case "$RDAP_BASE_URL" in
-  https://*) RDAP_PROTO=https ;;
-  # NOTE: loopback patterns are host-anchored on purpose — the bare prefix
-  # glob http://127.* also matched http://127.evil.com, letting an on-path
-  # attacker serve a forged expiration event. Subdomain lookalikes
-  # (127.evil.com, localhost.evil.com, 127.0.0.1.evil.com) must refuse.
-  http://127.0.0.1|http://127.0.0.1/*|http://127.0.0.1:*|http://localhost|http://localhost/*|http://localhost:*) RDAP_PROTO=http ;;
-  *) echo "push-domain-expiry: refusing — RDAP_BASE_URL must be https (http only on loopback)" >&2; exit 2 ;;
-esac
+if [[ "$RDAP_BASE_URL" == https://* ]]; then
+  RDAP_PROTO=https
+elif [[ "$RDAP_BASE_URL" == http://* ]]; then
+  # NOTE: the loopback exception is authority-anchored on purpose — the bare
+  # prefix glob http://127.* also matched http://127.evil.com, and the
+  # host-boundary glob http://localhost:* also matched userinfo such as
+  # http://localhost:x@evil.example.net (curl reads "localhost:x" as
+  # userinfo and connects to evil.example.net over plaintext, where an
+  # on-path attacker could forge an expiration event). The authority (up to
+  # the first "/") must be exactly 127.0.0.1 or localhost with an optional
+  # numeric port; anything else — subdomain lookalikes (127.evil.com,
+  # localhost.evil.com, 127.0.0.1.evil.com) or any userinfo (@) — refuses.
+  _rdap_rest="${RDAP_BASE_URL#http://}"
+  _rdap_authority="${_rdap_rest%%/*}"
+  if [[ "$_rdap_authority" =~ ^(127\.0\.0\.1|localhost)(:[0-9]+)?$ ]]; then
+    RDAP_PROTO=http
+  else
+    echo "push-domain-expiry: refusing — RDAP_BASE_URL must be https (http only on loopback)" >&2; exit 2
+  fi
+  unset _rdap_rest _rdap_authority
+else
+  echo "push-domain-expiry: refusing — RDAP_BASE_URL must be https (http only on loopback)" >&2; exit 2
+fi
 
 # Derive default registered domains from the pull-check URLs: hostname
 # reduced to its last two labels, deduplicated. Scheme, path, query and

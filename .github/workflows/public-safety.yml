@@ -18,8 +18,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: public-safety-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: public-safety-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   public-safety:

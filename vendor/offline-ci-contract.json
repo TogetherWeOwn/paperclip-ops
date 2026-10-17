@@ -309,6 +309,7 @@
     "migration safety gates suites:1",
     "queue age depth contract suite:1",
     "pr6 acceptance suite:1",
+    "Beszel adapter and Discord forwarder suites:1",
     "activation contract suite:1"
   ],
   "retained": [
@@ -1726,6 +1727,11 @@
       "name": "pr6 acceptance suite",
       "definition_sha256": "63a04269075c57e92a96db6e55ba7bffb4f910e69a222a44cfd186d930e369f4",
       "id": "pr6 acceptance suite:1"
+    },
+    {
+      "name": "Beszel adapter and Discord forwarder suites",
+      "definition_sha256": "95e64baa6bd280f6743477a1ad970c30b44eb74961ffb5f92aa519bf25f114c6",
+      "id": "Beszel adapter and Discord forwarder suites:1"
     },
     {
       "name": "activation contract suite",

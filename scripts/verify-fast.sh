@@ -140,6 +140,7 @@ python3 -m unittest test_private_mutation_gates || fail "private mutation harnes
 ./test_upstream_prepush_hook.sh || fail "upstream pre-push hook suite failed"
 ./test_cliproxy_mgmt_recon_argv.sh || fail "cliproxy recon argv suite failed"
 ./test_case_b2acfa5c_selfhosted_runner.sh || fail "runner migration contract failed"
+python3 -m unittest test_pr6_acceptance || fail "pr6 acceptance failed"
 ./test_dropchannel_scan.sh || fail "dropchannel fixture suite failed"
 # case_77f64939/case_8d3070e3. Tool-approval deadline probe: synthetic bundle + fake
 # psql, so hermetic. Restored by the toolkit sync above in fresh checkouts.

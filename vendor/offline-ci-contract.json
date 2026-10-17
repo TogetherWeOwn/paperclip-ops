@@ -305,7 +305,8 @@
     "invariant views suite:1",
     "project regen prune manifest atomic suite:1",
     "sweep-auto node7b1ff338 pressure-gate suite:1",
-    "host regenerable cache reclaim hostile suite:1"
+    "host regenerable cache reclaim hostile suite:1",
+    "pr6 acceptance suite:1"
   ],
   "retained": [
     {
@@ -1707,6 +1708,11 @@
       "name": "host regenerable cache reclaim hostile suite",
       "definition_sha256": "78073dbf9a3d03094eaa143eba9f93f8a6a85da68d79e4e48d92b48b27ef4001",
       "id": "host regenerable cache reclaim hostile suite:1"
+    },
+    {
+      "name": "pr6 acceptance suite",
+      "definition_sha256": "63a04269075c57e92a96db6e55ba7bffb4f910e69a222a44cfd186d930e369f4",
+      "id": "pr6 acceptance suite:1"
     }
   ],
   "removed": [

@@ -213,7 +213,14 @@ else
     # Python options-method lines stay silent for the same reason. The .ts
     # config url values run to the property boundary so comma-carrying
     # path.join/new-URL expressions fire, while payload and nested-spread
-    # typed lines stay silent exactly like the untyped rule.
+    # typed lines stay silent exactly like the untyped rule. Constant-url
+    # typed lines with later req.* properties (BASE_URL + params/headers)
+    # pin the boundary lookahead itself: without it they fire. Nested
+    # objects before url/baseURL (headers, method/data) and inline payload
+    # objects in post/put/patch second position fire, while nested url/
+    # baseURL/spread positions stay silent. Typed post/put/patch calls with
+    # a config third argument fire; http.createServer/https.Agent lines pin
+    # the $HTTP.$METHOD constraint (without it they fire).
     cat > "$FX/fx-ssrf.js" <<'EOF'
 async function h(req, searchParams, url, body) {
   await fetch("https://api.example.com/health");
@@ -266,6 +273,8 @@ async function h(req, searchParams, url, body) {
   await axios.create({ ...req.body });
   await axios.get("/x", data, { baseURL: req.query.host });
   await axios.get("/x", data, { ...req.body });
+  await http.createServer(req.query.handler);
+  await https.Agent(req.query.opts);
 }
 EOF
     cat > "$FX/fx-ssrf.ts" <<'EOF'
@@ -309,6 +318,25 @@ async function h(req: any, data: any, url: any) {
   await axios.get<User>("/internal", { params: { ...req.query } });
   await axios<User>({ url: "/internal", headers: { ...req.headers } });
   await axios<User>({ method: "post", data: { url: req.body.target }, url: "/hook" });
+  await axios<User>({ url: BASE_URL, params: req.query });
+  await axios<User>({ url: BASE_URL, headers: req.headers });
+  await axios.get<User>("/x", { baseURL: BASE_URL, params: req.query });
+  await axios.post<User>("/x", data, { baseURL: BASE_URL, headers: req.headers });
+  await axios<User>({ headers: { Authorization: tok }, url: req.query.u });
+  await axios<User>({ method: "post", data: { a: 1 }, url: req.body.target });
+  await axios<User>({ headers: { A: 1 }, baseURL: req.query.host, url: "/x" });
+  await axios.post<User>("/x", { a: 1 }, { baseURL: req.query.host });
+  await axios.post<User>("/x", { a: 1 }, { ...req.body });
+  await axios.put<User>("/x", { id: req.body.id }, { baseURL: req.query.host });
+  await axios.get<User>("/x", { params: { a: 1 }, baseURL: req.query.host });
+  await axios.get<User>("/x", { headers: { ...req.headers }, baseURL: req.query.host });
+  await axios.get<User>(path.join(a, b), { baseURL: req.query.host });
+  await axios.post<User>("/x", data, { baseURL: req.query.host });
+  await axios.post<User>("/x", data, { ...req.body });
+  await axios.put<User>("/x", data, { baseURL: req.query.host });
+  await axios.patch<User>("/x", data, { ...req.body });
+  await axios<User>({ extra: { baseURL: req.query.host }, url: BASE_URL });
+  await axios.get<User>("/x", { extra: { ...req.body }, baseURL: BASE_URL });
 }
 EOF
     cat > "$FX/fx-ssrf.py" <<'EOF'
@@ -525,13 +553,13 @@ def expect_silent(fname, rid):
 expect_hit("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16, 17, 21, 25, 26, 28, 30, 32, 33, 34, 36, 37, 39, 40))
 check(2 not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
       "behavioural fx-ssrf.js:2 literal fetch stays silent")
-for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24, 27, 29, 31, 35, 38, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51):
+for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24, 27, 29, 31, 35, 38, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53):
     check(ln not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
           f"behavioural fx-ssrf.js:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.js", "tier0-open-redirect-js")
 expect_hit("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5))
-expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32))
-for ln in (23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37, 38, 39, 40):
+expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57))
+for ln in (23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 58, 59):
     check(ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts"), set())
           and ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js"), set()),
           f"behavioural fx-ssrf.ts:{ln} literal/constant URL stays silent")

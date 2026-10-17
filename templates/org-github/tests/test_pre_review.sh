@@ -474,6 +474,64 @@ run_check
 [[ "$RC" -eq 1 ]] && has_row FAIL spec-mismatch && ok "bad non-merge subject still fails" \
   || bad "bad non-merge subject still fails (rc=$RC)"
 
+# --- 20. gate fixes: Rust type and getter shapes pass authz -------------------
+# Struct fields with generic types hold no literal: only the shape name
+# plus angle brackets is committed. Fixture lines mirror real auth code.
+new_repo
+printf 'pub password: Option<String>,\n' > "$REPO_DIR/auth.rs"
+printf 'pub token: Option<String>,\n' >> "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): add credential fields"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "rust option fields pass authz" \
+  || bad "rust option fields pass authz (rc=$RC)"
+# Runtime getter chains resolve at runtime: no literal is committed.
+new_repo
+printf 'let token = creds.token.clone().unwrap_or_default();\n' > "$REPO_DIR/auth.rs"
+printf 'let raw_password = creds.password.clone().unwrap_or_default();\n' >> "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): read credentials at runtime"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "rust getter chains pass authz" \
+  || bad "rust getter chains pass authz (rc=$RC)"
+# Long generic names hold no literal: the `<` after a 12+ type-path run is a
+# type argument list, not a credential boundary.
+new_repo
+printf 'password: CredentialEnvelope<String>\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): add credential envelope field"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "long generic type passes authz" \
+  || bad "long generic type passes authz (rc=$RC)"
+# Turbofish deserialisation paths hold no literal: `::from_str::<T>` after a
+# credential-named binding is a type-parameterised call, not a value.
+new_repo
+printf 'let token = serde_json::from_str::<TokenResponse>\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): parse token response"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "turbofish path passes authz" \
+  || bad "turbofish path passes authz (rc=$RC)"
+# Cloud and private-key literals still fail. Split across adjacent
+# strings so this file never holds a contiguous scanner pattern; bash
+# concatenates them at runtime into the real fixture.
+new_repo
+FAKE_AKIA="AKIA""IOSFODNN7EXAMPLE"
+printf 'key = "%s"\n' "$FAKE_AKIA" > "$REPO_DIR/app.py"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "feat(app): add app with key"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "akia literal still fails" \
+  || bad "akia literal still fails (rc=$RC)"
+new_repo
+KEY_HEAD="-----BEGIN RSA ""PRIVATE KEY-----"
+printf -- "%s\n" "$KEY_HEAD" > "$REPO_DIR/app.py"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "feat(app): add app with key header"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "private key still fails" \
+  || bad "private key still fails (rc=$RC)"
+
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

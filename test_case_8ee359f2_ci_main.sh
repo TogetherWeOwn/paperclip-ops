@@ -16,8 +16,9 @@
 #      >=); skipped checks with impossible timestamps are excluded, never
 #      scored; an unlisted job breaches only past 2x the fallback.
 #   4. FAIL CLOSED — empty check-runs (the case_b730ec29 vacuous case), an
-#      unreadable API, garbage JSON, and unreadable timestamps all push
-#      false, never healthy.
+#      unreadable API, garbage JSON, and unreadable/grossly-negative
+#      timestamps all push false, never healthy. A small negative span
+#      (-60s..0, a GitHub timestamp artefact on healthy mains) clamps to 0.
 #   5. RUNNER UNITS — one inactive unit pushes ci_runner-units false naming
 #      it, exit 1; all active pushes true.
 #   6. REFUSALS — missing GATUS_URL, missing GH_REPOS, a bad factor, an
@@ -25,9 +26,14 @@
 #      exit 2 with zero pushes (the 10m heartbeat miss then pages).
 #   7. NON-DISCLOSURE — the Bearer token never reaches curl argv; it
 #      travels in the 0600 curl config only.
-#   8. DEFINITIONS — gatus-endpoints.yaml carries seven endpoints, each
-#      with threshold + owner + runbook anchor; baselines cover the three
-#      repos with per-entry seeds; no secret-shaped strings committed.
+#   8. DEFINITIONS — gatus-endpoints.yaml carries thirteen endpoints
+#      (main + runtime for each of the six covered public repos, plus
+#      runner-units), each with threshold + owner + runbook anchor;
+#      the synthetic baselines fixture covers the same six repos with
+#      per-entry seeds (the real measurement table stays host-side via
+#      CI_BASELINES_FILE and is never committed); endpoint slugs are unique
+#      and within the push-helper key alphabet; no secret-shaped strings
+#      committed.
 #   9. NOT VACUOUS — a mutant with the red-conclusion selector neutered
 #      scores the red-main fixture healthy, proving §2 asserts something.
 #
@@ -166,6 +172,14 @@ cfg_has "unparseable check timestamps" && ok "2l. reason names untimed checks" |
 export GH_FIXTURE_FILE="$FIX/boundary-over.json"
 rc="$(run_tool GH_REPOS="O/R")"
 [[ "$rc" == "1" ]] && ok "2n. mixed-case repo still resolves baselines" || bad "2n. case-insensitive lookup" "got $rc $(cat "$CFG_LOG")"
+# A dotted repo name (TogetherWeOwn/.github shape) must push under a
+# dashed key: the shared helper's key alphabet rejects dots, so an
+# unmapped dot would refuse every push and exit nonzero.
+export GH_FIXTURE_FILE="$FIX/healthy.json"
+rc="$(run_tool GH_REPOS="o/.r")"
+[[ "$rc" == "0" ]] && ok "2o. dotted repo exits 0" || bad "2o. dotted repo exit" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_main-o--r)" == "true" ]] && ok "2p. dotted repo pushes ci_main-o--r" || bad "2p. dotted slug key" "$(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o--r)" == "true" ]] && ok "2q. dotted repo pushes ci_runtime-o--r" || bad "2q. dotted slug key" "$(cat "$CFG_LOG")"
 
 # --- §3 runtime 2x ------------------------------------------------------------
 export GH_FIXTURE_FILE="$FIX/slow-job.json"
@@ -217,9 +231,15 @@ rc="$(run_tool)"
 [[ "$rc" == "1" ]] && ok "4e. garbage JSON exits 1" || bad "4e. garbage exit" "got $rc"
 export GH_FIXTURE_FILE="$FIX/bad-time.json"
 rc="$(run_tool)"
-[[ "$rc" == "1" ]] && ok "4f. negative duration fails closed" || bad "4f. bad-time exit" "got $rc"
+[[ "$rc" == "1" ]] && ok "4f. grossly negative duration fails closed" || bad "4f. bad-time exit" "got $rc"
 [[ "$(pushes_for ci_runtime-o-r)" == "false" ]] || bad "4f2. bad-time runtime" "$(cat "$CFG_LOG")"
 [[ "$(pushes_for ci_main-o-r)" == "true" ]] && ok "4g. conclusion still evaluated under a bad timestamp" || bad "4g. bad-time main" "$(cat "$CFG_LOG")"
+# Small negative span (-8s): a GitHub timestamp artefact on healthy mains;
+# it clamps to 0 and never pages.
+export GH_FIXTURE_FILE="$FIX/negative-span.json"
+rc="$(run_tool)"
+[[ "$rc" == "0" ]] && ok "4h. small negative span exits 0" || bad "4h. negative-span exit" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "true" ]] && ok "4i. small negative span runtime pushed true" || bad "4i. negative-span runtime" "$(cat "$CFG_LOG")"
 
 # --- §5 runner units --------------------------------------------------------------
 export GH_FIXTURE_FILE="$FIX/healthy.json" SYSTEMCTL_FIXTURE=one-dead
@@ -274,12 +294,12 @@ if grep -q "SENTINELTOKEN" "$ARGV_LOG"; then bad "7. token in argv" "$(cat "$ARG
 grep -q "Authorization: Bearer" "$CFG_LOG" && ok "7b. token travels in curl config" || bad "7b. config transport" "missing"
 
 # --- §8 definitions ----------------------------------------------------------------
-[[ "$(grep -c '^  - name: ' "$YAML")" == 7 ]] \
-  && ok "8. seven gatus endpoints" || bad "8. endpoint count" "$(grep -c '^  - name: ' "$YAML")"
-for e in main-togetherweown-two-bot-next main-togetherweown-two-web-next main-togetherweown-paperclip-ops runtime-togetherweown-two-bot-next runtime-togetherweown-two-web-next runtime-togetherweown-paperclip-ops runner-units; do
+[[ "$(grep -c '^  - name: ' "$YAML")" == 13 ]] \
+  && ok "8. thirteen gatus endpoints" || bad "8. endpoint count" "$(grep -c '^  - name: ' "$YAML")"
+for e in main-togetherweown-two-bot-next main-togetherweown-two-web-next main-togetherweown-nntunev2 main-togetherweown-routeware-shadow-api main-togetherweown-paperclip-ops main-togetherweown--github runtime-togetherweown-two-bot-next runtime-togetherweown-two-web-next runtime-togetherweown-nntunev2 runtime-togetherweown-routeware-shadow-api runtime-togetherweown-paperclip-ops runtime-togetherweown--github runner-units; do
   grep -q "name: $e" "$YAML" && ok "endpoint $e" || bad "endpoint $e missing"
 done
-[[ "$(grep -c THRESHOLD "$YAML")" -ge 7 ]] && ok "8b. thresholds declared" || bad "8b. thresholds missing"
+[[ "$(grep -c THRESHOLD "$YAML")" -ge 13 ]] && ok "8b. thresholds declared" || bad "8b. thresholds missing"
 { grep -q "OWNER on-call" "$YAML" && grep -q "OWNER devops" "$YAML"; } \
   && ok "8c. owners declared" || bad "8c. owners missing"
 for a in main-conclusion job-runtime runner-units; do
@@ -287,34 +307,49 @@ for a in main-conclusion job-runtime runner-units; do
     && ok "runbook pointer $a" || bad "runbook pointer $a missing"
 done
 if grep -En '://' "$YAML"; then bad "8d. yaml carries a URL literal"; else ok "8d. yaml has no URL literals"; fi
-[[ "$(grep -c 'GATUS_EXTERNAL_TOKEN' "$YAML")" -ge 7 ]] \
+[[ "$(grep -c 'GATUS_EXTERNAL_TOKEN' "$YAML")" -ge 13 ]] \
   && ok "8e. token only via env reference" || bad "8e. token reference missing"
-# Only the private measured-baseline integration check is absent in the public
-# snapshot. All synthetic runtime, boundary, refusal and mutation checks run.
-if python3 - "$HERE" <<'PY'
-import sys
-sys.path.insert(0, sys.argv[1])
-from public_snapshot_test_support import private_artifact_absent
-raise SystemExit(0 if private_artifact_absent(sys.argv[1], "ops/case_c542accd/job_baselines.json") else 1)
-PY
-then
-  printf '%s\n' 'SKIP: historical private CI runtime measurements are excluded from the fresh public snapshot; synthetic runtime and mutation tests remain enabled.'
+# The real measurement table stays host-side via CI_BASELINES_FILE and is never
+# committed here; the synthetic fixture below proves the shape/slug/key/GH_REPOS
+# agreement checks without publishing private job names or timings.
+if [[ -e "$BASE" ]]; then
+  bad "8f. real baselines file must stay out of the public snapshot" "$BASE"
 else
-python3 - "$BASE" <<'PY'
-import json, sys
+  ok "8f0. no real baselines file committed"
+fi
+python3 - "$FIX/synthetic-baselines.json" "$YAML" "$OPDOC" <<'PY'
+import json, re, sys
 d = json.load(open(sys.argv[1]))
 repos = d["repos"]
-assert set(repos) == {"TogetherWeOwn/paperclip-ops", "TogetherWeOwn/two-bot-next", "TogetherWeOwn/two-web-next"}, sorted(repos)
+expected = {"TogetherWeOwn/.github", "TogetherWeOwn/nntunev2",
+            "TogetherWeOwn/paperclip-ops", "TogetherWeOwn/routeware-shadow-api",
+            "TogetherWeOwn/two-bot-next", "TogetherWeOwn/two-web-next"}
+assert set(repos) == expected, sorted(repos)
 assert isinstance(d["fallback_s"], int) and d["fallback_s"] > 0
 for r, spec in repos.items():
     assert spec["jobs"], r
     for j, e in spec["jobs"].items():
         assert isinstance(e["baseline_s"], int) and e["baseline_s"] > 0, (r, j)
         assert e.get("seed"), (r, j)
+# Every covered repo maps to a unique main-/runtime- endpoint in the YAML
+# under the script's slug rule ('/' and '.' to '-'), and every resulting
+# push key fits the shared helper's alphabet.
+yaml_text = open(sys.argv[2]).read()
+names = re.findall(r"^  - name: (\S+)$", yaml_text, re.M)
+slugs = [r.lower().replace("/", "-").replace(".", "-") for r in repos]
+assert len(slugs) == len(set(slugs)), "slug collision"
+for s in slugs:
+    assert f"main-{s}" in names and f"runtime-{s}" in names, s
+    assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", f"ci_main-{s}"), s
+assert len(names) == 2 * len(repos) + 1 and "runner-units" in names, names
+# OPERATOR-adjacent GH_REPOS agreement is pinned via the endpoint set above;
+# the host GH_REPOS list itself lives in the Operator install, not in this
+# source snapshot. The exact-equality check below guards the private
+# host-side wiring (endpoints, baselines, slugs, GH_REPOS must agree):
+# an endpoint without a matching push pages forever on heartbeat miss.
 print("baselines ok")
 PY
-[[ $? -eq 0 ]] && ok "8f. baselines cover three repos with seeded positive entries" || bad "8f. baselines shape"
-fi
+[[ $? -eq 0 ]] && ok "8f. synthetic baselines cover six public repos; slugs unique, keys in alphabet" || bad "8f. baselines shape"
 # Scoped to ops/case_c542accd only: this suite file itself carries the planted
 # webhook positive control below, so scanning it would self-trip.
 if grep -rnE 'discord\.com/api/webhooks/[0-9]|^(DISCORD_WEBHOOK_URL|AKMATORI_ALERTMANAGER_URL|AKMATORI_WEBHOOK_SECRET|GATUS_EXTERNAL_TOKEN)=[^<"$'"'"'[:space:]$]|Bearer [A-Za-z0-9._~-]{8,}' "$HERE/ops/case_c542accd" | grep -v SENTINELTOKEN; then

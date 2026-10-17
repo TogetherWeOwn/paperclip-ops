@@ -51,10 +51,16 @@ Suite: `test_case_8ee359f2_ci_main.sh`.
 
 - `ci/main-togetherweown-two-bot-next`
 - `ci/main-togetherweown-two-web-next`
+- `ci/main-togetherweown-nntunev2`
+- `ci/main-togetherweown-routeware-shadow-api`
 - `ci/main-togetherweown-paperclip-ops`
+- `ci/main-togetherweown--github`
 - `ci/runtime-togetherweown-two-bot-next`
 - `ci/runtime-togetherweown-two-web-next`
+- `ci/runtime-togetherweown-nntunev2`
+- `ci/runtime-togetherweown-routeware-shadow-api`
 - `ci/runtime-togetherweown-paperclip-ops`
+- `ci/runtime-togetherweown--github`
 - `ci/runner-units`
 
 ## CLIProxy lanes

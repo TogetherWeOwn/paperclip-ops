@@ -36,13 +36,16 @@
 # (completed_at - started_at); every non-completed check is aged
 # (now - started_at). Duration or age STRICTLY greater than
 # CI_RUNTIME_FACTOR x baseline breaches, naming the job and both seconds
-# counts. Baselines come from job_baselines.json (seeded 2026-10-03 from
-# completed successes on main; seeds named per entry); a job or repo with
-# no entry falls back to fallback_s — a backstop for pathological hangs,
-# not a tuned threshold. Repo matching is case-insensitive, so GH_REPOS
-# case never changes which baseline a job resolves to. Skipped/neutral
+# counts. Baselines come from the reviewed CI_BASELINES_FILE (default sibling
+# job_baselines.json, which the public snapshot intentionally does not carry);
+# a job or repo with no entry falls back to fallback_s — a backstop for
+# pathological hangs, not a tuned threshold. Repo matching is case-insensitive,
+# so GH_REPOS case never changes which baseline a job resolves to. Skipped/neutral
 # checks never ran, so they are excluded from timing (a 0s skipped job
-# against any baseline is noise).
+# against any baseline is noise). Small negative spans/ages (-60s..0) are
+# a GitHub timestamp artefact measured on healthy mains and clamp to 0 —
+# they cannot hide a breach, which needs a large positive span; grossly
+# negative spans still fail closed as corrupt data.
 #
 # FAIL CLOSED: an unreadable check-runs API, unparseable JSON, zero
 # check-runs on an active repo's main (the case_b730ec29 vacuous case: "all zero
@@ -109,8 +112,11 @@ FALLBACK="$(jq -r '.fallback_s' "$BASELINES_FILE" 2>/dev/null)" \
 
 # Endpoint key derivation (same as case_658bf6b9): <group>_<name>, separators to
 # '-'. Group is ci; owner/repo slashes become dashes (repos are allowlisted
-# above, so the key alphabet holds by construction).
-slug_of() { tr '[:upper:]' '[:lower:]' <<<"${1//\//-}"; }
+# above, so the key alphabet holds by construction). Dots also become
+# dashes: the allowlist admits dotted repo names but the shared helper's
+# key alphabet (^[A-Za-z0-9][A-Za-z0-9_-]*$) does not, so an unmapped dot
+# would refuse every push for that repo. Repos without dots keep unchanged keys.
+slug_of() { local s="${1//\//-}"; tr '[:upper:]' '[:lower:]' <<<"${s//./-}"; }
 
 now="$(date +%s)"
 overall=0
@@ -184,11 +190,19 @@ for repo in "${REPOS[@]}"; do
       [[ -n "$cend" && "$cend" != "null" ]] || { unreadable=1; continue; }
       end_s="$(date -d "$cend" +%s 2>/dev/null)" || { unreadable=1; continue; }
       span=$(( end_s - start_s ))
-      (( span >= 0 )) || { unreadable=1; continue; }
+      # Small negative spans are a GitHub timestamp artefact on healthy
+      # mains: clamp them to 0, which can never hide a breach (a breach needs
+      # span > FACTOR x baseline). Grossly negative spans are corrupt
+      # data and still fail closed.
+      if (( span < 0 )); then
+        (( span >= -60 )) && span=0 || { unreadable=1; continue; }
+      fi
       (( span > 10#$FACTOR * 10#$baseline )) && breaches+=("$cname ${span}s > ${FACTOR}x${baseline}s")
     else
       age=$(( now - start_s ))
-      (( age >= 0 )) || { unreadable=1; continue; }
+      if (( age < 0 )); then
+        (( age >= -60 )) && age=0 || { unreadable=1; continue; }
+      fi
       (( age > 10#$FACTOR * 10#$baseline )) && breaches+=("$cname in-flight ${age}s > ${FACTOR}x${baseline}s")
     fi
   done <<<"$tsv"

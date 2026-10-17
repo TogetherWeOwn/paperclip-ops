@@ -1,8 +1,12 @@
 # Pre-review gate: staged source for the org template repo
 
 Author self-review before a PR is marked ready: a deterministic script plus
-a 10-bucket rubric. No model calls, no network, no credentials — bash and
-git only — so it runs anywhere, on any subscription.
+a 10-bucket rubric. No model calls, network, or credentials; Cargo metadata
+runs offline only when a Cargo manifest changes, using the operator's Cargo
+cache. A tracked lockfile is checked with `--locked`; projects without a
+tracked lockfile are checked for offline dependency resolution without
+creating or committing a lockfile. Submitted `.cargo` configuration is removed
+from the snapshot and compiler wrappers are overridden. Other checks use bash/git.
 
 ## Destination map
 

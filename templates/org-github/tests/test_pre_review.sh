@@ -35,13 +35,33 @@ trap 'rm -rf "$WORK"' EXIT
 # PATH (~10s per spawn). The staged script calls plain `git`, so shadow it
 # with the system git when one exists outside the current PATH.
 mkdir -p "$WORK/bin"
+export PATH="$WORK/bin:$PATH"
 if REALGIT="$(PATH="$(getconf PATH)" command -v git 2>/dev/null)" && [[ -n "$REALGIT" ]]; then
   ln -sf "$REALGIT" "$WORK/bin/git"
-  export PATH="$WORK/bin:$PATH"
 fi
 # Stop BASH_ENV from re-prepending the credential shim on child shells,
 # which would bury the shadow above (BASH_ENV= + real git first).
 export BASH_ENV=/dev/null
+# Cargo is stubbed so these lockfile checks stay offline and hermetic. The
+# status simulates Cargo's --locked result for dependency-neutral/stale cases.
+FAKE_CARGO_LOG="$WORK/cargo.log"
+export FAKE_CARGO_LOG
+cat > "$WORK/bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+printf 'cwd=%s config=%s cargo_home=%s lock=%s args=%s\n' "$PWD" \
+  "$([[ -e .cargo/config.toml ]] && echo present || echo absent)" \
+  "${CARGO_HOME:-unset}" \
+  "$(grep -E '^version' Cargo.lock 2>/dev/null | head -n 1 || echo missing)" "$*" >> "$FAKE_CARGO_LOG"
+if [[ " $* " == *" --locked "* && ! -f Cargo.lock ]]; then
+  echo 'error: cannot create the lock file because --locked was passed' >&2
+  exit 101
+fi
+if [[ "${FAKE_CARGO_STATUS:-0}" -ne 0 ]]; then
+  echo 'error: lock file needs to be updated but --locked was passed' >&2
+  exit "$FAKE_CARGO_STATUS"
+fi
+EOF
+chmod +x "$WORK/bin/cargo"
 N=0; REPO_DIR=""; CHANGE_BASE=""
 
 # new_repo: sets REPO_DIR; seeds one conventional base commit. No stdout.
@@ -67,6 +87,7 @@ commit_change() {
 
 OUT=""; RC=0
 run_check() {
+  : > "$FAKE_CARGO_LOG"
   OUT="$(cd "$REPO_DIR" && bash "$PRE" --base "$CHANGE_BASE" "$@" 2>&1)" && RC=0 || RC=$?
 }
 has_row() { grep -qE "^$1  +$2" <<<"$OUT"; }
@@ -163,6 +184,101 @@ commit_change "feat(deps): bump nested manifest without lockfile"
 run_check
 [[ "$RC" -eq 1 ]] && has_row FAIL generated-drift && ok "nested lockfile drift fails" \
   || bad "nested lockfile drift fails (rc=$RC)"
+
+# Cargo's own locked metadata check distinguishes a dependency-neutral
+# manifest edit from one that needs a Cargo.lock change.
+new_repo
+printf 'Cargo.lock\n' > "$REPO_DIR/.gitignore"
+mkdir -p "$REPO_DIR/cfg"
+printf 'build.rustc = "/tmp/untrusted-compiler-wrapper"\n' > "$REPO_DIR/cfg/config.toml"
+ln -s cfg "$REPO_DIR/.cargo"
+printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[lib]\ncrate-type = ["rlib"]\n' > "$REPO_DIR/Cargo.toml"
+$GIT -C "$REPO_DIR" add -A >&2
+$GIT -C "$REPO_DIR" commit -qm "chore(cargo): seed manifest"
+CHANGE_BASE="$($GIT -C "$REPO_DIR" rev-parse HEAD)"
+printf 'version = 3\n' > "$REPO_DIR/Cargo.lock"
+printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[lib]\ncrate-type = ["rlib", "cdylib"]\n' > "$REPO_DIR/Cargo.toml"
+commit_change "chore(cargo): add crate type"
+FAKE_CARGO_STATUS=0 run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL generated-drift \
+  && $GIT -C "$REPO_DIR" check-ignore -q Cargo.lock \
+  && grep -q 'metadata --offline --format-version 1 --manifest-path .*Cargo.toml' "$FAKE_CARGO_LOG" \
+  && ! grep -q 'metadata --locked' "$FAKE_CARGO_LOG" \
+  && grep -Eq -- '--manifest-path /[^[:space:]]+/Cargo.toml' "$FAKE_CARGO_LOG" \
+  && grep -q '^cwd=' "$FAKE_CARGO_LOG" \
+  && ! grep -Fq "cwd=$REPO_DIR config=" "$FAKE_CARGO_LOG" \
+  && ! grep -Fq -- "--manifest-path $REPO_DIR/" "$FAKE_CARGO_LOG" \
+  && ! grep -q 'cargo_home=.*/cargo-home' "$FAKE_CARGO_LOG" \
+  && grep -q 'config=absent' "$FAKE_CARGO_LOG" \
+  && grep -q 'build.rustc="rustc"' "$FAKE_CARGO_LOG" \
+  && grep -q 'build.rustc-wrapper=""' "$FAKE_CARGO_LOG" \
+  && ok "dependency-neutral Cargo manifest uses isolated committed snapshot" \
+  || bad "dependency-neutral Cargo manifest passes with ignored lockfile (rc=$RC)"
+
+new_repo
+printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1"\n' > "$REPO_DIR/Cargo.toml"
+printf 'version = 3\n' > "$REPO_DIR/Cargo.lock"
+$GIT -C "$REPO_DIR" add -A >&2
+$GIT -C "$REPO_DIR" commit -qm "chore(cargo): seed tracked lockfile"
+CHANGE_BASE="$($GIT -C "$REPO_DIR" rev-parse HEAD)"
+printf 'version = 4\n' > "$REPO_DIR/Cargo.lock"
+printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1"\ntokio = "1"\n' > "$REPO_DIR/Cargo.toml"
+$GIT -C "$REPO_DIR" add Cargo.toml >&2
+$GIT -C "$REPO_DIR" commit -qm "feat(cargo): add dependency without saved lock update"
+FAKE_CARGO_STATUS=1 run_check
+if [[ "$RC" -eq 1 ]] && has_row FAIL generated-drift \
+  && grep -q 'metadata --locked --offline --format-version 1' "$FAKE_CARGO_LOG" \
+  && grep -q 'lock=version = 3' "$FAKE_CARGO_LOG" \
+  && grep -q '^version = 4$' "$REPO_DIR/Cargo.lock"; then
+  ok "Cargo metadata validates committed lock, not unsaved worktree lock"
+else
+  bad "Cargo metadata validates committed lock, not unsaved worktree lock (rc=$RC)"
+fi
+
+new_repo
+printf '[package]\nname = "x"\nversion = "0.1.0"\n' > "$REPO_DIR/Cargo.toml"
+$GIT -C "$REPO_DIR" add -A >&2
+$GIT -C "$REPO_DIR" commit -qm "chore(cargo): seed manifest"
+CHANGE_BASE="$($GIT -C "$REPO_DIR" rev-parse HEAD)"
+printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1"\n' > "$REPO_DIR/Cargo.toml"
+commit_change "feat(cargo): add dependency"
+FAKE_CARGO_STATUS=1 run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL generated-drift \
+  && grep -q 'metadata --offline --format-version 1' "$FAKE_CARGO_LOG" \
+  && ! grep -q 'metadata --locked' "$FAKE_CARGO_LOG" \
+  && ok "Cargo dependency change without lockfile fails" \
+  || bad "Cargo dependency change without lockfile fails (rc=$RC)"
+
+# A non-ASCII path must still detect its tracked lockfile and require --locked.
+new_repo
+$GIT -C "$REPO_DIR" config core.quotepath true
+mkdir -p "$REPO_DIR/crätes"
+printf '[package]\nname = "x"\nversion = "0.1.0"\n' > "$REPO_DIR/crätes/Cargo.toml"
+printf 'version = 3\n' > "$REPO_DIR/crätes/Cargo.lock"
+$GIT -C "$REPO_DIR" add -A >&2
+$GIT -C "$REPO_DIR" commit -qm "chore(cargo): seed unicode manifest and lockfile"
+CHANGE_BASE="$($GIT -C "$REPO_DIR" rev-parse HEAD)"
+printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1"\n' > "$REPO_DIR/crätes/Cargo.toml"
+commit_change "feat(cargo): add dependency under unicode path"
+FAKE_CARGO_STATUS=1 run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL generated-drift \
+  && grep -q 'metadata --locked --offline --format-version 1' "$FAKE_CARGO_LOG" \
+  && ok "non-ASCII Cargo path keeps tracked lockfile check locked" \
+  || bad "non-ASCII Cargo path keeps tracked lockfile check locked (rc=$RC)"
+
+new_repo
+printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[lib]\ncrate-type = ["rlib"]\n' > "$REPO_DIR/Cargo.toml"
+printf 'version = 3\n' > "$REPO_DIR/Cargo.lock"
+$GIT -C "$REPO_DIR" add -A >&2
+$GIT -C "$REPO_DIR" commit -qm "chore(cargo): seed manifest and lockfile"
+CHANGE_BASE="$($GIT -C "$REPO_DIR" rev-parse HEAD)"
+printf '[package]\nname = "x"\nversion = "0.1.0"\n\n[lib]\ncrate-type = ["rlib", "cdylib"]\n' > "$REPO_DIR/Cargo.toml"
+printf 'version = 4\n' > "$REPO_DIR/Cargo.lock"
+commit_change "chore(cargo): update manifest and lockfile"
+FAKE_CARGO_STATUS=0 run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL generated-drift \
+  && ok "paired Cargo manifest and lockfile pass" \
+  || bad "paired Cargo manifest and lockfile pass (rc=$RC)"
 
 # --- 8. commit subject ------------------------------------------------------------
 new_repo

@@ -3,8 +3,8 @@
 #
 # Runs the mechanical half of a code review locally, on the diff only, and
 # prints a pass/fail table. No network, no credentials, no model calls:
-# bash and git only. The judgment half (does the change do the right thing?)
-# stays with the author plus the rubric in RUBRIC.md.
+# bash and git, plus offline Cargo metadata when Cargo.toml changes. The
+# judgment half stays with the author plus the rubric in RUBRIC.md.
 #
 # Usage:
 #   pre-review.sh [--base <sha>] [--pr-title <title>] [--pr-body <file>] [--public]
@@ -189,6 +189,40 @@ GEN_FAIL=0
 # whose manifest is live but untouched is a lock-only update (audit-fix,
 # version bump), not drift: only a lockfile with no manifest of its kind at
 # its side, above, or anywhere else in the tree fails, as dangling.
+cargo_lock_current() { # $1: changed Cargo.toml path; inspect committed inputs only.
+  command -v cargo >/dev/null 2>&1 || return 1
+  local snapshot manifest dir lock_path lock_tracked result
+  snapshot="$(mktemp -d 2>/dev/null)" || return 1
+  if ! git archive HEAD 2>/dev/null | tar -x -C "$snapshot" 2>/dev/null; then
+    rm -rf "$snapshot"
+    return 1
+  fi
+  # Remove every submitted .cargo entry, including symlinks. Cargo command-line
+  # overrides also neutralize compiler wrappers if another config source exists.
+  find "$snapshot" -name .cargo -prune -exec rm -rf {} + 2>/dev/null || true
+  manifest="$snapshot/$1"
+  lock_tracked=0
+  dir="$(dirname "$1")"
+  while true; do
+    lock_path="${dir#./}"
+    [[ "$dir" == "." ]] && lock_path=""
+    if git cat-file -e "HEAD:${lock_path:+$lock_path/}Cargo.lock" 2>/dev/null; then
+      lock_tracked=1
+      break
+    fi
+    [[ "$dir" == "." ]] && break
+    dir="$(dirname "$dir")"
+  done
+  local -a lock_args=()
+  [[ "$lock_tracked" -eq 1 ]] && lock_args+=(--locked)
+  (cd "$snapshot" && cargo --config 'build.rustc="rustc"' \
+    --config 'build.rustc-wrapper=""' \
+    --config 'build.rustc-workspace-wrapper=""' \
+    metadata "${lock_args[@]}" --offline --format-version 1 --manifest-path "$manifest" >/dev/null 2>&1)
+  result=$?
+  rm -rf "$snapshot"
+  return "$result"
+}
 gen_pair() { # $1: manifest basename; $2...: lockfile basenames.
   local m="$1"; shift
   local f d h g key hit up
@@ -203,7 +237,17 @@ gen_pair() { # $1: manifest basename; $2...: lockfile basenames.
       [[ "$up" == "." ]] && break
       up="$(dirname "$up")"
     done
-    [[ "$hit" -eq 1 ]] || { fail "generated-drift" "$f changed without its lockfile in $d or above"; GEN_FAIL=1; }
+    if [[ "$hit" -eq 0 ]]; then
+      if [[ "$m" == Cargo.toml ]] && cargo_lock_current "$f"; then
+        continue
+      fi
+      if [[ "$m" == Cargo.toml ]]; then
+        fail "generated-drift" "$f changed without a lockfile update; offline Cargo metadata could not verify dependency state"
+      else
+        fail "generated-drift" "$f changed without its lockfile in $d or above"
+      fi
+      GEN_FAIL=1
+    fi
   done
   for h in "${CHANGED[@]}"; do
     for g in "$@"; do

@@ -1442,6 +1442,16 @@ assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
 assert "$(grep -q "default branch" <<< "$OUT" && echo 0 || echo 1)" \
   "the unresolvable-base blindness names the default branch" "$OUT"
 
+# Stale origin/HEAD naming a branch with no ref here: origin/HEAD is
+# authoritative, so the base stays unproven even though master exists.
+STALEH="$(mkdefault master masterstale)"
+(cd "$STALEH" && git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/gone)
+run_guard "$STALEH" EXAMPLE-900 --repo=stub/none
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a stale origin/HEAD with no matching ref exits 3, not a fallback pass" "rc=$RC out=$OUT"
+assert "$(grep -q 'default branch "gone"' <<< "$OUT" && echo 0 || echo 1)" \
+  "the stale-HEAD blindness names the unresolved branch" "$OUT"
+
 # ===========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1

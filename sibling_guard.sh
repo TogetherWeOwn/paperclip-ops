@@ -219,7 +219,7 @@ BASE_REF=""
 BASE_REMOTE_REF=""
 resolve_default_branch() {
   [[ -n "$BASE_RESOLVED" ]] && return
-  BASE_RESOLVED=1
+  BASE_RESOLVED=1; BASE_BRANCH=""; BASE_REF=""; BASE_REMOTE_REF=""
   local head cand
   head="$(git symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null || echo "")"
   if [[ "$head" == refs/remotes/origin/* && -n "${head#refs/remotes/origin/}" ]]; then
@@ -418,7 +418,7 @@ detect_remote() {
     blind_on "remote: fetch skipped by SIBLING_GUARD_NO_FETCH, so the remote view is only as fresh as the last fetch"
   elif git fetch --quiet origin 2>"$TMPD/fetch.err"; then
     fetched=1
-    BASE_RESOLVED=""   # the fetch may have brought in the default-branch ref
+    BASE_RESOLVED=""; BASE_BRANCH=""; BASE_REF=""; BASE_REMOTE_REF=""   # the fetch may have brought in the default-branch ref
   else
     blind_on "remote: git fetch origin failed ($(head -1 "$TMPD/fetch.err" 2>/dev/null | tr -d '\n')). A stale remote view cannot clear you."
   fi

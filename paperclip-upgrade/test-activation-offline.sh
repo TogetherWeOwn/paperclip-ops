@@ -303,6 +303,36 @@ printf 'x\n' > "$ROOT/outside-target"; chmod 0666 "$ROOT/outside-target"
 ln -s "$ROOT/outside-target" "$ROOT/data/.local/bin/escape"
 expect_refused "reharden fails on a protected symlink resolving outside the baseline" "symlink" -- reharden_env
 rm -f "$ROOT/data/.local/bin/escape"
+# each descendant dimension pinned separately: group-write alone (0664, no
+# other-write bit) and group-owner alone. The test user belongs to one group
+# and cannot chgrp a fixture, so the group-owner case shifts the EXPECTED
+# gid: roots then fail in check_path, so the needle must be the
+# failure-path-only "protected descendant violates" (a bare "descendant"
+# would also match the success line "descendants within the baseline")
+# to pin check_tree's own ! -group term.
+chmod 0664 "$ROOT/data/plugin-packages-root/pkg/index.js"
+expect_refused "reharden fails on a group-writable descendant (0664)" "protected descendant violates" -- reharden_env
+chmod 0644 "$ROOT/data/plugin-packages-root/pkg/index.js"
+expect_refused "reharden fails on a wrong-gid descendant" "protected descendant violates" -- \
+  env PAPERCLIP_DATA="$ROOT/data" PAPERCLIP_UPGRADE_EXPECT_OWNER="$(id -u):$(( $(id -g) + 1 ))" \
+    PAPERCLIP_UPGRADE_REQUIRE_CARGO_POOL=1 PAPERCLIP_UPGRADE_SERVER_CONTAINER=paperclip-example \
+    DOCKER="$ROOT/bin/docker" bash "$REHARDEN"
+# container-absolute symlink targets are judged through the /paperclip ->
+# $DATA_DIR remap: a link created inside the container must not fail the
+# baseline permanently just because the host mounts the data elsewhere,
+# while a dangling or out-of-baseline mapped target must still fail
+mkdir -p "$ROOT/data/.local/share/tool"
+printf 'x\n' > "$ROOT/data/.local/share/tool/run"; chmod 0644 "$ROOT/data/.local/share/tool/run"
+ln -s /paperclip/.local/share/tool/run "$ROOT/data/.local/bin/tool-abs"
+expect_ok "reharden passes a container-absolute symlink whose mapped target is in the baseline" -- reharden_env
+rm -f "$ROOT/data/.local/bin/tool-abs"
+ln -s /paperclip/.local/share/tool/missing "$ROOT/data/.local/bin/tool-abs"
+expect_refused "reharden fails a container-absolute symlink whose mapped target does not resolve" "does not resolve" -- reharden_env
+rm -f "$ROOT/data/.local/bin/tool-abs"
+printf 'x\n' > "$ROOT/data/outside-x"; chmod 0666 "$ROOT/data/outside-x"
+ln -s /paperclip/outside-x "$ROOT/data/.local/bin/tool-abs"
+expect_refused "reharden fails a container-absolute symlink whose mapped target is outside the baseline" "outside the baseline" -- reharden_env
+rm -f "$ROOT/data/.local/bin/tool-abs" "$ROOT/data/outside-x"
 # a broken docker exec must FAIL the probes, never read as "denied"
 : > "$STUB/exec_broken"
 expect_refused "reharden fails when docker exec cannot answer the write-denial probes" "inconclusive" -- reharden_env
@@ -678,6 +708,46 @@ printf '%s\n%s\n' "$MGH1" "$MGH2" > "$ROOT/mig-ledger"
 expect_ok "declared 'none' passes when every image migration is applied" -- \
   python3 "$HERE/migration_gate.py" --sql-hashes "$ROOT/mig-hashes" --ledger "$ROOT/mig-ledger" \
     --max-unknown 0 --expect-pending-exact
+
+# --- 8. drain.sh restart wiring of that gate, executed verbatim ----------------
+# pending_migrations_gate is extracted from drain.sh and run against fixture
+# state (hashes-ahead + ledger-backup), so the restart wiring itself — env
+# binding, 4-digit prefixes, --expect-pending appends, fail-closed on a gate
+# miss — is behaviourally pinned, not only grepped. fail() is stubbed with
+# its real exit semantics; in cmd_restart that exit is what stops the
+# restart, and the call-site order check below pins it before compose_up.
+mkdir -p "$ROOT/migstate"; : > "$ROOT/migstate/gate.log"
+cp "$ROOT/mig-hashes" "$ROOT/migstate/hashes-ahead"
+printf '%s\n' "$MGH1" > "$ROOT/migstate/ledger-backup"
+pmig_gate() { # DECLARED | __unset__
+  (
+    eval "$(awk '/^pending_migrations_gate\(\) \{/,/^}$/' "$DRAIN")"
+    STATE_DIR="$ROOT/migstate"; HELPERS_DIR="$HERE"; LOG="$ROOT/migstate/gate.log"
+    st() { printf '%s/%s' "$STATE_DIR" "$1"; }
+    fail() { printf 'ERROR: %s\n' "$*"; exit 1; }
+    if [[ "$1" != __unset__ ]]; then
+      PAPERCLIP_ACTIVATION_PENDING_MIGRATIONS="$1"
+    else
+      unset PAPERCLIP_ACTIVATION_PENDING_MIGRATIONS
+    fi
+    pending_migrations_gate
+  )
+}
+expect_refused "restart gate: missing pending-migrations declaration is refused" "declared pending migrations missing" -- pmig_gate __unset__
+expect_refused "restart gate: declared 'none' refuses an image carrying a pending migration" "do not match" -- pmig_gate none
+expect_ok "restart gate: declared 0294 passes when exactly 0294 is pending" -- pmig_gate 0294
+expect_refused "restart gate: a wrong declared prefix is refused" "do not match" -- pmig_gate 0299
+expect_refused "restart gate: a malformed declared prefix is refused" "4-digit" -- pmig_gate 29x
+printf '%s\n%s\n' "$MGH1" "$MGH2" > "$ROOT/migstate/ledger-backup"
+expect_ok "restart gate: declared 'none' passes when every image migration is applied" -- pmig_gate none
+expect_refused "restart gate: declared 0294 refuses when nothing is pending" "do not match" -- pmig_gate 0294
+gate_line="$(awk '/^cmd_restart\(\) \{/{on=1} on && /pending_migrations_gate/{print NR; exit}' "$DRAIN")"
+up_line="$(awk '/^cmd_restart\(\) \{/{on=1} on && /compose_up/{print NR; exit}' "$DRAIN")"
+if [[ -n "$gate_line" && -n "$up_line" ]] && ((gate_line < up_line)); then
+  pass "restart gate: pending_migrations_gate runs in cmd_restart before any compose_up"
+else
+  oops "restart gate: pending_migrations_gate call site missing or after compose_up (gate=$gate_line up=$up_line)"
+fi
 
 say "test-activation-offline: $CHECKS checks, FAIL=$FAIL"
 ((FAIL == 0)) && say "ACTIVATION CONTRACT PASSED" || say "ACTIVATION CONTRACT FAILED"

@@ -929,6 +929,32 @@ preserve_tmp() { # the recreate discards the container's /tmp: keep a copy, minu
   log "restart: preserved the server /tmp to $dest ($(wc -l < "$dest.SHA256SUMS") files; secrets, sockets and SQLite WAL excluded)"
 }
 
+pending_migrations_gate() { # declared (manifest) pending set vs image hashes + backup ledger
+  # The manifest's declared pending set is verified against reality, not
+  # trusted: image migration hashes absent from the backup-time ledger are
+  # exactly what this boot will apply. A stale 'none' (or a wrong prefix
+  # list) must stop here, before preserve/hold/recreate — otherwise the
+  # admission receipt the wrapper consumed could be skipped by declaring
+  # 'none' for an image that carries a new migration. fail() exits, so a
+  # gate miss stops cmd_restart before it touches the server.
+  local declared_pending="${PAPERCLIP_ACTIVATION_PENDING_MIGRATIONS:-}"
+  [[ -n "$declared_pending" ]] \
+    || fail "declared pending migrations missing (PAPERCLIP_ACTIVATION_PENDING_MIGRATIONS, set by activation.sh from the manifest); restart NOT started"
+  local -a pmig=(--sql-hashes "$(st hashes-ahead)" --ledger "$(st ledger-backup)" --max-unknown 0 --expect-pending-exact)
+  if [[ "$declared_pending" != none ]]; then
+    local -a declared_list=()
+    IFS=',' read -r -a declared_list <<<"$declared_pending"
+    local dp
+    for dp in "${declared_list[@]}"; do
+      [[ "$dp" =~ ^[0-9]{4}$ ]] || fail "declared pending migration is not a 4-digit prefix: $dp; restart NOT started"
+      pmig+=(--expect-pending "$dp")
+    done
+  fi
+  python3 "$HELPERS_DIR/migration_gate.py" "${pmig[@]}" 2>&1 | tee -a "$LOG"
+  ((PIPESTATUS[0] == 0)) \
+    || fail "candidate image pending migrations do not match the manifest declaration ($declared_pending); restart NOT started"
+}
+
 cmd_restart() {
   check_auth_file
   open_state 0
@@ -948,28 +974,7 @@ cmd_restart() {
   ((PIPESTATUS[0] == 0)) || fail "pre-restart-check failed; restart NOT started"
   mark hashes-ahead-src "$EXPECT_IMAGE_ID"
   image_mig_hashes "$EXPECT_IMAGE_ID" "$(st hashes-ahead)" || fail "cannot read the target image's migrations"
-  # The manifest's declared pending set is verified against reality, not
-  # trusted: image migration hashes absent from the backup-time ledger are
-  # exactly what this boot will apply. A stale 'none' (or a wrong prefix
-  # list) must stop here, before preserve/hold/recreate — otherwise the
-  # admission receipt the wrapper consumed could be skipped by declaring
-  # 'none' for an image that carries a new migration.
-  local declared_pending="${PAPERCLIP_ACTIVATION_PENDING_MIGRATIONS:-}"
-  [[ -n "$declared_pending" ]] \
-    || fail "declared pending migrations missing (PAPERCLIP_ACTIVATION_PENDING_MIGRATIONS, set by activation.sh from the manifest); restart NOT started"
-  local -a pmig=(--sql-hashes "$(st hashes-ahead)" --ledger "$(st ledger-backup)" --max-unknown 0 --expect-pending-exact)
-  if [[ "$declared_pending" != none ]]; then
-    local -a declared_list=()
-    IFS=',' read -r -a declared_list <<<"$declared_pending"
-    local dp
-    for dp in "${declared_list[@]}"; do
-      [[ "$dp" =~ ^[0-9]{4}$ ]] || fail "declared pending migration is not a 4-digit prefix: $dp; restart NOT started"
-      pmig+=(--expect-pending "$dp")
-    done
-  fi
-  python3 "$HELPERS_DIR/migration_gate.py" "${pmig[@]}" 2>&1 | tee -a "$LOG"
-  ((PIPESTATUS[0] == 0)) \
-    || fail "candidate image pending migrations do not match the manifest declaration ($declared_pending); restart NOT started"
+  pending_migrations_gate
 
   # Pin the effective-build expectations to the state dir (verify reads these
   # back, so the flags passed to a later `verify` cannot drift from what the

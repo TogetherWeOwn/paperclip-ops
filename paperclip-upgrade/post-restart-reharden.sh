@@ -19,7 +19,11 @@
 #     the same way (the recursive repair being replaced covered the whole
 #     trees, so the verification must too): a non-symlink descendant with
 #     the wrong owner or a group/other write bit fails, and a symlink
-#     fails unless its resolved target itself passes owner+mode;
+#     fails unless its resolved target itself passes owner+mode. A
+#     container-absolute target (/paperclip/..., the in-container mount
+#     of $DATA) is remapped onto $DATA before resolving, so a link
+#     created inside the container is judged by its real target instead
+#     of failing forever on the host, where the data lives elsewhere;
 #   - when the bounded Cargo pool is required (or present as a
 #     mountpoint), its ROOT and policy.json are judged the same way,
 #     NON-recursively: slot directories beneath the root stay
@@ -91,7 +95,7 @@ check_path() { # PATH -- owned by EXPECT_OWNER, no group/other write, no symlink
 }
 
 check_tree() { # ROOT -- every descendant judged, verify-only (see header)
-  local root="$1" euid="${EXPECT_OWNER%%:*}" egid="${EXPECT_OWNER##*:}" hits links link target tst tuid tgid tmode
+  local root="$1" euid="${EXPECT_OWNER%%:*}" egid="${EXPECT_OWNER##*:}" hits links link raw cand target tst tuid tgid tmode
   if ! hits="$(find "$root" -xdev ! -type l \( ! -user "$euid" -o ! -group "$egid" -o -perm /022 \) -print 2>/dev/null)"; then
     printf 'FAIL: cannot scan protected tree for baseline violations: %s\n' "$root"
     return 1
@@ -107,7 +111,25 @@ check_tree() { # ROOT -- every descendant judged, verify-only (see header)
   fi
   while IFS= read -r link; do
     [[ -n "$link" ]] || continue
-    target="$(readlink -f -- "$link" 2>/dev/null)" \
+    # Resolve through the container mount (see header): /paperclip is
+    # $DATA inside the container (the probes below address it the same
+    # way), so remap that prefix before resolving on the host. Relative
+    # targets resolve via the link itself; other absolute targets keep
+    # host semantics. The mapped target is then judged exactly like any
+    # other resolved target — remapping never exempts it.
+    raw="$(readlink -- "$link" 2>/dev/null)" \
+      || { printf 'FAIL: protected symlink cannot be read: %s\n' "$link"; return 1; }
+    case "$raw" in
+      /paperclip) cand="$DATA_DIR" ;;
+      /paperclip/*) cand="$DATA_DIR/${raw#/paperclip/}" ;;
+      /*) cand="$raw" ;;
+      *) cand="$link" ;;
+    esac
+    # readlink -f tolerates a missing final component, so existence is
+    # judged explicitly: a dangling (mapped) target does not resolve.
+    target="$(readlink -f -- "$cand" 2>/dev/null)" \
+      || { printf 'FAIL: protected symlink does not resolve: %s\n' "$link"; return 1; }
+    [[ -e "$target" ]] \
       || { printf 'FAIL: protected symlink does not resolve: %s\n' "$link"; return 1; }
     tst="$(stat -c '%u %g %a' -- "$target" 2>/dev/null)" \
       || { printf 'FAIL: protected symlink target cannot be judged: %s -> %s\n' "$link" "$target"; return 1; }

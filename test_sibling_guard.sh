@@ -487,7 +487,7 @@ assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
 SELF="$TMP/self"; mkclone "$SELF"
 (cd "$SELF" && git checkout --quiet -b example-901-work && echo mine >> file.txt && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "my work")
 run_guard "$SELF" EXAMPLE-901 --repo=stub/none
-assert "$(grep -qv "example-901-work is" <<< "$OUT" && grep -q "run-sib" <<< "$OUT" && echo 0 || echo 1)" \
+assert "$(! grep -q "example-901-work is" <<< "$OUT" && grep -q "run-sib" <<< "$OUT" && echo 0 || echo 1)" \
   "the branch the caller is standing on is not reported as a sibling branch" "$OUT"
 
 # ===========================================================================
@@ -1298,6 +1298,14 @@ run_guard "$CLEAN" EXAMPLE-900 --phase=sideways --repo=stub/none
 assert "$([[ "$RC" -eq 2 ]] && echo 0 || echo 1)" \
   "an unknown phase is a usage error" "rc=$RC out=$OUT"
 
+OUT="$(timeout 5 "$TOOL" EXAMPLE-900 --phase 2>&1)"; RC=$?
+assert "$([[ "$RC" -eq 2 ]] && echo 0 || echo 1)" \
+  "a trailing --phase with no value is a usage error, not a hang" "rc=$RC out=$OUT"
+
+OUT="$(timeout 5 "$TOOL" EXAMPLE-900 --repo 2>&1)"; RC=$?
+assert "$([[ "$RC" -eq 2 ]] && echo 0 || echo 1)" \
+  "a trailing --repo with no value is a usage error, not a hang" "rc=$RC out=$OUT"
+
 OUT="$("$TOOL" 2>&1)"; RC=$?
 assert "$([[ "$RC" -eq 2 ]] && echo 0 || echo 1)" \
   "no issue argument is a usage error" "rc=$RC out=$OUT"
@@ -1451,6 +1459,95 @@ assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
   "a stale origin/HEAD with no matching ref exits 3, not a fallback pass" "rc=$RC out=$OUT"
 assert "$(grep -q 'default branch "gone"' <<< "$OUT" && echo 0 || echo 1)" \
   "the stale-HEAD blindness names the unresolved branch" "$OUT"
+assert "$(grep -q 'git remote set-head origin -a' <<< "$OUT" && echo 0 || echo 1)" \
+  "the stale-HEAD blindness names the origin/HEAD repair" "$OUT"
+
+# Upstream renames the default branch master -> main after this clone was
+# made. A plain fetch neither prunes origin/master nor updates origin/HEAD,
+# so only the guard's post-fetch `git remote set-head origin -a` refresh
+# makes resolution yield the new main — and work landed on origin/main must
+# then refuse at prepush, never read as a false clear against stale master.
+REN="$(mkdefault master masterrename)"
+(cd "$REN" && git checkout --quiet -b example-900-work && echo two >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "landed on main" \
+   && git push --quiet origin HEAD:refs/heads/main)
+git -C "$TMP/masterrename.git" symbolic-ref HEAD refs/heads/main
+git -C "$TMP/masterrename.git" update-ref -d refs/heads/master
+run_guard "$REN" EXAMPLE-900 --repo=stub/none --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "prepush after a master-to-main default rename exits 1, not a false clear" "rc=$RC out=$OUT"
+assert "$(grep -q "ALREADY an ancestor of origin/main" <<< "$OUT" && echo 0 || echo 1)" \
+  "the renamed-default already-landed finding names origin/main" "$OUT"
+
+# The post-fetch cache reset: origin/master is deleted locally before the
+# run, so the first resolution can only prove the local master. The guard's
+# own fetch restores origin/master; without the reset the cached local-only
+# resolution would leave the prepush ancestor test blind instead of finding
+# the landed work.
+FREST="$(mkdefault master masterfetchrestore)"
+(cd "$FREST" && git checkout --quiet -b example-900-work && echo two >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "landed work" \
+   && git push --quiet origin HEAD:refs/heads/master \
+   && git update-ref -d refs/remotes/origin/master)
+run_guard "$FREST" EXAMPLE-900 --repo=stub/none --phase=prepush
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "prepush finds landed work when the guard fetch restores origin/master" "rc=$RC out=$OUT"
+assert "$(grep -q "ALREADY an ancestor of origin/master" <<< "$OUT" && echo 0 || echo 1)" \
+  "the fetch-restored already-landed finding names origin/master" "$OUT"
+
+# The converted base sites on a master default, vacuous HEAD: the
+# same-commit and same-head-worktree detectors must both measure "no local
+# commits" against master. Hardcoding main at either site turns this clean
+# master-tip HEAD into an evaluated collision (exit 1).
+MVAC="$(mkdefault master mastervacuous)"
+(cd "$MVAC" && git rev-parse HEAD > "$TMP/sha.txt" \
+   && git worktree add --quiet -b master-tip-other "$TMP/master-tip-wt" HEAD)
+run_guard "$MVAC" EXAMPLE-900 --repo=stub/shaforeign
+assert "$([[ "$RC" -eq 0 ]] && echo 0 || echo 1)" \
+  "a master-tip HEAD does not refuse a same-commit PR or a same-tip worktree" "rc=$RC out=$OUT"
+assert "$(grep -q "no local commits beyond master" <<< "$OUT" && echo 0 || echo 1)" \
+  "the vacuous master comparison names master as the base" "$OUT"
+assert "$(grep -q "sharing the base are not evaluated" <<< "$OUT" && echo 0 || echo 1)" \
+  "the same-commit detector skips the vacuous master HEAD" "$OUT"
+assert "$(grep -q "no head collision is evaluated" <<< "$OUT" && echo 0 || echo 1)" \
+  "the same-head worktree detector skips the vacuous master HEAD" "$OUT"
+
+# The converted generic-ownership base on a master default, ahead HEAD: a
+# claimed same-commit PR is skipped by the generic path (SAMESHA will
+# evaluate it) only when the ahead-of-master count is non-zero. Measuring
+# against a missing main makes the generic path fire its own refusal too.
+MGEN="$(mkdefault master mastergeneric)"
+(cd "$MGEN" && git checkout --quiet -b master-ahead-work && echo two >> file.txt \
+   && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "shared head" \
+   && git rev-parse HEAD > "$TMP/sha.txt")
+run_guard "$MGEN" EXAMPLE-900 --repo=stub/shavacown
+assert "$([[ "$RC" -eq 1 ]] && echo 0 || echo 1)" \
+  "on master, a claimed same-commit PR ahead of the base exits 1" "rc=$RC out=$OUT"
+assert "$(grep -q "carries the same commit" <<< "$OUT" && echo 0 || echo 1)" \
+  "on master, the same-commit detector owns the claimed same-commit refusal" "$OUT"
+assert "$(grep -q "your own PR on another branch" <<< "$OUT" && echo 1 || echo 0)" \
+  "on master, the generic path skips the claimed same-commit PR SAMESHA evaluates" "$OUT"
+
+# A local-only base at prepush: the default branch is proven by the local
+# master alone (the bare origin is empty), so there is no remote ref to run
+# the already-landed test against. That is blindness (exit 3), and gating
+# the test on the local ref instead would drop the blindness.
+git init --quiet --bare -b master "$TMP/masterlocalonly.git"
+git init --quiet -b master "$TMP/masterlocalonly" && (
+  cd "$TMP/masterlocalonly"
+  echo one > file.txt
+  git add file.txt && git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -m "seed"
+  git remote add origin "$TMP/masterlocalonly.git"
+  git checkout --quiet -b local-work && echo two >> file.txt
+  git -c user.name=suite -c user.email=suite@example.invalid commit --quiet -am "local work"
+)
+run_guard "$TMP/masterlocalonly" EXAMPLE-900 --repo=stub/none --phase=prepush
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "prepush with only a local master base exits 3, not 0" "rc=$RC out=$OUT"
+assert "$(grep -q "already-landed test could not run" <<< "$OUT" && echo 0 || echo 1)" \
+  "the local-only prepush blindness names the already-landed test" "$OUT"
+assert "$(grep -q "comparing against local master" <<< "$OUT" && echo 0 || echo 1)" \
+  "the local-only base comparison is named in the report" "$OUT"
 
 # ===========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

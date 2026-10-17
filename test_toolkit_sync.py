@@ -19,12 +19,9 @@ TAG = TOOLKIT["tag"]
 COMMIT = TOOLKIT["commit"]
 FIX_COMMIT = "d0324d0e5dd5a604a375e63a45eb5aa00e507059"
 FIX_ARCHIVE_SHA256 = "390032e7032e9041e82497b4fa90be086fea12df791653c0d5e6818a83d7f791"
-FIX_GUARD_SHA256 = "40fdea4eebad62c5ed20293fdb5913f3664daac06dae6584b757f6bf2272bb76"
 # sibling_guard.sh is tracked in this repo (toolkit-tracked allowlist
 # survivor, canonical for the default-branch resolution fix), so the guard
 # subject below is the tracked bytes, no longer the pinned toolkit copy.
-# FIX_GUARD_SHA256 still records the pinned toolkit bytes at FIX_COMMIT for
-# the pin-history assertions above.
 
 
 class ToolkitSyncTest(unittest.TestCase):
@@ -234,7 +231,19 @@ cp "$source" "$dest"
         self.assertNotIn("sibling_guard.sh", contract["restored_files_sha256"])
         # Repack only the needed immutable bytes, with a fixture checksum. The
         # real archive checksum is asserted separately, not relabelled as this tar.
-        self.pack({"LICENSE": b"fixture license\n", "sibling_guard.sh": subject})
+        # The archive carries DIFFERENT guard bytes on purpose: the destination
+        # below is seeded with the tracked subject and staged in git, so the
+        # assertions prove sync preserved the tracked file instead of copying
+        # the archive version over it.
+        (self.root / "vendor/toolkit-tracked-allowlist.txt").write_text(
+            "sibling_guard.sh\n")
+        (self.root / "sibling_guard.sh").write_bytes(subject)
+        subprocess.run(["/usr/bin/git", "-C", str(self.root), "init", "--quiet"],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["/usr/bin/git", "-C", str(self.root), "add", "sibling_guard.sh"],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.pack({"LICENSE": b"fixture license\n",
+                   "sibling_guard.sh": b"archive-only guard bytes\n"})
         entries = [line for line in (ROOT / "vendor/toolkit-files.txt").read_text().splitlines()
                    if line.split("|", 1)[0] == "sibling_guard.sh"]
         self.assertEqual(entries, ["sibling_guard.sh"],
@@ -250,7 +259,7 @@ cp "$source" "$dest"
         subject = (ROOT / "sibling_guard.sh").read_bytes()
         self.assertEqual(hashlib.sha256(self.guard.read_bytes()).hexdigest(),
                          hashlib.sha256(subject).hexdigest(),
-                         "sync must restore the guard subject bytes unchanged")
+                         "sync must preserve the tracked guard subject bytes unchanged")
 
     def prepare_guard_world(self):
         self.prepare_guard()

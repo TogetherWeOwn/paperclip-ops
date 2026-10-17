@@ -156,9 +156,9 @@ die() { echo "sibling_guard: $*" >&2; exit 2; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --phase=*) PHASE="${1#--phase=}"; shift;;
-    --phase)   PHASE="${2:-}"; shift 2;;
+    --phase)   [[ $# -ge 2 ]] || die "--phase needs a value"; PHASE="$2"; shift 2;;
     --repo=*)  REPO_SLUG="${1#--repo=}"; shift;;
-    --repo)    REPO_SLUG="${2:-}"; shift 2;;
+    --repo)    [[ $# -ge 2 ]] || die "--repo needs a value"; REPO_SLUG="$2"; shift 2;;
     --quiet|-q) QUIET=1; shift;;
     --json)    JSON=1; shift;;
     -h|--help) sed -n '98,144p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
@@ -202,11 +202,13 @@ branch_is_primary_for_key() {
 # no origin/main at all, and assuming one left every base-dependent detector
 # blind there. Resolution order:
 #   1. refs/remotes/origin/HEAD — the clone's own record of the remote
-#      default branch (set by clone; refreshable with
-#      `git remote set-head origin -a`). Authoritative when present, even
-#      for nonstandard names. If it names a branch with no ref in this
-#      clone, the base is unproven and callers fail closed — never a
-#      fallback to a branch that merely shares a conventional name.
+#      default branch (set by clone; the remote detector refreshes it with
+#      `git remote set-head origin -a` after a successful fetch, so an
+#      upstream rename cannot leave a stale name behind). Authoritative
+#      when present, even for nonstandard names. If it names a branch with
+#      no ref in this clone and the name could not be refreshed, the base
+#      is unproven and callers fail closed — never a fallback to a branch
+#      that merely shares a conventional name.
 #   2. The conventional names, remote refs first: origin/main,
 #      origin/master, then local main, master.
 # Empty BASE_BRANCH means the default branch could not be proven at all;
@@ -246,9 +248,9 @@ resolve_default_branch() {
 # Human phrasing for an unproven base, shared by the blind reports.
 base_unproven() {
   if [[ -n "$BASE_BRANCH" ]]; then
-    printf 'the default branch "%s" (from origin/HEAD) has no ref in this clone' "$BASE_BRANCH"
+    printf 'the default branch "%s" (from origin/HEAD) has no ref in this clone (run `git remote set-head origin -a` to refresh origin/HEAD)' "$BASE_BRANCH"
   else
-    printf 'the default branch cannot be resolved (no origin/HEAD, origin/main, origin/master, main or master)'
+    printf 'the default branch cannot be resolved (no origin/HEAD, origin/main, origin/master, main or master; run `git remote set-head origin -a` to refresh origin/HEAD)'
   fi
 }
 
@@ -418,7 +420,12 @@ detect_remote() {
     blind_on "remote: fetch skipped by SIBLING_GUARD_NO_FETCH, so the remote view is only as fresh as the last fetch"
   elif git fetch --quiet origin 2>"$TMPD/fetch.err"; then
     fetched=1
-    BASE_RESOLVED=""; BASE_BRANCH=""; BASE_REF=""; BASE_REMOTE_REF=""   # the fetch may have brought in the default-branch ref
+    # A plain fetch does not move origin/HEAD, so after an upstream
+    # default-branch rename it still names the old branch and resolution
+    # would use a stale base. Refresh it from the remote (best effort: a
+    # failed refresh keeps the previous resolution).
+    git remote set-head origin -a >/dev/null 2>&1 || true
+    BASE_RESOLVED=""; BASE_BRANCH=""; BASE_REF=""; BASE_REMOTE_REF=""   # the fetch may have brought in the default-branch ref, and origin/HEAD may have moved
   else
     blind_on "remote: git fetch origin failed ($(head -1 "$TMPD/fetch.err" 2>/dev/null | tr -d '\n')). A stale remote view cannot clear you."
   fi
@@ -862,6 +869,11 @@ detect_remote() {
     fi
     if [[ -n "$BASE_REMOTE_REF" ]]; then
       current_sha="$(git rev-parse HEAD 2>/dev/null || echo "")"
+      # Only the resolved default branch counts as "landed": HEAD being an
+      # ancestor of some other conventional branch (a long-lived main next
+      # to a master default, say) does not mean this work was delivered.
+      # Stale-origin/HEAD renames are handled by the set-head refresh after
+      # the fetch above, which re-resolves BASE_BRANCH before this test.
       if [[ -n "$current_sha" ]] && git merge-base --is-ancestor "$current_sha" "$BASE_REMOTE_REF" 2>/dev/null; then
         find_it "remote: HEAD ($(git rev-parse --short HEAD)) is ALREADY an ancestor of origin/$BASE_BRANCH. This work is landed. Pushing it again delivers nothing."
       else

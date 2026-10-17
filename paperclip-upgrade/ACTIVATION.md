@@ -1,0 +1,163 @@
+# Paperclip activation contract (no-chown, exclusive lock)
+
+`activation.sh` is the only supported entry point for a drained,
+immutable Paperclip activation. It wraps `drain.sh` in one process that
+holds a single service-scoped deployment lock from first validation to
+final undrain. It is a source contract: it proves the argv, bindings
+and failure behaviour offline; it does **not** attest that any host
+has these scripts installed, that a candidate image was built from a
+particular recipe, or that a runtime currently satisfies a gate (see
+"Remaining host-only attestations").
+
+## Usage
+
+```sh
+activation.sh preflight --manifest /abs/activation.conf --state-dir /abs/state
+activation.sh run       --manifest /abs/activation.conf --state-dir /abs/state --live
+activation.sh resume    --manifest /abs/activation.conf --state-dir /abs/state --live
+activation.sh rollback  --manifest /abs/activation.conf --state-dir /abs/state --live
+activation.sh abort     --manifest /abs/activation.conf --state-dir /abs/state --live
+```
+
+- `preflight` takes the lock briefly, validates everything read-only,
+  and starts no drain.
+- `run` refuses an existing state dir; a crashed or failed activation
+  is continued with `resume`, never restarted over the same state.
+- `rollback` runs only for a state this manifest owns, only after the
+  operator points the compose file at the pinned pre-change image
+  (its hash must then equal `ROLLBACK_COMPOSE_SHA256`), and undrains
+  only through `drain.sh`'s verified path.
+- `abort` is pre-restart only and only ever lifts its own drain
+  (`drain.sh` CAS checks the drain it started and the waker file it
+  created; a pre-existing drain or waker-disable is left alone).
+
+State ownership is recorded in `<state-dir>.activation-owner`
+(manifest SHA-256 + lock path) *before* the drain starts. `resume`,
+`rollback` and `abort` refuse a state whose owner record names a
+different manifest or lock, so one activation can never undrain or
+roll back another activation's drain.
+
+## The lock
+
+- Real `flock(2)` on the manifest's `DEPLOY_LOCK_PATH`, held by the
+  `activation.sh` process on fd 8 for the entire invocation — not a
+  metadata file, lease timestamp or heartbeat.
+- The path is validated before use: absolute; parent directory a
+  non-symlink owned by the invoking user with no group/other write;
+  an existing lock file a non-symlink, owned, owner-only (`0700`
+  mask) regular file. A collision (another holder) refuses; there is
+  no waiting, stealing or stale-lock breaking. Because the lock is
+  keyed by service identity in the manifest — not by state dir — two
+  activations with different state directories are mutually excluded.
+- On holder death the kernel releases the lock. `resume` can then
+  re-acquire it, but only for the manifest recorded in the owner
+  file, and `drain.sh` markers decide which phase runs next. An
+  interrupted restart (`restart_started_at` without `restarted_at`)
+  is never guessed at: `resume` stops and prints the rollback argv.
+- `drain.sh` refuses every mutating subcommand unless the caller
+  proves descent from the holder: lock path + token in the
+  environment, the token matching the holder's record inside the
+  lock file, an inherited open fd resolving to that file, and a
+  failed non-blocking re-lock attempt. `drain.sh status` is exempt
+  (read-only). Installed legacy scripts that bypass this wrapper are
+  a host removal item, not something source can enforce remotely;
+  once these sources are installed, the bypass refuses before any
+  state is created.
+
+## Parity table
+
+Each behaviour of the previous restart/hardening path, what it
+protected, how the contract now proves it, and what happens on
+failure. "Pre" runs before the drain; "post" runs under the
+scheduling hold before undrain.
+
+| Old operation | Preserved invariant | Pre/post check now | Failure action |
+|---|---|---|---|
+| Recursive root `chown` of `.local`, `.gitconfig`, plugin root after restart | Agent uid cannot write launcher, gitconfig or plugin roots | Pre + post (inside `drain.sh verify`): `post-restart-reharden.sh` stat-verifies owner `EXPECT_PROTECTED_OWNER` and no group/other write, then probes write denial as the agent uid. No ownership is changed | Verify/baseline FAIL; server stays under the hold; resolve ownership out of band under separate authority |
+| Non-recursive root `chown`+`chmod` of Cargo pool root + `policy.json` | Pool policy is operator-controlled while slot dirs stay agent-writable | Root and `policy.json` stat-verified non-recursively; slot directories are never tightened or inspected for tightening; pool required iff `REQUIRE_CARGO_POOL=1`, still judged when present | FAIL, hold preserved; slots untouched either way |
+| `chmod -R go-w` metadata repair | Protected paths are not group/other writable | Same stat check proves it instead of applying it: a writable mode is a failed gate, byte-for-byte left as found | FAIL, no repair attempted |
+| Image entrypoint root branch re-owning the data mount | Nothing in the launch path changes ownership under the mounts | Pre: entrypoint argv pin + entrypoint file hash pin + content scan refusing any ownership-change command; pinned non-root `EXPECT_USER` in image and compose; post: PID 1 uid re-read from `/proc/1/status` | Refuse before drain (pre) or hold + rollback argv (post) |
+| Per-state-dir `flock` | One activation at a time per service | The service-scoped lock above, held across every phase; the per-state-dir lock remains as defence in depth inside `drain.sh` | Second activation refused, first is never disturbed |
+| Natural drain + stable-zero wait | No work is cancelled; restart only at measured quiescence | Unchanged `drain.sh` machinery: `STABLE_POLLS ≥ 2` consecutive polls with API and SQL hard gates at zero, same container, same drain; `wait` gives up with admission still closed | Phase FAIL; admission stays closed; owned `abort` only |
+| Maintenance-window refusal in the legacy wrapper | No restarts inside the blocked UTC window | Manifest-pinned blocked window judged from the live UTC hour before drain and again before restart; no override flag, no `FORCE` (its mere presence refuses) | Refused before any mutation |
+| Disk checks in backup/pre-restart | Restart never starts against a full disk | Manifest floor `MIN_DISK_AVAIL_BYTES` pre + pre-restart, plus `drain.sh`'s own backup/pre-restart disk gates (their `df` call was repaired for current coreutils, where `-P` and `--output` are mutually exclusive) | Refused/FAIL before recreate |
+| (new) host-pressure admission | No activation onto a loaded or memory-short host | Live `/proc/loadavg` and `MemAvailable` against manifest ceilings/floors; missing or malformed evidence refuses — thresholds have no defaults in code | Refused before drain/restart |
+| Image swap by tag in compose | The exact reviewed build is what boots | Candidate ref pinned to `EXPECT_IMAGE_ID`, compose file SHA-256, service image/user, sorted mount-destination hash, effective-build file pins (`EXPECT_FILES` + entrypoint), health `.commit` against `EXPECT_COMMIT`, revision label checked when present but never sufficient alone; recreate is `--no-build --pull never` | Refuse pre-drain for binding mismatches; post-recreate mismatches hold + rollback |
+| Rollback by re-pointing compose | Rollback lands on the actual pre-change image/config | Pre-change image id is read live from the running container and must equal `ROLLBACK_IMAGE_ID`; the rollback ref must resolve locally; rollback compose must hash to `ROLLBACK_COMPOSE_SHA256` before `drain.sh rollback` runs | Refused; server stays held |
+| Restart hardening side effects | PID 1 umask `0077`, sandbox canary, effective build, migrations, plugin/config/inventory parity | Unchanged `drain.sh verify_held` gates (umask from `/proc/1/status`, review-bot sandbox canary, effective-build proof, migration gate, drift checks) plus the wrapper's PID 1 uid probe before verify | Verify FAIL; hold preserved; nothing admitted |
+| Legacy 916 redaction overlay refusal | Upgraded server never runs the whole-file override | Unchanged `compose_no_legacy_overlay` + effective-build `--forbid-916-redaction`; private overlays in general are pinned via `EXPECT_HOST_FILES` when `PRIVATE_OVERLAY_REQUIRED=1` | Restart refused before the server is touched |
+
+## Manifest
+
+A `0600` regular file of `KEY=VALUE` lines (see
+`activation.example.conf`), parsed strictly and never sourced:
+unknown or duplicate keys refuse, every required key must be present,
+and identity values are shape-checked (full image ids, full source
+commit, 64-hex hashes, non-root user, `STABLE_POLLS ≥ 2`). There are
+no code defaults for thresholds, window hours or identities: a
+missing value is a refusal, not a guess. The manifest itself carries
+no secrets — it pins public digests and paths; credentials stay in
+`drain.sh`'s existing `0600` curl auth file.
+
+## Failure behaviour
+
+- Before the drain: any refusal exits 2 with the host untouched.
+- After the drain, before restart: admission stays closed; the only
+  ways out are `resume` (same manifest) or owned `abort`.
+- After restart: the server stays under `drain.sh`'s scheduling
+  hold; `verify` or the runtime probe failing never undrains. The
+  printed next step is the owned `rollback` argv above.
+- Rollback verify failing likewise leaves the rolled-back server
+  held. There is no automatic undrain anywhere in this contract.
+- Rollback (one shot): point the compose file at the rollback image →
+  `activation.sh rollback ... --live` → it verifies the rollback
+  bindings, runs `drain.sh rollback` (image-only; the wrapper does
+  not expose `drain.sh`'s `--restore-db` database restore — needing
+  one is a separate, explicitly reviewed operator procedure), probes
+  PID 1, then undrains.
+  Undoing the compose edit afterwards is the operator's recorded
+  config change, hash-pinned like the forward edit.
+
+## Hermetic tests
+
+`paperclip-upgrade/test-activation-offline.sh` (wired into
+`scripts/verify-fast.sh` and CI) stubs `docker` and `drain.sh`; it
+touches no Docker daemon, database or network. It covers: the
+verify-only hardener (baseline pass, no repair, missing baseline,
+agent-writable path, slot untouched), every binding refusal (image,
+commit, compose, mounts, user, entrypoint argv/hash, entrypoint
+carrying an ownership-change command, rollback identity, helper
+carrying one), pressure/window evidence, lock path safety and
+cross-state-dir exclusivity, the full phase order under inherited
+lock proof, verify-failure hold preservation, foreign-state refusal,
+owned rollback argv and preconditions, and real `drain.sh` refusing
+mutating commands without wrapper proof. The pre-existing
+`test-offline.sh` database proofs create isolated `rehearse_sqlproof_*`
+databases on the agent test database only; nothing in this contract
+adds a database-creating suite.
+
+## Remaining host-only attestations
+
+The authorized host executor must still attest, with live evidence,
+before an activation from these sources:
+
+1. The installed scripts on the host are exactly this reviewed tree
+   (digests), and legacy wrappers/entrypoints that bypass
+   `activation.sh` are removed or refuse.
+2. The candidate image's build recipe and provenance (this contract
+   pins image id, entrypoint content and effective-build files; it
+   does not prove what built the image or what private overlays the
+   build consumed).
+3. The protected-path ownership baseline itself: that the roots are
+   already owned/moded as `EXPECT_PROTECTED_OWNER` requires, and how
+   they were established (this path never establishes them).
+4. The real manifest values: compose file and rollback-compose
+   hashes, mount set, thresholds and window for that host, plugin
+   inventory handoff, and any private-overlay file pins.
+5. Runtime (a)–(d) evidence for an actual activation — drained
+   readback, healthy boot on the pinned image, verify output, and
+   post-undrain behaviour — plus the recorded one-shot rollback
+   rehearsal/result for that host.
+6. That the lock file's parent directory on that host is the intended
+   operator-owned location and that no second deployment identity
+   (user, timer, legacy wrapper) can write it.

@@ -158,13 +158,16 @@ else
 fi
 
 # --- 6. real-root paths (informational under rootful Docker) ------------------
-# History: the image entrypoint runs `chown -R node:node /paperclip` and exits
-# fatally on the first path it cannot chown; host uid 0 was unmapped inside a
-# rootless container, so real-root files crash-looped the service (2026-09-03:
-# 65 min outage; 2026-09-19: 3 loops). Under rootful Docker the boot chown can
-# re-own real-root paths and they are no longer fatal; post-restart-reharden.sh
-# deliberately creates some (the agent immutability set). The count is
-# therefore reported, and only blocks with --block-on-root.
+# History: a legacy image entrypoint recursively changed ownership under
+# the data mount and exited fatally on the first path it could not touch;
+# host uid 0 was unmapped inside a rootless container, so real-root files
+# crash-looped the service. On the current activation path
+# (activation.sh) ownership changes under the mounts are forbidden in
+# helpers and in the candidate entrypoint, and post-restart-reharden.sh
+# only VERIFIES the pre-installed root-owned immutability set — it
+# creates nothing. Pre-existing real-root paths from that set are the
+# expected baseline, so the count is reported, and only blocks with
+# --block-on-root.
 if n="$(sudo -n find "$DATA_DIR" -xdev \( -user 0 -o -group 0 \) 2>/dev/null | wc -l)"; then
   if [[ "$n" != "0" ]]; then
     printf 'note: %s real-root-owned path(s) under %s (expected: reharden set)\n' "$n" "$DATA_DIR"

@@ -80,6 +80,7 @@ command -v jq >/dev/null || refuse "jq is missing (needed for the package-manife
 
 # --- 1. every harness script parses ------------------------------------------
 for f in rehearse-upgrade.sh drain.sh pre-restart-check.sh post-restart-reharden.sh \
+         activation.sh test-activation-offline.sh \
          resolve-drain-stranded.sh effective-build-check.sh migration_gate.py \
          check-plugin-inventory.py validate_sql.py test-offline.sh; do
   [[ -f "$HERE/$f" ]] || { oops "missing harness file: $f"; continue; }

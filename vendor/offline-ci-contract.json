@@ -306,7 +306,8 @@
     "project regen prune manifest atomic suite:1",
     "sweep-auto node7b1ff338 pressure-gate suite:1",
     "host regenerable cache reclaim hostile suite:1",
-    "pr6 acceptance suite:1"
+    "pr6 acceptance suite:1",
+    "activation contract suite:1"
   ],
   "retained": [
     {
@@ -1713,6 +1714,11 @@
       "name": "pr6 acceptance suite",
       "definition_sha256": "63a04269075c57e92a96db6e55ba7bffb4f910e69a222a44cfd186d930e369f4",
       "id": "pr6 acceptance suite:1"
+    },
+    {
+      "name": "activation contract suite",
+      "definition_sha256": "d3b4541f93b61ebe7cbba7cb1ed7bc82d721b6974c8a888f42bb8d35a413d203",
+      "id": "activation contract suite:1"
     }
   ],
   "removed": [

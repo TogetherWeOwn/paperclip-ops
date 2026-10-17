@@ -94,6 +94,8 @@ LOG=""; TMPD=""; PARTIAL=0
 usage() {
   cat <<'USAGE'
 usage: drain.sh SUBCOMMAND --state-dir DIR [--live] [options]
+  (mutating subcommands run only as children of activation.sh, which
+   holds the service-scoped deployment lock across every phase)
 
   status    drain + inflight report (read-only; --live and a state dir optional)
   drain     record baselines, disable the idle waker (CAS), start the task drain
@@ -244,9 +246,45 @@ mark() { # NAME VALUE -- atomic: a crash leaves the old marker or the new one
 need() { local m; for m in "$@"; do have "$m" || refuse "$CMD needs '$m' in $STATE_DIR (run the earlier step first)"; done; }
 none() { local m; for m in "$@"; do have "$m" && refuse "$CMD refused: '$m' is already recorded in $STATE_DIR ($(get "$m"))"; done; return 0; }
 
+# Mutating commands run only under the activation wrapper's service-scoped
+# deployment lock (activation.sh). The per-state-dir flock below cannot
+# exclude a second activation using a different state dir against the same
+# service, so open_state requires proof that this process descends from the
+# one lock holder: the lock path and token in the environment, the token
+# recorded in the (0600, owner-only) lock file by the holder, an inherited
+# open fd on that exact file, and a failed non-blocking re-lock attempt
+# (someone — the holder — really holds it). `status` stays exempt: it is
+# read-only and is how an operator inspects a stuck activation. A legacy
+# direct invocation is refused here, before any state is created.
+require_activation_lock() {
+  [[ "$CMD" == status ]] && return 0
+  local lock_path="${PAPERCLIP_ACTIVATION_LOCK_PATH:-}"
+  local lock_token="${PAPERCLIP_ACTIVATION_LOCK_TOKEN:-}"
+  local lock_fd="${PAPERCLIP_ACTIVATION_LOCK_FD:-}"
+  [[ -n "$lock_path" && "$lock_path" == /* && -n "$lock_token" && "$lock_fd" =~ ^[0-9]+$ ]] \
+    || refuse "no activation lock proof: run mutating commands through activation.sh (it holds the service-scoped deployment lock); direct drain.sh $CMD is refused"
+  [[ -f "$lock_path" && ! -L "$lock_path" && -O "$lock_path" ]] \
+    || refuse "activation lock file is missing, a symlink, or not owned by $(id -un): $lock_path"
+  grep -Fqx "token=$lock_token" "$lock_path" 2>/dev/null \
+    || refuse "activation lock token does not match the lock holder's record: $lock_path"
+  [[ -e "/proc/self/fd/$lock_fd" ]] \
+    || refuse "activation lock fd $lock_fd is not open in this process (not a child of the lock holder)"
+  local target; target="$(readlink "/proc/self/fd/$lock_fd" 2>/dev/null)" \
+    || refuse "cannot resolve activation lock fd $lock_fd"
+  [[ "$target" == "$lock_path" ]] \
+    || refuse "activation lock fd $lock_fd points at '$target', not the lock file '$lock_path'"
+  # The holder really holds it: a fresh non-blocking lock attempt must fail.
+  # flock(1) on a distinct open file description conflicts with the holder's
+  # lock even inside the same process tree. Subshell fd 7 is private here.
+  if ( exec 7>>"$lock_path"; flock -n 7 ) 2>/dev/null; then
+    refuse "activation lock is not held (re-lock succeeded): run through activation.sh"
+  fi
+}
+
 open_state() { # NEW=1: must not exist yet (fresh maintenance state, never reused)
   [[ -n "$STATE_DIR" ]] || refuse "--state-dir is required"
   [[ "$STATE_DIR" == /* ]] || refuse "--state-dir must be an absolute path"
+  require_activation_lock
   if [[ "$1" == 1 ]]; then
     [[ ! -e "$STATE_DIR" && ! -L "$STATE_DIR" ]] || refuse "state dir already exists: $STATE_DIR (a drain never reuses state; resolve it or pick a new dir)"
     mkdir -m 0700 -- "$STATE_DIR" || refuse "cannot create state dir $STATE_DIR"
@@ -850,7 +888,7 @@ SQL
 )" || fail "cannot read the database size"
   [[ "$size" =~ ^[0-9]+$ ]] || fail "unexpected database size"
   mkdir -p -m 0700 -- "$(st backup)" || fail "cannot create the backup dir"
-  avail="$(df -PB1 --output=avail -- "$(st backup)" | tail -n1 | tr -dc 0-9)"
+  avail="$(df -B1 --output=avail -- "$(st backup)" | tail -n1 | tr -dc 0-9)"
   (( avail >= size + 1073741824 )) || fail "not enough disk for the backup: $avail bytes free, need $size + 1GiB"
 
   kv_file "$(st inventory-backup-pre)" inventory.sql || fail "inventory (pre) failed"

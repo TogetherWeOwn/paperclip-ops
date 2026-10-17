@@ -216,12 +216,44 @@ class OfflineContractTest(unittest.TestCase):
             (root / dest).unlink()
             self.assertTrue(gate.restored_errors(root, contract))
 
-    def test_removed_producers_require_an_archive_restored_input_closure(self):
+    def test_consolidated_input_bytes_are_checked_not_only_filenames(self):
+        with tempfile.TemporaryDirectory(dir=os.environ.get("PAPERCLIP_SCRATCH_DIR")) as directory:
+            root = Path(directory)
+            dest = "tracked-toolkit-input.py"
+            expected = b"reviewed public source\n"
+            contract = {"restored_files_sha256": {},
+                        "consolidated_files_sha256": {
+                            dest: hashlib.sha256(expected).hexdigest()}}
+            self.assertTrue(gate.restored_errors(root, contract), "missing tracked input accepted")
+            (root / dest).write_bytes(b"stale public source\n")
+            self.assertTrue(gate.restored_errors(root, contract), "wrong tracked bytes accepted")
+            (root / dest).write_bytes(expected)
+            self.assertEqual(gate.restored_errors(root, contract), [])
+
+    def test_consolidated_closure_cannot_omit_reclassify_or_duplicate_a_path(self):
+        consolidated = self.contract.get("consolidated_files_sha256", {})
+        self.assertTrue(consolidated, "consolidation must pin tracked source bytes")
+        path = next(iter(consolidated))
+        for mode in ("omit", "reclassify", "duplicate", "invalid-hash"):
+            with self.subTest(mode=mode):
+                contract = copy.deepcopy(self.contract)
+                if mode in ("omit", "reclassify"):
+                    digest = contract["consolidated_files_sha256"].pop(path)
+                    if mode == "reclassify":
+                        contract["restored_files_sha256"][path] = digest
+                elif mode == "duplicate":
+                    contract["restored_files_sha256"][path] = consolidated[path]
+                else:
+                    contract["consolidated_files_sha256"][path] = "not-a-sha256"
+                self.assertTrue(gate.validate(self.text, contract))
+
+    def test_removed_producers_require_an_immutable_input_closure(self):
         self.assertTrue(self.contract["removed"])
+        pinned = (set(self.contract["restored_files_sha256"])
+                  | set(self.contract["consolidated_files_sha256"]))
         for item in self.contract["removed"]:
             self.assertTrue(item["input_paths"])
-            self.assertLessEqual(set(item["input_paths"]),
-                                 set(self.contract["restored_files_sha256"]))
+            self.assertLessEqual(set(item["input_paths"]), pinned)
         for inputs in (None, [], ["ci_failure_drain.sh"], ["unknown-private-input.py"]):
             contract = copy.deepcopy(self.contract)
             contract["removed"][0]["input_paths"] = inputs

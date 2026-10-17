@@ -57,6 +57,9 @@ pcsql_preflight() { [[ "${SHIM_UNREACHABLE:-0}" != "1" ]]; }
 pcsql_run() {
   local q; q="$(cat)"
   printf '%s\n-- ###SPLIT###\n' "$q" >> "$SHIM_LOG"
+  if [[ "$q" == *"INSERT INTO activity_log"* ]]; then
+    printf '%s' "${PGV_TEXT:-}" > "$SHIM_LOG.issue"
+  fi
   case "$q" in
     *"count(*) FROM agents WHERE company_id"*) echo "${SHIM_AGENT_COUNT:-24}" ;;
     *"status <> 'terminated';"*)               echo "${SHIM_REQUESTER_OK:-1}" ;;
@@ -69,7 +72,7 @@ SHIM
 # Run the tool. Echoes its exit status; the SQL it emitted lands in $WORK/sql.
 run() {
   : > "$WORK/sql"
-  ( cd "$WORK" && SHIM_LOG="$WORK/sql" COMPANY_ID="$CID" GRANT_LOG="$WORK/grant-log.jsonl" \
+  ( cd "$WORK" && AUDIT_ISSUE="${AUDIT_ISSUE-TEST-42}" SHIM_LOG="$WORK/sql" COMPANY_ID="$CID" GRANT_LOG="$WORK/grant-log.jsonl" \
       bash ./org_orphan_retire.sh "$@" ) >"$WORK/out" 2>"$WORK/err"
   echo $?
 }
@@ -171,6 +174,27 @@ else
     && ok "the attribution uses a recognised GRANT_ACTION" \
     || bad "the attribution action is not one grant_attribution.js reads"
 fi
+
+hdr "7b. Explicit audit issue travels through quoted SQL variables and JSON"
+grep -qF "'issue', :'text'" <<<"$txn" \
+  && [[ "$(cat "$WORK/sql.issue" 2>/dev/null)" == "TEST-42" ]] \
+  && ok "environment issue reaches the transaction as a quoted SQL parameter" \
+  || bad "transaction lost or interpolated the environment issue"
+jq -se '.[-1].issue == "TEST-42"' "$WORK/grant-log.jsonl" >/dev/null \
+  && ok "JSON audit log uses the same environment issue" || bad "JSON issue differs"
+rc="$(AUDIT_ISSUE=TEST-42 run apply --requested-by "$AGENT" --issue CHANGE-73)"
+[[ "$(cat "$WORK/sql.issue" 2>/dev/null)" == "CHANGE-73" ]] \
+  && jq -se '.[-1].issue == "CHANGE-73"' "$WORK/grant-log.jsonl" >/dev/null \
+  && ok "--issue overrides the environment in both audit sinks" || bad "issue override failed"
+rc="$(AUDIT_ISSUE= run apply --requested-by "$AGENT")"
+[[ "$rc" == "2" ]] && ! wrote_sql && grep -q -- '--issue' "$WORK/err" \
+  && ok "missing audit issue refuses before a write" || bad "missing issue did not refuse"
+rc="$(run apply --requested-by "$AGENT" --issue "TEST-1'; SELECT 1; --")"
+[[ "$rc" == "2" ]] && ! wrote_sql && grep -q -- '--issue' "$WORK/err" \
+  && ok "invalid audit issue refuses before a write" || bad "invalid issue did not refuse"
+rc="$(run apply --requested-by "$AGENT" --issue)"
+[[ "$rc" == "2" ]] && ! wrote_sql && grep -q -- '--issue' "$WORK/err" \
+  && ok "--issue without a value refuses clearly" || bad "missing flag value did not refuse"
 
 hdr "8. --kind confines the sweep to one table"
 rc="$(run apply --requested-by "$AGENT" --kind bindings)"

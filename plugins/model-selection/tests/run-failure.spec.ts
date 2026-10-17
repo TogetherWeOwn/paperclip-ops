@@ -1,0 +1,321 @@
+import { describe, expect, it } from "vitest";
+
+import { LANE_ID_OPENCODE_GO } from "../src/constants.js";
+import { classifyRunFailure } from "../src/engine/scores.js";
+import {
+  AUTO_QUARANTINE_SECONDS,
+  autoQuarantineFor,
+  laneExhaustionFromRunFailure,
+  mergeLaneOutage,
+} from "../src/lane-capacity/run-failure.js";
+import type { ModelEntry } from "../src/engine/types.js";
+
+function model(id: string, laneId: string | null): ModelEntry {
+  return {
+    id,
+    tier: "T2",
+    enabled: true,
+    costPerMTokIn: 1,
+    costPerMTokOut: 1,
+    costPerMTokCacheRead: 1,
+    capabilities: ["tools"],
+    contextWindow: 200_000,
+    aaIndex: null,
+    releasedAt: "1970-01-01",
+    fallbackOnly: false,
+    note: "",
+    earnIn: null,
+    ...(laneId ? { laneId } : {}),
+  };
+}
+
+const ROSTER: ModelEntry[] = [
+  model("gpt-5.6-sol", "cliproxy-codex"),
+  model("gpt-5.6-luna", "cliproxy-codex"),
+  model("claude-sonnet-5", "cliproxy-claude"),
+  model("glm-5.3", "cliproxy-zai"),
+  model("deepseek-v4-flash", LANE_ID_OPENCODE_GO),
+  model("laneless-model", null),
+];
+
+/**
+ * The exact string the 2026-09-16 16:40Z outage wrote to
+ * `heartbeat_runs.error`, copied from 's own failed run. This is the
+ * one input the whole feature exists to recognise, so it is asserted verbatim
+ * rather than paraphrased.
+ */
+const LIVE_429 =
+  "API Error: Request rejected (429) · All credentials for model gpt-5.6-sol are cooling down "
+  + "(last error: usage_limit_reached: The usage limit has been reached)";
+
+/**
+ * (ported from /PR #331). The managed-capacity family,
+ * verbatim from `heartbeat_runs.error`.
+ *
+ * Measured over the 14 days to 2026-09-17: 56 failed runs carried this family,
+ * with ZERO overlap with the 623 matched by the original five phrases — so
+ * before this was added, the quarantine could see none of them. The 63-minute
+ * OpenCode Go episode these come from is what blocked  itself three
+ * times.
+ */
+const LIVE_MANAGED_OPENCODE =
+  "Internal error: API Error: 500 no healthy managed OpenCode Go capacity remains. "
+  + "This is a server-side issue, usually temporary — try again in a moment. "
+  + "If it persists, check your inference gateway (cliproxy:8317).";
+
+const LIVE_MANAGED_ZAI =
+  "Internal error: API Error: 500 no healthy managed Z.ai capacity remains. "
+  + "This is a server-side issue, usually temporary — try again in a moment.";
+
+describe("laneExhaustionFromRunFailure — managed-capacity family", () => {
+  it("attributes the live OpenCode Go rejection to the failed run's own lane", () => {
+    const verdict = laneExhaustionFromRunFailure({
+      error: LIVE_MANAGED_OPENCODE,
+      models: ROSTER,
+      fallbackModelId: "gpt-5.6-sol",
+    });
+    expect(verdict).not.toBeNull();
+    expect(verdict!.laneId).toBe("cliproxy-codex");
+    // CLIProxy names the lane in its own words ("OpenCode Go"), which is not a
+    // roster id — so attribution MUST come from the fallback, not the text.
+    expect(verdict!.modelFromErrorText).toBe(false);
+  });
+
+  it("attributes the Z.ai variant of the same phrasing", () => {
+    const verdict = laneExhaustionFromRunFailure({
+      error: LIVE_MANAGED_ZAI,
+      models: ROSTER,
+      fallbackModelId: "glm-5.3",
+    });
+    expect(verdict?.laneId).toBe("cliproxy-zai");
+  });
+
+  /**
+   * The discriminator. Every string below is a 500/503 from the same gateway,
+   * two of them mentioning capacity; only the real phrase says the managed pool
+   * is empty. If this test ever fails, the phrase has been loosened into
+   * matching ordinary server errors and the quarantine will start evacuating
+   * healthy lanes — the exact failure the bare-429 exclusion exists to prevent.
+   */
+  it("does NOT quarantine on a transient 500 that lacks the phrase", () => {
+    for (const error of [
+      "Internal error: API Error: 500 upstream request failed. Check your inference gateway (cliproxy:8317).",
+      "Internal error: API Error: 500 internal server error",
+      "API Error: 503 capacity temporarily degraded, retry shortly",
+    ]) {
+      expect(
+        laneExhaustionFromRunFailure({ error, models: ROSTER, fallbackModelId: "gpt-5.6-sol" }),
+      ).toBeNull();
+    }
+  });
+
+  it("refuses to guess a lane when nothing resolves — the phrase alone is not attribution", () => {
+    expect(
+      laneExhaustionFromRunFailure({ error: LIVE_MANAGED_OPENCODE, models: ROSTER }),
+    ).toBeNull();
+  });
+});
+
+describe("laneExhaustionFromRunFailure — subscription-lapsed 403 family", () => {
+  /**
+   * Verbatim from the 2026-09-20 host probe on  (re-probed 2026-09-26):
+   * `opencode-go/deepseek-v4-flash -> 403 "Upstream request failed: An active
+   * OpenCode Go subscription is required to use Go models."` The lane names
+   * itself in CLIProxy's own words, carries no roster id, and arrives as a 403
+   * — so attribution MUST come from the fallback, and the phrase must fire on
+   * the `error` text.
+   */
+  const LIVE_SUBSCRIPTION_403 =
+    'API Error: Request rejected (403) · Upstream request failed: An active OpenCode Go subscription is required to use Go models.';
+
+  it("attributes the live subscription 403 to the failed run's own Go lane", () => {
+    const verdict = laneExhaustionFromRunFailure({
+      error: LIVE_SUBSCRIPTION_403,
+      models: ROSTER,
+      fallbackModelId: "deepseek-v4-flash",
+    });
+    expect(verdict).not.toBeNull();
+    expect(verdict!.laneId).toBe(LANE_ID_OPENCODE_GO);
+    expect(verdict!.laneId).toBe("cliproxy-opencode-go");
+    expect(verdict!.modelId).toBe("deepseek-v4-flash");
+    // CLIProxy names the lane in its own words ("OpenCode Go"), which is not a
+    // roster id — so attribution MUST come from the fallback, not the text.
+    expect(verdict!.modelFromErrorText).toBe(false);
+  });
+
+  it("folds the subscription verdict into an auto-quarantine on the Go lane", () => {
+    const at = Date.parse("2026-09-26T04:30:00.000Z");
+    const verdict = laneExhaustionFromRunFailure({
+      error: LIVE_SUBSCRIPTION_403,
+      models: ROSTER,
+      fallbackModelId: "deepseek-v4-flash",
+    });
+    expect(verdict).not.toBeNull();
+    const addition = autoQuarantineFor(verdict!, at);
+    expect(addition.lanes).toEqual([LANE_ID_OPENCODE_GO]);
+    expect(addition.until).toBe(new Date(at + AUTO_QUARANTINE_SECONDS * 1_000).toISOString());
+    const merged = mergeLaneOutage(null, addition, new Date(at).toISOString());
+    expect(merged.lanes).toEqual([LANE_ID_OPENCODE_GO]);
+  });
+
+  it("classifies the subscription 403 as infra (weight 0), never model quality", () => {
+    expect(classifyRunFailure(LIVE_SUBSCRIPTION_403, null, "deepseek-v4-flash")).toEqual({
+      kind: "infra",
+      weight: 0,
+    });
+  });
+
+  /**
+   * The discriminator. A bare 403 and a missing-field-shaped `required` are
+   * both 403-adjacent failures that must NOT evacuate a lane: the first is an
+   * authn-shaped rejection with no exhaustion evidence, the second is a
+   * per-request shape error on a healthy lane. If this test ever fails, the
+   * phrase has been loosened past the `subscription … required` adjacency and
+   * the quarantine will start evacuating healthy lanes.
+   */
+  it("does NOT quarantine on a bare 403 or an unrelated required-field 403", () => {
+    for (const error of [
+      "API Error: Request rejected (403) · Forbidden",
+      "API Error: Request rejected (403) · subscription ID required: pass your account identifier",
+    ]) {
+      expect(
+        laneExhaustionFromRunFailure({ error, models: ROSTER, fallbackModelId: "deepseek-v4-flash" }),
+      ).toBeNull();
+    }
+  });
+
+  it("refuses to guess a lane when nothing resolves — the phrase alone is not attribution", () => {
+    expect(
+      laneExhaustionFromRunFailure({ error: LIVE_SUBSCRIPTION_403, models: ROSTER }),
+    ).toBeNull();
+  });
+});
+
+describe("laneExhaustionFromRunFailure", () => {
+  it("attributes the live 2026-09-16 rejection to the codex lane, from the error text alone", () => {
+    const verdict = laneExhaustionFromRunFailure({ error: LIVE_429, models: ROSTER });
+    expect(verdict).not.toBeNull();
+    expect(verdict!.laneId).toBe("cliproxy-codex");
+    expect(verdict!.modelId).toBe("gpt-5.6-sol");
+    expect(verdict!.modelFromErrorText).toBe(true);
+  });
+
+  it("accepts the cliproxy/-qualified form of the same id", () => {
+    const verdict = laneExhaustionFromRunFailure({
+      error: "All credentials for model cliproxy/glm-5.3 are cooling down",
+      models: ROSTER,
+    });
+    expect(verdict?.laneId).toBe("cliproxy-zai");
+  });
+
+  it("does NOT quarantine on a bare 429 — that is per-request throttling on a healthy lane", () => {
+    expect(
+      laneExhaustionFromRunFailure({
+        error: "API Error: Request rejected (429) · Too many requests, retry in 20s",
+        models: ROSTER,
+        fallbackModelId: "gpt-5.6-sol",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not quarantine on unrelated failures even with a fallback model supplied", () => {
+    for (const error of [
+      "Internal error: ECONNRESET",
+      "Stream idle timeout",
+      "sandbox gone",
+      "API Error: Request rejected (400) · not supported for format",
+      "",
+    ]) {
+      expect(
+        laneExhaustionFromRunFailure({ error, models: ROSTER, fallbackModelId: "gpt-5.6-sol" }),
+      ).toBeNull();
+    }
+  });
+
+  it("reads usage_limit_reached out of errorCode when the message carries no phrase", () => {
+    const verdict = laneExhaustionFromRunFailure({
+      error: "Internal error",
+      errorCode: "usage_limit_reached",
+      models: ROSTER,
+      fallbackModelId: "gpt-5.6-sol",
+    });
+    expect(verdict?.laneId).toBe("cliproxy-codex");
+    expect(verdict?.modelFromErrorText).toBe(false);
+  });
+
+  it("prefers the model named in the error over the caller's fallback", () => {
+    const verdict = laneExhaustionFromRunFailure({
+      error: LIVE_429,
+      models: ROSTER,
+      fallbackModelId: "glm-5.3",
+    });
+    expect(verdict?.modelId).toBe("gpt-5.6-sol");
+    expect(verdict?.laneId).toBe("cliproxy-codex");
+  });
+
+  it("refuses to guess when the named model is not on the roster and no fallback resolves", () => {
+    expect(
+      laneExhaustionFromRunFailure({
+        error: "All credentials for model some-unknown-model are cooling down",
+        models: ROSTER,
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses a model that has no lane — there is nothing to quarantine", () => {
+    expect(
+      laneExhaustionFromRunFailure({
+        error: "All credentials for model laneless-model are cooling down",
+        models: ROSTER,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("mergeLaneOutage", () => {
+  const now = "2026-09-16T17:00:00.000Z";
+
+  it("creates the record when none exists", () => {
+    const merged = mergeLaneOutage(null, { lanes: ["cliproxy-codex"], models: [], until: "2026-09-16T17:15:00.000Z", reason: "auto" }, now);
+    expect(merged.lanes).toEqual(["cliproxy-codex"]);
+    expect(merged.until).toBe("2026-09-16T17:15:00.000Z");
+  });
+
+  it("never shortens a longer operator-declared outage", () => {
+    const operator = { lanes: ["cliproxy-opencode-go"], models: [], until: "2026-09-17T06:00:00.000Z", reason: "MissingSessionID" };
+    const merged = mergeLaneOutage(operator, { lanes: ["cliproxy-codex"], models: [], until: "2026-09-16T17:15:00.000Z", reason: "auto" }, now);
+    expect(merged.until).toBe("2026-09-17T06:00:00.000Z");
+    expect([...merged.lanes].sort()).toEqual(["cliproxy-codex", "cliproxy-opencode-go"]);
+    expect(merged.reason).toContain("MissingSessionID");
+    expect(merged.reason).toContain("auto");
+  });
+
+  it("extends when the addition outlives the existing record", () => {
+    const existing = { lanes: ["cliproxy-codex"], models: [], until: "2026-09-16T17:05:00.000Z" };
+    const merged = mergeLaneOutage(existing, { lanes: ["cliproxy-codex"], models: [], until: "2026-09-16T17:20:00.000Z" }, now);
+    expect(merged.until).toBe("2026-09-16T17:20:00.000Z");
+    expect(merged.lanes).toEqual(["cliproxy-codex"]);
+  });
+
+  it("treats an expired record as absent rather than resurrecting its lanes", () => {
+    const stale = { lanes: ["cliproxy-zai"], models: ["glm-5.3"], until: "2026-09-15T00:00:00.000Z", reason: "yesterday" };
+    const merged = mergeLaneOutage(stale, { lanes: ["cliproxy-codex"], models: [], until: "2026-09-16T17:15:00.000Z" }, now);
+    expect(merged.lanes).toEqual(["cliproxy-codex"]);
+    expect(merged.models).toEqual([]);
+    expect(merged.reason).toBeUndefined();
+  });
+});
+
+describe("autoQuarantineFor", () => {
+  it("quarantines the lane, not the single model, for the documented TTL", () => {
+    const at = Date.parse("2026-09-16T16:40:00.000Z");
+    const addition = autoQuarantineFor(
+      { modelId: "gpt-5.6-sol", laneId: "cliproxy-codex", matchedPhrase: "x", modelFromErrorText: true },
+      at,
+    );
+    expect(addition.lanes).toEqual(["cliproxy-codex"]);
+    expect(addition.models).toEqual([]);
+    expect(addition.until).toBe(new Date(at + AUTO_QUARANTINE_SECONDS * 1_000).toISOString());
+    expect(addition.reason).toContain("cliproxy-codex");
+  });
+});

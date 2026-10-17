@@ -49,7 +49,8 @@ Never add a private artifact to make an old fixture pass.
 Tracked root operator utilities are indexed below. This is a source index, not an
 execution or deployment checklist; inspect each utility's usage and prerequisites
 before running it. `cliproxy_seam_extract.py` is an exempt one-shot forensic
-parser, not a standing operator command. Test entry points begin with `test_`.
+parser, not a standing operator command. Test entry points conventionally begin
+with `test_`; imported `test-` entry points are indexed too.
 
 | Tool |
 | --- |
@@ -119,6 +120,77 @@ parser, not a standing operator command. Test entry points begin with `test_`.
 | `upstream_watch.sh` |
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
+
+### Consolidated toolkit entry points
+
+These additional root utilities, libraries, and test entry points retain the same
+source-only status and require inspection before use.
+
+| Tool |
+| --- |
+| `acceptance_org_lib.sh` |
+| `acceptance_rehearsal.sh` |
+| `acp_crash_triage.sh` |
+| `agent_endpoint_preflight.sh` |
+| `app_tree_guard.sh` |
+| `auth_denial_discriminator.py` |
+| `blocked_audit.sh` |
+| `breaker_cotenancy_probe.sh` |
+| `capability_gate.sh` |
+| `capture_network_name_evidence.sh` |
+| `channel_drift.sh` |
+| `cliproxy_quota_contract.py` |
+| `cliproxy_quota_controller.py` |
+| `cliproxy_release_preflight.sh` |
+| `cold_start_detector.sh` |
+| `discord_job_health_monitor.sh` |
+| `dispatch-acceptance-measurement.py` |
+| `external_disclosure.js` |
+| `gh_ci_status.sh` |
+| `gh_embedded_token_remediate.py` |
+| `gh_override_scope_audit.sh` |
+| `gh_scope_residue.sh` |
+| `gh_scope_residue_monitor.sh` |
+| `git_remote_credential_scan.sh` |
+| `interaction_envelope_lint.sh` |
+| `interaction_route.sh` |
+| `interaction_triage.sh` |
+| `liveness_reconciler.py` |
+| `liveness_reconciler_source.js` |
+| `model_lane_probe.sh` |
+| `mount-escape-repro.sh` |
+| `op_approval_executor.sh` |
+| `opencode_shared_budget_probe.sh` |
+| `operator_runbook.sh` |
+| `org_access_review.sh` |
+| `org_orphan_retire.sh` |
+| `pacing_verdict.py` |
+| `paperclip_activation_gate.sh` |
+| `pg_source.js` |
+| `plugin_deploy_drift.sh` |
+| `plugin_manifest_gate.sh` |
+| `post_rollup_comment.sh` |
+| `predispatch-deploy-gate.sh` |
+| `queue_liveness.sh` |
+| `quota_brake.sh` |
+| `quota_burn_derive.py` |
+| `rehearsal_authorized_preflight.sh` |
+| `rehearsal_endpoint_preflight.sh` |
+| `review_dedup.py` |
+| `runner_capacity_headroom.sh` |
+| `secret_exposure_audit.sh` |
+| `sibling_guard.sh` |
+| `skills.sh` |
+| `test-dispatch-acceptance-measurement.py` |
+| `test-effective-boundary-reconcile.sh` |
+| `test-grant-declaration-symmetry.sh` |
+| `test-host-audit-wrapper-checks.sh` |
+| `test-mapping-guard-calibration.mjs` |
+| `test-orphan-grant-retirement.sh` |
+| `test-predispatch-deploy-gate.sh` |
+| `test-selfhosted-runner-gate.sh` |
+| `tool_drift.sh` |
+| `upstream_filing_readiness.sh` |
 
 ## Contributing
 

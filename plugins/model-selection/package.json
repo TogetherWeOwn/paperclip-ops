@@ -1,0 +1,44 @@
+{
+  "name": "@togetherweown/paperclip-model-selection",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Paperclip plugin: choose the cheapest fully-capable model for each harness run, from a recorded tier judgement and a volume-aware cost term.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "paperclipPlugin": {
+    "manifest": "./dist/manifest.js",
+    "worker": "./dist/worker.js"
+  },
+  "files": [
+    "config",
+    "dist",
+    "migrations",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "package:verify": "node scripts/verify-package-completeness.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "guard:mutation-ci": "node scripts/require-mutation-ci.mjs",
+    "test:mutants": "npm run guard:mutation-ci && node scripts/mutation-gate.mjs",
+    "test:anchors": "node scripts/anchor-check.mjs",
+    "verify": "npm run guard:mutation-ci && npm run typecheck && npm run test && npm run test:anchors && npm run test:mutants && npm run build",
+    "profiles:refresh": "node scripts/refresh-volume-profiles.mjs",
+    "config:assemble": "node scripts/assemble-additive-config.mjs",
+    "gate:stage2": "node scripts/check-stage2-gate.mjs",
+    "decisions:summary": "node scripts/summarize-paired-decisions.mjs"
+  },
+  "dependencies": {
+    "@paperclipai/plugin-sdk": "2026.824.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

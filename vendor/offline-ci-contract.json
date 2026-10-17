@@ -307,7 +307,8 @@
     "sweep-auto node7b1ff338 pressure-gate suite:1",
     "host regenerable cache reclaim hostile suite:1",
     "queue age depth contract suite:1",
-    "pr6 acceptance suite:1"
+    "pr6 acceptance suite:1",
+    "registrar domain-expiry probe suite:1"
   ],
   "retained": [
     {
@@ -1719,6 +1720,11 @@
       "name": "pr6 acceptance suite",
       "definition_sha256": "63a04269075c57e92a96db6e55ba7bffb4f910e69a222a44cfd186d930e369f4",
       "id": "pr6 acceptance suite:1"
+    },
+    {
+      "name": "registrar domain-expiry probe suite",
+      "definition_sha256": "e426aa711be5afc17c7cfb64ca76094e19e8c8e3596607a1027b8f4a05bad52b",
+      "id": "registrar domain-expiry probe suite:1"
     }
   ],
   "removed": [

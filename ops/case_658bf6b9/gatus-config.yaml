@@ -256,6 +256,23 @@ external-endpoints:
       - type: custom
         description: "TLS certificate near expiry. THRESHOLD cert expiry within warning window or no push in 26h. OWNER devops. RUNBOOK ops/case_658bf6b9/OPERATOR.md"
 
+  # Pushed by push-domain-expiry.sh: registrar (RDAP expiration event)
+  # expiry for the owned registered domains; warn at 21d, crit at 7d, both
+  # push DOWN. Complements tls-expiry (certificate notAfter): a renewed
+  # certificate over a lapsed registration still goes dark. A missed 26h
+  # heartbeat fails closed (UNKNOWN, never healthy). Daily cron; install is
+  # a separate CEO Operator card.
+  - name: domain-expiry
+    group: platform
+    token: "${GATUS_EXTERNAL_TOKEN}"
+    heartbeat:
+      interval: 26h
+    alerts:
+      - type: discord
+        description: "Registrar domain near expiry (RDAP). THRESHOLD domain expiry within warning window or no push in 26h. OWNER devops. RUNBOOK ops/case_658bf6b9/OPERATOR.md"
+      - type: custom
+        description: "Registrar domain near expiry (RDAP). THRESHOLD domain expiry within warning window or no push in 26h. OWNER devops. RUNBOOK ops/case_658bf6b9/OPERATOR.md"
+
   # Pushed by push-garm-pool.sh (case_6ab2cd4d D2): per-pool GARM state plus the
   # eligible-label queue age. A missed 10m heartbeat fails closed (UNKNOWN,
   # never healthy). Cron install is a separate CEO Operator card.

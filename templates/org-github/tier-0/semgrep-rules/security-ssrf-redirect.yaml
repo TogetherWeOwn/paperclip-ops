@@ -33,17 +33,49 @@ rules:
           - pattern: fetch($URL, ...)
           # Bare callable forms: axios(url) / got(url) are the same direct
           # shape as their method forms. The axios config-object form
-          # binds $URL to its url property: binding the whole object made
-          # a constant url fire whenever params/data mentioned req.*, so
-          # the bare branch excludes objects and the config branch below
-          # matches them instead.
+          # binds $URL to its url/baseURL property or a spread source:
+          # binding the whole object made a constant url fire whenever
+          # params/data mentioned req.*, so the bare branch excludes
+          # objects and the config branches below match them instead. A
+          # relative url rides on a user-controlled baseURL, and a spread
+          # config can carry either, so both are URL positions too. The
+          # literal guards for the config branches live inside their own
+          # branch: a top-level literal-url guard would also suppress a
+          # baseURL hit on the same call (and vice versa).
           - patterns:
               - pattern: axios($URL, ...)
               - pattern-not: 'axios({...}, ...)'
-          - pattern: 'axios({..., url: $URL, ...}, ...)'
+          - patterns:
+              - pattern: 'axios({..., url: $URL, ...}, ...)'
+              - pattern-not: 'axios({..., url: "...", ...}, ...)'
+          - patterns:
+              - pattern: 'axios({..., baseURL: $URL, ...}, ...)'
+              - pattern-not: 'axios({..., baseURL: "...", ...}, ...)'
+          - pattern: 'axios({..., ...$URL, ...}, ...)'
           - pattern: got($URL, ...)
+          # Method forms take the same config object (axios.request):
+          # the generic branch excludes objects, the config branches bind
+          # url/baseURL/spread exactly like the bare form.
           - patterns:
               - pattern: axios.$METHOD($URL, ...)
+              - pattern-not: 'axios.$METHOD({...}, ...)'
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head|request)$
+          - patterns:
+              - pattern: 'axios.$METHOD({..., url: $URL, ...}, ...)'
+              - pattern-not: 'axios.$METHOD({..., url: "...", ...}, ...)'
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head|request)$
+          - patterns:
+              - pattern: 'axios.$METHOD({..., baseURL: $URL, ...}, ...)'
+              - pattern-not: 'axios.$METHOD({..., baseURL: "...", ...}, ...)'
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head|request)$
+          - patterns:
+              - pattern: 'axios.$METHOD({..., ...$URL, ...}, ...)'
               - metavariable-regex:
                   metavariable: $METHOD
                   regex: (?i)^(get|post|put|patch|delete|head|request)$
@@ -60,7 +92,6 @@ rules:
       # ("/api/params", "https://api.example.com/v1/query").
       - pattern-not: fetch("...", ...)
       - pattern-not: axios("...", ...)
-      - pattern-not: 'axios({..., url: "...", ...}, ...)'
       - pattern-not: got("...", ...)
       - pattern-not: axios.$METHOD("...", ...)
       - pattern-not: $HTTP.$METHOD("...", ...)

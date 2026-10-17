@@ -185,7 +185,9 @@ else
     # fragment word (/v1/query, /api/params, webhook), and configured
     # constants (SLACK_WEBHOOK_URL, settings.EXTERNAL_API_URL) stay silent;
     # every dynamically built shape (bare, String()-wrapped, decoded,
-    # templated, concatenated, accessor, callback, new URL) fires.
+    # templated, concatenated, accessor, callback, new URL) fires. The
+    # axios config forms fire on a dynamic url, baseURL or spread source
+    # (bare and .request alike) and stay silent on literal ones.
     cat > "$FX/fx-ssrf.js" <<'EOF'
 async function h(req, searchParams, url, body) {
   await fetch("https://api.example.com/health");
@@ -211,6 +213,14 @@ async function h(req, searchParams, url, body) {
   await axios({ method: "get", url: "https://x/a", params: req.query });
   await axios({ method: "get", url: "https://api.example.com/v1/query", params: req.query });
   await axios({ method: "get", url: API_URL, params: req.query });
+  await axios({ baseURL: req.query.host, url: "/x" });
+  await axios({ ...req.body, method: "get" });
+  await axios({ baseURL: "https://api.example.com/v1/query", url: "/x" });
+  await axios.request({ url: req.query.url });
+  await axios.request({ url: "https://api.example.com/v1/query", params: req.query });
+  await axios.request({ baseURL: req.query.host, url: "/x" });
+  await axios.request({ baseURL: "https://api.example.com/v1/query", url: "/x" });
+  await axios.request({ ...req.body });
 }
 EOF
     cat > "$FX/fx-ssrf.py" <<'EOF'
@@ -257,7 +267,10 @@ EOF
     # Redirect fixtures: literal targets and safe builders stay silent
     # (both argument positions, literal-URL construction, url_for), while
     # user-influenced targets fire — including the SvelteKit two-arg form
-    # and Starlette RedirectResponse.
+    # and Starlette RedirectResponse. The fragment-carrying literals
+    # ("/search?query=x", "/request.html", url_for with request.args) pin
+    # each literal/safe-builder guard: without the guard the fragment
+    # regex alone would fire on them.
     cat > "$FX/fx-redirect.js" <<'EOF'
 import { redirect } from "@sveltejs/kit";
 import { NextResponse } from "next/server";
@@ -270,6 +283,21 @@ export function h(res, url, request, req) {
   res.redirect(302, req.query.next);
   res.redirect(req.query.next);
   throw redirect(url.searchParams.get("next"));
+  res.redirect("/search?query=x");
+  res.redirect(302, "/search?query=x");
+  throw redirect("/search?query=x");
+  throw redirect(302, "/search?query=x");
+}
+EOF
+    # Import-free copy: with the SvelteKit import present, Semgrep's
+    # qualified-name matching also lets the $RES.redirect guards silence
+    # the bare redirect() literals above, so this copy is what pins the
+    # bare redirect("...") / redirect($S, "...") guards themselves.
+    cat > "$FX/fx-redirect-bare.js" <<'EOF'
+export function h(url) {
+  throw redirect(url.searchParams.get("next"));
+  throw redirect("/search?query=x");
+  throw redirect(302, "/search?query=x");
 }
 EOF
     cat > "$FX/fx-redirect.py" <<'EOF'
@@ -284,6 +312,11 @@ def h(request):
     HttpResponseRedirect("/home")
     redirect(request.args["next"], code=302)
     RedirectResponse(request.query_params["next"], status_code=302)
+    redirect("/request.html")
+    redirect(url_for("login", next=request.args["next"]))
+    HttpResponseRedirect("/request.html")
+    RedirectResponse("/request.html")
+    redirect("/request.html", "/home")
 EOF
     # Secrets fixtures: credential positives are assembled from split
     # fragments (never committed as literals); kebab-case words and
@@ -331,7 +364,7 @@ EOF
         printf 's=%s%s\n' "$SK_P" "$SK_EX_BODY"
         printf 't=%s%s\n' "$SK_P" "$SK_REP_BODY"
     } > "$FX/fx-secrets.txt"
-    "$SEMGREP" scan --config "$ROOT/$SSRF" --json "$FX/fx-ssrf.js" "$FX/fx-ssrf.py" "$FX/fx-redirect.js" "$FX/fx-redirect.py" > "$FX/ssrf.json" 2>/dev/null \
+    "$SEMGREP" scan --config "$ROOT/$SSRF" --json "$FX/fx-ssrf.js" "$FX/fx-ssrf.py" "$FX/fx-redirect.js" "$FX/fx-redirect-bare.js" "$FX/fx-redirect.py" > "$FX/ssrf.json" 2>/dev/null \
         || fail "semgrep scan of SSRF/redirect fixtures failed to run"
     "$SEMGREP" scan --config "$ROOT/$SECRETS" --json "$FX/fx-secrets.txt" > "$FX/secrets.json" 2>/dev/null \
         || fail "semgrep scan of secrets fixtures failed to run"
@@ -359,10 +392,10 @@ def expect_silent(fname, rid):
     got = hits.get((fname, rid), set())
     check(not got, f"behavioural {fname} stays silent for {rid} (got lines {sorted(got)})")
 
-expect_hit("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16, 17, 21))
+expect_hit("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16, 17, 21, 25, 26, 28, 30, 32))
 check(2 not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
       "behavioural fx-ssrf.js:2 literal fetch stays silent")
-for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24):
+for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24, 27, 29, 31):
     check(ln not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
           f"behavioural fx-ssrf.js:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.js", "tier0-open-redirect-js")
@@ -374,11 +407,16 @@ for ln in (9, 10, 11, 12, 14, 16, 20, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34
           f"behavioural fx-ssrf.py:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.py", "tier0-open-redirect-py")
 expect_hit("fx-redirect.js", "tier0-open-redirect-js", (5, 8, 9, 10, 11))
-for ln in (4, 6, 7):
+for ln in (4, 6, 7, 12, 13, 14, 15):
     check(ln not in hits.get(("fx-redirect.js", "tier0-open-redirect-js"), set()),
           f"behavioural fx-redirect.js:{ln} literal target stays silent")
+expect_hit("fx-redirect-bare.js", "tier0-open-redirect-js", (2,))
+for ln in (3, 4):
+    check(ln not in hits.get(("fx-redirect-bare.js", "tier0-open-redirect-js"), set()),
+          f"behavioural fx-redirect-bare.js:{ln} literal target stays silent")
+expect_silent("fx-redirect-bare.js", "tier0-ssrf-dynamic-fetch-js")
 expect_hit("fx-redirect.py", "tier0-open-redirect-py", (5, 6, 8, 10, 11))
-for ln in (4, 7, 9):
+for ln in (4, 7, 9, 12, 13, 14, 15, 16):
     check(ln not in hits.get(("fx-redirect.py", "tier0-open-redirect-py"), set()),
           f"behavioural fx-redirect.py:{ln} safe/literal target stays silent")
 

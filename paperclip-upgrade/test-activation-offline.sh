@@ -145,6 +145,7 @@ printf '%s\n' "lock-proof-ok $cmd" >> "$STUB_DRAIN_LOG"
 printf 'helpers precheck=%s reharden=%s canary=%s\n' "${PAPERCLIP_UPGRADE_PRECHECK:-}" "${PAPERCLIP_UPGRADE_REHARDEN:-}" "${PAPERCLIP_UPGRADE_SANDBOX_CANARY:-}" >> "$STUB_DRAIN_LOG"
 [[ -n "${STUB_DRAIN_SLEEP_SECS:-}" && "$cmd" == drain ]] && sleep "$STUB_DRAIN_SLEEP_SECS"
 [[ -n "${STUB_TAMPER_COMPOSE:-}" && "$cmd" == wait ]] && printf 'tampered\n' >> "$PAPERCLIP_UPGRADE_COMPOSE_FILE"
+[[ -n "${STUB_TAMPER_COMPOSE_VERIFY:-}" && "$cmd" == verify ]] && printf 'tampered\n' >> "$PAPERCLIP_UPGRADE_COMPOSE_FILE"
 case "$cmd" in
   drain) mkdir -m 0700 "$state"; printf 'x\n' > "$state/drain-started"; printf 'x\n' > "$state/drain_requested_at" ;;
   wait) printf 'x\n' > "$state/drained_at" ;;
@@ -468,6 +469,15 @@ expect_refused "compose tampered during wait is refused before restart" "compose
   env STUB_TAMPER_COMPOSE=1 bash "$ACT" run --manifest "$MAN" --state-dir "$ROOT/state-tamper" --live
 grep -q '^lock-proof-ok restart' "$STUB_DRAIN_LOG" \
   && oops "restart ran against a tampered compose file" || pass "restart never ran against tampered compose"
+printf 'services: candidate\n' > "$ROOT/compose.yaml"
+
+# compose edited between verify and undrain is caught before the undrain recreate
+rm -rf "$ROOT/state-tamper2" "$ROOT/state-tamper2.activation-owner"
+reset_logs
+expect_refused "compose tampered after verify is refused before undrain" "compose" -- \
+  env STUB_TAMPER_COMPOSE_VERIFY=1 bash "$ACT" run --manifest "$MAN" --state-dir "$ROOT/state-tamper2" --live
+grep -q '^lock-proof-ok undrain' "$STUB_DRAIN_LOG" \
+  && oops "undrain ran against a tampered compose file" || pass "undrain never ran against tampered compose"
 printf 'services: candidate\n' > "$ROOT/compose.yaml"
 
 # --- 6. real drain.sh refuses mutating commands without the wrapper lock --------

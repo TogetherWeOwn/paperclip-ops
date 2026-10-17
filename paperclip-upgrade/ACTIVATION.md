@@ -40,8 +40,9 @@ activation.sh rewake    --manifest /abs/activation.conf --state-dir /abs/state -
   `drain.sh` honors to the scanned helper set, so a stale override in
   the caller's environment cannot substitute unscanned code.
 - Compose identity (file hash, service image/user, mount set) is
-  judged at preflight and judged *again* immediately before the
-  recreate, because the natural wait between them can run for hours.
+  judged at preflight and judged *again* immediately before each
+  recreate (restart and undrain), because the natural wait between
+  preflight and restart can run for hours.
 
 State ownership is recorded in `<state-dir>.activation-owner`
 (manifest SHA-256 + lock path) *before* the drain starts. `resume`,

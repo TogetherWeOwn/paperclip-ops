@@ -513,7 +513,10 @@ run_phases() {
   have verified_at || phase verify verify --expect-commit "$(mv_ EXPECT_COMMIT)"
   # undrain recreates the server too; a long drain can cross into the
   # blocked window, so it is re-judged, never inherited from the start.
+  # Same for compose: verify->undrain is short, but the pins are cheap
+  # to re-read and drain.sh's undrain does not pin hash/user/mounts.
   window_gate
+  if have rolledback_at; then compose_gate rollback; else compose_gate candidate; fi
   phase undrain undrain
   log "activation: done (undrained on $(mv_ EXPECT_IMAGE_ID))"
 }
@@ -553,6 +556,7 @@ case "$CMD" in
       || phase rollback rollback --image "$(mv_ ROLLBACK_IMAGE)" --expect-image-id "$(mv_ ROLLBACK_IMAGE_ID)"
     runtime_probe || { printf 'FAIL: %s: rollback runtime probe failed under the hold\n' "$ME" >&2; exit 1; }
     window_gate
+    compose_gate rollback
     phase undrain undrain
     log "rollback: done (undrained on the pinned pre-change image $(mv_ ROLLBACK_IMAGE_ID))"
     ;;

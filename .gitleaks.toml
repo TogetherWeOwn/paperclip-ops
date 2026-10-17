@@ -1,5 +1,5 @@
 title = "Reviewed synthetic fixtures and integrity hashes only"
-minVersion = "8.25.0"
+minVersion = "8.30.1"
 [extend]
 useDefault = true
 
@@ -275,3 +275,20 @@ paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
 regexTarget = "line"
 regexes = ['''(?m)^\ \ \ \ "scripts/discord_job_health\.js":\ "2c255bb856e28f17201491179c11f635a25bf306ad6cf24c276aafbaeabae2cd",$''']
 
+[[allowlists]]
+targetRules = ["generic-api-key", "discord-api-token"]
+description = "Exact reviewed historical SHA-256 entries in restored_files_sha256; each finding is file-integrity data, not a credential."
+condition = "AND"
+paths = ['''(^|/)vendor/offline\-ci\-contract\.json$''']
+regexTarget = "line"
+regexes = [
+  '''(?m)^\s*"gh_embedded_token_remediate\.py":\s*"e94e918e11034e5741afe052fd78506006cdacd94e143c3b405ac47a0f33a125",?$''',
+  '''(?m)^\s*"git_remote_credential_scan\.sh":\s*"09c770feaf86ebc6590b055692dd5125bc3ac135859c62ef0682343fc69f7bb2",?$''',
+  '''(?m)^\s*"org_access_review\.sh":\s*"9a2b192b2f14271b065547aa056608c6858d5dea89cbf0d1132bc72a6a05c6f9",?$''',
+  '''(?m)^\s*"scripts/discord_job_health\.js":\s*"1252d87cc6721de88bb57c69c660edc18bd780f0db38a98cbf103e1ea565f41f",?$''',
+  '''(?m)^\s*"secret_exposure_audit\.sh":\s*"f51c4388b285592d7ff7b7a4384acc101929e20b1468574bda0e91f737f13a7c",?$''',
+  '''(?m)^\s*"test_credential_chain_audit\.sh":\s*"39362af62eb9ceb373a83a9bb197cfe454d9a4f25df21d6c55858904a3be4aac",?$''',
+  '''(?m)^\s*"test_credential_chain_pin_gate\.sh":\s*"37304fab939601d5e85bbacc2f87f7a7cc9ae10aaffdb63779ab64d25d785e0b",?$''',
+  '''(?m)^\s*"test_gh_token_api_body\.sh":\s*"45dc37e31f8e24121fd26c8881432beba4cf981ebb0d48eae963a0012df60991",?$''',
+  '''(?m)^\s*"test_gh_token_dispatch\.sh":\s*"3fef140e9666da8500b91f55d251734f5de2c9c8b4f1cdd11c96b51a2bde5b64",?$''',
+]

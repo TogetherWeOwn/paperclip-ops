@@ -34,10 +34,15 @@ credentials and file-integrity hashes, not directory-wide exclusions. Exceptions
 for removed historical fixtures do not authorize restoring those private files.
 
 Run the secret and privacy checks before adding a new commit. The public-safety
-workflow checks both the working tree and all fetched Git history. Do not disable
-it to import a patch. Changes derived from an old private PR must be reviewed as
-plain diffs and committed freshly; keep author/card custody on the private board,
-not in public branch names, commit messages, or PR text.
+workflow checks the working tree and commits introduced by the current pull
+request or push; it does not rescan every fetched branch or main's earlier
+history. A push whose old tip is missing (force-push) scans all reachable
+history instead, since the rewritten commits are unknown. Previously landed
+commits were covered by the scans that ran when they were introduced. Do not
+disable the workflow to import a patch. Changes derived
+from an old private PR must be reviewed as plain diffs and committed freshly;
+keep author/card custody on the private board, not in public branch names, commit
+messages, or PR text.
 
 The optional toolkit restoration script uses pinned public archives and checksums.
 Its legacy compatibility manifest is not a release-readiness certificate: verify

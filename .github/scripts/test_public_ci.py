@@ -236,6 +236,286 @@ class PublicCI(unittest.TestCase):
         safety = (ROOT / ".github/workflows/public-safety.yml").read_text()
         self.assertIn("gitleaks", safety)
         self.assertIn("public_safety.py", safety)
+        # The history scan fails closed: no --all sweep of unrelated
+        # branches, no narrowed single-commit fallback (on a pull-request
+        # merge commit -p -U0 prints no patch, passing vacuously).
+        # Pushes validate BEFORE and every range validates via rev-list.
+        self.assertNotIn('--log-opts="--all"', safety)
+        self.assertNotIn('RANGE="-1 HEAD"', safety)
+        self.assertIn("git merge-base origin/main HEAD", safety)
+        self.assertIn("github.event.before", safety)
+        self.assertIn('git cat-file -e "$BEFORE^{commit}"', safety)
+        self.assertIn('git rev-list --count "$RANGE"', safety)
+        self.assertIn("pull-request history range", safety)
+
+    def test_history_range_survives_advanced_main(self):
+        # Pins the range logic against a scratch repo shaped like the review
+        # probe: a PR that adds a credential-shaped file in one commit and
+        # removes it in the next, with main advanced afterwards. The old
+        # origin/main ancestor check then fails (fallback territory) while
+        # the merge-base range still contains both PR commits and the old
+        # single-commit scan of the synthetic merge commit sees nothing.
+        try:
+            subprocess.run(["git", "--version"], capture_output=True,
+                           check=True)
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest("git not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ,
+                       GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                       GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+            def git(*args):
+                subprocess.run(["git", *args], cwd=tmp, env=env,
+                               capture_output=True, text=True, check=True)
+            git("init", "-q")
+            git("checkout", "-q", "-B", "main")
+            Path(tmp, "base.txt").write_text("base\n")
+            git("add", "base.txt")
+            git("commit", "-qm", "base")
+            git("checkout", "-qb", "pr")
+            Path(tmp, "secret.txt").write_text("token = hunter2-hunter2\n")
+            git("add", "secret.txt")
+            git("commit", "-qm", "add credential-shaped file")
+            git("rm", "-q", "secret.txt")
+            git("commit", "-qm", "remove credential-shaped file")
+            git("checkout", "-q", "main")
+            Path(tmp, "other.txt").write_text("advance\n")
+            git("add", "other.txt")
+            git("commit", "-qm", "advance main")
+            # Synthetic pull-request merge ref on a side branch, then main
+            # advances again so origin/main is no longer an ancestor of the
+            # merge commit.
+            git("checkout", "-qb", "tmp-merge")
+            git("merge", "--no-ff", "--no-edit", "-q", "pr", "-m", "merge pr")
+            git("branch", "-f", "merge-ref", "HEAD")
+            git("checkout", "-q", "main")
+            Path(tmp, "later.txt").write_text("later\n")
+            git("add", "later.txt")
+            git("commit", "-qm", "main moves after merge-ref creation")
+            def out(*args):
+                r = subprocess.run(["git", *args], cwd=tmp, env=env,
+                                   capture_output=True, text=True,
+                                   check=True)
+                return r.stdout
+            ancestor = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", "main", "merge-ref"],
+                cwd=tmp, env=env, capture_output=True)
+            self.assertNotEqual(
+                ancestor.returncode, 0,
+                "scratch repo must reproduce the stale-base trigger")
+            base = out("merge-base", "main", "merge-ref").strip()
+            ranged = out("log", "-p", "-U0", base + "..merge-ref")
+            self.assertIn("secret.txt", ranged,
+                          "merge-base range lost the PR history")
+            single = out("log", "-p", "-U0", "-1", "merge-ref")
+            self.assertNotIn("secret.txt", single,
+                             "single-commit scan unexpectedly saw a patch")
+
+    def _history_scan_shell(self):
+        # Slice the real `run:` block out of public-safety.yml so this test
+        # executes the workflow's shell, not a reimplementation. Stub only
+        # the docker invocations; every git conditional stays verbatim.
+        data = yaml.safe_load(
+            (ROOT / ".github/workflows/public-safety.yml").read_text())
+        steps = data["jobs"]["public-safety"]["steps"]
+        run = next(
+            s["run"] for s in steps
+            if (s.get("name") or "").startswith("Scan working tree"))
+        script = run.replace(
+            "${{ github.event_name }}", "${EVENT_NAME}").replace(
+            "${{ github.event.before }}", "${BEFORE}")
+        docker_stub = (
+            'docker() { python3 -c "import json, sys; '
+            'print(json.dumps(sys.argv[1:]))" "$@" >> "$DOCKER_LOG"; }\n')
+        return docker_stub + script + "\n"
+
+    def _run_history_scan(self, tmp, base_env, event_name, before):
+        script = self._history_scan_shell()
+        log_path = Path(tmp, "docker-invocations.jsonl")
+        log_path.unlink(missing_ok=True)
+        env = dict(base_env, EVENT_NAME=event_name,
+                   BEFORE=before or "", SCANNER="stub",
+                   DOCKER_LOG=str(log_path))
+        return subprocess.run(
+            ["bash", "-e", "-c", script], cwd=tmp, env=env,
+            capture_output=True, text=True)
+
+    def _assert_scanned_range(self, tmp, expected):
+        invocations = [json.loads(line) for line in
+                       Path(tmp, "docker-invocations.jsonl").read_text().splitlines()]
+        git_scans = [args for args in invocations if "git" in args]
+        self.assertEqual(len(git_scans), 1, invocations)
+        scan_args = git_scans[0]
+        log_opts = next((arg for arg in scan_args if arg.startswith("--log-opts=")), None)
+        self.assertEqual(log_opts, "--log-opts=" + expected, scan_args)
+        self._assert_tree_scanned(tmp)
+        return expected
+
+    def _assert_tree_scanned(self, tmp):
+        # The exit-0 paths are justified by "the working-tree scan covers
+        # this event": pin that the dir scan ran before the early exit, so
+        # deleting or reordering it fails this test.
+        invocations = [json.loads(line) for line in
+                       Path(tmp, "docker-invocations.jsonl").read_text().splitlines()]
+        tree = [args for args in invocations
+                if "dir" in args and "/repo" in args]
+        self.assertEqual(len(tree), 1, invocations)
+
+    def _assert_no_history_scan(self, tmp):
+        invocations = [json.loads(line) for line in
+                       Path(tmp, "docker-invocations.jsonl").read_text().splitlines()]
+        self.assertFalse(any("git" in args for args in invocations), invocations)
+        self._assert_tree_scanned(tmp)
+
+    def test_history_scan_script_uses_fail_closed_ranges(self):
+        # Executes the workflow's actual range block in scratch repos for:
+        # pull_request with and without an advanced main, push with a real
+        # before, zero before (new branch), and unreachable before (force-push),
+        # plus empty PR, dispatch, and zero-before push ranges. The docker
+        # function records argv so the gitleaks --log-opts argument itself is
+        # asserted, not merely the RANGE variable. Range and failure mutations
+        # must break this test.
+        try:
+            subprocess.run(["git", "--version"], capture_output=True,
+                           check=True)
+            subprocess.run(["bash", "--version"], capture_output=True,
+                           check=True)
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest("git or bash not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ,
+                       GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                       GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+            def git(*args):
+                subprocess.run(["git", *args], cwd=tmp, env=env,
+                               capture_output=True, text=True, check=True)
+            def out(*args):
+                r = subprocess.run(["git", *args], cwd=tmp, env=env,
+                                   capture_output=True, text=True,
+                                   check=True)
+                return r.stdout.strip()
+            git("init", "-q")
+            git("checkout", "-q", "-B", "main")
+            Path(tmp, "base.txt").write_text("base\n")
+            git("add", "base.txt")
+            git("commit", "-qm", "base")
+            base0 = out("rev-parse", "main")
+            git("checkout", "-qb", "pr")
+            Path(tmp, "secret.txt").write_text("token = hunter2-hunter2\n")
+            git("add", "secret.txt")
+            git("commit", "-qm", "add credential-shaped file")
+            first_pr = out("rev-parse", "HEAD")
+            git("rm", "-q", "secret.txt")
+            git("commit", "-qm", "remove credential-shaped file")
+            pr_tip = out("rev-parse", "HEAD")
+            git("checkout", "-q", "main")
+            Path(tmp, "other.txt").write_text("advance\n")
+            git("add", "other.txt")
+            git("commit", "-qm", "advance main")
+            main1 = out("rev-parse", "main")
+            git("checkout", "-qb", "tmp-merge")
+            git("merge", "--no-ff", "--no-edit", "-q", "pr", "-m", "merge pr")
+            git("branch", "-f", "merge-ref", "HEAD")
+            git("checkout", "-q", "main")
+            Path(tmp, "later.txt").write_text("later\n")
+            git("add", "later.txt")
+            git("commit", "-qm", "main moves after merge-ref creation")
+            main2 = out("rev-parse", "main")
+            zero = "0" * 40
+            bogus = "d" * 40
+
+            def set_origin(sha_or_none):
+                if sha_or_none is None:
+                    subprocess.run(
+                        ["git", "update-ref", "-d",
+                         "refs/remotes/origin/main"],
+                        cwd=tmp, env=env, capture_output=True)
+                else:
+                    git("update-ref", "refs/remotes/origin/main",
+                        sha_or_none)
+
+            def range_log(rng):
+                r = subprocess.run(
+                    ["git", "log", "-p", "-U0", rng], cwd=tmp, env=env,
+                    capture_output=True, text=True, check=True)
+                return r.stdout
+
+            # 1. pull_request without an advanced main.
+            set_origin(main1)
+            git("checkout", "-q", "merge-ref")
+            r = self._run_history_scan(tmp, env, "pull_request", "")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rng = out("merge-base", "origin/main", "HEAD") + "..HEAD"
+            self._assert_scanned_range(tmp, rng)
+            self.assertIn("secret.txt", range_log(rng))
+
+            # 2. pull_request with main advanced after the merge ref.
+            set_origin(main2)
+            git("checkout", "-q", "merge-ref")
+            r = self._run_history_scan(tmp, env, "pull_request", "")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rng = out("merge-base", "origin/main", "HEAD") + "..HEAD"
+            self._assert_scanned_range(tmp, rng)
+            self.assertIn("secret.txt", range_log(rng),
+                          "merge-base range lost PR history after advance")
+
+            # 3. push with a real before (multi-commit push scans all).
+            set_origin(main2)
+            git("checkout", "-q", "pr")
+            r = self._run_history_scan(tmp, env, "push", first_pr)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rng = first_pr + "..HEAD"
+            self._assert_scanned_range(tmp, rng)
+
+            # 4. push with a zero before (new branch) falls back to
+            # merge-base instead of exiting 1.
+            set_origin(base0)
+            git("checkout", "-q", "pr")
+            r = self._run_history_scan(tmp, env, "push", zero)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rng = out("merge-base", "origin/main", "HEAD") + "..HEAD"
+            self._assert_scanned_range(tmp, rng)
+            self.assertIn("secret.txt", range_log(rng))
+
+            # 5. push with an unreachable before (force-push) has unknown
+            # rewritten history: scan all reachable history instead of an
+            # empty merge-base range.
+            set_origin(base0)
+            git("checkout", "-q", "pr")
+            r = self._run_history_scan(tmp, env, "push", bogus)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self._assert_scanned_range(tmp, "HEAD")
+            self.assertIn("secret.txt", range_log("HEAD"))
+
+            # 6. Fail closed on an empty pull-request range.
+            set_origin(main2)
+            git("checkout", "-q", "main")
+            r = self._run_history_scan(tmp, env, "pull_request", "")
+            self.assertNotEqual(r.returncode, 0,
+                                "empty pull-request history must fail closed")
+            self.assertIn("pull-request history range", r.stderr)
+            self._assert_no_history_scan(tmp)
+
+            # 7. A workflow_dispatch at main scans the tree without invoking
+            # gitleaks on an empty history range.
+            r = self._run_history_scan(tmp, env, "workflow_dispatch", "")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("no new commits", r.stdout)
+            self._assert_no_history_scan(tmp)
+
+            # 8. A zero-before push at the main tip also has no new commits.
+            r = self._run_history_scan(tmp, env, "push", zero)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("no new commits", r.stdout)
+            self._assert_no_history_scan(tmp)
+
+            # 9. A non-zero unreachable push at the main tip (force-push to
+            # main) must not exit 0 with no history scan: the rewritten
+            # commits are unknown, so the full reachable history is scanned.
+            r = self._run_history_scan(tmp, env, "push", bogus)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("no new commits", r.stdout)
+            self._assert_scanned_range(tmp, "HEAD")
 
     def test_metadata_protocol_constant_does_not_exempt_private_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -659,106 +939,6 @@ class PublicCI(unittest.TestCase):
                 if not skipped:
                     self.assertIn("FAIL dataset shape", proc.stdout)
                     self.assertIn("FAIL no token-shaped string", proc.stdout)
-
-    def test_history_scan_range_covers_pr_commits_after_main_advances(self):
-        script = ROOT / ".github/scripts/public-safety-range.sh"
-        self.assertTrue(script.is_file(), "range helper missing")
-        safety = (ROOT / ".github/workflows/public-safety.yml").read_text()
-        self.assertIn("public-safety-range.sh", safety)
-        # A bare merge commit has an empty `git log -p` diff, so scanning one
-        # reports clean over zero commits. The fallback must never be one.
-        self.assertNotIn("-1 HEAD", safety)
-        # An invalid revision range also scans zero commits with a clean
-        # gitleaks exit code, so the workflow verifies the range with git.
-        self.assertIn("rev-list --count", safety)
-        # `git rev-parse --verify` accepts any well-formed hex string, so the
-        # helper must verify the pushed object exists before trusting it.
-        helper = script.read_text()
-        self.assertIn('cat-file -e', helper)
-        self.assertNotIn("rev-parse --verify", helper)
-        with tempfile.TemporaryDirectory() as tmp:
-            env = {"PATH": os.environ["PATH"], "HOME": tmp,
-                   "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
-                   "GIT_AUTHOR_NAME": "Synthetic Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
-                   "GIT_COMMITTER_NAME": "Synthetic Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
-                   "GIT_EDITOR": "true"}
-
-            def git(*args):
-                return subprocess.run(["git", "-C", tmp, *args], env=env, check=True,
-                                      capture_output=True, text=True)
-
-            # Identity travels as -c flags: the sandbox git wrapper does not
-            # honor GIT_AUTHOR_* / GIT_COMMITTER_* from the environment.
-            ident = ("-c", "user.name=Synthetic Fixture",
-                     "-c", "user.email=fixture@example.invalid")
-
-            def run_range(*args):
-                return subprocess.run(["bash", str(script), *args], cwd=tmp, env=env,
-                                      check=True, capture_output=True, text=True,
-                                      timeout=30).stdout.strip()
-
-            git("init", "-q", ".")
-            git("checkout", "-q", "-b", "main")
-            (Path(tmp) / "base.txt").write_text("base\n")
-            git("add", "base.txt")
-            git(*ident, "commit", "-qm", "main: base")
-            base = git("rev-parse", "HEAD").stdout.strip()
-            git("checkout", "-qb", "pr")
-            (Path(tmp) / "feature.txt").write_text("feature\n")
-            git("add", "feature.txt")
-            git(*ident, "commit", "-qm", "pr: add feature")
-            pr_commit = git("rev-parse", "HEAD").stdout.strip()
-            git("checkout", "-q", "main")
-            (Path(tmp) / "other.txt").write_text("other\n")
-            git("add", "other.txt")
-            git(*ident, "commit", "-qm", "main: advances after the merge ref is cut")
-            main_tip = git("rev-parse", "HEAD").stdout.strip()
-            # The checkout fetches the base the merge ref was built on, then
-            # main moves on: origin/main is no longer an ancestor of HEAD.
-            git("update-ref", "refs/remotes/origin/main", "main")
-            git("checkout", "-qb", "mergeref", base)
-            git(*ident, "merge", "--no-ff", "--no-edit", "-q", "pr")
-            ancestor = subprocess.run(
-                ["git", "-C", tmp, "merge-base", "--is-ancestor",
-                 "refs/remotes/origin/main", "HEAD"],
-                env=env, capture_output=True)
-            self.assertNotEqual(
-                ancestor.returncode, 0,
-                "fixture must reproduce main moving past the merge ref")
-            merge_base = git("merge-base", "refs/remotes/origin/main", "HEAD").stdout.strip()
-            ranged = run_range("pull_request", "")
-            self.assertEqual(ranged, f"{merge_base}..HEAD")
-            log = git("log", ranged, "--format=%H").stdout.split()
-            self.assertIn(pr_commit, log, "the PR commit must be inside the scanned range")
-            self.assertNotEqual(git("rev-list", ranged, "--count").stdout.strip(), "0")
-            # No derivable range fails closed to --all, never to a merge commit.
-            git("update-ref", "-d", "refs/remotes/origin/main")
-            self.assertEqual(run_range("pull_request", ""), "--all")
-            # Push scans what was pushed when the before commit is present.
-            git("update-ref", "refs/remotes/origin/main", "main")
-            self.assertEqual(run_range("push", main_tip), f"{main_tip}..HEAD")
-            # A force-push or rebase leaves a well-formed before SHA that is
-            # absent from the checkout: trusting it scans zero commits and
-            # passes. The helper must fall back to the merge-base range.
-            absent = "1" * 40
-            # Fixture precondition: the SHA is well-formed but names no
-            # object in this checkout (the force-push hole).
-            probe = subprocess.run(
-                ["git", "-C", tmp, "cat-file", "-e", absent + "^{commit}"],
-                env=env, capture_output=True)
-            self.assertNotEqual(probe.returncode, 0)
-            ranged_absent = run_range("push", absent)
-            self.assertEqual(ranged_absent, f"{merge_base}..HEAD")
-            self.assertNotIn(absent, ranged_absent)
-            self.assertNotEqual(
-                git("rev-list", ranged_absent, "--count").stdout.strip(), "0")
-            # A new branch (all-zero before) has no pushed range: it scans the
-            # branch commits via the merge base, not --all (which reds the
-            # gate on unrelated branches' fixtures).
-            ranged_new = run_range("push", "0" * 40)
-            self.assertEqual(ranged_new, f"{merge_base}..HEAD")
-            self.assertNotEqual(
-                git("rev-list", ranged_new, "--count").stdout.strip(), "0")
 
     def test_renamed_archive_sources_use_public_paths(self):
         manifest = (ROOT / "vendor/toolkit-files.txt").read_text().splitlines()

@@ -17,15 +17,17 @@ ROOT = Path(__file__).resolve().parent
 TOOLKIT = json.loads((ROOT / "vendor/offline-ci-contract.json").read_text())["toolkit"]
 TAG = TOOLKIT["tag"]
 COMMIT = TOOLKIT["commit"]
-FIX_COMMIT = "533c7ae2b013340bfae20cfcc711220048295855"
-FIX_ARCHIVE_SHA256 = "3f88a7325590b81250ed6779d87ee13def109ea3e64ca1afa80f539ada215092"
-FIX_GUARD_SHA256 = "93b14debe4cfb5fd7a059103a431cc87afbc36e66fa0705d0e4ba77cf3019874"
+FIX_COMMIT = "d0324d0e5dd5a604a375e63a45eb5aa00e507059"
+FIX_ARCHIVE_SHA256 = "390032e7032e9041e82497b4fa90be086fea12df791653c0d5e6818a83d7f791"
+FIX_GUARD_SHA256 = "40fdea4eebad62c5ed20293fdb5913f3664daac06dae6584b757f6bf2272bb76"
 # Immutable public dependency bytes, not replacement implementations.
 # Run scripts/sync-toolkit.sh before this suite, as the CI setup does. Do not
 # republish excluded historical archives merely to reconstruct a test subject.
 GUARD_SUBJECTS = {
     "637aff8ead6766016ca830fc726a0c91a58df02a":
         "9c6d54ac6d2ee64afaeb504ebd56be35bb29cec78803db659399f71be249d46b",
+    "533c7ae2b013340bfae20cfcc711220048295855":
+        "93b14debe4cfb5fd7a059103a431cc87afbc36e66fa0705d0e4ba77cf3019874",
     FIX_COMMIT: FIX_GUARD_SHA256,
 }
 

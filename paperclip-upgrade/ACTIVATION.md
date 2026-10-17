@@ -98,6 +98,10 @@ scheduling hold before undrain.
 | Image swap by tag in compose | The exact reviewed build is what boots | Candidate ref pinned to `EXPECT_IMAGE_ID`, compose file SHA-256, service image/user, sorted mount-destination hash, effective-build file pins (`EXPECT_FILES` + entrypoint), health `.commit` against `EXPECT_COMMIT`, revision label checked when present but never sufficient alone; recreate is `--no-build --pull never` | Refuse pre-drain for binding mismatches; post-recreate mismatches hold + rollback |
 | Rollback by re-pointing compose | Rollback lands on the actual pre-change image/config | Pre-change image id is read live from the running container and must equal `ROLLBACK_IMAGE_ID`; the rollback ref must resolve locally; rollback compose must hash to `ROLLBACK_COMPOSE_SHA256` before `drain.sh rollback` runs | Refused; server stays held |
 | Restart hardening side effects | PID 1 umask `0077`, sandbox canary, effective build, migrations, plugin/config/inventory parity | Unchanged `drain.sh verify_held` gates (umask from `/proc/1/status`, review-bot sandbox canary, effective-build proof, migration gate, drift checks) plus the wrapper's PID 1 uid probe before verify | Verify FAIL; hold preserved; nothing admitted |
+| Installed pre-restart check run before restart | The restart only proceeds on the reviewed pre-restart gates (drained marker, verified backup, migrations present, orphans, disk) | `drain.sh restart` runs the helper-set `pre-restart-check.sh` (path pinned by the wrapper, helper overrides cannot substitute it) and the wrapper verifies that file's SHA-256 against `PRE_RESTART_CHECK_SHA256` at preflight and again immediately before restart. The check's backup-cover test matches the standard `sha256sum` format `drain.sh backup` actually writes | Digest mismatch refuses before drain/restart; a failing check stops restart with the old server still running under the drain |
+| (new) pending-decision safety | No pending decision continuation crosses a restart onto a paused/terminated origin agent | Pre (inside `pre-restart-check.sh`, fresh in the drained transaction): `pending-decisions.sql` counts `wake_origin_agent` decisions with `metadata.continuationPending=true` whose origin agent is `paused` **or** `terminated` — deliberately no age/expiry narrowing. Must be exactly 0; there is no ack flag and rows are never repaired by the check | Restart FAIL before recreate; reconcile through the product, then re-run |
+| Fresh backup taken ad hoc before an upgrade | A restorable, validated backup exists before anything can change schema or image | Phase order is drain → wait → **backup** → restart: `drain.sh backup` pg_dumps, TOC-checks and checksums the dump; `drain.sh restart` re-verifies the checksum and refuses a backup older than the manifest's `MAX_BACKUP_AGE_MINS` (no code default) — all before `compose_up`, i.e. before any migration the candidate boot applies | Backup or validation failure stops the run pre-recreate; admission stays closed; owned `abort` only |
+| Migrations applied implicitly by a new image's boot | A schema-changing boot happens only under an explicit out-of-band admission for exactly those migrations, with old-image rollback compatibility decided there | Manifest `PENDING_MIGRATIONS` (`none`, or the 4-digit prefixes the candidate will newly apply). Anything but `none` requires `MIGRATION_ADMISSION_RECEIPT` + its SHA-256 pin, verified at preflight and again immediately before restart. The wrapper consumes the receipt by hash only — it executes no migration, parses no decision and waives nothing. Rollback stays image-only through `drain.sh`'s known-ahead gate: additive schema and history are retained, never dropped, and no DB restore is exposed | Missing/mismatched receipt refuses before drain/restart; the admission decision itself stays with its issuing authority (host attestation) |
 | Legacy 916 redaction overlay refusal | Upgraded server never runs the whole-file override | Unchanged `compose_no_legacy_overlay` + effective-build `--forbid-916-redaction`; private overlays in general are pinned via `EXPECT_HOST_FILES` when `PRIVATE_OVERLAY_REQUIRED=1` | Restart refused before the server is touched |
 
 ## Manifest
@@ -144,7 +148,12 @@ carrying one), pressure/window evidence, lock path safety and
 cross-state-dir exclusivity, the full phase order under inherited
 lock proof, verify-failure hold preservation, foreign-state refusal,
 owned rollback argv and preconditions, and real `drain.sh` refusing
-mutating commands without wrapper proof. The pre-existing
+mutating commands without wrapper proof. It also executes the real
+`pre-restart-check.sh` against a SQL-answering Docker stub: a fresh
+backup in the exact `sha256sum` format `drain.sh backup` writes passes
+its checksum gate, a tampered dump fails it, and a nonzero
+pending-decision count (paused/terminated origins, no expiry filter in
+`pending-decisions.sql`) fails it. The pre-existing
 `test-offline.sh` database proofs create isolated `rehearse_sqlproof_*`
 databases on the agent test database only; nothing in this contract
 adds a database-creating suite.
@@ -174,3 +183,19 @@ before an activation from these sources:
 6. That the lock file's parent directory on that host is the intended
    operator-owned location and that no second deployment identity
    (user, timer, legacy wrapper) can write it.
+7. The installed pre-restart check's provenance: that the digest bound
+   as `PRE_RESTART_CHECK_SHA256` is the reviewed script actually
+   installed at the host path the executor records (absolute path,
+   digest, exact argv and exit status in the activation receipt), and
+   that its database scope covers the service being restarted. This
+   source ships and pins the generic `pre-restart-check.sh` +
+   `pending-decisions.sql`; it does not prove what a host has
+   installed under any product-tree path.
+8. For a candidate whose boot applies migrations: the admission
+   decision behind `MIGRATION_ADMISSION_RECEIPT` (exact migration
+   inventory, backup proof, and old-image compatibility with the
+   retained additive schema/history), issued by the authority that
+   owns that boundary — plus the frozen product source pin for the
+   batch being activated (a full immutable commit, never a moving
+   branch) and the protected destination/receipt for the fresh backup
+   this contract takes before recreate.

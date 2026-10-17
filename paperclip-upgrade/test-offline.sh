@@ -7,12 +7,12 @@
 #   1. bash -n over every harness script (a script that cannot parse is not
 #      a reviewable artifact).
 #   2. validate_sql.py against the isolated agent-testdb proof database:
-#      neutraliser negative control + 20/20 gates, inventory, all 7 drain
+#      neutraliser negative control + 20/20 gates, inventory, all 8 drain
 #      queries with positive and negative controls.
 #   3. with --extra-migrations: the 0280-0284 upgrade proof — migration_gate
 #      positive + withheld-row negative control, image-only rollback gate
 #      (bare FAIL / --known-ahead PASS / foreign-row FAIL), and drain-query
-#      identity (7/7 identical) on the upgraded schema.
+#      identity (8/8 identical) on the upgraded schema.
 #   4. the refusal probes below (every mutating path refuses before touching
 #      Docker, the DB or the host).
 #   5. the drain.sh restart <-> pre-restart-check.sh flag contract (the exact

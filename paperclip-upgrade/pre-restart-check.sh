@@ -21,6 +21,10 @@
 #      is the outage this gate prevents)
 #   6. real-root path report under the data dir (informational under rootful
 #      Docker; blocking only with --block-on-root)
+#   7. pending-decision report (NON-DESTRUCTIVE, via pending-decisions.sql):
+#      zero wake_origin_agent decisions with a pending continuation whose
+#      origin agent is paused or terminated. No ack flag exists for this
+#      gate and no row is ever repaired here.
 #
 # Read-only except for nothing: this script writes nothing anywhere. It never
 # cancels runs, deletes leases, or touches backups.
@@ -71,6 +75,7 @@ done
 [[ "$ACK_ORPHANS" =~ ^[0-9]+$ ]] || { printf 'REFUSED: %s: --ack-orphans must be a non-negative integer\n' "$ME" >&2; exit 2; }
 for t in "${REQUIRE[@]}"; do [[ "$t" =~ ^[0-9]{4}$ ]] || { printf 'REFUSED: %s: --require must be a 4-digit migration prefix: %s\n' "$ME" "$t" >&2; exit 2; }; done
 [[ -f "$HERE/orphans.sql" && ! -L "$HERE/orphans.sql" ]] || { printf 'REFUSED: %s: orphans.sql missing beside %s\n' "$ME" "$0" >&2; exit 2; }
+[[ -f "$HERE/pending-decisions.sql" && ! -L "$HERE/pending-decisions.sql" ]] || { printf 'REFUSED: %s: pending-decisions.sql missing beside %s\n' "$ME" "$0" >&2; exit 2; }
 command -v "$DOCKER" >/dev/null || { printf 'REFUSED: %s: docker runtime is missing\n' "$ME" >&2; exit 2; }
 
 rc=0
@@ -101,7 +106,9 @@ if [[ -f "$dump" && ! -L "$dump" && -s "$dump" ]]; then
   else
     gate_ok "backup $dump ($(stat -c %s -- "$dump") bytes, ${age_m}m old, limit ${MAX_AGE_MINS}m)"
   fi
-  if [[ -f "$BACKUP_DIR/SHA256SUMS" ]] && grep -q '^paperclip\.dump' "$BACKUP_DIR/SHA256SUMS"; then
+  # drain.sh backup writes standard sha256sum format ("<hash>  <name>");
+  # the cover check must match THAT format, not a name-first line.
+  if [[ -f "$BACKUP_DIR/SHA256SUMS" ]] && grep -Eq '^[0-9a-f]{64}[[:space:]][ *]?paperclip\.dump$' "$BACKUP_DIR/SHA256SUMS"; then
     if (cd "$BACKUP_DIR" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then
       gate_ok "backup checksum verifies (SHA256SUMS covers paperclip.dump)"
     else
@@ -177,6 +184,22 @@ if n="$(sudo -n find "$DATA_DIR" -xdev \( -user 0 -o -group 0 \) 2>/dev/null | w
   fi
 else
   printf 'info: cannot scan real-root paths (no passwordless sudo); skipped\n'
+fi
+
+# --- 7. pending wake_origin_agent decisions (NON-DESTRUCTIVE) ------------------
+# Fresh in this same drained transaction: a pending continuation whose
+# origin agent is paused or terminated must not cross the restart. There
+# is no --ack for this gate and rows are never repaired here; reconcile
+# through the product, then re-run.
+if pending="$(dbq < "$HERE/pending-decisions.sql" 2>/dev/null)" \
+   && [[ "$pending" =~ ^pending_wake_origin_decisions\|([0-9]+)$ ]]; then
+  if (( BASH_REMATCH[1] == 0 )); then
+    gate_ok "pending wake_origin_agent decisions on paused/terminated origins: 0"
+  else
+    gate_fail "pending wake_origin_agent decisions on paused/terminated origins: ${BASH_REMATCH[1]} — reported, NOT repaired; reconcile through the product, then re-run"
+  fi
+else
+  gate_fail "pending-decisions.sql unreadable or malformed (database unreachable?)"
 fi
 
 exit "$rc"

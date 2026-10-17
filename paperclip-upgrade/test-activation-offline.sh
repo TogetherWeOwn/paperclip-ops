@@ -175,6 +175,9 @@ ENTRY_SHA="$(sha256sum < "$STUB/entrypoint_file" | cut -d' ' -f1)"
 MOUNTS_SHA="$(printf '/app/data\n/paperclip\n' | sha256sum | cut -d' ' -f1)"
 FILE_SHA="$(printf 'd%.0s' $(seq 1 64))"
 OWNER="$(id -u):$(id -g)"
+PRECHECK_SHA="$(sha256sum < "$HERE/pre-restart-check.sh" | cut -d' ' -f1)"
+printf 'migration admission receipt (hermetic fixture)\n' > "$ROOT/mig-receipt.txt"
+RECEIPT_SHA="$(sha256sum < "$ROOT/mig-receipt.txt" | cut -d' ' -f1)"
 printf '0.10 0.20 0.30 1/100 123\n' > "$ROOT/loadavg"
 printf 'MemTotal:       16384000 kB\nMemAvailable:    8192000 kB\n' > "$ROOT/meminfo"
 export PAPERCLIP_ACTIVATION_TEST_SEAMS=1
@@ -218,6 +221,9 @@ write_manifest() { # OUT [KEY=VALUE overrides...]
     printf 'HEALTH_TIMEOUT_SECS=60\n'
     printf 'PRIVATE_OVERLAY_REQUIRED=0\n'
     printf 'BUILD_MARKER=EPIPE\n'
+    printf 'PRE_RESTART_CHECK_SHA256=%s\n' "$PRECHECK_SHA"
+    printf 'MAX_BACKUP_AGE_MINS=120\n'
+    printf 'PENDING_MIGRATIONS=none\n'
     for kv in "$@"; do printf '%s\n' "$kv"; done
   } > "$out"
   chmod 0600 "$out"
@@ -331,6 +337,34 @@ write_manifest "$bad"; grep -v '^MAX_LOAD1_X100=' "$bad" > "$bad.tmp" && mv "$ba
 expect_refused "missing pressure threshold is refused (no silent default)" "MAX_LOAD1_X100" -- \
   bash "$ACT" preflight --manifest "$bad" --state-dir "$ROOT/state-a"
 
+# bound pre-restart check: digest-pinned in the manifest, never a stub
+manifest_with "$bad" PRE_RESTART_CHECK_SHA256 "$(printf 'e%.0s' $(seq 1 64))"
+reset_logs
+expect_refused "pre-restart-check digest mismatch is refused" "pre-restart" -- \
+  bash "$ACT" preflight --manifest "$bad" --state-dir "$ROOT/state-a"
+[[ ! -s "$STUB_DRAIN_LOG" ]] && pass "pre-restart mismatch: drain.sh untouched" || oops "pre-restart mismatch reached drain.sh"
+
+write_manifest "$bad"; grep -v '^MAX_BACKUP_AGE_MINS=' "$bad" > "$bad.tmp" && mv "$bad.tmp" "$bad"; chmod 0600 "$bad"
+expect_refused "missing backup-freshness bound is refused (no silent default)" "MAX_BACKUP_AGE_MINS" -- \
+  bash "$ACT" preflight --manifest "$bad" --state-dir "$ROOT/state-a"
+
+# pending migrations need an admission receipt the wrapper consumes by pin,
+# never a waiver computed here
+manifest_with "$bad" PENDING_MIGRATIONS "0294"
+expect_refused "pending migration without an admission receipt is refused" "migration admission" -- \
+  bash "$ACT" preflight --manifest "$bad" --state-dir "$ROOT/state-a"
+printf 'MIGRATION_ADMISSION_RECEIPT=%s\n' "$ROOT/mig-receipt.txt" >> "$bad"
+printf 'MIGRATION_ADMISSION_RECEIPT_SHA256=%s\n' "$(printf 'e%.0s' $(seq 1 64))" >> "$bad"; chmod 0600 "$bad"
+expect_refused "admission receipt digest mismatch is refused" "migration admission" -- \
+  bash "$ACT" preflight --manifest "$bad" --state-dir "$ROOT/state-a"
+sed -i "s|^MIGRATION_ADMISSION_RECEIPT_SHA256=.*|MIGRATION_ADMISSION_RECEIPT_SHA256=$RECEIPT_SHA|" "$bad"
+expect_ok "pending migration with a pin-matching admission receipt passes preflight" -- \
+  bash "$ACT" preflight --manifest "$bad" --state-dir "$ROOT/state-a"
+ln -s "$ROOT/mig-receipt.txt" "$ROOT/mig-receipt-link.txt"
+sed -i "s|^MIGRATION_ADMISSION_RECEIPT=.*|MIGRATION_ADMISSION_RECEIPT=$ROOT/mig-receipt-link.txt|" "$bad"
+expect_refused "symlink admission receipt is refused" "migration admission" -- \
+  bash "$ACT" preflight --manifest "$bad" --state-dir "$ROOT/state-a"
+
 # pressure + window evidence
 printf 'garbage\n' > "$ROOT/loadavg"
 expect_refused "malformed load evidence is refused" "load" -- \
@@ -400,6 +434,9 @@ fi
 grep -q 'compose_up() .*--no-build --pull never\|--no-build --pull never --force-recreate' "$DRAIN" \
   && pass "drain.sh recreate stays --no-build --pull never" \
   || oops "drain.sh recreate lost its no-build/no-pull flags"
+grep -qx -- '--max-backup-age-mins' "$STUB_DRAIN_LOG.args" && grep -qx '120' "$STUB_DRAIN_LOG.args" \
+  && pass "restart argv carries the manifest backup-freshness bound" \
+  || oops "restart argv lacks --max-backup-age-mins 120"
 
 # a second run over a finished state refuses instead of re-draining
 expect_refused "run over a completed state dir is refused" "REFUSED" -- \
@@ -479,6 +516,53 @@ expect_refused "compose tampered after verify is refused before undrain" "compos
 grep -q '^lock-proof-ok undrain' "$STUB_DRAIN_LOG" \
   && oops "undrain ran against a tampered compose file" || pass "undrain never ran against tampered compose"
 printf 'services: candidate\n' > "$ROOT/compose.yaml"
+
+# --- 5b. pre-restart-check: pending-decision gate + backup checksum format ------
+# Pending-decision SQL must cover BOTH paused and terminated origin agents
+# with no expiry narrowing (an expired-only filter would hide live rows).
+PDSQL="$HERE/pending-decisions.sql"
+if [[ -f "$PDSQL" ]] && grep -q "continuationPending" "$PDSQL" && grep -q "wake_origin_agent" "$PDSQL" \
+   && grep -q "'paused'" "$PDSQL" && grep -q "'terminated'" "$PDSQL" && ! grep -qi "expires" "$PDSQL"; then
+  pass "pending-decisions.sql covers paused+terminated origins, no expiry filter"
+else
+  oops "pending-decisions.sql missing or narrowed (want paused+terminated, no expires filter)"
+fi
+grep -q 'pending-decisions.sql' "$HERE/pre-restart-check.sh" \
+  && pass "pre-restart-check wires the pending-decision gate" \
+  || oops "pre-restart-check does not wire pending-decisions.sql"
+
+# Execute the real pre-restart-check against a SQL-answering docker stub.
+cat > "$ROOT/bin/docker-precheck" <<'STUBPRE'
+#!/usr/bin/env bash
+set -uo pipefail
+sql="$(cat)"
+case "$sql" in
+  *continuationPending*) printf 'pending_wake_origin_decisions|%s\n' "$(cat "$STUB_DIR/pending_count")" ;;
+  *__drizzle_migrations*) printf '1 0280aaaa\n2 0281bbbb\n' ;;
+  *native_lease_expired*) printf 'native_lease_expired|0\n' ;;
+  *) printf 'stub docker-precheck: unhandled sql\n' >&2; exit 99 ;;
+esac
+STUBPRE
+chmod +x "$ROOT/bin/docker-precheck"
+mkdir -p -m 0700 "$ROOT/pre-state" "$ROOT/pre-backup"
+printf '2026-01-01T00:00:00Z\n' > "$ROOT/pre-state/drained_at"
+printf 'dump-bytes' > "$ROOT/pre-backup/paperclip.dump"
+# exactly the format drain.sh backup writes (sha256sum paperclip.dump)
+(cd "$ROOT/pre-backup" && sha256sum paperclip.dump > SHA256SUMS)
+precheck_run() {
+  env DOCKER="$ROOT/bin/docker-precheck" PAPERCLIP_DATA="$ROOT/data" \
+    bash "$HERE/pre-restart-check.sh" --state-dir "$ROOT/pre-state" \
+      --backup-dir "$ROOT/pre-backup" --max-backup-age-mins 120 --ack-orphans 0 \
+      --require 0280 --require 0281
+}
+printf '0\n' > "$STUB/pending_count"
+expect_ok "pre-restart-check passes: fresh checksum-verifying backup (drain format), zero pending decisions" -- precheck_run
+printf '2\n' > "$STUB/pending_count"
+expect_refused "pre-restart-check fails on pending wake_origin_agent decisions" "pending" -- precheck_run
+printf '0\n' > "$STUB/pending_count"
+printf 'tampered' >> "$ROOT/pre-backup/paperclip.dump"
+expect_refused "pre-restart-check fails when the backup checksum does not verify" "backup" -- precheck_run
+printf 'dump-bytes' > "$ROOT/pre-backup/paperclip.dump"
 
 # --- 6. real drain.sh refuses mutating commands without the wrapper lock --------
 printf 'header = "X-Test: 1"\n' > "$ROOT/board.curl"; chmod 0600 "$ROOT/board.curl"

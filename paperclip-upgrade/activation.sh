@@ -27,6 +27,15 @@
 #     never repaired: this path changes no ownership or modes anywhere;
 #   - helpers reachable from drain.sh are scanned for ownership-change
 #     commands before anything runs;
+#   - the pre-restart-check drain.sh runs inside restart is digest-
+#     pinned in the manifest (no success stub can stand in); that check
+#     includes the fresh pending-decision gate (zero pending
+#     wake_origin_agent continuations on paused/terminated origins);
+#   - the backup phase's fresh dump is TOC- and checksum-validated, and
+#     restart re-verifies both against the manifest freshness bound
+#     before any recreate applies a migration; pending migrations
+#     additionally require a pin-matched admission receipt, consumed
+#     here by hash only (never executed or waived by this wrapper);
 #   - recreate stays drain.sh's --no-build --pull never compose_up;
 #   - any phase failure leaves the drain/hold exactly as drain.sh left
 #     it (nothing is cancelled or undrained) and prints the owned
@@ -127,14 +136,17 @@ EXPECT_USER EXPECT_FILES REQUIRE_MIGRATIONS MOUNT_DESTINATIONS_SHA256 DEPLOY_LOC
 DATA_DIR MAX_LOAD1_X100 MIN_MEM_AVAILABLE_KB MIN_DISK_AVAIL_BYTES \
 BLOCKED_START_HOUR_UTC BLOCKED_END_HOUR_UTC REQUIRE_CARGO_POOL EXPECT_PROTECTED_OWNER \
 STABLE_POLLS POLL_SECS MAX_WAIT_SECS HEALTH_TIMEOUT_SECS PRIVATE_OVERLAY_REQUIRED \
-BUILD_MARKER EXPECT_HOST_FILES PLUGIN_INVENTORY "
+BUILD_MARKER PRE_RESTART_CHECK_SHA256 MAX_BACKUP_AGE_MINS PENDING_MIGRATIONS \
+MIGRATION_ADMISSION_RECEIPT MIGRATION_ADMISSION_RECEIPT_SHA256 \
+EXPECT_HOST_FILES PLUGIN_INVENTORY "
 REQUIRED_KEYS="SERVICE SERVER_CONTAINER COMPOSE_FILE COMPOSE_SHA256 ROLLBACK_COMPOSE_SHA256 \
 IMAGE EXPECT_IMAGE_ID EXPECT_COMMIT ROLLBACK_IMAGE ROLLBACK_IMAGE_ID \
 ENTRYPOINT_PATH ENTRYPOINT_SHA256 ROLLBACK_ENTRYPOINT_SHA256 EXPECT_ENTRYPOINT_JSON \
 EXPECT_USER EXPECT_FILES REQUIRE_MIGRATIONS MOUNT_DESTINATIONS_SHA256 DEPLOY_LOCK_PATH \
 DATA_DIR MAX_LOAD1_X100 MIN_MEM_AVAILABLE_KB MIN_DISK_AVAIL_BYTES \
 BLOCKED_START_HOUR_UTC BLOCKED_END_HOUR_UTC REQUIRE_CARGO_POOL EXPECT_PROTECTED_OWNER \
-STABLE_POLLS POLL_SECS MAX_WAIT_SECS HEALTH_TIMEOUT_SECS PRIVATE_OVERLAY_REQUIRED BUILD_MARKER"
+STABLE_POLLS POLL_SECS MAX_WAIT_SECS HEALTH_TIMEOUT_SECS PRIVATE_OVERLAY_REQUIRED BUILD_MARKER \
+PRE_RESTART_CHECK_SHA256 MAX_BACKUP_AGE_MINS PENDING_MIGRATIONS"
 while IFS= read -r line || [[ -n "$line" ]]; do
   [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
   [[ "$line" =~ ^([A-Z0-9_]+)=(.*)$ ]] || refuse "malformed manifest line (want KEY=VALUE): $line"
@@ -181,7 +193,30 @@ for xf in "${EXPECT_FILE_LIST[@]}"; do
 done
 IFS=',' read -r -a MIGRATION_LIST <<<"$(mv_ REQUIRE_MIGRATIONS)"
 for t in "${MIGRATION_LIST[@]}"; do [[ "$t" =~ ^[0-9]{4}$ ]] || refuse "REQUIRE_MIGRATIONS entry must be a 4-digit prefix: $t"; done
-for n_key in MAX_LOAD1_X100 MIN_MEM_AVAILABLE_KB MIN_DISK_AVAIL_BYTES POLL_SECS MAX_WAIT_SECS HEALTH_TIMEOUT_SECS; do
+# Migrations the candidate boot will newly apply. "none" is an explicit
+# attestation, not an absence: anything else must be 4-digit prefixes and
+# needs the admission receipt below (consumed by pin, never judged here —
+# this wrapper executes no migration and waives none).
+PENDING_MIGRATION_LIST=()
+if [[ "$(mv_ PENDING_MIGRATIONS)" != none ]]; then
+  IFS=',' read -r -a PENDING_MIGRATION_LIST <<<"$(mv_ PENDING_MIGRATIONS)"
+  ((${#PENDING_MIGRATION_LIST[@]} >= 1)) || refuse "PENDING_MIGRATIONS must be 'none' or 4-digit prefixes"
+  for t in "${PENDING_MIGRATION_LIST[@]}"; do
+    [[ "$t" =~ ^[0-9]{4}$ ]] || refuse "PENDING_MIGRATIONS entry must be a 4-digit prefix or 'none': $t"
+  done
+fi
+[[ "$(mv_ PRE_RESTART_CHECK_SHA256)" =~ $sha64_re ]] || refuse "PRE_RESTART_CHECK_SHA256 must be 64 lowercase hex"
+if [[ -n "$(mv_ MIGRATION_ADMISSION_RECEIPT_SHA256)" ]]; then
+  [[ "$(mv_ MIGRATION_ADMISSION_RECEIPT_SHA256)" =~ $sha64_re ]] \
+    || refuse "migration admission receipt sha256 must be 64 lowercase hex"
+fi
+if ((${#PENDING_MIGRATION_LIST[@]} > 0)) || [[ -n "$(mv_ MIGRATION_ADMISSION_RECEIPT)" ]]; then
+  [[ -n "$(mv_ MIGRATION_ADMISSION_RECEIPT)" && -n "$(mv_ MIGRATION_ADMISSION_RECEIPT_SHA256)" ]] \
+    || refuse "migration admission receipt and its sha256 pin are both required when PENDING_MIGRATIONS is not 'none'"
+  [[ "$(mv_ MIGRATION_ADMISSION_RECEIPT)" == /* ]] \
+    || refuse "migration admission receipt path must be absolute"
+fi
+for n_key in MAX_LOAD1_X100 MIN_MEM_AVAILABLE_KB MIN_DISK_AVAIL_BYTES POLL_SECS MAX_WAIT_SECS HEALTH_TIMEOUT_SECS MAX_BACKUP_AGE_MINS; do
   [[ "$(mv_ "$n_key")" =~ ^[0-9]+$ && "$(mv_ "$n_key")" -ge 1 ]] || refuse "$n_key must be a positive integer"
 done
 [[ "$(mv_ STABLE_POLLS)" =~ ^[0-9]+$ && "$(mv_ STABLE_POLLS)" -ge 2 ]] \
@@ -374,6 +409,30 @@ compose_gate() { # MODE(candidate|rollback) — compose hash + resolved service
   log "ok: compose file, service image, service user and mount destinations pinned"
 }
 
+pre_restart_pin_gate() {
+  # The exact pre-restart-check drain.sh restart will run (its path is
+  # pinned to this helper set below) must hash to the manifest pin. A
+  # success stub or a swapped check cannot satisfy this.
+  local got
+  got="$(sha256sum < "$HELPERS_DIR/pre-restart-check.sh" 2>/dev/null | cut -d' ' -f1)"
+  [[ "$got" == "$(mv_ PRE_RESTART_CHECK_SHA256)" ]] \
+    || refuse "pre-restart-check $HELPERS_DIR/pre-restart-check.sh sha256 $got does not match the pinned PRE_RESTART_CHECK_SHA256"
+  log "ok: pre-restart-check digest pinned"
+}
+
+migration_admission_gate() {
+  # Consumes the out-of-band migration admission receipt by content pin
+  # only: the receipt's decision itself belongs to its issuing authority
+  # and is never parsed, executed or waived here.
+  ((${#PENDING_MIGRATION_LIST[@]} == 0)) && [[ -z "$(mv_ MIGRATION_ADMISSION_RECEIPT)" ]] && return 0
+  local receipt="$(mv_ MIGRATION_ADMISSION_RECEIPT)"
+  [[ -f "$receipt" && ! -L "$receipt" ]] \
+    || refuse "migration admission receipt missing or a symlink: $receipt"
+  [[ "$(sha256sum < "$receipt" | cut -d' ' -f1)" == "$(mv_ MIGRATION_ADMISSION_RECEIPT_SHA256)" ]] \
+    || refuse "migration admission receipt hash does not match its pinned sha256: $receipt"
+  log "ok: migration admission receipt pinned for pending migrations: $(mv_ PENDING_MIGRATIONS)"
+}
+
 bindings_gate() { # MODE(candidate|rollback) EXPECTED_RUNNING_ID(may be "")
   local mode="$1" expected_running="${2:-}"
   local image image_id entry_sha
@@ -391,6 +450,8 @@ bindings_gate() { # MODE(candidate|rollback) EXPECTED_RUNNING_ID(may be "")
     "$HELPERS_DIR/sandbox-canary.sh" "$HELPERS_DIR/migration_gate.py" \
     "$HELPERS_DIR/check-plugin-inventory.py"
   log "ok: helper set carries no reachable ownership-change command"
+  pre_restart_pin_gate
+  migration_admission_gate
 
   compose_gate "$mode"
 
@@ -498,10 +559,19 @@ run_phases() {
     # can run for hours, and drain.sh's own compose_check does not pin
     # the compose hash, service user or mount set.
     compose_gate candidate
+    # Same re-judgement for the two restart-time consumptions: the bound
+    # pre-restart-check drain.sh is about to run, and the migration
+    # admission receipt for the boot that applies pending migrations.
+    # The backup phase above already completed and TOC/checksum-validated
+    # a fresh dump; drain.sh restart re-verifies its checksum and the
+    # pinned freshness bound immediately before any recreate/migration.
+    pre_restart_pin_gate
+    migration_admission_gate
     window_gate; pressure_gate
     local -a rargs=(--image "$(mv_ IMAGE)" --expect-image-id "$(mv_ EXPECT_IMAGE_ID)"
       --expect-commit "$(mv_ EXPECT_COMMIT)" --expect-build-marker "$(mv_ BUILD_MARKER)"
       --health-timeout-secs "$(mv_ HEALTH_TIMEOUT_SECS)"
+      --max-backup-age-mins "$(mv_ MAX_BACKUP_AGE_MINS)"
       --expect-file "$(mv_ ENTRYPOINT_PATH):$(mv_ ENTRYPOINT_SHA256)")
     local xf t
     for xf in "${EXPECT_FILE_LIST[@]}"; do rargs+=(--expect-file "$xf"); done

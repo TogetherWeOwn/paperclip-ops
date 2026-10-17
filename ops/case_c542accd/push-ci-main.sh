@@ -118,6 +118,17 @@ FALLBACK="$(jq -r '.fallback_s' "$BASELINES_FILE" 2>/dev/null)" \
 # would refuse every push for that repo. Repos without dots keep unchanged keys.
 slug_of() { local s="${1//\//-}"; tr '[:upper:]' '[:lower:]' <<<"${s//./-}"; }
 
+# Slugs are not injective: '.' and '/' both map to '-', so distinct repos
+# (o/a.b vs o/a-b) would share one endpoint key and the last write would
+# silently mask a red main. Refuse upfront, before any health claim.
+_seen_slugs=","
+for repo in "${REPOS[@]}"; do
+  _slug="$(slug_of "$repo")"
+  [[ "$_seen_slugs" != *",${_slug},"* ]] \
+    || { echo "push-ci-main: refusing — GH_REPOS entries collide on endpoint slug '$_slug' (dots and dashes both map to '-')" >&2; exit 2; }
+  _seen_slugs+="${_slug},"
+done
+
 now="$(date +%s)"
 overall=0
 push_endpoint() {  # <key> <true|false> [reason]; records the round verdict
@@ -172,9 +183,13 @@ for repo in "${REPOS[@]}"; do
   # missing timestamp fails closed: an untimed check is not a fast check.
   breaches=()
   unreadable=0
-  tsv="$(jq -r '.check_runs[] | [.name, .status, (.conclusion // ""), (.started_at // ""), (.completed_at // "")] | @tsv' <<<"$payload" 2>/dev/null)" \
+  # Unit-separator rows: conclusion/timestamps are empty for live checks, and
+  # tab is IFS whitespace (empty fields collapse and shift the row left), so
+  # @tsv cannot carry this shape — join on \x1f, which never occurs in check
+  # fields, and split on the same byte to keep empty fields in place.
+  tsv="$(jq -r '.check_runs[] | [.name, .status, (.conclusion // ""), (.started_at // ""), (.completed_at // "")] | join("\u001f")' <<<"$payload" 2>/dev/null)" \
     || unreadable=1
-  while IFS=$'\t' read -r cname cstatus cconcl cstart cend; do
+  while IFS=$'\x1f' read -r cname cstatus cconcl cstart cend; do
     [[ -n "$cname" ]] || continue
     if [[ "$cconcl" == "skipped" || "$cconcl" == "neutral" ]]; then continue; fi
     baseline="$(jq -r --arg r "$repo" --arg n "$cname" \

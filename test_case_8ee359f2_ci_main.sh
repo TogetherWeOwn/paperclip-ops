@@ -14,16 +14,23 @@
 #   3. RUNTIME 2x — a completed duration strictly over 2x baseline pushes
 #      false naming the job; exactly 2x stays green (strictly-greater, not
 #      >=); skipped checks with impossible timestamps are excluded, never
-#      scored; an unlisted job breaches only past 2x the fallback.
+#      scored; an unlisted job breaches only past 2x the fallback. Live
+#      checks age the same way: a stale in-flight check pages naming
+#      "in-flight", while a young or future-started one (conclusion null)
+#      stays green — the empty conclusion must never collapse the row into
+#      "unparseable check timestamps" while CI runs on main.
 #   4. FAIL CLOSED — empty check-runs (the case_b730ec29 vacuous case), an
 #      unreadable API, garbage JSON, and unreadable/grossly-negative
 #      timestamps all push false, never healthy. A small negative span
-#      (-60s..0, a GitHub timestamp artefact on healthy mains) clamps to 0.
+#      (-60s..0, a GitHub timestamp artefact on healthy mains) clamps to 0;
+#      exactly -60 clamps green while -61 fails closed (span and age alike).
 #   5. RUNNER UNITS — one inactive unit pushes ci_runner-units false naming
 #      it, exit 1; all active pushes true.
 #   6. REFUSALS — missing GATUS_URL, missing GH_REPOS, a bad factor, an
-#      unreadable baselines file, and missing gh/systemctl binaries each
-#      exit 2 with zero pushes (the 10m heartbeat miss then pages).
+#      unreadable baselines file, missing gh/systemctl binaries, and
+#      colliding endpoint slugs (o/a.b vs o/a-b: dots and dashes both map
+#      to '-', so the last write would mask a red main) each exit 2 with
+#      zero pushes (the 10m heartbeat miss then pages).
 #   7. NON-DISCLOSURE — the Bearer token never reaches curl argv; it
 #      travels in the 0600 curl config only.
 #   8. DEFINITIONS — gatus-endpoints.yaml carries thirteen endpoints
@@ -213,6 +220,31 @@ export GH_FIXTURE_FILE="$FIX/inflight.json"
 rc="$(run_tool)"
 [[ "$rc" == "1" ]] && ok "3j. stale in-flight check pages" || bad "3j. in-flight" "got $rc"
 [[ "$(pushes_for ci_main-o-r)" == "true" ]] && ok "3k. live checks never redden the conclusion" || bad "3k. main push" "$(cat "$CFG_LOG")"
+cfg_has "in-flight" && ok "3j2. stale in-flight reason names in-flight ageing" || bad "3j2. in-flight reason" "$(cat "$CFG_LOG")"
+# Young live checks (conclusion null) stay green: the empty conclusion must
+# not collapse the row into "unparseable check timestamps" while CI runs.
+mk_inflight() { # <outfile> <started_at-offset-secs> writes a live Offline-suites + healthy pr-lint fixture
+python3 - "$1" "$2" <<'PY'
+import json, sys, time
+out, offset = sys.argv[1], int(sys.argv[2])
+start = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() + offset))
+json.dump({"check_runs": [
+  {"name": "Offline suites", "status": "in_progress", "conclusion": None, "started_at": start, "completed_at": None},
+  {"name": "pr-lint", "status": "completed", "conclusion": "success", "started_at": "2026-10-03T19:25:46Z", "completed_at": "2026-10-03T19:25:54Z"}],
+  "total_count": 2}, open(out, "w"))
+PY
+}
+mk_inflight "$WORK/inflight-young.json" -30
+export GH_FIXTURE_FILE="$WORK/inflight-young.json"
+rc="$(run_tool)"
+[[ "$rc" == "0" ]] && ok "3l. young in-flight check stays green" || bad "3l. young in-flight" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "true" ]] && ok "3m. young in-flight runtime pushed true" || bad "3m. young runtime" "$(cat "$CFG_LOG")"
+# Future-started live check (clock skew +30s): age clamps to 0, stays green.
+mk_inflight "$WORK/inflight-future.json" 30
+export GH_FIXTURE_FILE="$WORK/inflight-future.json"
+rc="$(run_tool)"
+[[ "$rc" == "0" ]] && ok "3n. future-started in-flight check stays green" || bad "3n. future in-flight" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "true" ]] && ok "3o. future in-flight runtime pushed true" || bad "3o. future runtime" "$(cat "$CFG_LOG")"
 
 # --- §4 fail closed -------------------------------------------------------------
 export GH_FIXTURE_FILE="$FIX/empty.json"
@@ -240,6 +272,27 @@ export GH_FIXTURE_FILE="$FIX/negative-span.json"
 rc="$(run_tool)"
 [[ "$rc" == "0" ]] && ok "4h. small negative span exits 0" || bad "4h. negative-span exit" "got $rc $(cat "$CFG_LOG")"
 [[ "$(pushes_for ci_runtime-o-r)" == "true" ]] && ok "4i. small negative span runtime pushed true" || bad "4i. negative-span runtime" "$(cat "$CFG_LOG")"
+# Clamp boundaries: exactly -60s clamps green, -61s fails closed (span …).
+export GH_FIXTURE_FILE="$FIX/span-minus-60.json"
+rc="$(run_tool)"
+[[ "$rc" == "0" ]] && ok "4h2. span exactly -60s clamps green" || bad "4h2. span -60 exit" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "true" ]] && ok "4h3. span -60s runtime pushed true" || bad "4h3. span -60 runtime" "$(cat "$CFG_LOG")"
+export GH_FIXTURE_FILE="$FIX/span-minus-61.json"
+rc="$(run_tool)"
+[[ "$rc" == "1" ]] && ok "4h4. span -61s fails closed" || bad "4h4. span -61 exit" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "false" ]] && ok "4h5. span -61s runtime pushed false" || bad "4h5. span -61 runtime" "$(cat "$CFG_LOG")"
+cfg_has "unparseable check timestamps" && ok "4h6. span -61s reason names untimed checks" || bad "4h6. span -61 reason" "$(cat "$CFG_LOG")"
+# … and age: a live check started 60s in the future clamps green, 61s fails.
+mk_inflight "$WORK/inflight-age-60.json" 60
+export GH_FIXTURE_FILE="$WORK/inflight-age-60.json"
+rc="$(run_tool)"
+[[ "$rc" == "0" ]] && ok "4h7. age -60s clamps green" || bad "4h7. age -60 exit" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "true" ]] && ok "4h8. age -60s runtime pushed true" || bad "4h8. age -60 runtime" "$(cat "$CFG_LOG")"
+mk_inflight "$WORK/inflight-age-61.json" 61
+export GH_FIXTURE_FILE="$WORK/inflight-age-61.json"
+rc="$(run_tool)"
+[[ "$rc" == "1" ]] && ok "4h9. age -61s fails closed" || bad "4h9. age -61 exit" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "false" ]] && ok "4h10. age -61s runtime pushed false" || bad "4h10. age -61 runtime" "$(cat "$CFG_LOG")"
 
 # --- §5 runner units --------------------------------------------------------------
 export GH_FIXTURE_FILE="$FIX/healthy.json" SYSTEMCTL_FIXTURE=one-dead
@@ -282,6 +335,11 @@ set +e; env PATH="$WORK/bin:/usr/bin:/bin" HOME="$HOME" TMPDIR="$WORK" \
   GH_BIN="$WORK/bin/gh" SYSTEMCTL_BIN="$WORK/bin/no-such-systemctl" \
   CI_BASELINES_FILE="$WORK/baselines.json" bash "$TOOL" >/dev/null 2>&1; rc=$?; set -e
 [[ "$rc" == "2" ]] && [[ ! -s "$CFG_LOG" ]] && ok "6d. missing systemctl refuses exit 2" || bad "6d. systemctl refusal" "rc=$rc"
+# Dots and dashes both map to '-': distinct repos sharing one endpoint key
+# would let the last write mask a red main, so the run refuses upfront.
+export GH_FIXTURE_FILE="$FIX/healthy.json"
+rc="$(run_tool GH_REPOS="o/a.b o/a-b")"
+[[ "$rc" == "2" ]] && [[ ! -s "$CFG_LOG" ]] && ok "6e. slug collision refuses (exit 2, zero pushes)" || bad "6e. slug collision" "rc=$rc pushes=$(grep -c endpoints/ "$CFG_LOG" || true)"
 
 # --- §7 non-disclosure -----------------------------------------------------------
 : > "$ARGV_LOG"; : > "$CFG_LOG"

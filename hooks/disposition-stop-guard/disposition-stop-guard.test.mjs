@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { spawnSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -15,15 +15,22 @@ import { fileURLToPath } from "node:url";
 import {
   DEFAULT_MODE,
   MAX_HANDBACKS_DEFAULT,
+  REQUEST_TIMEOUT_MS_DEFAULT,
+  cacheFileFor,
   classifyCard,
   countPendingInteractions,
   deadlineMs,
   decide,
+  deleteCardCache,
   handbackReason,
   isMonitorExhausted,
+  projectCardForCache,
+  readCardCache,
   readHandbacks,
+  requestTimeoutMs,
   resolveMode,
   unresolvedBlockers,
+  writeCardCache,
   writeHandbacks,
 } from "./disposition-stop-guard.mjs";
 import {
@@ -81,13 +88,14 @@ const exhausted = (extra = {}) =>
 const NO_EXTRAS = { pendingInteractions: 0 };
 const verdict = (c, extra = NO_EXTRAS) => classifyCard(c, { ...CTX, ...extra });
 
-/** An env that cannot reach the shared decision log or the real run state. */
+/** An env that cannot reach the shared decision log, the real run state, or the shared card cache. */
 function isolatedEnv(dir, extra = {}) {
   return {
     PAPERCLIP_RUN_ID: RUN,
     PAPERCLIP_AGENT_ID: AGENT,
     PAPERCLIP_TASK_ID: TASK,
     DISPOSITION_STOP_GUARD_STATE_DIR: join(dir, "state"),
+    DISPOSITION_STOP_GUARD_CACHE_DIR: join(dir, "cache"),
     DISPOSITION_STOP_GUARD_LOG: join(dir, "decisions.jsonl"),
     DISPOSITION_STOP_GUARD_MODE: "enforce",
     ...extra,
@@ -436,12 +444,19 @@ test("a card that is fine never waits for the interactions read, and a failing i
     // Both reads were started, card first.
     assert.deepEqual(fine.calls, [`/api/issues/${TASK}`, `/api/issues/${TASK}/interactions`]);
     // A rejecting interactions read with a failing card read is not an unhandled rejection.
-    const failing = async (path) => {
-      if (path.endsWith("/interactions")) throw new Error("late failure");
-      return { ok: false, status: 502 };
-    };
-    assert.equal((await decide(STOP, isolatedEnv(dir), { ...base, fetchJson: failing })).why, "card-unreadable");
-    await new Promise((resolve) => setImmediate(resolve));
+    // A fresh dir: the first half cached the fine card above, and the cache must not hide
+    // the network failure asserted here.
+    const dir2 = scratch();
+    try {
+      const failing = async (path) => {
+        if (path.endsWith("/interactions")) throw new Error("late failure");
+        return { ok: false, status: 502 };
+      };
+      assert.equal((await decide(STOP, isolatedEnv(dir2), { ...base, fetchJson: failing })).why, "card-unreadable");
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      rmSync(dir2, { recursive: true, force: true });
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1070,6 +1085,434 @@ test("installer CLI accepts a container path absent on disk when its mapped host
     const lone = spawnSync("node", [INSTALLER, "install", "--settings", settings, "--script", hostScript, "--hook-command", container, "--container-prefix", "/paperclip", "--apply"], { encoding: "utf8", env });
     assert.equal(lone.status, 2);
     assert.match(lone.stderr, /must be passed together/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- Stop budget (p95 <= 1 s)
+
+test("requestTimeoutMs defaults to 900 ms, env wins over config, clamps and falls back", () => {
+  assert.equal(REQUEST_TIMEOUT_MS_DEFAULT, 900);
+  assert.equal(requestTimeoutMs({}, {}), 900);
+  assert.equal(requestTimeoutMs({}, { requestTimeoutMs: 250 }), 250);
+  assert.equal(requestTimeoutMs({ DISPOSITION_STOP_GUARD_REQUEST_TIMEOUT_MS: "400" }, { requestTimeoutMs: 250 }), 400);
+  assert.equal(requestTimeoutMs({ DISPOSITION_STOP_GUARD_REQUEST_TIMEOUT_MS: "1" }, {}), 50);
+  assert.equal(requestTimeoutMs({ DISPOSITION_STOP_GUARD_REQUEST_TIMEOUT_MS: "999999" }, {}), 8000);
+  assert.equal(requestTimeoutMs({ DISPOSITION_STOP_GUARD_REQUEST_TIMEOUT_MS: "junk" }, {}), 900);
+});
+
+test("card cache round-trips, isolates by task and ignores corrupt entries", () => {
+  const dir = scratch();
+  try {
+    const env = isolatedEnv(dir);
+    assert.equal(readCardCache(env, TASK), null);
+    assert.equal(writeCardCache(env, TASK, { card: card(), pendingInteractions: 0 }), true);
+    const hit = readCardCache(env, TASK);
+    assert.equal(hit.card.identifier, TICKET);
+    assert.equal(hit.pendingInteractions, 0);
+    assert.ok(hit.ageMs >= 0 && hit.ageMs < 5000);
+    assert.equal(readCardCache(env, "another-task"), null, "entries are keyed by task");
+    assert.equal(cacheFileFor(env, TASK).file.endsWith(".json"), true);
+    writeFileSync(cacheFileFor(env, TASK).file, "{ corrupt");
+    assert.equal(readCardCache(env, TASK), null);
+    assert.equal(writeCardCache(env, TASK, { card: null }), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a fresh allow-cache hit skips the network, both modes marked cached", async () => {
+  for (const mode of ["enforce", "observe"]) {
+    const dir = scratch();
+    try {
+      const env = isolatedEnv(dir, { DISPOSITION_STOP_GUARD_MODE: mode });
+      assert.equal(writeCardCache(env, TASK, { card: card({ status: "done" }) }), true);
+      const calls = [];
+      const fetchJson = async (path) => {
+        calls.push(path);
+        return { ok: false, status: 500 };
+      };
+      const out = await decide(STOP, env, { fetchJson, config: {}, killSwitchPresent: () => false });
+      assert.deepEqual(calls, [], "no network on a fresh allow hit");
+      assert.equal(out.action, "allow");
+      assert.equal(out.why, "status-done");
+      assert.equal(out.cached, true);
+      assert.equal(out.wouldBlock, undefined);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a fresh block-cache entry is never served: the Stop re-reads and drops it", async () => {
+  for (const mode of ["enforce", "observe"]) {
+    const dir = scratch();
+    try {
+      const env = isolatedEnv(dir, { DISPOSITION_STOP_GUARD_MODE: mode });
+      assert.equal(writeCardCache(env, TASK, { card: card(), pendingInteractions: 0 }), true);
+      const api = API(card({ status: "done" }));
+      const out = await decide(STOP, env, { fetchJson: api.fetchJson, config: {}, killSwitchPresent: () => false });
+      assert.ok(api.calls.length > 0, "the network was used instead of the cached block");
+      assert.equal(out.action, "allow");
+      assert.equal(out.why, "status-done");
+      assert.equal(out.cached, undefined);
+      assert.equal(readCardCache(env, TASK) === null || readCardCache(env, TASK).card.status === "done", true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("the card cache stores only the classifier shape: no title or description", () => {
+  const dir = scratch();
+  try {
+    const env = isolatedEnv(dir);
+    const full = {
+      ...card(),
+      title: "secret title",
+      description: "sensitive operator text that must never touch tmp",
+      notes: "extra",
+    };
+    assert.equal(writeCardCache(env, TASK, { card: full, pendingInteractions: 0 }), true);
+    const raw = JSON.parse(readFileSync(cacheFileFor(env, TASK).file, "utf8"));
+    assert.equal(raw.card.title, undefined);
+    assert.equal(raw.card.description, undefined);
+    assert.equal(raw.card.notes, undefined);
+    assert.equal(raw.card.identifier, TICKET);
+    assert.equal(raw.card.status, "in_progress");
+    const projected = projectCardForCache(full);
+    assert.equal(projected.title, undefined);
+    assert.equal(projected.description, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writing the cache prunes expired entries in the same dir", () => {
+  const dir = scratch();
+  try {
+    const env = isolatedEnv(dir, { DISPOSITION_STOP_GUARD_CACHE_FRESH_MS: "1000", DISPOSITION_STOP_GUARD_CACHE_STALE_MS: "2000" });
+    const { dir: cacheDir } = cacheFileFor(env, TASK);
+    assert.equal(writeCardCache(env, TASK, { card: card({ status: "done" }) }), true);
+    const staleFile = join(cacheDir, "card-cache.old-task.json");
+    writeFileSync(staleFile, JSON.stringify({ v: 1, taskId: "old-task", ts: Date.now(), card: card({ status: "done" }) }));
+    const old = Date.now() - 60 * 1000;
+    utimesSync(staleFile, old / 1000, old / 1000);
+    assert.equal(writeCardCache(env, TASK, { card: card({ status: "done" }) }), true);
+    assert.equal(existsSync(staleFile), false, "expired entry pruned on write");
+    assert.notEqual(readCardCache(env, TASK), null, "fresh entry kept");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a fresh cache held by another run, or owned by another agent, is ignored", async () => {
+  const dir = scratch();
+  try {
+    const env = isolatedEnv(dir);
+    assert.equal(writeCardCache(env, TASK, { card: card({ executionRunId: "another-run" }), pendingInteractions: 0 }), true);
+    const api = API(card());
+    const out = await decide(STOP, env, { fetchJson: api.fetchJson, config: {}, killSwitchPresent: () => false });
+    assert.equal(out.cached, undefined);
+    assert.equal(out.action, "block");
+    assert.equal(api.calls.length, 2, "the network was used");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const dir2 = scratch();
+  try {
+    const env2 = isolatedEnv(dir2);
+    assert.equal(writeCardCache(env2, TASK, { card: card({ assigneeAgentId: "someone-else" }), pendingInteractions: 0 }), true);
+    const api2 = API(card());
+    const out2 = await decide(STOP, env2, { fetchJson: api2.fetchJson, config: {}, killSwitchPresent: () => false });
+    assert.equal(out2.cached, undefined);
+    assert.equal(out2.action, "block");
+  } finally {
+    rmSync(dir2, { recursive: true, force: true });
+  }
+});
+
+test("a stale allow-cache covers a timed-out card read without touching card-unreadable", async () => {
+  const dir = scratch();
+  try {
+    // Fresh window closed, stale window open: the network is slow, the allow cache decides.
+    const env = isolatedEnv(dir, { DISPOSITION_STOP_GUARD_CACHE_FRESH_MS: "0" });
+    assert.equal(writeCardCache(env, TASK, { card: card({ status: "done" }) }), true);
+    const timeout = async () => ({ ok: false, status: 0, timeout: true });
+    const out = await decide(STOP, env, { fetchJson: timeout, config: {}, killSwitchPresent: () => false });
+    assert.equal(out.action, "allow");
+    assert.equal(out.why, "status-done");
+    assert.equal(out.cached, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a stale block-cache never blocks on a slow read: it fails open and drops the entry", async () => {
+  const dir = scratch();
+  try {
+    const env = isolatedEnv(dir, { DISPOSITION_STOP_GUARD_CACHE_FRESH_MS: "0" });
+    assert.equal(writeCardCache(env, TASK, { card: card(), pendingInteractions: 0 }), true);
+    const timeout = async () => ({ ok: false, status: 0, timeout: true });
+    const out = await decide(STOP, env, { fetchJson: timeout, config: {}, killSwitchPresent: () => false });
+    assert.equal(out.action, "allow");
+    assert.equal(out.why, "card-timeout");
+    assert.equal(out.timeout, true);
+    assert.equal(out.cached, undefined);
+    assert.equal(readCardCache(env, TASK), null, "stale block entry dropped");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a stale cache never overrides an authoritative 4xx, and never blocks on a 5xx", async () => {
+  for (const status of [403, 503]) {
+    const dir = scratch();
+    try {
+      const env = isolatedEnv(dir, { DISPOSITION_STOP_GUARD_CACHE_FRESH_MS: "0" });
+      assert.equal(writeCardCache(env, TASK, { card: card(), pendingInteractions: 0 }), true);
+      const out = await decide(STOP, env, { fetchJson: async () => ({ ok: false, status }), config: {}, killSwitchPresent: () => false });
+      assert.equal(out.action, "allow", `status ${status}`);
+      assert.equal(out.why, "card-unreadable", `status ${status}`);
+      assert.equal(out.cached, undefined, `status ${status}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  // A stale allow entry still covers a 5xx.
+  const dir = scratch();
+  try {
+    const env = isolatedEnv(dir, { DISPOSITION_STOP_GUARD_CACHE_FRESH_MS: "0" });
+    assert.equal(writeCardCache(env, TASK, { card: card({ status: "done" }) }), true);
+    const out = await decide(STOP, env, { fetchJson: async () => ({ ok: false, status: 503 }), config: {}, killSwitchPresent: () => false });
+    assert.equal(out.action, "allow");
+    assert.equal(out.why, "status-done");
+    assert.equal(out.cached, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("without cache a timed-out card read is its own class, a 500 stays card-unreadable", async () => {
+  const dir = scratch();
+  try {
+    const env = isolatedEnv(dir);
+    const base = { config: {}, killSwitchPresent: () => false };
+    const timedOut = await decide(STOP, env, { ...base, fetchJson: async () => ({ ok: false, status: 0, timeout: true }) });
+    assert.equal(timedOut.action, "allow");
+    assert.equal(timedOut.why, "card-timeout");
+    assert.equal(timedOut.timeout, true);
+    const failed = await decide(STOP, env, { ...base, fetchJson: async () => ({ ok: false, status: 500 }) });
+    assert.equal(failed.action, "allow");
+    assert.equal(failed.why, "card-unreadable");
+    assert.equal(failed.timeout, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a timed-out interactions read falls back to the stale count, else its own class", async () => {
+  const dir = scratch();
+  try {
+    const base = { config: {}, killSwitchPresent: () => false };
+    // Stale count 1 (pending interaction): the slow read still allows via the live path.
+    const withStale = isolatedEnv(dir, { DISPOSITION_STOP_GUARD_CACHE_FRESH_MS: "0" });
+    assert.equal(writeCardCache(withStale, TASK, { card: card(), pendingInteractions: 1 }), true);
+    const slowInteractions = async (path) =>
+      path.endsWith("/interactions") ? { ok: false, status: 0, timeout: true } : { ok: true, status: 200, body: card() };
+    const out = await decide(STOP, withStale, { ...base, fetchJson: slowInteractions });
+    assert.equal(out.action, "allow");
+    assert.equal(out.why, "interaction-pending");
+    assert.equal(out.cached, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const dir2 = scratch();
+  try {
+    const base = { config: {}, killSwitchPresent: () => false };
+    const slowInteractions = async (path) =>
+      path.endsWith("/interactions") ? { ok: false, status: 0, timeout: true } : { ok: true, status: 200, body: card() };
+    const out2 = await decide(STOP, isolatedEnv(dir2), { ...base, fetchJson: slowInteractions });
+    assert.equal(out2.action, "allow");
+    assert.equal(out2.why, "interactions-timeout");
+    assert.equal(out2.timeout, true);
+  } finally {
+    rmSync(dir2, { recursive: true, force: true });
+  }
+});
+
+test("a block is never cached: the Stop after a hand-back re-reads the fixed card", async () => {
+  const dir = scratch();
+  try {
+    const env = isolatedEnv(dir);
+    const api = API(card());
+    const first = await decide(STOP, env, { fetchJson: api.fetchJson, config: {}, killSwitchPresent: () => false });
+    assert.equal(first.action, "block");
+    assert.equal(readCardCache(env, TASK), null, "blocks are not written to the cache");
+    // The agent does what the hand-back asks (done) and stops again inside the
+    // fresh window: the second Stop must re-read and allow, not re-block cached.
+    const fixed = API(card({ status: "done" }));
+    const second = await decide({ ...STOP, stop_hook_active: true }, env, { fetchJson: fixed.fetchJson, config: {}, killSwitchPresent: () => false });
+    assert.ok(fixed.calls.length > 0, "the second Stop re-read instead of serving cache");
+    assert.equal(second.action, "allow");
+    assert.equal(second.why, "status-done");
+    assert.equal(second.cached, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a fresh cross-run cache entry without a count never blocks a fixed card", async () => {
+  // Written by another run's Stop (allow other-run-holds-card caches the card
+  // without a count): this run's Stop classifies it as need-extras and takes
+  // the light interactions read. The cached block verdict must fall through to
+  // a full re-read instead of re-blocking the card this run just set to done.
+  const dir = scratch();
+  try {
+    const env = isolatedEnv(dir);
+    assert.equal(writeCardCache(env, TASK, { card: card() }), true);
+    const api = API(card({ status: "done" }));
+    const out = await decide(STOP, env, { fetchJson: api.fetchJson, config: {}, killSwitchPresent: () => false });
+    assert.ok(api.calls.length > 1, "the cached block fell through to a full re-read");
+    assert.equal(out.action, "allow");
+    assert.equal(out.why, "status-done");
+    assert.equal(out.cached, undefined);
+    assert.equal(readCardCache(env, TASK)?.card.status, "done");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a fresh cross-run cache entry without a count fails open on a timed-out card read", async () => {
+  // Same entry, but the card read times out while the light interactions read
+  // succeeds with a zero count: a stale card plus a fresh count is still a
+  // stale card, so the Stop fails open as card-timeout instead of blocking.
+  const dir = scratch();
+  try {
+    const env = isolatedEnv(dir);
+    assert.equal(writeCardCache(env, TASK, { card: card() }), true);
+    const fetchJson = async (path) => {
+      if (path.endsWith("/interactions")) return { ok: true, status: 200, body: [] };
+      return { ok: false, status: 0, timeout: true };
+    };
+    // The stale block verdict must never be written back: without the guard the
+    // fresh count is remembered before the fall-through fail-open deletes it.
+    // writeCardCache here is the module import above, wrapped to record calls.
+    const writes = [];
+    const out = await decide(STOP, env, {
+      fetchJson,
+      config: {},
+      killSwitchPresent: () => false,
+      writeCardCache: (...args) => {
+        writes.push(args);
+        return writeCardCache(...args);
+      },
+    });
+    assert.equal(out.action, "allow");
+    assert.equal(out.why, "card-timeout");
+    assert.equal(out.timeout, true);
+    assert.equal(out.cached, undefined);
+    assert.deepEqual(writes, [], "the stale block verdict is never re-cached");
+    assert.equal(readCardCache(env, TASK), null, "the stale block entry is dropped, never re-cached");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a successful allow decision is cached for the next Stop of the same run", async () => {
+  const dir = scratch();
+  try {
+    const env = isolatedEnv(dir);
+    const api = API(card({ status: "done" }));
+    const first = await decide(STOP, env, { fetchJson: api.fetchJson, config: {}, killSwitchPresent: () => false });
+    assert.equal(first.action, "allow");
+    const hit = readCardCache(env, TASK);
+    assert.equal(hit.card.identifier, TICKET);
+    // The next Stop is served from cache without touching the network.
+    const calls = [];
+    const never = async (path) => {
+      calls.push(path);
+      throw new Error("must not be called");
+    };
+    const second = await decide({ ...STOP, stop_hook_active: true }, env, { fetchJson: never, config: {}, killSwitchPresent: () => false });
+    assert.equal(second.action, "allow");
+    assert.equal(second.why, "status-done");
+    assert.equal(second.cached, true);
+    assert.deepEqual(calls, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the read budget reaches both reads", async () => {
+  const dir = scratch();
+  try {
+    const seen = [];
+    const fetchJson = async (path, timeoutMs) => {
+      seen.push([path, timeoutMs]);
+      if (path.endsWith("/interactions")) return { ok: true, status: 200, body: [] };
+      return { ok: true, status: 200, body: card({ status: "done" }) };
+    };
+    const env = isolatedEnv(dir, { DISPOSITION_STOP_GUARD_REQUEST_TIMEOUT_MS: "321" });
+    const out = await decide(STOP, env, { fetchJson, config: {}, killSwitchPresent: () => false });
+    assert.equal(out.why, "status-done");
+    assert.deepEqual(seen, [[`/api/issues/${TASK}`, 321], [`/api/issues/${TASK}/interactions`, 321]]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: a hanging API with an empty cache fails open on the read budget", async () => {
+  const dir = scratch();
+  try {
+    await withStub(() => "hang", async (url) => {
+      const env = { ...isolatedEnv(dir), PAPERCLIP_API_URL: url, PAPERCLIP_API_KEY: "k" };
+      const out = await runHook(STOP, env);
+      assert.equal(out.status, 0);
+      assert.equal(out.stdout, "");
+      assert.ok(out.ms < 4000, `took ${out.ms} ms`);
+      const entry = JSON.parse(readFileSync(join(dir, "decisions.jsonl"), "utf8").trim());
+      assert.equal(entry.why, "card-timeout");
+      assert.equal(entry.timeout, true);
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: a hanging API with a fresh allow-cache decides from cache instead of waiting", async () => {
+  const dir = scratch();
+  try {
+    await withStub(() => "hang", async (url) => {
+      const env = { ...isolatedEnv(dir), PAPERCLIP_API_URL: url, PAPERCLIP_API_KEY: "k" };
+      assert.equal(writeCardCache(env, TASK, { card: card({ status: "done" }) }), true);
+      const out = await runHook(STOP, env);
+      assert.equal(out.status, 0);
+      assert.equal(out.stdout, "");
+      assert.ok(out.ms < 2000, `took ${out.ms} ms`);
+      const entry = JSON.parse(readFileSync(join(dir, "decisions.jsonl"), "utf8").trim());
+      assert.equal(entry.cached, true);
+      assert.equal(entry.why, "status-done");
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: a hanging API with a fresh block-cache fails open instead of blocking cached", async () => {
+  const dir = scratch();
+  try {
+    await withStub(() => "hang", async (url) => {
+      const env = { ...isolatedEnv(dir), PAPERCLIP_API_URL: url, PAPERCLIP_API_KEY: "k" };
+      assert.equal(writeCardCache(env, TASK, { card: card(), pendingInteractions: 0 }), true);
+      const out = await runHook(STOP, env);
+      assert.equal(out.status, 0);
+      assert.equal(out.stdout, "");
+      const entry = JSON.parse(readFileSync(join(dir, "decisions.jsonl"), "utf8").trim());
+      assert.equal(entry.why, "card-timeout");
+      assert.equal(entry.cached !== true, true);
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

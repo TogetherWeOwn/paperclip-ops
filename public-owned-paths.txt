@@ -1,6 +1,6 @@
 # public-owned-paths.txt — freeze guard list (C4).
 # Every path below now lives in TogetherWeOwn/paperclip-operator-toolkit.
-# Generated from vendor/toolkit-files.txt (dest side, pinned main-533c7ae2) minus
+# Generated from vendor/toolkit-files.txt (dest side, pinned main-d0324d0) minus
 # still-tracked private survivors and plugins/model-selection/ (covered by
 # the model-selection-moved guard). Do not edit by hand: re-generate with
 #   cut -d'|' -f1 vendor/toolkit-files.txt | sort -u | grep -v '^plugins/model-selection/' | comm -23 - <(comm -12 <(git ls-tree -r --name-only origin/main | sort -u) <(git ls-files | sort -u))

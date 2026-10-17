@@ -11,14 +11,14 @@
 # Restored files are byte-identical to the pinned commit by verification.
 #
 # Usage: bash scripts/sync-toolkit.sh [--tag vX.Y.Z] [--commit <sha>]
-#        (default: main-533c7ae2 resolved through the pins file; a full-SHA
+#        (default: main-d0324d0 resolved through the pins file; a full-SHA
 #        fallback label, since no release tag contains the fix yet)
 # Env:   TOOLKIT_TAG overrides the default tag; TOOLKIT_COMMIT overrides the
 #        commit lookup; TOOLKIT_SHA256 overrides the expected checksum;
 #        TOOLKIT_URL overrides the archive base URL.
 set -euo pipefail
 
-TAG="${TOOLKIT_TAG:-main-533c7ae2}"
+TAG="${TOOLKIT_TAG:-main-d0324d0}"
 COMMIT="${TOOLKIT_COMMIT:-}"
 SHA256="${TOOLKIT_SHA256:-}"
 

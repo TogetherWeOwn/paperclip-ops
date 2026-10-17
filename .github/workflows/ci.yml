@@ -6,7 +6,7 @@ name: CI
 # green badge anywhere: a CI that looks like it tests everything while testing
 # part of it is worse than one that says which part.
 #
-#   REPO SPLIT (C5e cutover): default restoration is immutable toolkit main-533c7ae2.
+#   REPO SPLIT (C5e cutover): default restoration is immutable toolkit main-d0324d0.
 #   Only 19 complete portable producers with exact-pin suite, dependency and
 #   hosted-command proof are removed from 247 accepted runnable suites steps.
 #   The 228 retained producers include private/diverged/unproved behavior;

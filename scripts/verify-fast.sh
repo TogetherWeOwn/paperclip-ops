@@ -49,7 +49,7 @@ elif [[ "${1:-}" == "--list" ]]; then
   echo "      review-error-rerequest, backlog-promoter, board-jobs-bounds, focus-gate-bounds, pr-supply, flow-guard, host-ok, connection-intent-sweeper, hide-noop-reconcile, nongit-quarantine-custody,"
   echo "      guard-state (atomic-state, stuck-run-state, idle-waiter-state, owner-guard-state), feed-contract,"
   echo "      survival-atomic-write, corpus atomic-write, observational-collect-atomic-write, pr-hygiene owner-match, live-run guard, review-route, arm-import, merge-survival-atomic-write, operator-workspace reconciler and sweep, operator copy-risk gate,"
-  echo "      translator-fixture (pinned tsc), deploy-window wrapper, deploy-window manifest gate, staged-tier0-drift gate,"
+  echo "      translator-fixture (pinned tsc), deploy-window wrapper, deploy-window manifest gate, activation contract (paperclip-upgrade), staged-tier0-drift gate,"
   echo "      migration-safety gates (timeout-preamble, squawk, rehearsal, drift-gate),"
   echo "      org-snapshot offline suite"
   exit 0
@@ -130,6 +130,9 @@ node --test hooks/muse-stop-guard/muse-stop-guard.test.mjs || fail "muse-stop-gu
 node --test hooks/disposition-stop-guard/disposition-stop-guard.test.mjs hooks/disposition-stop-guard/measure/census.test.mjs \
   || fail "disposition-stop-guard suites failed"
 ./test_deploy_window_open.sh || fail "deploy-window wrapper suite failed"
+# Activation contract: exclusive lock, verify-only hardening, pinned
+# bindings. Hermetic: stub docker and stub drain.sh, temp fixtures only.
+./paperclip-upgrade/test-activation-offline.sh || fail "activation contract suite failed"
 python3 -m unittest test_deploy_window_manifest || fail "deploy-window manifest gate suite failed"
 ./test_credential_chain_lockdown.sh || fail "credential-chain lockdown fixture suite failed"
 python3 -m unittest test_ci_required_checks_audit || fail "required-checks audit failed"

@@ -39,6 +39,8 @@
 #   rollback    owned rollback to the pinned pre-change image, after the
 #               operator points the compose file at it (--live)
 #   abort       owned pre-restart abort (--live)
+#   rewake      owned re-delivery of wakes deferred at undrain (--live;
+#               --rewake-filter FILE / --focus-gate-expired pass through)
 #
 # Manifest: 0600 regular file, KEY=VALUE lines, parsed never sourced.
 # See activation.example.conf and ACTIVATION.md for the key contract,
@@ -65,10 +67,12 @@ REHARDEN="$HELPERS_DIR/post-restart-reharden.sh"
 DOCKER="${DOCKER:-docker}"
 
 CMD=""; MANIFEST=""; STATE_DIR=""; LIVE=0
+REWAKE_ARGS=()
 usage() {
   cat <<'USAGE'
-usage: activation.sh preflight|run|resume|rollback|abort \
-         --manifest FILE --state-dir DIR [--live]
+usage: activation.sh preflight|run|resume|rollback|abort|rewake \
+         --manifest FILE --state-dir DIR [--live] \
+         [--rewake-filter FILE | --focus-gate-expired]   (rewake only)
 USAGE
 }
 while (($#)); do
@@ -76,8 +80,10 @@ while (($#)); do
     --manifest) MANIFEST="${2:?}"; shift 2 ;;
     --state-dir) STATE_DIR="${2:?}"; shift 2 ;;
     --live) LIVE=1; shift ;;
+    --rewake-filter) REWAKE_ARGS+=(--rewake-filter "${2:?}"); shift 2 ;;
+    --focus-gate-expired) REWAKE_ARGS+=(--focus-gate-expired); shift ;;
     -h|--help) usage; exit 0 ;;
-    preflight|run|resume|rollback|abort)
+    preflight|run|resume|rollback|abort|rewake)
       [[ -z "$CMD" ]] || { printf 'REFUSED: %s: two subcommands given\n' "$ME" >&2; exit 2; }
       CMD="$1"; shift ;;
     *) printf 'REFUSED: %s: unknown flag or subcommand: %s\n' "$ME" "$1" >&2; exit 2 ;;
@@ -89,6 +95,7 @@ fail() { printf 'FAIL: %s: %s\n' "$ME" "$*" >&2; exit 1; }
 log() { printf '%s\n' "$*"; }
 
 [[ -n "$CMD" ]] || { usage >&2; refuse "a subcommand is required"; }
+[[ "$CMD" == rewake || ${#REWAKE_ARGS[@]} -eq 0 ]] || refuse "--rewake-filter/--focus-gate-expired only apply to the rewake subcommand"
 [[ -n "$MANIFEST" ]] || refuse "--manifest is required"
 [[ -n "$STATE_DIR" && "$STATE_DIR" == /* ]] || refuse "--state-dir must be an absolute path"
 STATE_DIR="${STATE_DIR%/}"
@@ -238,8 +245,16 @@ export PAPERCLIP_ACTIVATION_LOCK_TOKEN="$LOCK_TOKEN"
 export PAPERCLIP_ACTIVATION_LOCK_FD=8
 log "ok: deployment lock held ($LOCK_PATH)"
 
-# environment for drain.sh and its helpers: one helper set, one service
+# environment for drain.sh and its helpers: one helper set, one service.
+# drain.sh also honors per-helper path overrides; pin every one of them to
+# the scanned helper set so a stale or planted override in the caller's
+# environment cannot substitute unscanned code after the scan passes.
 export PAPERCLIP_UPGRADE_HELPERS_DIR="$HELPERS_DIR"
+export PAPERCLIP_UPGRADE_PRECHECK="$HELPERS_DIR/pre-restart-check.sh"
+export PAPERCLIP_UPGRADE_REHARDEN="$HELPERS_DIR/post-restart-reharden.sh"
+export PAPERCLIP_UPGRADE_EFFECTIVE_BUILD_CHECK="$HELPERS_DIR/effective-build-check.sh"
+export PAPERCLIP_UPGRADE_PLUGIN_INVENTORY_CHECK="$HELPERS_DIR/check-plugin-inventory.py"
+export PAPERCLIP_UPGRADE_SANDBOX_CANARY="$HELPERS_DIR/sandbox-canary.sh"
 export PAPERCLIP_UPGRADE_COMPOSE_FILE="$(mv_ COMPOSE_FILE)"
 export PAPERCLIP_UPGRADE_SERVER_SERVICE="$(mv_ SERVICE)"
 export PAPERCLIP_UPGRADE_SERVER_CONTAINER="$(mv_ SERVER_CONTAINER)"
@@ -328,25 +343,13 @@ entrypoint_gate() { # IMAGE_ID EXPECTED_SHA256 — content, hash, no chown token
   log "ok: entrypoint content pinned ($want) and chown-free"
 }
 
-bindings_gate() { # MODE(candidate|rollback) EXPECTED_RUNNING_ID(may be "")
-  local mode="$1" expected_running="${2:-}"
-  local image image_id sha_key entry_sha compose_sha_key
+compose_gate() { # MODE(candidate|rollback) — compose hash + resolved service
+  local mode="$1" image compose_sha_key
   if [[ "$mode" == candidate ]]; then
-    image="$(mv_ IMAGE)"; image_id="$(mv_ EXPECT_IMAGE_ID)"
-    compose_sha_key=COMPOSE_SHA256; entry_sha="$(mv_ ENTRYPOINT_SHA256)"
+    image="$(mv_ IMAGE)"; compose_sha_key=COMPOSE_SHA256
   else
-    image="$(mv_ ROLLBACK_IMAGE)"; image_id="$(mv_ ROLLBACK_IMAGE_ID)"
-    compose_sha_key=ROLLBACK_COMPOSE_SHA256; entry_sha="$(mv_ ROLLBACK_ENTRYPOINT_SHA256)"
+    image="$(mv_ ROLLBACK_IMAGE)"; compose_sha_key=ROLLBACK_COMPOSE_SHA256
   fi
-
-  # helper set first: nothing runs before this scan passes
-  scan_no_ownership_change "$DRAIN" "$REHARDEN" \
-    "$HELPERS_DIR/pre-restart-check.sh" "$HELPERS_DIR/effective-build-check.sh" \
-    "$HELPERS_DIR/sandbox-canary.sh" "$HELPERS_DIR/migration_gate.py" \
-    "$HELPERS_DIR/check-plugin-inventory.py"
-  log "ok: helper set carries no reachable ownership-change command"
-
-  # compose file identity, then its resolved service
   [[ -f "$(mv_ COMPOSE_FILE)" && ! -L "$(mv_ COMPOSE_FILE)" ]] \
     || refuse "compose file missing or a symlink: $(mv_ COMPOSE_FILE)"
   local compose_sha; compose_sha="$(sha256sum < "$(mv_ COMPOSE_FILE)" | cut -d' ' -f1)"
@@ -369,6 +372,27 @@ bindings_gate() { # MODE(candidate|rollback) EXPECTED_RUNNING_ID(may be "")
   [[ "$dest_hash" == "$(mv_ MOUNT_DESTINATIONS_SHA256)" ]] \
     || refuse "compose mount destinations do not match the pinned mount binding"
   log "ok: compose file, service image, service user and mount destinations pinned"
+}
+
+bindings_gate() { # MODE(candidate|rollback) EXPECTED_RUNNING_ID(may be "")
+  local mode="$1" expected_running="${2:-}"
+  local image image_id entry_sha
+  if [[ "$mode" == candidate ]]; then
+    image="$(mv_ IMAGE)"; image_id="$(mv_ EXPECT_IMAGE_ID)"
+    entry_sha="$(mv_ ENTRYPOINT_SHA256)"
+  else
+    image="$(mv_ ROLLBACK_IMAGE)"; image_id="$(mv_ ROLLBACK_IMAGE_ID)"
+    entry_sha="$(mv_ ROLLBACK_ENTRYPOINT_SHA256)"
+  fi
+
+  # helper set first: nothing runs before this scan passes
+  scan_no_ownership_change "$DRAIN" "$REHARDEN" \
+    "$HELPERS_DIR/pre-restart-check.sh" "$HELPERS_DIR/effective-build-check.sh" \
+    "$HELPERS_DIR/sandbox-canary.sh" "$HELPERS_DIR/migration_gate.py" \
+    "$HELPERS_DIR/check-plugin-inventory.py"
+  log "ok: helper set carries no reachable ownership-change command"
+
+  compose_gate "$mode"
 
   # image identity: id, entrypoint argv, user, revision label (never alone)
   local got_id cfgline entry_json image_user revision want_json
@@ -470,6 +494,10 @@ run_phases() {
     exit 1
   fi
   if ! have restarted_at; then
+    # Re-judge compose immediately before the recreate: the natural wait
+    # can run for hours, and drain.sh's own compose_check does not pin
+    # the compose hash, service user or mount set.
+    compose_gate candidate
     window_gate; pressure_gate
     local -a rargs=(--image "$(mv_ IMAGE)" --expect-image-id "$(mv_ EXPECT_IMAGE_ID)"
       --expect-commit "$(mv_ EXPECT_COMMIT)" --expect-build-marker "$(mv_ BUILD_MARKER)"
@@ -537,6 +565,18 @@ case "$CMD" in
     fi
     phase abort abort
     log "abort: done (drain lifted by its owner)"
+    ;;
+  rewake)
+    # Suppressed wakes deferred at undrain (focus gate) or left unsent by
+    # a transient API failure are re-delivered only by drain.sh rewake,
+    # which needs lock proof like every mutating command. This is the
+    # owned passthrough for that: allowed after undrained_at, never for
+    # another manifest's state.
+    check_owner
+    have undrained_at \
+      || refuse "rewake needs a completed undrain/abort in $STATE_DIR (undrained_at missing)"
+    phase rewake rewake ${REWAKE_ARGS[@]+"${REWAKE_ARGS[@]}"}
+    log "rewake: done"
     ;;
 esac
 exit 0

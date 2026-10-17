@@ -17,6 +17,7 @@ activation.sh run       --manifest /abs/activation.conf --state-dir /abs/state -
 activation.sh resume    --manifest /abs/activation.conf --state-dir /abs/state --live
 activation.sh rollback  --manifest /abs/activation.conf --state-dir /abs/state --live
 activation.sh abort     --manifest /abs/activation.conf --state-dir /abs/state --live
+activation.sh rewake    --manifest /abs/activation.conf --state-dir /abs/state --live [--rewake-filter FILE | --focus-gate-expired]
 ```
 
 - `preflight` takes the lock briefly, validates everything read-only,
@@ -30,6 +31,17 @@ activation.sh abort     --manifest /abs/activation.conf --state-dir /abs/state -
 - `abort` is pre-restart only and only ever lifts its own drain
   (`drain.sh` CAS checks the drain it started and the waker file it
   created; a pre-existing drain or waker-disable is left alone).
+- `rewake` is the owned path for wakes deferred at undrain (focus
+  gate) or left unsent by a transient failure: it requires this
+  manifest's owner record and a completed undrain/abort, and passes
+  `--rewake-filter` / `--focus-gate-expired` through to `drain.sh`.
+  Without it, deferred wakes would have no lock-carrying caller.
+- The wrapper pins every per-helper path environment override
+  `drain.sh` honors to the scanned helper set, so a stale override in
+  the caller's environment cannot substitute unscanned code.
+- Compose identity (file hash, service image/user, mount set) is
+  judged at preflight and judged *again* immediately before the
+  recreate, because the natural wait between them can run for hours.
 
 State ownership is recorded in `<state-dir>.activation-owner`
 (manifest SHA-256 + lock path) *before* the drain starts. `resume`,

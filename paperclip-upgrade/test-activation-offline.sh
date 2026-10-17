@@ -142,10 +142,13 @@ while (($#)); do case "$1" in --state-dir) state="${2:-}"; shift 2;; *) shift;; 
 grep -qx "token=$PAPERCLIP_ACTIVATION_LOCK_TOKEN" "$PAPERCLIP_ACTIVATION_LOCK_PATH" \
   || { echo "stub drain: lock token mismatch" >&2; exit 42; }
 printf '%s\n' "lock-proof-ok $cmd" >> "$STUB_DRAIN_LOG"
+printf 'helpers precheck=%s reharden=%s canary=%s\n' "${PAPERCLIP_UPGRADE_PRECHECK:-}" "${PAPERCLIP_UPGRADE_REHARDEN:-}" "${PAPERCLIP_UPGRADE_SANDBOX_CANARY:-}" >> "$STUB_DRAIN_LOG"
 [[ -n "${STUB_DRAIN_SLEEP_SECS:-}" && "$cmd" == drain ]] && sleep "$STUB_DRAIN_SLEEP_SECS"
+[[ -n "${STUB_TAMPER_COMPOSE:-}" && "$cmd" == wait ]] && printf 'tampered\n' >> "$PAPERCLIP_UPGRADE_COMPOSE_FILE"
 case "$cmd" in
   drain) mkdir -m 0700 "$state"; printf 'x\n' > "$state/drain-started"; printf 'x\n' > "$state/drain_requested_at" ;;
   wait) printf 'x\n' > "$state/drained_at" ;;
+  rewake) printf 'x\n' > "$state/rewake_ran" ;;
   backup) printf 'x\n' > "$state/backup_at" ;;
   restart)
     grep -q -- '--expect-file' "$STUB_DRAIN_LOG.args" || { echo "stub drain: restart lacks --expect-file" >&2; exit 43; }
@@ -436,6 +439,36 @@ reset_logs
 STUB_DRAIN_VERIFY_FAIL=1 bash "$ACT" run --manifest "$MAN" --state-dir "$ROOT/state-rb2" --live >/dev/null 2>&1 || true
 expect_refused "rollback refused until compose matches the rollback pin" "compose" -- \
   bash "$ACT" rollback --manifest "$MAN" --state-dir "$ROOT/state-rb2" --live
+
+# owned rewake after a completed activation (deferred-wake redelivery path)
+reset_logs
+expect_ok "owned rewake runs after undrain under the lock" -- \
+  env PAPERCLIP_UPGRADE_PRECHECK=/tmp/evil-precheck PAPERCLIP_UPGRADE_SANDBOX_CANARY=/tmp/evil-canary \
+    bash "$ACT" rewake --manifest "$MAN" --state-dir "$ROOT/state-run" --live --focus-gate-expired
+grep -q '^lock-proof-ok rewake' "$STUB_DRAIN_LOG" \
+  && pass "rewake carried lock proof" || oops "rewake lacked lock proof"
+grep -qF "precheck=$HERE/pre-restart-check.sh" "$STUB_DRAIN_LOG" \
+  && grep -qF "canary=$HERE/sandbox-canary.sh" "$STUB_DRAIN_LOG" \
+  && pass "per-helper env overrides are pinned to the scanned helper set" \
+  || oops "per-helper env overrides reached drain.sh unpinned"
+grep -q -- '--focus-gate-expired' "$STUB_DRAIN_LOG.args" \
+  && pass "rewake passes --focus-gate-expired through" || oops "rewake lost its passthrough flag"
+manifest_with "$bad" EXPECT_COMMIT "$(printf 'f%.0s' $(seq 1 40))"
+reset_logs
+expect_refused "rewake of a state owned by a different manifest is refused" "REFUSED" -- \
+  bash "$ACT" rewake --manifest "$bad" --state-dir "$ROOT/state-run" --live
+[[ ! -s "$STUB_DRAIN_LOG" ]] && pass "foreign rewake never reached drain.sh" || oops "foreign rewake reached drain.sh"
+expect_refused "rewake before any undrain is refused" "undrained_at" -- \
+  bash "$ACT" rewake --manifest "$MAN" --state-dir "$ROOT/state-rb2" --live
+
+# compose edited during the (potentially hours-long) wait is caught pre-restart
+rm -rf "$ROOT/state-tamper" "$ROOT/state-tamper.activation-owner"
+reset_logs
+expect_refused "compose tampered during wait is refused before restart" "compose" -- \
+  env STUB_TAMPER_COMPOSE=1 bash "$ACT" run --manifest "$MAN" --state-dir "$ROOT/state-tamper" --live
+grep -q '^lock-proof-ok restart' "$STUB_DRAIN_LOG" \
+  && oops "restart ran against a tampered compose file" || pass "restart never ran against tampered compose"
+printf 'services: candidate\n' > "$ROOT/compose.yaml"
 
 # --- 6. real drain.sh refuses mutating commands without the wrapper lock --------
 printf 'header = "X-Test: 1"\n' > "$ROOT/board.curl"; chmod 0600 "$ROOT/board.curl"

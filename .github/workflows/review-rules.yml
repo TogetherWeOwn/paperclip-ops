@@ -11,6 +11,15 @@ jobs:
   review-rules:
     permissions:
       contents: read
+    # Known central limitation (Paperclip Review on #27): the pinned reusable
+    # checks its engine out at 60af3686, which predates the merged
+    # review-rules/ tree from TogetherWeOwn/.github#26 and carries a
+    # quadratic-time svelte scan (~20 min on a 2 MiB .svelte file). Bounded
+    # here: mode is warn, the callee sets continue-on-error, this workflow is
+    # ci-policy non-required on free hosted runners, and this repo ships no
+    # .svelte files, so the slow path only triggers on anomalous PRs.
+    # Follow-up: re-pin once central merges an engine-ref bump matching the
+    # merged tree. Rollback: delete this file.
     uses: TogetherWeOwn/.github/.github/workflows/review-rules.yml@63699075b492914c137281acffd4c89e51cc1c4c
     with:
       packs: python-shell-ci,security,ts

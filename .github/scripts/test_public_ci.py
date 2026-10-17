@@ -49,9 +49,17 @@ class PublicCI(unittest.TestCase):
                     self.assertIn(job["uses"],
                                   (HOSTED_TEST_GUARD, REVIEW_RULES_GUARD), label)
                     self.assertNotIn("runs-on", job, label)
+                    # Fail closed on job-level keys that can widen authority
+                    # or execution (secrets inherit, env, if, strategy,
+                    # concurrency, ...). `name` is display-only and kept for
+                    # the test-guard caller's byte-identical id/name contract.
+                    self.assertFalse(
+                        set(job) - {"uses", "with", "permissions", "name"}, label)
                     inputs = job.get("with", {})
                     self.assertIsInstance(inputs, dict, label)
                     if job["uses"] == REVIEW_RULES_GUARD:
+                        self.assertEqual(job.get("permissions"),
+                                         {"contents": "read"}, label)
                         self.assert_review_rules_inputs(inputs, label)
                     else:
                         try:
@@ -100,7 +108,7 @@ class PublicCI(unittest.TestCase):
                 "on: pull_request\njobs:\n  guard:\n    uses: " + HOSTED_TEST_GUARD
                 + "\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n")
             (directory / "review.yml").write_text(
-                "on: pull_request\njobs:\n  review-rules:\n    uses: " + REVIEW_RULES_GUARD
+                "on: pull_request\njobs:\n  review-rules:\n    name: review-rules\n    permissions:\n      contents: read\n    uses: " + REVIEW_RULES_GUARD
                 + "\n    with:\n      packs: python-shell-ci,security,ts\n      mode: warn\n")
             self.assert_public_hosted_routes(directory)
 
@@ -131,6 +139,24 @@ class PublicCI(unittest.TestCase):
                 + "\n    with:\n      packs: ts\n      mode: warn\n      runs-on-json: '[\"self-hosted\"]'\n",
             "review-rules-unknown-input": "    uses: " + REVIEW_RULES_GUARD
                 + "\n    with:\n      packs: ts\n      mode: warn\n      unreviewed-input: 'yes'\n",
+            "review-rules-secrets-inherit": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    secrets: inherit\n    with:\n      packs: ts\n      mode: warn\n",
+            "review-rules-env": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    env:\n      UNREVIEWED: 'yes'\n    with:\n      packs: ts\n      mode: warn\n",
+            "review-rules-if": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    if: github.event_name == 'pull_request'\n    with:\n      packs: ts\n      mode: warn\n",
+            "review-rules-strategy": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    strategy:\n      matrix:\n        pack: [ts]\n    with:\n      packs: ts\n      mode: warn\n",
+            "review-rules-permissions-write": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    permissions: write-all\n    with:\n      packs: ts\n      mode: warn\n",
+            "review-rules-permissions-contents-write": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    permissions:\n      contents: write\n    with:\n      packs: ts\n      mode: warn\n",
+            "review-rules-missing-permissions": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    with:\n      packs: ts\n      mode: warn\n",
+            "test-guard-secrets-inherit": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    secrets: inherit\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-if": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    if: github.event_name == 'pull_request'\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
         }
         for name, job in bad_jobs.items():
             for suffix in (".yml", ".yaml"):

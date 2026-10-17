@@ -307,7 +307,8 @@
     "sweep-auto node7b1ff338 pressure-gate suite:1",
     "host regenerable cache reclaim hostile suite:1",
     "queue age depth contract suite:1",
-    "pr6 acceptance suite:1"
+    "pr6 acceptance suite:1",
+    "Beszel adapter and Discord forwarder suites:1"
   ],
   "retained": [
     {
@@ -1719,6 +1720,11 @@
       "name": "pr6 acceptance suite",
       "definition_sha256": "63a04269075c57e92a96db6e55ba7bffb4f910e69a222a44cfd186d930e369f4",
       "id": "pr6 acceptance suite:1"
+    },
+    {
+      "name": "Beszel adapter and Discord forwarder suites",
+      "definition_sha256": "4048d59ac30bdf2fd62c72fc32b1b3d7f44648b37a99db7931c5a59496c77b9d",
+      "id": "Beszel adapter and Discord forwarder suites:1"
     }
   ],
   "removed": [

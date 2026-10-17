@@ -105,7 +105,6 @@ scripts/parked_backlog_guard.js
 scripts/stale_descriptor_sweep.js
 scripts/storage_audit.sh
 secret_exposure_audit.sh
-sibling_guard.sh
 skills.sh
 test/external-disclosure.test.mjs
 test/fixtures/case_d2b472ea-four-cases.json
@@ -169,7 +168,6 @@ test_quota_brake.sh
 test_render_binding_normalization.sh
 test_responsible_leader.sh
 test_secret_exposure_audit.sh
-test_sibling_guard.sh
 test_stale_descriptor_sweep.sh
 test_suite_preconditions.sh
 test_upstream_filing_readiness.sh

@@ -313,3 +313,19 @@ class TimeoutConfig(unittest.TestCase):
                 with mock.patch.object(op.subprocess, 'run') as run, self.assertRaises(ValueError):
                     spec.loader.exec_module(importlib.util.module_from_spec(spec))
                 run.assert_not_called()
+
+
+class ShepherdCardText(unittest.TestCase):
+    def test_review_step_has_the_same_head_dedup_rule(self):
+        text = op.card_description('https://github.com/TogetherWeOwn/paperclip-ops/pull/1')
+        self.assertIn('at most once per head', text)
+        self.assertIn('Paperclip Review', text)
+
+    def test_only_an_owner_identity_mention_covers_the_head(self):
+        # The CI trigger step posts its marker mention as github-actions[bot];
+        # counting any mention as coverage would strand the head with a card
+        # that says it is covered while the required check still waits.
+        text = op.card_description('https://github.com/TogetherWeOwn/paperclip-ops/pull/1')
+        self.assertIn('owner-identity', text)
+        self.assertIn('github-actions[bot]', text)
+        self.assertIn('does not cover the head', text)

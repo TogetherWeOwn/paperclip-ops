@@ -307,6 +307,7 @@
     "sweep-auto node7b1ff338 pressure-gate suite:1",
     "host regenerable cache reclaim hostile suite:1",
     "migration safety gates suites:1",
+    "queue age depth contract suite:1",
     "pr6 acceptance suite:1"
   ],
   "retained": [
@@ -502,7 +503,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "9f5d17bde8cde6ab4236463376e459a839b5ed128de346816643a8e429cf7050",
+      "definition_sha256": "56960f13fcb0e61a69901a9690ebf786e1f0eff4d5232c5d8effc80b997ea30c",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1714,6 +1715,11 @@
       "name": "migration safety gates suites",
       "definition_sha256": "fce3b348e7f6f7519516081f58fc644adfccc9ce70ed91bf543880a3a88d5369",
       "id": "migration safety gates suites:1"
+    },
+    {
+      "name": "queue age depth contract suite",
+      "definition_sha256": "8ca1e2a63ba97130c428665099c43db06c748272bb96882606596bdc8f197a92",
+      "id": "queue age depth contract suite:1"
     },
     {
       "name": "pr6 acceptance suite",

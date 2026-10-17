@@ -302,12 +302,25 @@ class PublicCI(unittest.TestCase):
 
             head = subprocess.check_output(
                 ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            # A sibling of HEAD (same parent): origin/main has moved on
+            # without containing HEAD, so origin/main..HEAD would be wrong
+            # but merge-base(origin/main, HEAD) is still base.
+            sibling = subprocess.check_output(
+                ["git", "-C", str(repo), "commit-tree", f"{base}^{{tree}}",
+                 "-p", base, "-m", "sibling"], text=True).strip()
             cases = (
                 # (env overrides, origin/main target or None to delete, expected)
                 ({"EVENT_NAME": "pull_request", "REF": "refs/pull/1/merge",
                   "PUSH_BEFORE": ""}, base, f"{base}..HEAD"),
+                # Branch behind a moved main: range still covers PR commits.
+                ({"EVENT_NAME": "pull_request", "REF": "refs/pull/1/merge",
+                  "PUSH_BEFORE": ""}, sibling, f"{base}..HEAD"),
                 ({"EVENT_NAME": "push", "REF": "refs/heads/main",
                   "PUSH_BEFORE": base}, base, f"{base}..HEAD"),
+                # The all-zeros before-sha of a new-branch push falls
+                # through to the merge-base range.
+                ({"EVENT_NAME": "push", "REF": "refs/heads/main",
+                  "PUSH_BEFORE": "0" * 40}, base, f"{base}..HEAD"),
                 # A before-sha absent from this repo falls through to the
                 # merge-base range instead of scanning nothing.
                 ({"EVENT_NAME": "push", "REF": "refs/heads/main",
@@ -337,6 +350,9 @@ class PublicCI(unittest.TestCase):
                 calls = docker_log.read_text().splitlines()
                 history_call = next(line for line in calls if " git /repo " in line)
                 self.assertIn(f"--log-opts={expected}", history_call)
+                if expected == "--all":
+                    # The full-history fallback must be loud, never silent.
+                    self.assertIn("::warning::public-safety:", result.stdout)
 
     def test_metadata_protocol_constant_does_not_exempt_private_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:

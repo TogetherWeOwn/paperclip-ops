@@ -218,6 +218,23 @@ refuse userinfoport RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://localhost:x
 refuse userinfoipport RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://127.0.0.1:x@evil.example.net/domain/'
 refuse nodomains TWO_WEB_PROD_URL='' TWO_WEB_STAGING_URL=''
 refuse nocurl RDAP_DOMAINS='example.com' CURL_BIN="$WORK/bin/no-such-curl"
+refuse barenonslashlookalike RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://localhostexample.com'
+refuse bareslashlookalike RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://localhostexample.com/domain/'
+
+# Bare loopback / slash-less path bases must JOIN with a slash, never fuse
+# host+domain into a non-loopback host (http://localhost + example.com once
+# requested http://localhostexample.com over plaintext).
+echo far > "$MODE_FILE"
+out="$(run_probe RDAP_DOMAINS='example.com' RDAP_BASE_URL="http://127.0.0.1:$PORT")"; p="$(last_push)"
+[[ "$out" == "rc=0" ]] && grep -q 'platform_domain-expiry/external?success=true' <<<"$p" \
+  && grep -qx 'example.com' "$RDAP_FILE" \
+  && ok "4-bareloopback. bare http://127.0.0.1:PORT joins to loopback path (rc 0)" \
+  || bad "4-bareloopback. slash-less loopback join" "$out push=$p rdap=$(cat "$RDAP_FILE" 2>/dev/null)"
+echo far > "$MODE_FILE"
+out="$(run_probe RDAP_DOMAINS='example.com' RDAP_BASE_URL="http://127.0.0.1:$PORT/domain")"; p="$(last_push)"
+[[ "$out" == "rc=0" ]] && grep -qx 'example.com' "$RDAP_FILE" \
+  && ok "4-noslashpath. slash-less path base joins to loopback path (rc 0)" \
+  || bad "4-noslashpath. slash-less path join" "$out push=$p rdap=$(cat "$RDAP_FILE" 2>/dev/null)"
 
 # === 5. NON-DISCLOSURE ============================================================
 echo far > "$MODE_FILE"; fresh

@@ -46,6 +46,14 @@ WARN_DAYS="${DOMAIN_WARN_DAYS:-21}"
 CRIT_DAYS="${DOMAIN_CRIT_DAYS:-7}"
 TIMEOUT_S="${RDAP_TIMEOUT:-15}"
 RDAP_BASE_URL="${RDAP_BASE_URL:-https://rdap.org/domain/}"
+# Normalize exactly one trailing slash BEFORE the scheme/authority check so
+# "$RDAP_BASE_URL$domain" can never fuse host and domain (bare
+# http://localhost + example.com once requested http://localhostexample.com,
+# a non-loopback host, over plaintext). Joining with a slash turns the bare
+# loopback base into http://localhost/example.com (still loopback, still
+# allowed) and a bare lookalike into http://localhostexample.com/ whose
+# authority then refuses below.
+RDAP_BASE_URL="${RDAP_BASE_URL%/}/"
 MAX_RDAP_BYTES=262144
 
 command -v "$CURL_BIN" >/dev/null 2>&1 \

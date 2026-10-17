@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
 """forward_beszel_discord.py — Beszel generic-webhook alert -> ops Discord.
 
-Consumer for beszel-discord-routing.json. Beszel's generic webhook posts
-{"title": ..., "body": ...}; that shape matches no other adapter we run,
-so host alerts ride the EXISTING ops Discord webhook. This forwarder is
-the only thing that reads the routing table:
+Consumer for beszel-discord-routing.json. Beszel's generic webhook (with
+template=json) posts {"title": ..., "message": ...}; the forwarder also
+accepts {"title": ..., "body": ...} for hand-built payloads. That shape
+matches no other adapter we run, so host alerts ride the EXISTING ops
+Discord webhook. This forwarder is the only thing that reads the routing
+table:
 
-  - only allow-listed title prefixes route (longest prefix wins). The
-    default route catches other "Beszel:" titles; anything else is
-    dropped without a send (exit 0) — alert text is untrusted input and
-    must never become a free-form Discord post.
+  - only allow-listed title substrings route (longest wins). The
+    substrings match Beszel's real alert titles, which always lead with
+    the system name: "<system> <alert> above|below threshold"
+    (internal/alerts/alerts_system.go, e.g. "ovh-1 disk usage above
+    threshold", "ovh-1 CPU above threshold") and "Connection to
+    <system> is down" (alerts_status.go). A Beszel-shaped title with no
+    specific route takes the default route, so a future Beszel title
+    change still forwards instead of vanishing; anything else is
+    dropped without a send (exit 0, with a "dropped" line on stderr for
+    counting) — alert text is untrusted input and must never become a
+    free-form Discord post.
   - title is capped at 200 chars, body at min(body_max_chars, 500).
   - the message renders severity/owner/runbook from the route; Discord
     mentions are always suppressed (allowed_mentions.parse = []), so a
@@ -17,8 +26,9 @@ the only thing that reads the routing table:
     there is no mention target in the routing table to ping.
   - the webhook URL comes only from the env var the routing table
     names, and the only accepted name is DISCORD_WEBHOOK_URL (the
-    existing secret; no new credential). It travels in a 0600 curl
-    config file, never argv (/proc/<pid>/cmdline is world-readable).
+    existing secret; no new credential). It must be https and travels
+    in a 0600 curl config file, never argv (/proc/<pid>/cmdline is
+    world-readable).
 
 Usage: forward_beszel_discord.py [--routing FILE] [--dry-run] [ALERT.json]
   ALERT.json omitted = read the alert from stdin.
@@ -35,6 +45,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 TITLE_CAP = 200
 BODY_HARD_CAP = 500
@@ -63,20 +74,27 @@ def load_routing(path: Path):
     if not isinstance(routes, list) or not routes:
         die("routes must be a non-empty list")
     for route in routes:
-        if not isinstance(route, dict) or not isinstance(route.get("title_prefix"), str) \
-                or not route["title_prefix"]:
-            die("every route needs a non-empty title_prefix")
+        if not isinstance(route, dict) or not isinstance(route.get("title_contains"), str) \
+                or not route["title_contains"]:
+            die("every route needs a non-empty title_contains")
     default = routing.get("default_route")
     if default is not None and not isinstance(default, dict):
         die("default_route must be an object when present")
     return routing, min(cap, BODY_HARD_CAP)
 
 
+def looks_like_beszel(title):
+    """True for Beszel's real title shapes: threshold notices
+    ("<system> <alert> above|below threshold") and connection notices
+    ("Connection to <system> is ...")."""
+    return " threshold" in title or title.startswith("Connection to ")
+
+
 def pick_route(routing, title):
-    matches = [r for r in routing["routes"] if title.startswith(r["title_prefix"])]
+    matches = [r for r in routing["routes"] if r["title_contains"] in title]
     if matches:
-        return max(matches, key=lambda r: len(r["title_prefix"]))
-    if title.startswith("Beszel:"):
+        return max(matches, key=lambda r: len(r["title_contains"]))
+    if looks_like_beszel(title):
         return routing.get("default_route")
     return None
 
@@ -91,6 +109,9 @@ def render(route, title, body, cap):
 
 
 def send(webhook_url, payload):
+    parts = urlsplit(webhook_url)
+    if parts.scheme.lower() != "https" or not parts.netloc:
+        die("DISCORD_WEBHOOK_URL must be an HTTPS URL")
     with tempfile.TemporaryDirectory(prefix="beszel_discord.") as tmp:
         os.chmod(tmp, 0o700)
         data = Path(tmp) / "payload.json"
@@ -100,7 +121,7 @@ def send(webhook_url, payload):
             f'url = "{webhook_url}"\n'
             'header = "Content-Type: application/json"\n'
             f'data-binary = "@{data}"\n'
-            'max-time = "15"\nsilent\nshow-error\nfail\n')
+            'max-time = "15"\nproto = "https"\nsilent\nshow-error\nfail\n')
         os.chmod(cfg, 0o600)
         proc = subprocess.run(["curl", "--config", str(cfg)],
                               capture_output=True, text=True, timeout=30)
@@ -126,10 +147,15 @@ def main():
         die("alert payload is not readable JSON")
     if not isinstance(alert, dict) or not isinstance(alert.get("title"), str) or not alert["title"]:
         die("alert needs a non-empty string title")
-    body = alert.get("body") if isinstance(alert.get("body"), str) else ""
+    body = alert.get("body")
+    if not isinstance(body, str):
+        # Beszel's generic webhook (template=json) posts the text under
+        # "message" (the shoutrrr generic messagekey default); hand-built
+        # payloads use "body".
+        body = alert.get("message") if isinstance(alert.get("message"), str) else ""
     route = pick_route(routing, alert["title"])
     if route is None:
-        print("forward_beszel_discord: dropped — no allow-listed title prefix",
+        print("forward_beszel_discord: dropped — no allow-listed title match",
               file=sys.stderr)
         return 0
     payload = render(route, alert["title"], body, cap)

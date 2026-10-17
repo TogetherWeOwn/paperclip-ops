@@ -1,5 +1,5 @@
 {
-  "_comment": "Public source routing template, not an installed channel inventory. Resolve DISCORD_WEBHOOK_URL only from separately authorized protected configuration. Treat alert text as untrusted; route only allow-listed title prefixes and truncate the body to 500 characters. Every route names its response role and runbook. No webhook URL, credential or channel ID is included.",
+  "_comment": "Public source routing template, not an installed channel inventory. Resolve DISCORD_WEBHOOK_URL only from separately authorized protected configuration. Treat alert text as untrusted; route only allow-listed title substrings (title_contains, longest wins) and truncate the body to 500 characters. Substrings match Beszel's real alert titles, which always lead with the system name: '<system> <alert> above|below threshold' (henrygd/beszel internal/alerts/alerts_system.go; alert names are lowercased except CPU/GPU/CPU*, so 'disk usage' and 'memory' are lowercase while 'CPU' is not) and 'Connection to <system> is down' (alerts_status.go). A Beszel-shaped title with no specific route takes default_route; anything else is dropped. Every route names its response role and runbook. No webhook URL, credential or channel ID is included.",
   "webhook_env": "DISCORD_WEBHOOK_URL",
   "body_max_chars": 500,
   "default_route": {
@@ -11,7 +11,7 @@
   },
   "routes": [
     {
-      "title_prefix": "Beszel: disk",
+      "title_contains": "disk usage above threshold",
       "channel": "ops-alerts",
       "mention": true,
       "severity": "critical",
@@ -19,7 +19,7 @@
       "runbook": "docs/runbooks/runner-disk-triage.md (via docs/runbooks/garm-ci-oncall-alert-to-action.md §3)"
     },
     {
-      "title_prefix": "Beszel: host down",
+      "title_contains": " is down",
       "channel": "ops-alerts",
       "mention": true,
       "severity": "critical",
@@ -27,7 +27,7 @@
       "runbook": "docs/runbooks/garm-ci-oncall-alert-to-action.md"
     },
     {
-      "title_prefix": "Beszel: cpu",
+      "title_contains": "CPU above threshold",
       "channel": "ops-alerts",
       "mention": false,
       "severity": "warning",
@@ -35,15 +35,7 @@
       "runbook": "docs/runbooks/garm-ci-oncall-alert-to-action.md"
     },
     {
-      "title_prefix": "Beszel: memory",
-      "channel": "ops-alerts",
-      "mention": false,
-      "severity": "warning",
-      "owner": "devops",
-      "runbook": "docs/runbooks/garm-ci-oncall-alert-to-action.md"
-    },
-    {
-      "title_prefix": "Beszel: systemd",
+      "title_contains": "memory above threshold",
       "channel": "ops-alerts",
       "mention": false,
       "severity": "warning",

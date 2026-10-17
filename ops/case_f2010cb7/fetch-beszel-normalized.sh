@@ -8,8 +8,10 @@
 #   BESZEL_SOURCE_CMD=".../fetch-beszel-normalized.sh" push-beszel-hosts.sh
 #
 # Env (from the root-only 0600 env file the operator installs):
-#   BESZEL_HUB_URL      e.g. http://127.0.0.1:8090 (no path is invented
-#                       beyond the PocketBase collection API below)
+#   BESZEL_HUB_URL      e.g. https://beszel.example.com, or
+#                       http://127.0.0.1:8090 for a loopback hub (no path is
+#                       invented beyond the PocketBase collection API below;
+#                       plain http to a non-loopback host is refused)
 #   BESZEL_IDENTITY     hub user email for auth-with-password
 #   BESZEL_PASSWORD     that user's password (read-only scope suffices)
 #   BESZEL_FETCH_TIMEOUT  per-request seconds (default 15)
@@ -41,6 +43,20 @@ command -v python3 >/dev/null 2>&1 || refuse "python3 required"
 # unexported vars would read as null and every fetch would refuse.
 export BESZEL_IDENTITY BESZEL_PASSWORD
 HUB="${BESZEL_HUB_URL%/}"
+# Plain http to a remote hub sends the password and token in the clear and
+# lets an on-path attacker answer with a hostile token (see the charset
+# gate below). Refuse unless the hub is https or loopback.
+hub_scheme="${HUB%%://*}"
+if [[ "${hub_scheme,,}" != "https" ]]; then
+  hub_host="${HUB#*://}"
+  hub_host="${hub_host%%[/:]*}"
+  hub_host="${hub_host#[}"
+  hub_host="${hub_host%]}"
+  case "${hub_host,,}" in
+    127.*|localhost|::1) ;;
+    *) refuse "BESZEL_HUB_URL must be https unless the hub is loopback" ;;
+  esac
+fi
 TIMEOUT="${BESZEL_FETCH_TIMEOUT:-15}"
 [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || refuse "BESZEL_FETCH_TIMEOUT must be a whole number"
 MAX_AGE="${BESZEL_MAX_STATS_AGE_SEC:-600}"
@@ -72,6 +88,12 @@ chmod 0600 "$work/authcfg"
 auth_resp="$(curl --config "$work/authcfg" 2>/dev/null)" || refuse "Beszel auth failed"
 token="$(jq -r '.token // empty' <<<"$auth_resp" 2>/dev/null)"
 [[ -n "$token" ]] || refuse "Beszel auth returned no token"
+# The token is interpolated into a curl config below, where a quote plus a
+# newline would inject arbitrary curl directives (e.g. output = <path>)
+# running with this account's privileges. A real PocketBase token is
+# base64url/dot only; refuse anything outside a tight charset instead.
+[[ "$token" =~ ^[A-Za-z0-9._~+/=-]+$ ]] \
+  || refuse "Beszel auth returned a token with unexpected characters"
 # The password body has served its purpose; do not keep it around.
 rm -f "$work/auth.json"
 

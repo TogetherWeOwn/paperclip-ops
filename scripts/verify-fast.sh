@@ -135,6 +135,7 @@ python3 -m unittest test_deploy_window_manifest || fail "deploy-window manifest 
 python3 -m unittest test_ci_required_checks_audit || fail "required-checks audit failed"
 python3 -B test_beszel_adapter.py || fail "beszel adapter suite failed"
 python3 -B test_beszel_discord_forwarder.py || fail "beszel discord forwarder suite failed"
+bash test_fetch_beszel_normalized.sh || fail "beszel fetch wrapper suite failed"
 python3 -m unittest test_private_mutation_gates || fail "private mutation harness failed"
 ./test_ci_gating.sh || fail "change-gating contract failed"
 ./test_readme_script_index.sh || fail "readme script-index gate failed"

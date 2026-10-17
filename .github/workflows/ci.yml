@@ -2196,13 +2196,17 @@ jobs:
       # from Beszel-native records into the bridge contract: a wrong GiB
       # factor, load divisor, or failed-services index would mis-score
       # every host while looking healthy, and the forwarder is the only
-      # consumer of the Discord routing table (allow-list + 500-char cap +
-      # webhook never in argv). Offline: native fixtures + stub curl.
+      # consumer of the Discord routing table (real Beszel title shapes +
+      # 500-char cap + https-only webhook never in argv). The fetch
+      # wrapper is the only handler of the hub password and token
+      # (0600 files, token charset gate, https-unless-loopback).
+      # Offline: native fixtures + stub curl.
       - name: Beszel adapter and Discord forwarder suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: |
           python3 -B test_beszel_adapter.py
           python3 -B test_beszel_discord_forwarder.py
+          bash test_fetch_beszel_normalized.sh
 
       # case_c542accd. CI main-conclusion + job-runtime Gatus module: a script
       # that scores a red, slow, or unreadable main as healthy would

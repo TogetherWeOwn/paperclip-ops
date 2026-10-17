@@ -1,0 +1,246 @@
+# Reusable prod-clone rehearsal (shared migration safety gates).
+#
+# Callers reference a pinned SHA:
+#   uses: TogetherWeOwn/paperclip-ops/.github/workflows/reusable-migration-rehearsal.yml@<sha>
+#
+# What it does: plans the pending chain offline on every call (enumerate +
+# digest, no cloud), then runs the full rehearsal — branch off prod, apply
+# the chain exactly as production would, report, delete — ONLY when the
+# caller supplies its existing provider credentials. Without credentials
+# the job plans but never claims a rehearsal happened. Evidence uploads as
+# an artifact for the production preflight gate (freshness < 24h).
+#
+# The caller owns its principals: it maps its EXISTING provider secrets
+# into the declared `secrets` below and passes its caller-owned
+# apply/restore commands as `restore-cmd` / `apply-cmd` inputs (commands
+# are not secret). This workflow never invents credentials and prints none
+# (provider output is redacted).
+name: migration-rehearsal (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      provider:
+        description: "Rehearsal provider: planetscale or pitr."
+        required: false
+        default: planetscale
+        type: string
+      migrations-dir:
+        description: Repo-relative directory holding NNNN_slug.sql files.
+        required: false
+        default: packages/db/src/migrations
+        type: string
+      restore-cmd:
+        description: >-
+          Caller-owned restore command for the pitr provider (run with the
+          branch name appended). Empty falls back to the caller's
+          REHEARSAL_RESTORE_CMD repo variable.
+        required: false
+        default: ""
+        type: string
+      apply-cmd:
+        description: >-
+          Caller-owned apply command (run with one wrapped SQL file path
+          appended). Empty falls back to the caller's REHEARSAL_APPLY_CMD
+          repo variable.
+        required: false
+        default: ""
+        type: string
+      pscale-version:
+        description: >-
+          Pinned pscale CLI release installed when provider is planetscale
+          and no pscale binary is present (e.g. "0.346.0").
+        required: false
+        default: "0.346.0"
+        type: string
+      script-ref:
+        description: Required immutable 40-character commit SHA for gate scripts.
+        required: true
+        type: string
+      pending-tags:
+        description: Required comma-separated pending migration tags from the production ledger.
+        required: true
+        type: string
+      evidence-retention-days:
+        description: Artifact retention for the evidence document.
+        required: false
+        default: 7
+        type: number
+    secrets:
+      rehearsal-pscale-org:
+        description: PlanetScale org (existing caller principal).
+        required: false
+      rehearsal-pscale-db:
+        description: PlanetScale database (existing caller principal).
+        required: false
+      rehearsal-pscale-token-id:
+        description: PlanetScale service token ID (existing caller principal).
+        required: false
+      rehearsal-pscale-token:
+        description: PlanetScale service token (existing caller principal).
+        required: false
+      rehearsal-pitr-endpoint:
+        description: PITR endpoint (existing caller principal).
+        required: false
+
+jobs:
+  rehearse:
+    name: prod-clone rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      # Pinned: actions/checkout v4. Repin with the SHA, never a moving tag.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate immutable gate-script reference
+        env:
+          SCRIPT_REF: ${{ inputs.script-ref }}
+        run: |
+          [[ "$SCRIPT_REF" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "script-ref must be a full 40-character commit SHA"; exit 2; }
+
+      - name: Fetch canonical gate scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: TogetherWeOwn/paperclip-ops
+          ref: ${{ inputs.script-ref }}
+          path: .paperclip-migration-gates
+          persist-credentials: false
+
+      - name: Plan the pending chain (offline, always runs)
+        env:
+          ONLY_TAGS: ${{ inputs.pending-tags }}
+          PROVIDER: ${{ inputs.provider }}
+          MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
+        run: |
+          set -euo pipefail
+          [[ -n "$ONLY_TAGS" ]] || { echo "pending-tags must not be empty"; exit 2; }
+          bash .paperclip-migration-gates/migration_rehearsal.sh plan \
+            --migrations-dir "$MIGRATIONS_DIR" \
+            --provider "$PROVIDER" \
+            --only "$ONLY_TAGS" \
+            --out rehearsal-plan.json
+          cat rehearsal-plan.json
+
+      - name: Install pscale CLI (planetscale only, when missing)
+        if: inputs.provider == 'planetscale'
+        env:
+          PSCALE_VERSION: ${{ inputs.pscale-version }}
+        run: |
+          set -euo pipefail
+          if command -v pscale >/dev/null 2>&1; then
+            echo "pscale already present: $(pscale version 2>/dev/null || echo unknown)"
+            exit 0
+          fi
+          case "$(uname -m)" in
+            x86_64) GOARCH=amd64 ;;
+            aarch64) GOARCH=arm64 ;;
+            *) echo "unsupported architecture: $(uname -m)"; exit 2 ;;
+          esac
+          base="https://github.com/planetscale/cli/releases/download/v${PSCALE_VERSION}"
+          tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL -o "$tmp/pscale.tar.gz" "$base/pscale_${PSCALE_VERSION}_linux_${GOARCH}.tar.gz"
+          curl -fsSL -o "$tmp/checksums.txt" "$base/pscale_${PSCALE_VERSION}_checksums.txt"
+          (cd "$tmp" && grep "linux_${GOARCH}.tar.gz" checksums.txt | sha256sum -c -)
+          tar -xzf "$tmp/pscale.tar.gz" -C "$tmp"
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 "$tmp/pscale" "$HOME/.local/bin/pscale"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/pscale" version
+
+      # Full rehearsal only when the caller wired its provider credentials.
+      # The caller maps its EXISTING secrets above; no new principals.
+      - name: Run the rehearsal on a throwaway prod clone
+        env:
+          REHEARSAL_PSCALE_ORG: ${{ secrets.rehearsal-pscale-org }}
+          REHEARSAL_PSCALE_DB: ${{ secrets.rehearsal-pscale-db }}
+          PLANETSCALE_SERVICE_TOKEN_ID: ${{ secrets.rehearsal-pscale-token-id }}
+          PLANETSCALE_SERVICE_TOKEN: ${{ secrets.rehearsal-pscale-token }}
+          REHEARSAL_PITR_ENDPOINT: ${{ secrets.rehearsal-pitr-endpoint }}
+          REHEARSAL_RESTORE_CMD: ${{ inputs.restore-cmd != '' && inputs.restore-cmd || vars.REHEARSAL_RESTORE_CMD }}
+          REHEARSAL_APPLY_CMD: ${{ inputs.apply-cmd != '' && inputs.apply-cmd || vars.REHEARSAL_APPLY_CMD }}
+          ONLY_TAGS: ${{ inputs.pending-tags }}
+          PROVIDER: ${{ inputs.provider }}
+          MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
+          REHEARSAL_BRANCH: rehearsal-${{ github.run_id }}-${{ github.run_attempt }}
+          REHEARSAL_CLEANUP_MARKER: ${{ runner.temp }}/rehearsal-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          # Plan-only when the selected provider cannot be used. Credentials
+          # for a different provider do not authorize this rehearsal.
+          case "$PROVIDER" in
+            pitr)
+              if [ -z "${REHEARSAL_PITR_ENDPOINT:-}" ] || [ -z "${REHEARSAL_RESTORE_CMD:-}" ]; then
+                echo "No PITR credentials on this run: plan only, no rehearsal claimed."
+                exit 0
+              fi
+              ;;
+            planetscale)
+              if [ -z "${REHEARSAL_PSCALE_ORG:-}" ] || [ -z "${REHEARSAL_PSCALE_DB:-}" ]; then
+                echo "No PlanetScale org/database on this run: plan only, no rehearsal claimed."
+                exit 0
+              fi
+              if { [ -z "${PLANETSCALE_SERVICE_TOKEN_ID:-}" ] || [ -z "${PLANETSCALE_SERVICE_TOKEN:-}" ]; } \
+                && { ! command -v pscale >/dev/null 2>&1 || ! pscale auth check >/dev/null 2>&1; }; then
+                echo "No PlanetScale token or authenticated CLI on this run: plan only, no rehearsal claimed."
+                exit 0
+              fi
+              ;;
+            *)
+              echo "Unsupported rehearsal provider: $PROVIDER" >&2
+              exit 2
+              ;;
+          esac
+          [[ -n "$ONLY_TAGS" ]] || { echo "pending-tags must not be empty"; exit 2; }
+          bash .paperclip-migration-gates/migration_rehearsal.sh run \
+            --migrations-dir "$MIGRATIONS_DIR" \
+            --provider "$PROVIDER" \
+            --only "$ONLY_TAGS" \
+            --branch "$REHEARSAL_BRANCH" \
+            --out rehearsal-evidence.json
+
+      - name: Clean up abandoned PlanetScale clone
+        if: always() && inputs.provider == 'planetscale'
+        env:
+          REHEARSAL_PSCALE_ORG: ${{ secrets.rehearsal-pscale-org }}
+          REHEARSAL_PSCALE_DB: ${{ secrets.rehearsal-pscale-db }}
+          PLANETSCALE_SERVICE_TOKEN_ID: ${{ secrets.rehearsal-pscale-token-id }}
+          PLANETSCALE_SERVICE_TOKEN: ${{ secrets.rehearsal-pscale-token }}
+          REHEARSAL_BRANCH: rehearsal-${{ github.run_id }}-${{ github.run_attempt }}
+          REHEARSAL_CLEANUP_MARKER: ${{ runner.temp }}/rehearsal-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          [[ -e "$REHEARSAL_CLEANUP_MARKER" ]] || { echo "No interrupted clone to clean."; exit 0; }
+          if [[ -z "${REHEARSAL_PSCALE_ORG:-}" || -z "${REHEARSAL_PSCALE_DB:-}" ]]; then
+            echo "Cannot clean interrupted clone: provider scope is unavailable." >&2
+            exit 1
+          fi
+          if { [[ -z "${PLANETSCALE_SERVICE_TOKEN_ID:-}" || -z "${PLANETSCALE_SERVICE_TOKEN:-}" ]]; } \
+            && { ! command -v pscale >/dev/null 2>&1 || ! pscale auth check >/dev/null 2>&1; }; then
+            echo "Cannot clean interrupted clone: PlanetScale auth is unavailable." >&2
+            exit 1
+          fi
+          for attempt in 1 2 3; do
+            if bash .paperclip-migration-gates/migration_rehearsal.sh clean \
+              --provider planetscale --branch "$REHEARSAL_BRANCH"; then
+              rm -f "$REHEARSAL_CLEANUP_MARKER"
+              exit 0
+            fi
+            [[ "$attempt" -eq 3 ]] || sleep "$((attempt * 2))"
+          done
+          echo "WARN: cleanup failed; manually delete PlanetScale branch $REHEARSAL_BRANCH" >&2
+          exit 1
+
+      # Pinned: actions/upload-artifact v7.0.1. Repin with the SHA on updates.
+      - name: Upload rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rehearsal-evidence
+          path: rehearsal-*.json
+          retention-days: ${{ inputs.evidence-retention-days }}
+          if-no-files-found: error

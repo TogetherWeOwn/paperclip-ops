@@ -4751,6 +4751,21 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 test_staged_drift.py
 
+      # Shared migration safety gates (docs/migration-standard.md): the
+      # timeout-preamble injector, the squawk + file-standard gate, the
+      # prod-clone rehearsal driver and the ledger-vs-candidate drift gate,
+      # each with an offline suite. Fully hermetic: fixture files, fake
+      # provider CLIs by absolute path, no database, no network, no
+      # credentials. Root test_* fallthrough already wakes core; the pins
+      # in ci_changes.py record the intent.
+      - name: migration safety gates suites
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: |
+          ./test_migration_timeout_preamble.sh
+          ./test_migration_squawk.sh
+          ./test_migration_rehearsal.sh
+          python3 -m unittest -v test_migration_drift_gate
+
       # == area: runbook (was runbook-gates; runs only when runbook or full changed) ==
       - name: DLQ redrive CLI standalone suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'

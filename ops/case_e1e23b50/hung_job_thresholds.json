@@ -31,6 +31,9 @@
     "off-host Gatus probe (staging)": 10,
     "pr-lint": 5,
     "Live runner disk-pressure check": 10,
-    "Request one review per ready head": 10
+    "Request one review per ready head": 10,
+    "migration squawk": 15,
+    "prod-clone rehearsal": 45,
+    "schema drift gate": 10
   }
 }

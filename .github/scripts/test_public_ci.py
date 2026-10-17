@@ -62,6 +62,15 @@ class PublicCI(unittest.TestCase):
                                          {"contents": "read"}, label)
                         self.assert_review_rules_inputs(inputs, label)
                     else:
+                        # Test-guard callers carry no job permissions today
+                        # (workflow-level only); pin that to absent-or-read so
+                        # a later `permissions: write-all` edit fails closed.
+                        # The callee caps its own permissions, so impact is low,
+                        # but the guard should prove the bound it claims.
+                        perms = job.get("permissions")
+                        self.assertTrue(
+                            perms is None or perms == {"contents": "read"},
+                            label)
                         try:
                             route = json.loads(inputs.get("runs-on-json", "null"))
                         except (TypeError, ValueError):
@@ -140,13 +149,13 @@ class PublicCI(unittest.TestCase):
             "review-rules-unknown-input": "    uses: " + REVIEW_RULES_GUARD
                 + "\n    with:\n      packs: ts\n      mode: warn\n      unreviewed-input: 'yes'\n",
             "review-rules-secrets-inherit": "    uses: " + REVIEW_RULES_GUARD
-                + "\n    secrets: inherit\n    with:\n      packs: ts\n      mode: warn\n",
+                + "\n    permissions:\n      contents: read\n    secrets: inherit\n    with:\n      packs: ts\n      mode: warn\n",
             "review-rules-env": "    uses: " + REVIEW_RULES_GUARD
-                + "\n    env:\n      UNREVIEWED: 'yes'\n    with:\n      packs: ts\n      mode: warn\n",
+                + "\n    permissions:\n      contents: read\n    env:\n      UNREVIEWED: 'yes'\n    with:\n      packs: ts\n      mode: warn\n",
             "review-rules-if": "    uses: " + REVIEW_RULES_GUARD
-                + "\n    if: github.event_name == 'pull_request'\n    with:\n      packs: ts\n      mode: warn\n",
+                + "\n    permissions:\n      contents: read\n    if: github.event_name == 'pull_request'\n    with:\n      packs: ts\n      mode: warn\n",
             "review-rules-strategy": "    uses: " + REVIEW_RULES_GUARD
-                + "\n    strategy:\n      matrix:\n        pack: [ts]\n    with:\n      packs: ts\n      mode: warn\n",
+                + "\n    permissions:\n      contents: read\n    strategy:\n      matrix:\n        pack: [ts]\n    with:\n      packs: ts\n      mode: warn\n",
             "review-rules-permissions-write": "    uses: " + REVIEW_RULES_GUARD
                 + "\n    permissions: write-all\n    with:\n      packs: ts\n      mode: warn\n",
             "review-rules-permissions-contents-write": "    uses: " + REVIEW_RULES_GUARD
@@ -157,6 +166,10 @@ class PublicCI(unittest.TestCase):
                 + "\n    secrets: inherit\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
             "test-guard-if": "    uses: " + HOSTED_TEST_GUARD
                 + "\n    if: github.event_name == 'pull_request'\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-permissions-write": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    permissions: write-all\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-permissions-contents-write": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    permissions:\n      contents: write\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
         }
         for name, job in bad_jobs.items():
             for suffix in (".yml", ".yaml"):

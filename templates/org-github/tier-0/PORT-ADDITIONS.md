@@ -25,7 +25,7 @@ Before: 2 live semgrep rules (hardcoded-credential assignment, eval/shell-exec)
 plus gitleaks defaults; no SSRF rule, no open-redirect rule, no
 provider-shaped secret rules at org level.
 
-After: 12 live semgrep rules (+10). Deterministically covered classes move
+After: 13 live semgrep rules (+11). Deterministically covered classes move
 from 1 of 4 (credential assignment) to 4 of 4 (credential assignment,
 provider-shaped secrets, SSRF fetch shapes, open-redirect shapes) for the
 direct shape; indirect/laundered flows stay with the Tier-2 reviewer by

@@ -207,6 +207,13 @@ else
     # config argument even when the url itself is a literal, and the .ts
     # fixture pins the TypeScript language path plus the generic-call
     # regex rule (axios.get<T>(...)), which no call pattern can bind.
+    # The $METHOD split is pinned too: post/put/patch payload objects in
+    # second position stay silent (the config is third there), as do
+    # axios.create/isAxiosError shapes the method regex excludes, and the
+    # Python options-method lines stay silent for the same reason. The .ts
+    # config url values run to the property boundary so comma-carrying
+    # path.join/new-URL expressions fire, while payload and nested-spread
+    # typed lines stay silent exactly like the untyped rule.
     cat > "$FX/fx-ssrf.js" <<'EOF'
 async function h(req, searchParams, url, body) {
   await fetch("https://api.example.com/health");
@@ -249,6 +256,16 @@ async function h(req, searchParams, url, body) {
   await axios.post("/x", data, { baseURL: req.query.host });
   await axios.post("/x", data, { ...req.body });
   await axios.post("/x", data, { baseURL: "https://api.example.com/v1/query" });
+  await axios.post("/x", { ...req.body });
+  await axios.put("/x", { ...req.body, id: 1 });
+  await axios.post("/x", { baseURL: req.query.host });
+  await axios.create(req.query.config);
+  await axios.isAxiosError(req.query.err);
+  await axios.create({ url: req.query.url });
+  await axios.create({ baseURL: req.query.host, url: "/x" });
+  await axios.create({ ...req.body });
+  await axios.get("/x", data, { baseURL: req.query.host });
+  await axios.get("/x", data, { ...req.body });
 }
 EOF
     cat > "$FX/fx-ssrf.ts" <<'EOF'
@@ -282,6 +299,16 @@ async function h(req: any, data: any, url: any) {
   await axios.get<User>(`https://api.example.com/v1/query`);
   await axios.get<User>("https://api.example.com/" + "v1/query");
   await axios.get("https://api.example.com/v1/query");
+  await axios<User>({ url: path.join(base, req.query.p) });
+  await axios<User>({ url: new URL(path, req.query.base).href });
+  await axios.post<User>("/internal/users", { ...req.body });
+  await axios.put<User>("/internal/users/1", { ...req.body, id: 1 });
+  await axios.patch<User>("/internal/users/1", { ...req.query });
+  await axios.post<User>("/internal/users", { baseURL: req.body.host });
+  await axios.post<User>("/internal", data, { headers: { ...req.headers } });
+  await axios.get<User>("/internal", { params: { ...req.query } });
+  await axios<User>({ url: "/internal", headers: { ...req.headers } });
+  await axios<User>({ method: "post", data: { url: req.body.target }, url: "/hook" });
 }
 EOF
     cat > "$FX/fx-ssrf.py" <<'EOF'
@@ -324,6 +351,13 @@ def h(request):
     httpx.get(url="https://x/request.html")
     httpx.Client().get("https://x/request.html")
     httpx.AsyncClient().get("https://x/request.html")
+    requests.options(request.args["u"])
+    httpx.options(request.args["u"])
+    requests.options(url=request.args["u"])
+    httpx.options(url=request.args["u"])
+    requests.Session().options(request.args["u"])
+    httpx.Client().options(request.args["u"])
+    httpx.AsyncClient().options(request.args["u"])
 EOF
     # Redirect fixtures: literal targets and safe builders stay silent
     # (both argument positions, literal-URL construction, url_for), while
@@ -333,7 +367,9 @@ EOF
     # TypeScript language path (.ts fixture). The fragment-carrying literals
     # ("/search?query=x", "/request.html", url_for with request.args) pin
     # each literal/safe-builder guard: without the guard the fragment
-    # regex alone would fire on them.
+    # regex alone would fire on them. Constant non-literal targets
+    # (HOME_URL, config.loginPath, settings.LOGIN_URL, reverse("home"),
+    # HOME) pin the user-input fragment regex itself: without it they fire.
     cat > "$FX/fx-redirect.js" <<'EOF'
 import { redirect } from "@sveltejs/kit";
 import { NextResponse } from "next/server";
@@ -355,6 +391,10 @@ export function h(res, url, request, req) {
   NextResponse.redirect("/search?query=x", 302);
   res.redirect("/search?query=x", 301);
   Response.redirect(request.query.next, 302);
+  res.redirect(HOME_URL);
+  res.redirect(302, HOME_URL);
+  throw redirect(303, HOME_URL);
+  Response.redirect(config.loginPath, 302);
 }
 EOF
     cat > "$FX/fx-redirect.ts" <<'EOF'
@@ -404,6 +444,9 @@ def h(request):
     redirect(location="/request.html")
     redirect(to="/request.html")
     redirect(location=url_for("login", next=request.args["next"]))
+    redirect(settings.LOGIN_URL)
+    HttpResponseRedirect(reverse("home"))
+    redirect(HOME)
 EOF
     # Secrets fixtures: credential positives are assembled from split
     # fragments (never committed as literals); kebab-case words and
@@ -482,13 +525,13 @@ def expect_silent(fname, rid):
 expect_hit("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16, 17, 21, 25, 26, 28, 30, 32, 33, 34, 36, 37, 39, 40))
 check(2 not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
       "behavioural fx-ssrf.js:2 literal fetch stays silent")
-for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24, 27, 29, 31, 35, 38, 41):
+for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24, 27, 29, 31, 35, 38, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51):
     check(ln not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
           f"behavioural fx-ssrf.js:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.js", "tier0-open-redirect-js")
 expect_hit("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5))
-expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22))
-for ln in (23, 24, 25, 26, 27, 28, 29, 30):
+expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32))
+for ln in (23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37, 38, 39, 40):
     check(ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts"), set())
           and ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js"), set()),
           f"behavioural fx-ssrf.ts:{ln} literal/constant URL stays silent")
@@ -496,12 +539,12 @@ expect_silent("fx-ssrf.ts", "tier0-open-redirect-js")
 expect_hit("fx-ssrf.py", "tier0-ssrf-dynamic-url-py", (4, 5, 6, 7, 8, 13, 15, 17, 18, 19, 21, 22, 23))
 check(3 not in hits.get(("fx-ssrf.py", "tier0-ssrf-dynamic-url-py"), set()),
       "behavioural fx-ssrf.py:3 literal request stays silent")
-for ln in (9, 10, 11, 12, 14, 16, 20, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39):
+for ln in (9, 10, 11, 12, 14, 16, 20, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46):
     check(ln not in hits.get(("fx-ssrf.py", "tier0-ssrf-dynamic-url-py"), set()),
           f"behavioural fx-ssrf.py:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.py", "tier0-open-redirect-py")
 expect_hit("fx-redirect.js", "tier0-open-redirect-js", (5, 8, 9, 10, 11, 16, 17, 20))
-for ln in (4, 6, 7, 12, 13, 14, 15, 18, 19):
+for ln in (4, 6, 7, 12, 13, 14, 15, 18, 19, 21, 22, 23, 24):
     check(ln not in hits.get(("fx-redirect.js", "tier0-open-redirect-js"), set()),
           f"behavioural fx-redirect.js:{ln} literal target stays silent")
 expect_hit("fx-redirect.ts", "tier0-open-redirect-js", (3, 4))
@@ -514,7 +557,7 @@ for ln in (3, 4, 6):
           f"behavioural fx-redirect-bare.js:{ln} literal target stays silent")
 expect_silent("fx-redirect-bare.js", "tier0-ssrf-dynamic-fetch-js")
 expect_hit("fx-redirect.py", "tier0-open-redirect-py", (5, 6, 8, 10, 11, 17, 18, 20, 21))
-for ln in (4, 7, 9, 12, 13, 14, 15, 16, 19, 22, 23, 24):
+for ln in (4, 7, 9, 12, 13, 14, 15, 16, 19, 22, 23, 24, 25, 26, 27):
     check(ln not in hits.get(("fx-redirect.py", "tier0-open-redirect-py"), set()),
           f"behavioural fx-redirect.py:{ln} safe/literal target stays silent")
 

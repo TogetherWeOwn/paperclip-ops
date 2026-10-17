@@ -19,3 +19,7 @@ test_cold_start_detector.sh
 verification/case_77bba75d-mutation-gate.sh
 # Align pinned mutation gate with the retained sanitized fixture and current broker.
 verification/case_46e26fa6-mutation-gate.sh
+# Sibling-run guard: canonical here (default-branch resolution fix); sync
+# restores around it so CI tests the tree, not the pinned toolkit bytes.
+sibling_guard.sh
+test_sibling_guard.sh

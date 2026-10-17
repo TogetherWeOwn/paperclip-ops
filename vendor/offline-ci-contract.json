@@ -1725,6 +1725,11 @@
       "name": "Beszel adapter and Discord forwarder suites",
       "definition_sha256": "4048d59ac30bdf2fd62c72fc32b1b3d7f44648b37a99db7931c5a59496c77b9d",
       "id": "Beszel adapter and Discord forwarder suites:1"
+    },
+    {
+      "name": "sibling-run guard suite",
+      "definition_sha256": "cc22f4f858562b90e61f70a77b2a11d6fc1d0e2adae556d6c569a5515a148beb",
+      "id": "sibling-run guard suite:1"
     }
   ],
   "removed": [
@@ -1902,25 +1907,6 @@
       "input_paths": [
         "breaker_cotenancy_probe.sh",
         "test_breaker_cotenancy_probe.sh"
-      ]
-    },
-    {
-      "id": "sibling-run guard suite:1",
-      "name": "sibling-run guard suite",
-      "forbidden_inputs": [
-        "test_sibling_guard.sh"
-      ],
-      "toolkit_commands": [
-        "./test_sibling_guard.sh"
-      ],
-      "evidence": "docs/offline-ci-cutover.md and vendor/offline-ci-proof.json: Guard and regression test exact; all fake sources generated in the cold suite.",
-      "index": 147,
-      "working_directory": ".",
-      "run_sha256": "5475b29f92b6103b4aef4256d4d95a3b526ff6d00b9b312a7dc863f0151dbf2c",
-      "private_command": "./test_sibling_guard.sh",
-      "input_paths": [
-        "sibling_guard.sh",
-        "test_sibling_guard.sh"
       ]
     },
     {
@@ -2288,7 +2274,6 @@
     "scripts/storage_audit.sh": "777c4f7fbfc55172a3234c5bdbc62046e2b0ec7449a9c32f12ed8046b04a67a8",
     "scripts/case_e20effbb-mapping-guard-calibration.mjs": "523b48e26c1f6bf3210dcc12e853dc92756c211a758a02b1a6606cbfc8c36b01",
     "secret_exposure_audit.sh": "67cc775efb5619ff808a6bfe6ace6aded91113237d25635d8314b26e41771539",
-    "sibling_guard.sh": "40fdea4eebad62c5ed20293fdb5913f3664daac06dae6584b757f6bf2272bb76",
     "skills.sh": "91f0c7f0180f0ec4a04193fcea6ebf1f58f7765554f2817dc4819301c51d5258",
     "test/external-disclosure.test.mjs": "dac15e46b073cef74b3b8e13f34e4b24e55e91612c6aba450550d6c6a907470d",
     "test/fixtures/gh_ci_status/RECORDED.md": "b7951de6c585400a35ef15613afa29f3f967c9b263b272a9c52e5b7f41a49544",
@@ -2348,7 +2333,6 @@
     "test_render_binding_normalization.sh": "c69bdb5104d90c449e7ece7e9137ef31e0def8fc4496ff7e84a48833df00748a",
     "test_responsible_leader.sh": "7467fd1ede05afa043db6c977fcc3be4cf1a177f5c0ed2d72e83b61a6649cb27",
     "test_secret_exposure_audit.sh": "399703e781a26a6c2555f16da37c9968c386eeb7b91f938bef53208db04601cc",
-    "test_sibling_guard.sh": "f19b6beecb68ff319935b45970bd1c507d14149ced7fbc455284b633e18c3659",
     "test_stale_descriptor_sweep.sh": "0d8022b586bbb8300b7b72c6b8b3a7da13dcd01c259df2f49cad6341514ad2af",
     "test_suite_preconditions.sh": "86f91b5ff13e906ca21c661df5282e445199dee0eb06b7a875e5a5ba47587259",
     "test_case_1ba58d26_acceptance.py": "98140b4eea6b52ec15f02b0279fcda0a9ad15cb020f93e55e29b023d16866f7c",

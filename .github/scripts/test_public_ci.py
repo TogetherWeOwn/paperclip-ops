@@ -159,6 +159,15 @@ class PublicCI(unittest.TestCase):
             text = (ROOT / ".github/workflows" / name).read_text()
             self.assertRegex(text, r"(?m)^  merge_group:", name)
 
+    def test_public_safety_push_ignores_merge_queue_branches(self):
+        # A push run and a merge_group run for the same queue commit share
+        # the workflow's concurrency group; cancel-in-progress cancels one
+        # and the cancelled required check ejects the queue entry.
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/public-safety.yml").read_text())
+        push = workflow[True]["push"]  # YAML 1.1 parses bare `on:` as True
+        self.assertEqual(push["branches-ignore"], ["gh-readonly-queue/**"])
+
     def test_lint_attests_hosted_environment_not_runner_name(self):
         text = (ROOT / ".github/workflows/pr-lint.yml").read_text()
         self.assertIn('"${RUNNER_ENVIRONMENT:-}" == github-hosted', text)
@@ -227,9 +236,12 @@ class PublicCI(unittest.TestCase):
         safety = (ROOT / ".github/workflows/public-safety.yml").read_text()
         self.assertIn("gitleaks", safety)
         self.assertIn("public_safety.py", safety)
-        # History scan is scoped to HEAD-reachable commits only: --all would
-        # judge unrelated fetched branches by this branch's allowlist.
-        self.assertIn("--log-opts=HEAD", safety)
+        # History scan is scoped to the commits this change introduces
+        # (merge-base range): an unconditional --all would judge unrelated
+        # fetched branches by this branch's allowlist. The workflow's only
+        # --all use is the loud-warning fallback when no range resolves.
+        self.assertIn('--log-opts="$LOGOPTS"', safety)
+        self.assertIn('RANGE="$MB..HEAD"', safety)
         self.assertNotIn("--log-opts=--all", safety)
 
     def test_metadata_protocol_constant_does_not_exempt_private_inventory(self):

@@ -34,7 +34,7 @@ credentials and file-integrity hashes, not directory-wide exclusions. Exceptions
 for removed historical fixtures do not authorize restoring those private files.
 
 Run the secret and privacy checks before adding a new commit. The public-safety
-workflow checks both the working tree and Git history reachable from HEAD. Do not disable
+workflow checks both the working tree and the Git history a change introduces. Do not disable
 it to import a patch. Changes derived from an old private PR must be reviewed as
 plain diffs and committed freshly; keep author/card custody on the private board,
 not in public branch names, commit messages, or PR text.

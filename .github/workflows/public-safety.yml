@@ -2,6 +2,13 @@ name: public-safety
 
 on:
   push:
+    # Merge-queue commits are covered by merge_group below. Without this
+    # ignore, creating the queue branch also fires a push run for the same
+    # commit; both runs share the concurrency group below (no pull_request
+    # number, same ref), cancel-in-progress kills one instantly, and the
+    # cancelled required check ejects the entry from the merge queue.
+    branches-ignore:
+      - 'gh-readonly-queue/**'
   pull_request:
   merge_group:
     types: [checks_requested]
@@ -25,14 +32,52 @@ jobs:
           persist-credentials: false
       - name: Reject private artifacts and deployment identifiers
         run: python3 .github/scripts/public_safety.py
-      - name: Scan working tree and history reachable from HEAD with reviewed fixture exceptions
+      - name: Scan working tree and fetched history with reviewed fixture exceptions
         env:
           SCANNER: ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          PUSH_BEFORE: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
         run: |
           docker pull "$SCANNER"
           docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" dir /repo --config /repo/.gitleaks.toml --redact=100 --no-banner
-          # Scan only history reachable from HEAD: --all also scans unrelated
-          # fetched branches, whose commits are judged by this branch's
-          # allowlist (a branch that recomputes a fixture digest and
-          # allowlists it only on itself would fail every open PR).
-          docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts=HEAD --config /repo/.gitleaks.toml --redact=100 --no-banner
+          # Scope the history scan to commits introduced here. actions/checkout
+          # with fetch-depth 0 fetches every branch, so --all scans unrelated
+          # branches against this commit's allowlist and reds every PR for
+          # another branch's finding. The dir scan above already covers the
+          # checked-out tree.
+          #
+          # The range is derived from the merge base so it covers the PR's own
+          # commits even when origin/main is not an ancestor of HEAD (stale
+          # merge ref, branch behind main). Pushes to main use the push's
+          # before..HEAD instead. The fallback is the full history with a loud
+          # warning -- never a silent single-commit scan: for a merge commit
+          # `git log -1` prints no patch, so a secret added and removed inside
+          # the PR would be missed.
+          BASE="origin/main"
+          RANGE=""
+          if [ "${EVENT_NAME:-}" = "push" ] && [ "${REF:-}" = "refs/heads/main" ] \
+             && [ -n "${PUSH_BEFORE:-}" ] \
+             && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "$PUSH_BEFORE" 2>/dev/null; then
+            RANGE="$PUSH_BEFORE..HEAD"
+          elif git rev-parse --verify "$BASE" >/dev/null 2>&1 \
+             && MB="$(git merge-base "$BASE" HEAD 2>/dev/null)" && [ -n "$MB" ]; then
+            RANGE="$MB..HEAD"
+          fi
+          if [ -z "$RANGE" ]; then
+            echo "::warning::public-safety: no merge-base with $BASE; scanning full history"
+            LOGOPTS="--all"
+          else
+            COUNT="$(git rev-list "$RANGE" --count 2>/dev/null || true)"
+            if [ -z "$COUNT" ]; then
+              echo "::warning::public-safety: cannot list range $RANGE; scanning full history"
+              LOGOPTS="--all"
+            elif [ "$COUNT" = "0" ]; then
+              echo "::warning::public-safety: empty history range $RANGE; scanning full history"
+              LOGOPTS="--all"
+            else
+              LOGOPTS="$RANGE"
+            fi
+          fi
+          docker run --rm --network none -v "$PWD:/repo:ro" "$SCANNER" git /repo --log-opts="$LOGOPTS" --config /repo/.gitleaks.toml --redact=100 --no-banner

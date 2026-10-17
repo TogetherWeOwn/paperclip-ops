@@ -8,17 +8,19 @@ matches no other adapter we run, so host alerts ride the EXISTING ops
 Discord webhook. This forwarder is the only thing that reads the routing
 table:
 
-  - only allow-listed title substrings route (longest wins). The
-    substrings match Beszel's real alert titles, which always lead with
-    the system name: "<system> <alert> above|below threshold"
-    (internal/alerts/alerts_system.go, e.g. "ovh-1 disk usage above
-    threshold", "ovh-1 CPU above threshold") and "Connection to
-    <system> is down" (alerts_status.go). A Beszel-shaped title with no
-    specific route takes the default route, so a future Beszel title
-    change still forwards instead of vanishing; anything else is
-    dropped without a send (exit 0, with a "dropped" line on stderr for
-    counting) — alert text is untrusted input and must never become a
-    free-form Discord post.
+  - a title routes only when it is Beszel-shaped (looks_like_beszel:
+    threshold tails, "Connection to " heads, failed-services /
+    container / SMART / storage-pool / network-monitor / certificate
+    families — all pinned to henrygd/beszel internal/alerts title
+    strings). Among the routes, allow-listed title substrings match
+    longest-wins; a route may additionally pin title_prefix (the " is
+    down" route requires the "Connection to " head, so "Database is
+    down" cannot ride it). A Beszel-shaped title with no specific route
+    takes the default route, so a future Beszel title change still
+    forwards instead of vanishing; anything else is dropped without a
+    send (exit 0, with a "dropped" line on stderr for counting) — alert
+    text is untrusted input and must never become a free-form Discord
+    post.
   - title is capped at 200 chars, body at min(body_max_chars, 500).
   - the message renders severity/owner/runbook from the route; Discord
     mentions are always suppressed (allowed_mentions.parse = []), so a
@@ -41,6 +43,7 @@ Exit: 0 sent (or dropped by policy, or dry-run); 1 send failed;
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -77,26 +80,72 @@ def load_routing(path: Path):
         if not isinstance(route, dict) or not isinstance(route.get("title_contains"), str) \
                 or not route["title_contains"]:
             die("every route needs a non-empty title_contains")
+        prefix = route.get("title_prefix")
+        if prefix is not None and (not isinstance(prefix, str) or not prefix):
+            die("title_prefix must be a non-empty string when present")
     default = routing.get("default_route")
     if default is not None and not isinstance(default, dict):
         die("default_route must be an object when present")
     return routing, min(cap, BODY_HARD_CAP)
 
 
+# Beszel's exact title heads (henrygd/beszel internal/alerts, main branch):
+# threshold "<system> <alert> above|below threshold" (alerts_system.go, no
+# trailing emoji), "Connection to <system> is <up|down> <emoji>"
+# (alerts_status.go), "Failed services on <system> <emoji>" /
+# "Services recovered on <system> <emoji>" (alerts_systemd.go),
+# "Unhealthy container <c> on <system> 🔴" / "<n> unhealthy containers on
+# <system> 🔴" / "<system> containers are healthy ✅" (alerts_container.go),
+# "SMART <state> on <system>: <dev> <emoji>" (alerts_smart.go),
+# "Storage pool <health> on <system>: <pool>" (alerts_zfs.go),
+# "Certificate expired|expiring|expiry recovered on <system>: <name>" and
+# "Network monitor <name> on <system>: <detail>" (alerts_network_monitors.go,
+# no emoji). Threshold titles end at "threshold" — a mid-text occurrence in
+# foreign prose is not Beszel-shaped.
+_BESZEL_TITLE_PREFIXES = (
+    "Connection to ",
+    "Failed services on ",
+    "Services recovered on ",
+    "Unhealthy container ",
+    "SMART ",
+    "Storage pool ",
+    "Network monitor ",
+    "Certificate ",
+)
+_BESZEL_TITLE_INFIXES = (
+    " unhealthy containers on ",
+    " containers are healthy",
+)
+_THRESHOLD_TAIL_RE = re.compile(r" threshold$")
+
+
 def looks_like_beszel(title):
-    """True for Beszel's real title shapes: threshold notices
-    ("<system> <alert> above|below threshold") and connection notices
-    ("Connection to <system> is ...")."""
-    return " threshold" in title or title.startswith("Connection to ")
+    """True only for Beszel's real title shapes (see _BESZEL_TITLE_*)."""
+    if title.startswith(_BESZEL_TITLE_PREFIXES):
+        return True
+    if any(infix in title for infix in _BESZEL_TITLE_INFIXES):
+        return True
+    return bool(_THRESHOLD_TAIL_RE.search(title))
+
+
+def _route_matches(route, title):
+    if route["title_contains"] not in title:
+        return False
+    prefix = route.get("title_prefix")
+    return prefix is None or title.startswith(prefix)
 
 
 def pick_route(routing, title):
-    matches = [r for r in routing["routes"] if r["title_contains"] in title]
+    # The Beszel-shape gate comes first: without it any substring route
+    # (e.g. " is down") would fire on foreign titles like "Database is
+    # down". A non-Beszel title never routes, even when it embeds a
+    # route substring mid-text.
+    if not looks_like_beszel(title):
+        return None
+    matches = [r for r in routing["routes"] if _route_matches(r, title)]
     if matches:
         return max(matches, key=lambda r: len(r["title_contains"]))
-    if looks_like_beszel(title):
-        return routing.get("default_route")
-    return None
+    return routing.get("default_route")
 
 
 def render(route, title, body, cap):

@@ -76,27 +76,54 @@ here; an operator installs the cron lines separately.
    ```python
    # beszel_discord_receiver.py — POST body -> forward_beszel_discord.py stdin
    import subprocess, sys
-   from http.server import BaseHTTPRequestHandler, HTTPServer
+   from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
    FWD = "/opt/beszel-bridge/forward_beszel_discord.py"
+   MAX_BODY = 64 * 1024  # alert JSON is small; bound the read
    class H(BaseHTTPRequestHandler):
+       timeout = 10  # one stalled loopback client cannot wedge the server
        def do_POST(self):
-           n = int(self.headers.get("Content-Length", 0))
+           try:
+               n = int(self.headers.get("Content-Length", "0"), 10)
+           except (TypeError, ValueError):
+               self.send_response(400)  # non-numeric length: no read
+               self.end_headers()
+               return
+           if n < 0 or n > MAX_BODY:
+               self.send_response(413)  # negative or oversized: no read
+               self.end_headers()
+               return
            body = self.rfile.read(n) if n else b"{}"
            p = subprocess.run([sys.executable, FWD], input=body,
                               capture_output=True, timeout=60)
+           # The forwarder's stderr carries the countable "dropped" line
+           # and refusal reasons — inherit it into this process's stderr
+           # so drops stay visible in the supervisor's journal.
+           sys.stderr.buffer.write(p.stderr or b"")
+           sys.stderr.flush()
            self.send_response(200 if p.returncode == 0 else 500)
            self.end_headers()
-       def log_message(self, *a):  # drops go to the forwarder's stderr
-           pass
-   HTTPServer(("127.0.0.1", 8099), H).serve_forever()
+       def log_message(self, *a):  # routine requests stay quiet; drops
+           pass                      # surface via the write-through above
+   server = ThreadingHTTPServer(("127.0.0.1", 8099), H)
+   server.daemon_threads = True
+   server.serve_forever()
    ```
    Beszel notification URL (shoutrrr `generic://`; `template=json`
    is what produces the `{title, message}` JSON payload — without it
    there is no title key — and `messagekey` defaults to `message`,
    which the forwarder reads):
-   `generic://127.0.0.1:8099/hook?template=json`. Keep
-   `titlekey=title&messagekey=message` explicit if the hub UI ever
+   `generic://127.0.0.1:8099/hook?template=json&disabletls=yes`.
+   The `&disabletls=yes` is load-bearing, not optional: shoutrrr's
+   generic service defaults to https, so without it the hub opens a
+   TLS handshake against this plain-HTTP receiver and every alert is
+   lost. Keep the scheme exactly `generic`: Beszel only attaches the
+   `$title` property when the scheme is generic and a template is set.
+   Keep `titlekey=title&messagekey=message` explicit if the hub UI ever
    pre-fills other keys.
+   Since Beszel v0.20 the hub refuses loopback/private webhook targets
+   unless the notification's owner is an admin: own this notification
+   as a Beszel admin user. The read-only hub user from step 1 is for
+   fetching only — it cannot own a loopback notification.
 
 ## Fail-closed rules
 

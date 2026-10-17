@@ -1,5 +1,5 @@
 {
-  "_comment": "Public source routing template, not an installed channel inventory. Resolve DISCORD_WEBHOOK_URL only from separately authorized protected configuration. Treat alert text as untrusted; route only allow-listed title substrings (title_contains, longest wins) and truncate the body to 500 characters. Substrings match Beszel's real alert titles, which always lead with the system name: '<system> <alert> above|below threshold' (henrygd/beszel internal/alerts/alerts_system.go; alert names are lowercased except CPU/GPU/CPU*, so 'disk usage' and 'memory' are lowercase while 'CPU' is not) and 'Connection to <system> is down' (alerts_status.go). A Beszel-shaped title with no specific route takes default_route; anything else is dropped. Every route names its response role and runbook. No webhook URL, credential or channel ID is included.",
+  "_comment": "Public source routing template, not an installed channel inventory. Resolve DISCORD_WEBHOOK_URL only from separately authorized protected configuration. Treat alert text as untrusted: a title routes only when Beszel-shaped (threshold tails, 'Connection to ' heads, failed-services / container / SMART / storage-pool / network-monitor / certificate families per henrygd/beszel internal/alerts), then allow-listed title substrings match longest-wins. A route may pin title_prefix (the host-down route requires the 'Connection to ' head so foreign 'X is down' titles cannot ride it). Truncate the body to 500 characters. Substrings match Beszel's real alert titles: '<system> <alert> above|below threshold' (alerts_system.go; alert names are lowercased except CPU/GPU/CPU*, so 'disk usage' and 'memory' are lowercase while 'CPU' is not), 'Connection to <system> is down' (alerts_status.go), 'Failed services on <system>' (alerts_systemd.go). A Beszel-shaped title with no specific route takes default_route; anything else is dropped. Every route names its response role and runbook. No webhook URL, credential or channel ID is included.",
   "webhook_env": "DISCORD_WEBHOOK_URL",
   "body_max_chars": 500,
   "default_route": {
@@ -20,6 +20,15 @@
     },
     {
       "title_contains": " is down",
+      "title_prefix": "Connection to ",
+      "channel": "ops-alerts",
+      "mention": true,
+      "severity": "critical",
+      "owner": "devops",
+      "runbook": "docs/runbooks/garm-ci-oncall-alert-to-action.md"
+    },
+    {
+      "title_contains": "Failed services on ",
       "channel": "ops-alerts",
       "mention": true,
       "severity": "critical",

@@ -19,6 +19,13 @@
 #      (positive control) still fetch.
 #   5. TOKENLESS AUTH — an auth answer with no token exits 2 with empty
 #      stdout, so the consumer scores nothing.
+#   6. LOOPBACK GATE — the http-vs-https gate parses the URL authority,
+#      it does not glob it: userinfo forms ("127.0.0.1@host",
+#      "user:pass@127.0.0.1"), lookalike hosts ("127.evil.example",
+#      hex/octal or decimal-integer IPv4), and a bare "::1" are refused
+#      with no curl call; "localhost" and bracketed "[::1]" fetch.
+#      (Without this, a misconfigured URL sends the password in the
+#      clear to a remote host.)
 #
 # Hermetic: no network, no credentials. A stub curl answers from fixture
 # JSON and records argv + config + data-file contents. Fake secret-shaped
@@ -190,6 +197,42 @@ if [[ "$(cat "$D/rc")" == "2" ]] && ! [[ -s "$D/stdout" ]] \
 else
   bad "tokenless auth refused with empty stdout" "rc=$(cat "$D/rc") stderr=$(head -c 300 "$D/stderr")"
 fi
+
+# --- §6 loopback gate parses the authority ----------------------------------
+# Refused (exit 2, no fetch): each URL must die in the gate before curl.
+for evil_url in \
+    "http://127.0.0.1@host.example.invalid/" \
+    "http://operator:TEST-password-not-a-secret@127.0.0.1:8090/" \
+    "http://127.0.0.1:8090@host.example.invalid/" \
+    "http://[::1]@host.example.invalid/" \
+    "http://127.evil.example.invalid/" \
+    "http://127.0.0.1.evil.example.invalid/" \
+    "http://0x7f.0.0.1:8090/" \
+    "http://2130706433/" \
+    "http://[::1%25lo]:8090/" \
+    "http://::1:8090/"; do
+  D="$(fresh_case gate-refused)"
+  run_tool "$D" BESZEL_HUB_URL="$evil_url"
+  if [[ "$(cat "$D/rc")" == "2" ]] && ! [[ -s "$D/stdout" ]] \
+      && grep -q "must be https unless the hub is loopback\|must not embed credentials" "$D/stderr" \
+      && ! [[ -s "$D/argv.log" ]]; then
+    ok "gate refuses $evil_url with no fetch"
+  else
+    bad "gate refuses $evil_url with no fetch" "rc=$(cat "$D/rc") stderr=$(head -c 300 "$D/stderr")"
+  fi
+done
+
+# Accepted: localhost and bracketed [::1] still fetch over plain http.
+for good_url in "http://localhost:8090" "http://[::1]:8090"; do
+  D="$(fresh_case gate-accepted)"
+  run_tool "$D" BESZEL_HUB_URL="$good_url"
+  if [[ "$(cat "$D/rc")" == "0" ]] \
+      && jq -e 'type == "array" and length == 1' "$D/stdout" >/dev/null 2>&1; then
+    ok "gate accepts $good_url"
+  else
+    bad "gate accepts $good_url" "rc=$(cat "$D/rc") stderr=$(head -c 300 "$D/stderr")"
+  fi
+done
 
 echo "fetch-beszel-normalized: $PASS passed, $FAIL failed"
 [[ "$FAIL" == "0" ]]

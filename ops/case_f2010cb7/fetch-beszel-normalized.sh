@@ -45,17 +45,40 @@ export BESZEL_IDENTITY BESZEL_PASSWORD
 HUB="${BESZEL_HUB_URL%/}"
 # Plain http to a remote hub sends the password and token in the clear and
 # lets an on-path attacker answer with a hostile token (see the charset
-# gate below). Refuse unless the hub is https or loopback.
+# gate below). Refuse unless the hub is https or loopback. The authority
+# is parsed, not globbed: any userinfo ("@" — e.g. "127.0.0.1@host" or
+# "user:pass@127.0.0.1") is refused outright, bracketed literals are
+# unwrapped before comparison (so "[::1]" matches but "::1" never
+# reaches curl unbracketed), and 127/8 must be a strict dotted quad with
+# validated octets (so "127.evil.example" and "2130706433" refuse).
 hub_scheme="${HUB%%://*}"
 if [[ "${hub_scheme,,}" != "https" ]]; then
-  hub_host="${HUB#*://}"
-  hub_host="${hub_host%%[/:]*}"
-  hub_host="${hub_host#[}"
-  hub_host="${hub_host%]}"
-  case "${hub_host,,}" in
-    127.*|localhost|::1) ;;
-    *) refuse "BESZEL_HUB_URL must be https unless the hub is loopback" ;;
+  hub_rest="${HUB#*://}"
+  case "$hub_rest" in
+    *@*) refuse "BESZEL_HUB_URL must not embed credentials (userinfo)" ;;
   esac
+  if [[ "$hub_rest" == "["* ]]; then
+    hub_host="${hub_rest%%]*}"
+    hub_host="${hub_host#[}"
+    case "$hub_host" in
+      ::1) ;;
+      *) refuse "BESZEL_HUB_URL must be https unless the hub is loopback" ;;
+    esac
+  else
+    hub_host="${hub_rest%%[/:]*}"
+    case "${hub_host,,}" in
+      localhost) ;;
+      *)
+        if [[ "$hub_host" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] \
+          && (( 10#${BASH_REMATCH[1]} == 127 && 10#${BASH_REMATCH[2]} <= 255 \
+            && 10#${BASH_REMATCH[3]} <= 255 && 10#${BASH_REMATCH[4]} <= 255 )); then
+          :
+        else
+          refuse "BESZEL_HUB_URL must be https unless the hub is loopback"
+        fi
+        ;;
+    esac
+  fi
 fi
 TIMEOUT="${BESZEL_FETCH_TIMEOUT:-15}"
 [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || refuse "BESZEL_FETCH_TIMEOUT must be a whole number"

@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """Hermetic suite for ops/case_f2010cb7/forward_beszel_discord.py.
 
-Titles below are Beszel's exact alert shapes (henrygd/beszel source):
-threshold notices "<system> <alert> above|below threshold"
-(internal/alerts/alerts_system.go; alert names lowercased except
-CPU/GPU/CPU*, so "disk usage"/"memory" are lowercase and "CPU" is not)
-and connection notices "Connection to <system> is down|up ..."
-(alerts_status.go).
+Titles below are Beszel's exact alert shapes (henrygd/beszel source,
+internal/alerts on main): threshold notices "<system> <alert>
+above|below threshold" (alerts_system.go, no trailing emoji; alert names
+lowercased except CPU/GPU/CPU*, so "disk usage"/"memory" are lowercase
+and "CPU" is not), connection notices "Connection to <system> is
+<up|down> <emoji>" (alerts_status.go), "Failed services on <system>
+<emoji>" / "Services recovered on <system> <emoji>" (alerts_systemd.go),
+"Unhealthy container <c> on <system> 🔴" / "<n> unhealthy containers on
+<system> 🔴" / "<system> containers are healthy ✅"
+(alerts_container.go), "SMART <state> on <system>: <dev> <emoji>"
+(alerts_smart.go), "Storage pool <health> on <system>: <pool>"
+(alerts_zfs.go), "Certificate expired|expiring|expiry recovered on
+<system>: <name>" and "Network monitor <name> on <system>: <detail>"
+(alerts_network_monitors.go).
 
 Pins, each with a positive control:
   1. ROUTE — an allow-listed substring forwards with that route's
@@ -32,16 +40,37 @@ Pins, each with a positive control:
      refuses a non-https webhook URL before any send.
   8. REFUSALS — webhook_env other than DISCORD_WEBHOOK_URL, non-JSON
      alert, empty title, and (live mode) unset webhook env each exit 2.
+  9. FAMILIES — every other real Beszel family (failed/recovered
+     services, unhealthy/healthy containers, SMART, storage pools,
+     network monitors, certificates) is Beszel-shaped: failed services
+     take the critical route, the rest take default_route. Foreign
+     lookalikes ("Database is down", mid-text "… above threshold …"
+     prose) are DROPPED even though they embed route substrings: the
+     Beszel-shape gate runs before any route, and the host-down route
+     additionally requires the "Connection to " head.
+ 10. RECEIVER — the exact README receiver snippet runs: a POST of
+     Beszel's exact {"title", "message"} shape delivers through the
+     real forwarder, a dropped title's "dropped" line lands on the
+     receiver's stderr (not discarded), and a non-numeric or oversized
+     Content-Length is rejected without crashing the server.
 
-No network: sends go to a stub curl that records its invocation.
+No network: sends go to a stub curl that records its invocation, and the
+receiver test serves on a loopback ephemeral port.
 """
 
+import http.client
 import json
 import os
+import re
+import socket
 import subprocess
 import sys
 import tempfile
+import textwrap
+import time
 import unittest
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -138,11 +167,77 @@ class TestRouting(ForwarderCase):
         self.assertIsNone(payload)
         self.assertIn("dropped", proc.stderr)
 
+    def test_bare_host_down_is_dropped(self):
+        # "Database is down" embeds the " is down" route substring but is
+        # not Beszel-shaped (no "Connection to " head): the shape gate
+        # must drop it before any route matches.
+        proc, payload = self.dry_run("Database is down")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIsNone(payload)
+        self.assertIn("dropped", proc.stderr)
+
+    def test_mid_text_threshold_lookalike_is_dropped(self):
+        # Foreign prose embedding route substrings mid-text is not
+        # Beszel-shaped: real threshold titles END at "threshold".
+        proc, payload = self.dry_run(
+            "Grafana note: CPU above threshold and disk usage above "
+            "threshold muted, db is down for maintenance")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIsNone(payload)
+        self.assertIn("dropped", proc.stderr)
+
+
+class TestAlertFamilies(ForwarderCase):
+    """Every other real Beszel family (pins: exact upstream strings)."""
+
+    def assert_default_warning(self, title):
+        _proc, payload = self.dry_run(title)
+        self.assertIsNotNone(payload, f"dropped real Beszel title: {title}")
+        self.assertTrue(payload["content"].startswith("[warning]"),
+                        payload["content"])
+        self.assertIn("garm-ci-oncall-alert-to-action.md", payload["content"])
+
+    def test_failed_services_route_is_critical(self):
+        proc, payload = self.dry_run("Failed services on ovh-1 \U0001F534")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        content = payload["content"]
+        self.assertTrue(content.startswith("[critical] Failed services on ovh-1"),
+                        content)
+        self.assertIn("garm-ci-oncall-alert-to-action.md", content)
+
+    def test_services_recovered_uses_default_route(self):
+        self.assert_default_warning("Services recovered on ovh-1 ✅")
+
+    def test_unhealthy_container_uses_default_route(self):
+        self.assert_default_warning("Unhealthy container web on ovh-1 \U0001F534")
+
+    def test_multiple_unhealthy_containers_use_default_route(self):
+        self.assert_default_warning("3 unhealthy containers on ovh-1 \U0001F534")
+
+    def test_healthy_containers_use_default_route(self):
+        self.assert_default_warning("db-1 containers are healthy ✅")
+
+    def test_smart_uses_default_route(self):
+        self.assert_default_warning("SMART failed on ovh-1: sda \U0001F534")
+
+    def test_storage_pool_uses_default_route(self):
+        self.assert_default_warning("Storage pool degraded on ovh-1: tank")
+
+    def test_network_monitor_uses_default_route(self):
+        self.assert_default_warning(
+            "Network monitor ping on ovh-1: host unreachable")
+
+    def test_certificate_uses_default_route(self):
+        self.assert_default_warning(
+            "Certificate expiring on ovh-1: example.com")
+
 
 class TestCapsAndMentions(ForwarderCase):
     def test_body_capped_at_500_and_title_at_200(self):
         routing = self.routing_variant(lambda d: d.__setitem__("body_max_chars", 5000))
-        title = "ovh-1 memory above threshold " + "x" * 400
+        # Padding goes in the system slot: a real threshold title still
+        # ENDS at "threshold", so over-long tails must not route.
+        title = "ovh-1-" + "x" * 180 + " memory above threshold"
         _proc, payload = self.dry_run(title, body="y" * 5000, routing=routing)
         lines = payload["content"].split("\n")
         self.assertEqual(len(lines[0]), len("[warning] ") + 200)
@@ -254,6 +349,132 @@ class TestRefusals(ForwarderCase):
             capture_output=True, text=True, timeout=30, env=env)
         self.assert_refusal(proc)
         self.assertIn("HTTPS", proc.stderr)
+
+
+class TestReceiverDocumentedSnippet(ForwarderCase):
+    """The README receiver is the documented install path: the EXACT
+    snippet from the doc must run, deliver Beszel's exact
+    {"title", "message"} shape through the real forwarder, keep the
+    "dropped" line on stderr, and reject bad Content-Length values
+    without dying."""
+
+    README = ROOT / "ops/case_f2010cb7/README.md"
+
+    def receiver_code(self, port):
+        blocks = [b for b in re.findall(r"```python\n(.*?)```",
+                                        self.README.read_text(), re.DOTALL)
+                  if "beszel_discord_receiver.py" in b]
+        self.assertEqual(len(blocks), 1,
+                         "README must carry exactly one receiver snippet")
+        code = textwrap.dedent(blocks[0])
+        self.assertIn("ThreadingHTTPServer", code)
+        self.assertIn("forward_beszel_discord.py", code)
+        code = code.replace("/opt/beszel-bridge/forward_beszel_discord.py",
+                            str(FWD))
+        self.assertIn('("127.0.0.1", 8099)', code)
+        return code.replace('("127.0.0.1", 8099)',
+                            f'("127.0.0.1", {port})')
+
+    def free_port(self):
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        return port
+
+    def start_receiver(self):
+        """Stub curl + fake webhook env; returns (proc, port)."""
+        stub = self.dir / "curl"
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            f'printf "sent %s\\n" "$@" >> "{self.dir}/curl.log"\n'
+            "exit 0\n")
+        stub.chmod(0o755)
+        port = self.free_port()
+        (self.dir / "receiver.py").write_text(self.receiver_code(port))
+        env = dict(os.environ, PATH=f"{self.dir}:{os.environ['PATH']}",
+                   DISCORD_WEBHOOK_URL=FAKE_WEBHOOK)
+        proc = subprocess.Popen(
+            [sys.executable, str(self.dir / "receiver.py")],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        base = f"http://127.0.0.1:{port}/hook"
+        deadline = time.time() + 10
+        while True:
+            try:
+                urllib.request.urlopen(base, timeout=2)
+            except urllib.error.HTTPError as e:
+                self.assertEqual(e.code, 501, "receiver answers GET with 501")
+                return proc, base
+            except OSError:
+                pass
+            if time.time() > deadline:
+                self.finish(proc)
+                self.fail("receiver did not start serving")
+            time.sleep(0.1)
+
+    def finish(self, proc):
+        """Terminate the receiver; return its stderr bytes."""
+        if proc.poll() is None:
+            proc.terminate()
+        try:
+            _, errs = proc.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            _, errs = proc.communicate(timeout=15)
+        return errs or b""
+
+    def post_json(self, base, payload):
+        req = urllib.request.Request(
+            base, data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status
+
+    def test_exact_beszel_shape_delivers(self):
+        proc, base = self.start_receiver()
+        try:
+            status = self.post_json(
+                base, {"title": "ovh-1 CPU above threshold",
+                       "message": "cpu text"})
+            self.assertEqual(status, 200)
+            log = (self.dir / "curl.log").read_text() \
+                if (self.dir / "curl.log").exists() else ""
+            self.assertIn("sent", log, "receiver must drive a forwarder send")
+        finally:
+            self.finish(proc)
+
+    def test_drop_surfaces_on_receiver_stderr(self):
+        proc, base = self.start_receiver()
+        try:
+            status = self.post_json(
+                base, {"title": "Grafana: something unrelated", "message": "x"})
+            self.assertEqual(status, 200)
+        finally:
+            errs = self.finish(proc)
+        self.assertIn(b"dropped", errs,
+                      "the forwarder's dropped line must reach receiver stderr")
+
+    def test_bad_content_length_rejected_server_survives(self):
+        proc, base = self.start_receiver()
+        port = int(base.rsplit(":", 1)[1].split("/", 1)[0])
+        try:
+            for raw_len, want in ((b"many", 400), (b"99999999", 413),
+                                  (b"-5", 413)):
+                s = socket.create_connection(("127.0.0.1", port), timeout=10)
+                try:
+                    s.sendall(b"POST /hook HTTP/1.1\r\nHost: x\r\nContent-Length: "
+                              + raw_len + b"\r\nConnection: close\r\n\r\n{}")
+                    data = s.recv(1024)
+                finally:
+                    s.close()
+                self.assertIn(f"HTTP/1.0 {want}".encode(), data,
+                              f"Content-Length {raw_len!r} must yield {want}")
+            # Server still alive afterwards: a good POST delivers.
+            status = self.post_json(
+                base, {"title": "ovh-1 CPU above threshold", "message": "ok"})
+            self.assertEqual(status, 200)
+        finally:
+            self.finish(proc)
 
 
 if __name__ == "__main__":

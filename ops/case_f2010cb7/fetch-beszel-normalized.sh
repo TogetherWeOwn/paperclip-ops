@@ -36,6 +36,10 @@ command -v python3 >/dev/null 2>&1 || refuse "python3 required"
 [[ -n "${BESZEL_HUB_URL:-}" ]] || refuse "BESZEL_HUB_URL is unset"
 [[ -n "${BESZEL_IDENTITY:-}" ]] || refuse "BESZEL_IDENTITY is unset"
 [[ -n "${BESZEL_PASSWORD:-}" ]] || refuse "BESZEL_PASSWORD is unset"
+# The auth body below reads these through jq's env (never argv). Export
+# explicitly: if this script is ever sourced after plain assignments,
+# unexported vars would read as null and every fetch would refuse.
+export BESZEL_IDENTITY BESZEL_PASSWORD
 HUB="${BESZEL_HUB_URL%/}"
 TIMEOUT="${BESZEL_FETCH_TIMEOUT:-15}"
 [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || refuse "BESZEL_FETCH_TIMEOUT must be a whole number"

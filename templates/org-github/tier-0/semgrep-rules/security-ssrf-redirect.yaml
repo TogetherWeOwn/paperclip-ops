@@ -65,6 +65,15 @@ rules:
               - pattern-not: 'axios($U, {..., baseURL: "...", ...}, ...)'
           - pattern: 'axios($U, {..., ...$URL, ...}, ...)'
           - pattern: got($URL, ...)
+          # got.get/post/... take the same first-argument URL as bare
+          # got(url); a dedicated method branch binds it with a literal
+          # guard and a method allowlist, so extend/paginate stay silent.
+          - patterns:
+              - pattern: got.$METHOD($URL, ...)
+              - pattern-not: got.$METHOD("...", ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head|stream)$
           # Method forms take the same config object (axios.request):
           # the generic branch excludes objects, the config branches bind
           # url/baseURL/spread exactly like the bare form.
@@ -171,20 +180,21 @@ rules:
   # payload objects (post/put/patch second argument) and nested spreads
   # (headers/params/nested url) stay silent exactly like the structural
   # rule. The config-object prefix steps over one nesting level, the
-  # get-style first argument allows one call-paren group, and the
-  # post-style second argument allows one inline object, so url/baseURL
-  # behind a headers/data/payload object fire. Config url values run to
-  # the next property boundary, not the first comma, so path.join(a,
-  # req...) and new URL(a, req...).href fire, while a constant url stays
-  # silent even when later properties mention req.*. The boundary
+  # get/post-style first argument allows one call-paren group, and the
+  # post-style second argument allows one inline object, call-paren group
+  # or array literal, so url/baseURL behind a headers/data/payload object
+  # fire, as do call/array payload shapes. Template config urls scan to
+  # the closing backtick, so a leading constant placeholder still fires.
+  # Config url values run to the next property boundary, not the first
+  # comma, so path.join(a, req...) and new URL(a, req...).href fire, while
+  # a constant url stays silent even when later properties mention req.*. The boundary
   # lookahead uses single backslashes: these patterns live in
   # single-quoted YAML scalars where a backslash is literal, so a doubled
   # backslash would test for a literal backslash and never fire.
   # Literal URLs are excluded inside the regex (the captured position may
   # not start with a quote or, for the direct form, a config brace).
   # Single-line calls only; a generic call split across lines stays with
-  # the reviewer, as do shapes deeper than one nesting level or with a
-  # brace inside a call-paren first argument.
+  # the reviewer, as do shapes deeper than one nesting level.
   - id: tier0-ssrf-generic-fetch-ts
     languages: [typescript]
     severity: WARNING
@@ -201,13 +211,13 @@ rules:
           - pattern-regex: '\b(?:axios(?:\.(?:get|post|put|patch|delete|head|request|options))?|got(?:\.(?:get|post|put|patch|delete|head|request|stream))?)<[^()\n]*>\s*\(\s*(?P<URL>`[^\n]*?\$\{[^\n)]*)'
           - pattern-regex: '\b(?:axios(?:\.(?:get|post|put|patch|delete|head|request|options))?|got(?:\.(?:get|post|put|patch|delete|head|request|stream))?)<[^()\n]*>\s*\(\s*["''][^"''\n]*["'']\s*\+\s*(?P<URL>(?!\s*["''`])[^\n)]*)'
           - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?:url|baseURL)\s*:\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*\w+\s*:)[^}\n])*)'
-          - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?:url|baseURL)\s*:\s*(?P<URL>`[^}\n]*?\$\{[^}\n]*)'
+          - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?:url|baseURL)\s*:\s*(?P<URL>`[^`\n]*?\$\{[^`\n]*)'
           - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?:url|baseURL)\s*:\s*["''][^"''\n]*["'']\s*\+\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*\w+\s*:)[^}\n])*)'
           - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?\.\.\.(?P<URL>[^,}\n]*)'
           - pattern-regex: '\baxios(?:\.(?:get|delete|head|options))?<[^()\n]*>\s*\((?:[^,{()\n]|\([^()\n]*\))*,\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?baseURL\s*:\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*\w+\s*:)[^}\n])*)'
           - pattern-regex: '\baxios(?:\.(?:get|delete|head|options))?<[^()\n]*>\s*\((?:[^,{()\n]|\([^()\n]*\))*,\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?\.\.\.(?P<URL>[^,}\n]*)'
-          - pattern-regex: '\baxios\.(?:post|put|patch)<[^()\n]*>\s*\([^,{\n]*,(?:[^,{\n]|\{[^{}\n]*\})*,\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?baseURL\s*:\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*\w+\s*:)[^}\n])*)'
-          - pattern-regex: '\baxios\.(?:post|put|patch)<[^()\n]*>\s*\([^,{\n]*,(?:[^,{\n]|\{[^{}\n]*\})*,\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?\.\.\.(?P<URL>[^,}\n]*)'
+          - pattern-regex: '\baxios\.(?:post|put|patch)<[^()\n]*>\s*\((?:[^,{()\n]|\([^()\n]*\))*,(?:[^,{\n]|\([^()\n]*\)|\[[^\]\n]*\]|\{[^{}\n]*\})*,\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?baseURL\s*:\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*\w+\s*:)[^}\n])*)'
+          - pattern-regex: '\baxios\.(?:post|put|patch)<[^()\n]*>\s*\((?:[^,{()\n]|\([^()\n]*\))*,(?:[^,{\n]|\([^()\n]*\)|\[[^\]\n]*\]|\{[^{}\n]*\})*,\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?\.\.\.(?P<URL>[^,}\n]*)'
       - metavariable-regex:
           metavariable: $URL
           regex: (?is).*(req\.|request\.|query|params|searchParams|userInput|untrusted|externalUrl|callbackUrl|redirectUrl|returnUrl|targetUrl|destUrl|webhookUrl|nextUrl|inputUrl)

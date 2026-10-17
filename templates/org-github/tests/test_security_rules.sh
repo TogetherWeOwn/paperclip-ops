@@ -275,6 +275,13 @@ async function h(req, searchParams, url, body) {
   await axios.get("/x", data, { ...req.body });
   await http.createServer(req.query.handler);
   await https.Agent(req.query.opts);
+  await got.get(req.query.u);
+  await got.post(req.body.url, { json: data });
+  await got.stream(`${base}/${req.query.p}`);
+  await got.get("https://api.example.com/v1/query");
+  await got.get(API_URL);
+  await got.extend(req.query.opts);
+  await got.paginate(req.query.u);
 }
 EOF
     cat > "$FX/fx-ssrf.ts" <<'EOF'
@@ -337,6 +344,22 @@ async function h(req: any, data: any, url: any) {
   await axios.patch<User>("/x", data, { ...req.body });
   await axios<User>({ extra: { baseURL: req.query.host }, url: BASE_URL });
   await axios.get<User>("/x", { extra: { ...req.body }, baseURL: BASE_URL });
+  await axios<User>({ headers: { A: 1 }, url: `/x/${req.query.p}` });
+  await axios<User>({ headers: { A: 1 }, url: "/x/" + req.query.p });
+  await axios<User>({ headers: { A: 1 }, ...req.body });
+  await axios.get<User>("/x", { headers: { A: 1 }, ...req.body });
+  await axios.post<User>("/x", data, { headers: { A: 1 }, baseURL: req.query.host });
+  await axios.post<User>("/x", data, { headers: { A: 1 }, ...req.body });
+  await axios<User>({ url: "/x/" + BASE_URL, params: req.query });
+  await axios<User>({ url: `${BASE_URL}/users/${req.params.id}` });
+  await axios<User>({ url: `${BASE_URL}/${req.query.p}`, timeout: 5 });
+  await axios.post<User>(path.join(a, b), data, { baseURL: req.query.host });
+  await axios.put<User>("/x", fn(a, b), { baseURL: req.query.host });
+  await axios.put<User>("/x", [1, 2], { baseURL: req.query.host });
+  await axios.post<User>("/x", JSON.stringify(a, b), { baseURL: req.query.host });
+  await axios.post<User>(path.join(a, b), data, { ...req.body });
+  await axios.post<User>("/x", fn(a, b), { ...req.body });
+  await axios.put<User>("/x", [1, 2], { ...req.body });
 }
 EOF
     cat > "$FX/fx-ssrf.py" <<'EOF'
@@ -550,16 +573,16 @@ def expect_silent(fname, rid):
     got = hits.get((fname, rid), set())
     check(not got, f"behavioural {fname} stays silent for {rid} (got lines {sorted(got)})")
 
-expect_hit("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16, 17, 21, 25, 26, 28, 30, 32, 33, 34, 36, 37, 39, 40))
+expect_hit("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16, 17, 21, 25, 26, 28, 30, 32, 33, 34, 36, 37, 39, 40, 54, 55, 56))
 check(2 not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
       "behavioural fx-ssrf.js:2 literal fetch stays silent")
-for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24, 27, 29, 31, 35, 38, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53):
+for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24, 27, 29, 31, 35, 38, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 57, 58, 59, 60):
     check(ln not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
           f"behavioural fx-ssrf.js:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.js", "tier0-open-redirect-js")
 expect_hit("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5))
-expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57))
-for ln in (23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 58, 59):
+expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75))
+for ln in (23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 58, 59, 66):
     check(ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts"), set())
           and ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js"), set()),
           f"behavioural fx-ssrf.ts:{ln} literal/constant URL stays silent")

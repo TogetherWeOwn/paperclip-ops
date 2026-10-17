@@ -32,8 +32,15 @@ rules:
       - pattern-either:
           - pattern: fetch($URL, ...)
           # Bare callable forms: axios(url) / got(url) are the same direct
-          # shape as their method forms.
-          - pattern: axios($URL, ...)
+          # shape as their method forms. The axios config-object form
+          # binds $URL to its url property: binding the whole object made
+          # a constant url fire whenever params/data mentioned req.*, so
+          # the bare branch excludes objects and the config branch below
+          # matches them instead.
+          - patterns:
+              - pattern: axios($URL, ...)
+              - pattern-not: 'axios({...}, ...)'
+          - pattern: 'axios({..., url: $URL, ...}, ...)'
           - pattern: got($URL, ...)
           - patterns:
               - pattern: axios.$METHOD($URL, ...)
@@ -53,6 +60,7 @@ rules:
       # ("/api/params", "https://api.example.com/v1/query").
       - pattern-not: fetch("...", ...)
       - pattern-not: axios("...", ...)
+      - pattern-not: 'axios({..., url: "...", ...}, ...)'
       - pattern-not: got("...", ...)
       - pattern-not: axios.$METHOD("...", ...)
       - pattern-not: $HTTP.$METHOD("...", ...)

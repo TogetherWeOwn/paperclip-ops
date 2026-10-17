@@ -207,6 +207,10 @@ async function h(req, searchParams, url, body) {
   await https.get("https://api.example.com/v1/query");
   await axios("https://api.example.com/v1/query");
   await got("https://api.example.com/v1/query");
+  await axios({ method: "get", url: req.query.url });
+  await axios({ method: "get", url: "https://x/a", params: req.query });
+  await axios({ method: "get", url: "https://api.example.com/v1/query", params: req.query });
+  await axios({ method: "get", url: API_URL, params: req.query });
 }
 EOF
     cat > "$FX/fx-ssrf.py" <<'EOF'
@@ -236,6 +240,19 @@ def h(request):
     httpx.request("GET", "https://x/request.html")
     urllib.request.urlopen("https://x/request.html")
     requests.Session().get("https://x/request.html")
+    requests.post("https://x/request.html")
+    requests.put("https://x/request.html")
+    requests.patch("https://x/request.html")
+    requests.delete("https://x/request.html")
+    requests.head("https://x/request.html")
+    httpx.post("https://x/request.html")
+    httpx.put("https://x/request.html")
+    httpx.patch("https://x/request.html")
+    httpx.delete("https://x/request.html")
+    httpx.head("https://x/request.html")
+    httpx.get(url="https://x/request.html")
+    httpx.Client().get("https://x/request.html")
+    httpx.AsyncClient().get("https://x/request.html")
 EOF
     # Redirect fixtures: literal targets and safe builders stay silent
     # (both argument positions, literal-URL construction, url_for), while
@@ -276,9 +293,12 @@ EOF
     SK_SVC="svcacct-"
     SK_BODY="AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEfGhIjKlMn"
     SK_SHORT="AbCdEfGh-12345678-IjKlMnOpQrStUv"
+    SK_EX_BODY="EXAMPLEAbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+    SK_REP_BODY="AAAAAAAAAABcDeFgHiJkLmNoPqRsTuVwXyZ0123456789"
     SL_P="xoxb-"
     SL_BODY="4827364927364-5827364927364-2hWdFy7ejxVuN3P8F6aZbCdE9"
     SL_CANARY="4827shy2-abcdefghijklmnop"
+    SL_EX_BODY="12345678-12345678-example123456789012"
     AWS_A="AK"
     AWS_B="IA"
     AWS_BODY="1A2B3C4D5E6F7G8H"
@@ -307,6 +327,9 @@ EOF
         printf 'o=url = "https://%s%s%s%s%s/%s%s"\n' "$DISC_D" "$DISC_B" "$DISC_C" "$CHAN_A" "$CHAN_B" "$TOK_A" "$TOK_B"
         printf 'p=%s%s\n' "$SL_P" "$SL_CANARY"
         printf 'q=%s%s\n' "$SK_P" "$SK_SHORT"
+        printf 'r=%s%s\n' "$SL_P" "$SL_EX_BODY"
+        printf 's=%s%s\n' "$SK_P" "$SK_EX_BODY"
+        printf 't=%s%s\n' "$SK_P" "$SK_REP_BODY"
     } > "$FX/fx-secrets.txt"
     "$SEMGREP" scan --config "$ROOT/$SSRF" --json "$FX/fx-ssrf.js" "$FX/fx-ssrf.py" "$FX/fx-redirect.js" "$FX/fx-redirect.py" > "$FX/ssrf.json" 2>/dev/null \
         || fail "semgrep scan of SSRF/redirect fixtures failed to run"
@@ -336,17 +359,17 @@ def expect_silent(fname, rid):
     got = hits.get((fname, rid), set())
     check(not got, f"behavioural {fname} stays silent for {rid} (got lines {sorted(got)})")
 
-expect_hit("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16, 17))
+expect_hit("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16, 17, 21))
 check(2 not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
       "behavioural fx-ssrf.js:2 literal fetch stays silent")
-for ln in (11, 12, 14, 18, 19, 20):
+for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24):
     check(ln not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
-          f"behavioural fx-ssrf.js:{ln} literal URL with a fragment word stays silent")
+          f"behavioural fx-ssrf.js:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.js", "tier0-open-redirect-js")
 expect_hit("fx-ssrf.py", "tier0-ssrf-dynamic-url-py", (4, 5, 6, 7, 8, 13, 15, 17, 18, 19, 21, 22, 23))
 check(3 not in hits.get(("fx-ssrf.py", "tier0-ssrf-dynamic-url-py"), set()),
       "behavioural fx-ssrf.py:3 literal request stays silent")
-for ln in (9, 10, 11, 12, 14, 16, 20, 24, 25, 26):
+for ln in (9, 10, 11, 12, 14, 16, 20, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39):
     check(ln not in hits.get(("fx-ssrf.py", "tier0-ssrf-dynamic-url-py"), set()),
           f"behavioural fx-ssrf.py:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.py", "tier0-open-redirect-py")
@@ -395,6 +418,12 @@ check(16 not in shits.get("tier0-secret-slack-token", set()),
       "behavioural fx-secrets.txt:16 slack short canary stays silent")
 check(17 not in shits.get("tier0-secret-openai-key", set()),
       "behavioural fx-secrets.txt:17 openai short-tail canary stays silent")
+check(18 not in shits.get("tier0-secret-slack-token", set()),
+      "behavioural fx-secrets.txt:18 slack real-shape token with example marker stays silent")
+check(19 not in shits.get("tier0-secret-openai-key", set()),
+      "behavioural fx-secrets.txt:19 openai real-shape key with EXAMPLE marker stays silent")
+check(20 not in shits.get("tier0-secret-openai-key", set()),
+      "behavioural fx-secrets.txt:20 openai repeated-character placeholder stays silent")
 
 if errors:
     raise SystemExit(1)

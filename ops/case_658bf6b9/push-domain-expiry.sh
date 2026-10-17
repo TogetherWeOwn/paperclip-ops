@@ -62,7 +62,11 @@ command -v python3 >/dev/null 2>&1 \
   || { echo "push-domain-expiry: refusing — RDAP_TIMEOUT must be a positive integer" >&2; exit 2; }
 case "$RDAP_BASE_URL" in
   https://*) RDAP_PROTO=https ;;
-  http://127.0.0.1*|http://localhost*) RDAP_PROTO=http ;;
+  # NOTE: loopback patterns are host-anchored on purpose — the bare prefix
+  # glob http://127.* also matched http://127.evil.com, letting an on-path
+  # attacker serve a forged expiration event. Subdomain lookalikes
+  # (127.evil.com, localhost.evil.com, 127.0.0.1.evil.com) must refuse.
+  http://127.0.0.1|http://127.0.0.1/*|http://127.0.0.1:*|http://localhost|http://localhost/*|http://localhost:*) RDAP_PROTO=http ;;
   *) echo "push-domain-expiry: refusing — RDAP_BASE_URL must be https (http only on loopback)" >&2; exit 2 ;;
 esac
 

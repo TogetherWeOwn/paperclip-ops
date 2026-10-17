@@ -261,8 +261,10 @@ external-endpoints:
   # push DOWN. Complements tls-expiry (certificate notAfter): a renewed
   # certificate over a lapsed registration still goes dark. A missed push
   # fails closed; the 12h heartbeat plus 6h cron cadence bounds detection to
-  # under 24h. Alerts track each probe result immediately. Install is a
-  # separate CEO Operator card.
+  # under 24h. Alerts track each probe result immediately. Gatus fires each
+  # alert once per failure streak, so both alerts carry
+  # minimum-reminder-interval 24h to re-page daily while a warn/crit window
+  # holds. Install is a separate CEO Operator card.
   - name: domain-expiry
     group: platform
     token: "${GATUS_EXTERNAL_TOKEN}"
@@ -273,10 +275,12 @@ external-endpoints:
         failure-threshold: 1
         success-threshold: 1
         description: "Registrar domain near expiry (RDAP). THRESHOLD domain expiry within warning window or no push in 12h (detection within 24h). OWNER devops. RUNBOOK ops/case_658bf6b9/OPERATOR.md"
+        minimum-reminder-interval: 24h
       - type: custom
         failure-threshold: 1
         success-threshold: 1
         description: "Registrar domain near expiry (RDAP). THRESHOLD domain expiry within warning window or no push in 12h (detection within 24h). OWNER devops. RUNBOOK ops/case_658bf6b9/OPERATOR.md"
+        minimum-reminder-interval: 24h
 
   # Pushed by push-garm-pool.sh (case_6ab2cd4d D2): per-pool GARM state plus the
   # eligible-label queue age. A missed 10m heartbeat fails closed (UNKNOWN,

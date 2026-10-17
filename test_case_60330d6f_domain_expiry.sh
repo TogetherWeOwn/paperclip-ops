@@ -5,9 +5,9 @@
 #
 # What is pinned here:
 #   1. CONFIG — the domain-expiry external endpoint declares token, its 12h
-#              heartbeat, immediate alert thresholds and discord+custom alerts
-#              config goes red), and the module-wiring gate passes (script +
-#              cron + registry all present).
+#              heartbeat, immediate alert thresholds, a 24h reminder re-page
+#              on both discord+custom alerts, and the module-wiring gate
+#              passes (script + cron + registry all present).
 #   2. SEMANTICS — stub RDAP server: far expiry pushes true; 10d pushes
 #              false "warning:"; 3d and expired push false "critical:"; a
 #              response with no expiration event, bad JSON or HTTP 500
@@ -15,8 +15,10 @@
 #   3. DERIVE — no RDAP_DOMAINS: hostnames from TWO_WEB_*_URL are reduced to
 #              registered domains and deduplicated before any RDAP query.
 #   4. CONFIG REFUSALS — bad domain, domain with a port, inverted
-#              thresholds, non-loopback http RDAP base, no domains at all
-#              and a missing curl binary all exit 2 and push NOTHING.
+#              thresholds, non-loopback http RDAP base, loopback-lookalike
+#              http RDAP bases (127.evil.com, localhost.evil.com,
+#              127.0.0.1.evil.com), no domains at all and a missing curl
+#              binary all exit 2 and push NOTHING.
 #   5. NON-DISCLOSURE — the Gatus token never appears in curl argv.
 #   6. MUTANTS — parse-anchor, HTTP-gate and warn-default mutants of the
 #              probe each break the far-expiry green, proving the suite is
@@ -132,9 +134,10 @@ blk="$(ep_block "$CFG" domain-expiry)"
 if grep -q 'token:' <<<"$blk" && grep -q 'interval: 12h' <<<"$blk" \
   && [[ "$(grep -c 'failure-threshold: 1' <<<"$blk")" -eq 2 ]] \
   && [[ "$(grep -c 'success-threshold: 1' <<<"$blk")" -eq 2 ]] \
+  && [[ "$(grep -c 'minimum-reminder-interval: 24h' <<<"$blk")" -eq 2 ]] \
   && grep -Fq 'no push in 12h (detection within 24h)' <<<"$blk" \
   && grep -q 'type: discord' <<<"$blk" && grep -q 'type: custom' <<<"$blk"; then
-  ok "1a. endpoint declares token, 12h heartbeat, immediate discord+custom alerts"
+  ok "1a. endpoint declares token, 12h heartbeat, immediate discord+custom alerts with 24h re-page"
 else bad "1a. domain-expiry endpoint" "$(ep_block "$CFG" domain-expiry || echo MISSING)"; fi
 mut="$WORK/nodomain.yaml"
 awk '/- name: domain-expiry/{skip=1} skip&&/^  - name: /&&!/- name: domain-expiry/{skip=0} !skip' "$CFG" > "$mut"
@@ -205,6 +208,9 @@ refuse baddomain RDAP_DOMAINS='not a domain!'
 refuse withport RDAP_DOMAINS='example.com:443'
 refuse inverted RDAP_DOMAINS='example.com' DOMAIN_WARN_DAYS=7 DOMAIN_CRIT_DAYS=21
 refuse httpremote RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://rdap.example.net/domain/'
+refuse loopbackprefix127 RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://127.evil.com/domain/'
+refuse loopbackprefixlocal RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://localhost.evil.com/domain/'
+refuse loopbackprefixip RDAP_DOMAINS='example.com' RDAP_BASE_URL='http://127.0.0.1.evil.com/domain/'
 refuse nodomains TWO_WEB_PROD_URL='' TWO_WEB_STAGING_URL=''
 refuse nocurl RDAP_DOMAINS='example.com' CURL_BIN="$WORK/bin/no-such-curl"
 

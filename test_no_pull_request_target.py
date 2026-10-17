@@ -44,6 +44,14 @@ PASS = {
     "token in run script passes": (
         "on:\n  push:\n" + JOB.replace(
             "echo hi", "echo pull_request_target is banned")),
+    # Quoted `*` globs are not YAML aliases: the alias check is
+    # quote-aware, so these clean workflows must pass.
+    "quoted glob in paths passes": (
+        "on:\n  push:\n    paths: ['**/*-lock.json']\n" + JOB),
+    "quoted glob sequence item passes": (
+        "on:\n  push:\n    paths:\n      - 'src/*Test.java'\n" + JOB),
+    "double-quoted glob passes": (
+        'on:\n  push:\n    branches: ["*-release"]\n' + JOB),
 }
 
 FAIL = {
@@ -92,6 +100,17 @@ FAIL = {
         "name: &trig pull_request_target\non: *trig\n" + JOB),
     "flow mapping continuation at column 0": (
         "on: {push: {},\npull_request_target: {}}\n" + JOB),
+    # Paperclip Review round 2: the bracket-depth fail-closed is defeated
+    # by a multi-line quoted scalar (quote state must persist across
+    # lines), a root flow document has no `on:` line (fail closed), and a
+    # YAML double-quoted escape hides the token (backslash fail-closed).
+    "multi-line quoted scalar hides trigger": (
+        'on: {push: {}, a: "foo\n } a #b", pull_request_target: {}}\n' + JOB),
+    "root flow document trigger": (
+        '{"on": {"pull_request_target": {}}, '
+        '"jobs": {"j": {"runs-on": "ubuntu-latest"}}}\n'),
+    "escaped token trigger": (
+        'on:\n  - "pull_request\\x5ftarget"\n' + JOB),
 }
 
 

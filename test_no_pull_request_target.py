@@ -149,6 +149,27 @@ FAIL = {
         "k: &k on\n? *k\n: pull_request_target\njobs:\n  j:\n"
         "    runs-on: ubuntu-latest\n    env:\n      on: x\n"
         "    steps:\n      - run: echo hi\n"),
+    # Paperclip Review round 4: a quote after an anchor/tag (`&d "…"`,
+    # `!!str "…"`) or after a JSON-style colon (`"k":"v"`) opens a quoted
+    # scalar; a `}` or `#` inside that string must not hide a later
+    # pull_request_target on the same line. All three read clean before.
+    "anchor double-quoted brace hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &d "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "tag double-quoted brace hides trigger": (
+        'on: {a: !!str "x } # y", pull_request_target: {}}' + "\n" + JOB),
+    "json-colon quoted brace hides trigger": (
+        'on: {"a":"x } # y", pull_request_target: {}}' + "\n" + JOB),
+    # Paperclip Review round 4 (late-novel): in a uniformly indented file an
+    # escaped or aliased `on:` never matches the extractor, so a decoy
+    # `env: on: x` below it wins and the real trigger goes unscanned. Both
+    # read clean before.
+    "indented escaped on key with decoy": (
+        '  "\\x6fn": {pull_request_target: {}}\n  jobs:\n    j:\n'
+        "      runs-on: ubuntu-latest\n      env:\n        on: x\n"),
+    "indented aliased on key with decoy": (
+        "  k: &k on\n  *k : {pull_request_target: {}}\n  jobs:\n    j:\n"
+        "      runs-on: ubuntu-latest\n      env:\n        on: x\n"),
 }
 
 

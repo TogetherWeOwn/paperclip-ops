@@ -20,8 +20,9 @@
 # file with no detectable top-level `on:` block (e.g. a root flow document),
 # duplicate `on:` lines at the winning indent, a winning `on:` below column 0
 # while column-0 content exists (the real top-level key is disguised and a
-# decoy line won), or a column-0 key position holding `\`, an unquoted `*` or
-# an explicit `?` (escaped/aliased top-level `on:`). Quote state is carried
+# decoy line won), or a key position at any indent holding `\`, an unquoted
+# `*` or an explicit `?` (escaped/aliased `on:`, including in a uniformly
+# indented file where the decoy sits below the hidden key). Quote state is carried
 # across lines but a quote only opens at a scalar start, so neither a
 # multi-line quoted scalar nor an apostrophe in a plain scalar (e.g.
 # `description: it's`) can desync the comment/bracket scan. Literal `|`/`>`
@@ -62,10 +63,15 @@ def _odd_backslashes(line, idx):
 
 def _at_scalar_start(line, i):
     # A quote opens a YAML scalar only at a value start: line start (after
-    # indent), after `[`, `{` or `,`, or after `:`, `-` or `?` followed by a
-    # space. An apostrophe inside a plain scalar (e.g. `description: it's`
-    # or `name: Don't deploy`) is literal text and must not open quote mode.
-    # Closing an already-open scalar is always allowed.
+    # indent), after `[`, `{` or `,`, after `:` (with or without the space:
+    # JSON-style `"k":"v"` is a value start too), after `-` or `?` followed
+    # by a space, or after a YAML anchor (`&name`) or tag (`!name`/`!!name`):
+    # `&d "..."` and `!!str "..."` open a quoted scalar, otherwise a `}` or
+    # `#` inside that string desyncs the comment/bracket scan. A bare word
+    # character is NOT a value start, so an apostrophe inside a plain scalar
+    # (e.g. `description: it's` or `name: Don't deploy`) is literal text and
+    # must not open quote mode. Closing an already-open scalar is always
+    # allowed.
     j = i - 1
     while j >= 0 and line[j] in (" ", "\t"):
         j -= 1
@@ -73,7 +79,16 @@ def _at_scalar_start(line, i):
         return True
     if line[j] in "[{,":
         return True
-    return line[j] in ":-?" and j < i - 1
+    if line[j] == ":":
+        return True
+    if line[j] in "-?" and j < i - 1:
+        return True
+    # Anchor/tag name directly before the quote: scan back over the name;
+    # the char before it must be `&` or `!`.
+    k = j
+    while k >= 0 and (line[k].isalnum() or line[k] in "_-./"):
+        k -= 1
+    return k >= 0 and line[k] in "&!" and k < j
 
 
 def _strip_line(line, in_single, in_double):
@@ -330,20 +345,21 @@ def _quote_states(code):
 
 
 def _suspicious_top_key(code_lines, literal):
-    """Return a report line if a column-0 key hides the trigger, else None.
+    """Return a report line if any key hides the trigger, else None.
 
     A top-level `on:` written with a YAML escape (`"\\x6fn"`), through an
     alias (`*k : ...`) or as an explicit `?` key never matches TOP_ON. If
     any other `on:`-looking line exists it would win as a clean decoy, so
-    fail closed when a backslash or an unquoted `*` appears in a column-0
-    key position (text before the first unquoted `:`), or when a column-0
-    line opens an explicit key. Ordinary quoted keys (`"on":`) hold neither
-    and pass.
+    fail closed when a backslash or an unquoted `*` appears in a key
+    position (text before the first unquoted `:`) at ANY indent -- a
+    uniformly indented file can hide the real trigger behind a decoy `on:`
+    below it -- or when a line opens an explicit key. Ordinary quoted keys
+    (`"on":`) hold neither and pass.
     """
     for code, is_lit in zip(code_lines, literal):
-        if is_lit or code.strip() == "" or _indent_of(code) != 0:
+        if is_lit or code.strip() == "":
             continue
-        if code.startswith("?"):
+        if code.lstrip(" \t").startswith("?"):
             return code.strip()[:120]
         quoted = _quote_states(code)
         end = len(code)

@@ -228,7 +228,15 @@ else
     # objects in post/put/patch second position fire, while nested url/
     # baseURL/spread positions stay silent. Typed post/put/patch calls with
     # a config third argument fire; http.createServer/https.Agent lines pin
-    # the $HTTP.$METHOD constraint (without it they fire).
+    # the $HTTP.$METHOD constraint (without it they fire). Templated and
+    # comma-carrying-string first arguments fire on the get/post config
+    # branches (the step is quote-aware), while a templated first argument
+    # with a constant baseURL stays silent; headers-prefixed, deep-paren,
+    # comma-in-paren, bracket-join, array-payload and three-level-spread
+    # shapes pin the new baseURL/lookahead lines, mybaseURL/x-baseURL
+    # template/concat lines pin the key anchor, and bracket-join plus
+    # headers-prefixed bare lines pin the older value-class/nest-prefix
+    # sites.
     cat > "$FX/fx-ssrf.js" <<'EOF'
 async function h(req, searchParams, url, body) {
   await fetch("https://api.example.com/health");
@@ -468,6 +476,43 @@ async function h(req: any, data: any, url: any) {
   await axios.get<User>(URL_CONST, { ...f(g(h(a, ctx.Query))) });
   await axios.post<User>(URL_CONST, data, { ...f(g(ctx.Query)) });
   await axios.post<User>(URL_CONST, data, { ...f(g(h(a, ctx.Query))) });
+  await axios.get<User>(`/users/${id}`, { baseURL: req.query.h });
+  await axios.get<User>(`/users/${id}`, { ...req.query });
+  await axios.post<User>(`/users/${id}`, data, { baseURL: req.query.h });
+  await axios.post<User>(`/users/${id}`, data, { ...req.query });
+  await axios.get<User>("/x?fields=a,b", { baseURL: req.query.h });
+  await axios.get<User>(`/users/${id}`, { baseURL: API_BASE, params: req.query });
+  await axios.get<User>("/x", { headers: { A: 1 }, baseURL: `https://${req.query.h}/` });
+  await axios.get<User>("/x", { headers: { A: 1 }, baseURL: "/x/" + req.query.h });
+  await axios.post<User>("/x", data, { headers: { A: 1 }, baseURL: `https://${req.query.h}/` });
+  await axios.post<User>("/x", data, { headers: { A: 1 }, baseURL: "/x/" + req.query.h });
+  await axios.get<User>("/x", { baseURL: "/x/" + a(b(c(d, req.query.u))) });
+  await axios.get<User>("/x", { baseURL: "/x/" + a(b, req.query.u) });
+  await axios.get<User>("/x", { baseURL: "/x/" + [a, req.query.u].join("/") });
+  await axios.post<User>("/x", data, { baseURL: "/x/" + a(b(c(d, req.query.u))) });
+  await axios.post<User>("/x", data, { baseURL: "/x/" + a(b, req.query.u) });
+  await axios.post<User>("/x", data, { baseURL: "/x/" + [a, req.query.u].join("/") });
+  await axios.post<User>("/x", [1, 2], { baseURL: `https://${req.query.h}/` });
+  await axios.post<User>("/x", [1, 2], { baseURL: "/x/" + req.query.h });
+  await axios<User>({ ...merge(wrap(inner(a)), req.query) });
+  await axios.get<User>(URL_CONST, { ...merge(wrap(inner(a)), req.query) });
+  await axios.post<User>(URL_CONST, data, { ...merge(wrap(inner(a)), req.query) });
+  await axios.get<User>("/x", { mybaseURL: `https://${req.query.h}/` });
+  await axios.get<User>("/x", { mybaseURL: "/x/" + req.query.h });
+  await axios.get<User>("/x", { 'x-baseURL': `https://${req.query.h}/` });
+  await axios.get<User>("/x", { 'x-baseURL': "/x/" + req.query.h });
+  await axios.post<User>("/x", data, { mybaseURL: `https://${req.query.h}/` });
+  await axios.post<User>("/x", data, { mybaseURL: "/x/" + req.query.h });
+  await axios.post<User>("/x", data, { 'x-baseURL': `https://${req.query.h}/` });
+  await axios.post<User>("/x", data, { 'x-baseURL': "/x/" + req.query.h });
+  await axios<User>({ url: [base, req.query.p].join("/") });
+  await axios<User>({ baseURL: [base, req.query.p].join("/") });
+  await axios<User>({ url: "/x/" + [a, req.query.p].join("/") });
+  await axios<User>({ baseURL: "/x/" + [a, req.query.p].join("/") });
+  await axios.get<User>("/x", { baseURL: [base, req.query.p].join("/") });
+  await axios.post<User>("/x", data, { baseURL: [base, req.query.p].join("/") });
+  await axios<User>({ headers: { A: 1 }, baseURL: `https://${req.query.h}/` });
+  await axios<User>({ headers: { A: 1 }, baseURL: "https://" + req.query.h });
 }
 EOF
     cat > "$FX/fx-ssrf.py" <<'EOF'
@@ -689,8 +734,8 @@ for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24, 27, 29, 31, 35, 38, 41, 42, 43, 4
           f"behavioural fx-ssrf.js:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.js", "tier0-open-redirect-js")
 expect_hit("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5))
-expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 81, 82, 86, 87, 88, 89, 94, 95, 96, 101, 102, 103, 104, 105, 109, 110, 111, 112, 113, 114, 116, 117, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175))
-for ln in (23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 58, 59, 66, 76, 77, 78, 79, 80, 83, 84, 85, 90, 91, 92, 93, 97, 98, 99, 100, 106, 107, 108, 115, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130):
+expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 81, 82, 86, 87, 88, 89, 94, 95, 96, 101, 102, 103, 104, 105, 109, 110, 111, 112, 113, 114, 116, 117, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 205, 206, 207, 208, 209, 210, 211, 212))
+for ln in (23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 58, 59, 66, 76, 77, 78, 79, 80, 83, 84, 85, 90, 91, 92, 93, 97, 98, 99, 100, 106, 107, 108, 115, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 181, 197, 198, 199, 200, 201, 202, 203, 204):
     check(ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts"), set())
           and ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js"), set()),
           f"behavioural fx-ssrf.ts:{ln} literal/constant URL stays silent")

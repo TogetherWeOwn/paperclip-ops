@@ -77,7 +77,10 @@ now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 sha256_of() { sha256sum "$1" | awk '{print $1}'; }
 
-default_branch() { printf 'rehearsal-%s' "$(date -u +%Y%m%dt%H%M%Sz)"; }
+default_branch() {
+  printf 'rehearsal-%s-%s' "$(date -u +%Y%m%dt%H%M%Sz)" \
+    "$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
+}
 
 # chain_json DIR [ONLY]: JSON array of {"tag","sha256"} sorted by file
 # name. When ONLY (comma-separated tags) is given, exactly those tags form
@@ -167,6 +170,24 @@ EOF
           "$PSCALE_BIN" auth check >/dev/null 2>&1 \
             || die "planetscale rehearsal needs PLANETSCALE_SERVICE_TOKEN_ID and PLANETSCALE_SERVICE_TOKEN or valid pscale CLI auth"
         fi
+        # Branch-ownership guard: never reuse or delete a pre-existing
+        # branch. Verified against planetscale/cli source
+        # (internal/cmd/branch/show.go @ 89498e2, via
+        # HandleNotFoundWithServiceTokenCheck in internal/cmdutil/auth.go):
+        # genuine 404 prints `branch <B> does not exist in database <D>
+        # (organization: <O>)` on stderr with cobra's `Error: ` prefix (plus
+        # a service-token permission note when tokens are set; invalid
+        # tokens report auth failure instead). The match below names the
+        # requested branch and database so an error about any other name
+        # cannot confirm absence; anything else fails closed. ($BRANCH is
+        # restricted to [a-z0-9-] above; both values expand as glob here,
+        # so an exotic database name can only refuse, never bypass.)
+        if branch_output="$("$PSCALE_BIN" branch show "$REHEARSAL_PSCALE_DB" "$BRANCH" \
+            --org "$REHEARSAL_PSCALE_ORG" 2>&1)"; then
+          die "branch $BRANCH already exists; refusing to reuse or delete it"
+        fi
+        [[ "$branch_output" == *"branch $BRANCH does not exist in database $REHEARSAL_PSCALE_DB "* ]] \
+          || die "could not confirm PlanetScale branch $BRANCH is absent"
         CREATE=("$PSCALE_BIN" branch create "$REHEARSAL_PSCALE_DB" "$BRANCH" --org "$REHEARSAL_PSCALE_ORG" --from prod --wait)
         DELETE=("$PSCALE_BIN" branch delete "$REHEARSAL_PSCALE_DB" "$BRANCH" --org "$REHEARSAL_PSCALE_ORG" --force)
         ;;

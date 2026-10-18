@@ -1206,6 +1206,14 @@ jobs:
       - name: TLS and Neon dependency probes suite
         run: ./test_case_60330d6f_dependency_probes.sh
 
+      # Registrar domain-expiry (RDAP expiration event) complement to the
+      # TLS certificate probe: warn/crit/down mapping, fail-closed on
+      # unverifiable RDAP, config refusals, token-off-argv, anchor mutants.
+      # Hermetic: one stub server for Gatus pushes and RDAP GETs on
+      # 127.0.0.1 (no network beyond loopback, no credentials).
+      - name: registrar domain-expiry probe suite
+        run: ./test_case_60330d6f_domain_expiry.sh
+
       # case_f3715a38. Router shadow-log freshness + window-landing gauge Gatus
       # module: fragment shape, secret sweep, fail-closed pushes, freshness
       # and joint-landing semantics from fixture inputs, staleness horizon

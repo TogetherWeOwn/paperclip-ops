@@ -89,6 +89,35 @@ class SyntheticDrift(unittest.TestCase):
         self.put(STAGE / "SOURCE", "SOURCE_SHA=not-a-commit\n")
         self.expect(2, "no valid SOURCE_SHA")
 
+    def add_port_addition(self, name="added.yml"):
+        # Machine list shape parsed by check-staged-drift.sh: a bullet
+        # `- \x60semgrep-rules/<file>\x60` in tier-0/PORT-ADDITIONS.md.
+        self.put(STAGE / "PORT-ADDITIONS.md", "- `semgrep-rules/" + name + "`\n")
+        return name
+
+    def test_listed_addition_staged_passes(self):
+        name = self.add_port_addition()
+        self.put(STAGE / "semgrep-rules" / name, "rules: []\n")
+        self.expect(0, "staged matches source")
+
+    def test_listed_addition_deleted_fails_missing_staged(self):
+        self.add_port_addition()
+        self.expect(1, "listed in PORT-ADDITIONS.md but missing staged")
+
+    def test_listed_addition_now_in_source_fails_drop_exemption(self):
+        name = self.add_port_addition()
+        self.put(STAGE / "semgrep-rules" / name, "rules: []\n")
+        self.put("semgrep-rules/" + name, "rules: []\n")
+        self.git("add", "semgrep-rules")
+        self.git("commit", "--quiet", "-m", "test: addition merged upstream\n\nCo-Authored-By: Claude Code <noreply@anthropic.com>")
+        self.expect(1, "drop the exemption", "HEAD")
+
+    def test_unlisted_extra_staged_fails_with_manifest_present(self):
+        name = self.add_port_addition()
+        self.put(STAGE / "semgrep-rules" / name, "rules: []\n")
+        self.put(STAGE / "semgrep-rules/unlisted.yml", "rules: []\n")
+        self.expect(1, "staged but missing in source")
+
     def test_absent_history_refuses_even_with_public_markers(self):
         self.put("README.md", "## Fresh-history publication candidate\n")
         self.put(".github/scripts/public_safety.py", "# fixture marker\n")

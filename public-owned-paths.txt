@@ -197,3 +197,5 @@ verification/case_ce726d7b-mutation-gate.sh
 verification/case_f17dd2a7-find-hash-collision.mjs
 verification/case_f909ca1f-mutation-gate.sh
 verification/upstream-bundle-filing-gate.sh
+sibling_guard.sh
+test_sibling_guard.sh

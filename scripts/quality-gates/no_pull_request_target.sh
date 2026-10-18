@@ -30,9 +30,12 @@
 # where the decoy sits below the hidden key; nested globs and continuations
 # are ordinary content). Quote state is carried
 # across lines but a quote only opens at a scalar start (anchors/tags admit
-# punctuation, verbatim `!<...>` included, but only when whitespace-separated
-# from the token: a quote glued to an anchor/tag name is part of the name),
-# so neither a
+# punctuation, verbatim `!<...>` included even when glued to a flow bracket,
+# but only when whitespace-separated from the token: a quote glued to an
+# anchor/tag name is part of the name; `:` is a value start only after
+# whitespace or a closing quote, so a colon inside a name is not either),
+# and lines split on "\n" only (U+2028/U+0085 are scalar content, not
+# line breaks), so neither a
 # multi-line quoted scalar nor an apostrophe in a plain scalar (e.g.
 # `description: it's`) can desync the comment/bracket scan. Literal `|`/`>`
 # block-scalar content is opaque text: `on:`-looking lines there never win the
@@ -72,15 +75,17 @@ def _odd_backslashes(line, idx):
 
 def _at_scalar_start(line, i):
     # A quote opens a YAML scalar only at a value start: line start (after
-    # indent), after `[`, `{` or `,`, after `:` (with or without the space:
-    # JSON-style `"k":"v"` is a value start too), after `-` or `?` followed
-    # by a space, or after a YAML anchor (`&name`) or tag (`!name`/`!!name`
-    # /`!<verbatim>`): `&d "..."`, `&a! "..."`, `&"a" "..."` and `!!str "..."`
-    # open a quoted scalar, otherwise a `}` or `#` inside that string
-    # desyncs the comment/bracket scan. The anchor/tag test is a whole-token
-    # test (any anchor-name charset, including a trailing `&`/`!` or an
-    # embedded quote), never a walk back to the nearest `&`/`!`. A bare word
-    # character is NOT a value start, so
+    # indent), after `[`, `{` or `,`, after a mapping `:` (whitespace before
+    # the quote, or JSON-style `"k":"v"` where the colon directly follows a
+    # closing quote: a colon glued inside an anchor/tag name or plain scalar
+    # such as `&a:"` or `!:'` is part of the name, not a value start),
+    # after `-` or `?` followed by a space, or after a YAML anchor (`&name`)
+    # or tag (`!name`/`!!name` /`!<verbatim>`): `&d "..."`, `&a! "..."`,
+    # `&"a" "..."` and `!!str "..."` open a quoted scalar, otherwise a `}`
+    # or `#` inside that string desyncs the comment/bracket scan. The
+    # anchor/tag test is a whole-token test (any anchor-name charset,
+    # including a trailing `&`/`!` or an embedded quote), never a walk back
+    # to the nearest `&`/`!`. A bare word character is NOT a value start, so
     # an apostrophe inside a plain scalar (e.g. `description: it's` or
     # `name: Don't deploy`) is literal text and must not open quote mode.
     # Closing an already-open scalar is always allowed.
@@ -91,23 +96,23 @@ def _at_scalar_start(line, i):
         return True
     if line[j] in "[{,":
         return True
-    if line[j] == ":":
+    if line[j] == ":" and (j < i - 1 or (j > 0 and line[j - 1] in "\"'")):
         return True
     if line[j] in "-?" and j < i - 1:
         return True
     # Verbatim tag `!<...>` directly before the quote: the tag URI may hold
     # `,`, `<` or quotes (e.g. `!<tag:yaml.org,2002:str>`, `!<(<,>`,
-    # `!<?',>`, `!<a,b'c>`), so locate the opening `!<` by scanning back to
-    # the nearest whitespace (verbatim tags cannot hold whitespace) instead
-    # of stopping at the first `<` or quote. A `>` that is not a verbatim
-    # tag falls through to the anchor/tag token scan below (e.g. `&<> "..."`
-    # is an anchor named `<>`, not a verbatim tag).
+    # `!<?',>`, `!<a,b'c>`), and the tag itself may sit glued to a flow
+    # indicator (`[`, `{` or `,` with no space, e.g. `[!<a,b>`,
+    # `[z,!<a,b>`, `{!<a,b>`), so locate the opening `!<` by searching back
+    # for it directly (verbatim tags cannot hold whitespace: accept when the
+    # `!<...>` span holds no whitespace) instead of taking the token from
+    # the last whitespace or stopping at the first `<` or quote. A `>` that
+    # is not a verbatim tag falls through to the anchor/tag token scan below
+    # (e.g. `&<> "..."` is an anchor named `<>`, not a verbatim tag).
     if line[j] == ">":
-        k = j
-        while k >= 0 and line[k] not in (" ", "\t"):
-            k -= 1
-        token = line[k + 1:j + 1]
-        if token.startswith("!<") and token.endswith(">"):
+        idx = line.rfind("!<", 0, j)
+        if idx != -1 and not any(c in " \t" for c in line[idx:j + 1]):
             return True
     # Anchor/tag name directly before the quote: take the whitespace- and
     # flow-delimited token ending at j (an anchor/tag name admits any other
@@ -318,8 +323,13 @@ def find_on_candidates(text):
     """
     # A leading UTF-8 BOM is not content: strip it so `on:`, `---`, `%YAML`
     # and root flow documents resolve (str.strip() keeps U+FEFF).
+    # Split on "\n" only: str.splitlines() also splits on U+2028/U+2029/U+0085
+    # (and \x0b/\x0c/\x1c-\x1e), which YAML 1.2 treats as ordinary scalar
+    # content, so a separator inside a quoted scalar would forge a phantom
+    # column-0 line that ends the trigger block early. The file is read in
+    # text mode, so universal newlines already translated \r\n and \r.
     text = text.lstrip("﻿")
-    lines = text.splitlines()
+    lines = text.split("\n")
     literal = _literal_flags(lines)
     code_lines = strip_comments_crossline(lines, literal)
     cands = []

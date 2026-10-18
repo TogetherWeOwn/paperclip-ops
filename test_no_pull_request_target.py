@@ -358,6 +358,46 @@ FAIL = {
     "verbatim comma-quote tag hides trigger": (
         'on: {workflow_dispatch: {inputs: {x: {description: !<a,b\'c> "a }}}}'
         ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    # Paperclip Review round 9: a verbatim tag glued to a flow indicator
+    # (`[`, `{` or `,` with no space) broke the whitespace-token scan (the
+    # token held the bracket, and the `,`-split fallback saw only `b>`), so
+    # the quote after the tag was missed and a `]`/`}`/`#` inside the string
+    # hid a later pull_request_target. All read clean before.
+    "verbatim tag glued to bracket hides trigger": (
+        'on: {push: {}, x: [!<a,b> "a ]}" # b", pull_request_target: {}}}'
+        + "\n" + JOB),
+    "verbatim tag glued after comma hides trigger": (
+        'on: {push: {}, x: [z,!<a,b> "a ]}" # b", pull_request_target: {}}}'
+        + "\n" + JOB),
+    "verbatim tag glued to brace hides trigger": (
+        'on: {push: {}, x: {!<a,b> "a }}" # b", pull_request_target: {}}}'
+        + "\n" + JOB),
+    # Paperclip Review round 9: a quote glued to a colon inside an
+    # anchor/tag name (`&a:"`, `&a:'`, `!:'`) was wrongly taken as a JSON
+    # `"k":"v"` value start. The first quote opened a string the real
+    # scalar's quote closed, so `}}}} # b"` read as live text and hid the
+    # later pull_request_target. All read clean before.
+    "colon-glued anchor dquote hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a:" "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "colon-glued anchor squote hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {description: &a:' 'a }}}} # b'}}}},"
+        " pull_request_target: {}}" + "\n" + JOB),
+    "colon-glued tag squote hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {description: !:' 'a }}}} # b'...}}},"
+        " pull_request_target: {}}" + "\n" + JOB),
+    # Paperclip Review round 9: str.splitlines() also splits on U+2028 /
+    # U+2029 / U+0085 (and \x0b/\x0c/\x1c-\x1e), which YAML treats as
+    # ordinary scalar content. A separator inside a quoted scalar forged a
+    # phantom column-0 line that ended the trigger block early, so a later
+    # pull_request_target fell outside the scan. Both read clean before
+    # (the gate now splits on "\n" only).
+    "u2028 in scalar before trigger": (
+        "on:\n  workflow_dispatch:\n    inputs:\n      x:\n"
+        "        description: \"foo\u2028bar\"\n  pull_request_target:\n" + JOB),
+    "u0085 in scalar before trigger": (
+        "on:\n  workflow_dispatch:\n    inputs:\n      x:\n"
+        "        description: \"foo\u0085bar\"\n  pull_request_target:\n" + JOB),
 }
 
 

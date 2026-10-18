@@ -19,6 +19,7 @@ Suites: `test_case_60330d6f_status_pilot.sh`, `test_queue_age_depth.sh`.
 - `platform/oom-kills`: `push-oom-kills.sh`
 - `platform/ci-queue-age`: `push-ci-queue-age.sh`
 - `platform/tls-expiry`
+- `platform/domain-expiry`: `push-domain-expiry.sh`
 - `platform/garm-pool`: `push-garm-pool.sh`
 - `platform/workers-error-rate`: `push-workers-error-rate.sh`
 - `platform/github-rate-limit`: `push-github-rate-limit.sh`

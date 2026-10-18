@@ -1,0 +1,222 @@
+# Reusable schema-drift gate (shared migration safety gates).
+#
+# Callers reference a pinned SHA:
+#   uses: TogetherWeOwn/paperclip-ops/.github/workflows/reusable-migration-drift.yml@<sha>
+#
+# Two uses, one gate:
+#   1. Preflight (pull_request / pre-deploy): the caller fetches its
+#      production ledger(s) with its EXISTING read-only principal, uploads
+#      the export as an artifact, and passes the artifact name in
+#      `ledger-artifact`. This gate downloads it, then requires zero
+#      pending and zero unknown migrations plus rehearsal evidence fresher
+#      than `max-age-hours`. Rollback and live-SHA redeploy paths waive
+#      this gate inside their own scripts so recovery never waits on it.
+#   2. Nightly sweep (schedule): the same gate runs on a timer with
+#      `page-on-failure: true`, which auto-files an issue and posts to
+#      Discord ONLY when the gate fails — quiet nights stay quiet.
+#
+# CROSS-JOB HANDOFF. A reusable workflow is its own job on a fresh runner,
+# so a file the caller wrote to /tmp in another job is NOT visible here.
+# The ledger and the rehearsal evidence therefore travel as run artifacts:
+# the caller's earlier job uploads them (actions/upload-artifact) and this
+# gate downloads them with `gh run download` (no extra action pin needed).
+# `ledger-file` / `evidence-file` remain as paths for single-job use, but
+# the documented caller pattern is artifacts. The gate fails closed when
+# neither path resolves to a readable file.
+#
+# CALLER PERMISSIONS (on the calling job — without these the run cannot
+# start or page): contents: read, actions: read (artifact download),
+# issues: write (auto-filed page cards only, page-on-failure).
+name: migration-drift (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      migrations-dir:
+        description: Repo-relative directory holding NNNN_slug.sql files.
+        required: false
+        default: packages/db/src/migrations
+        type: string
+      ledger-file:
+        description: >-
+          Path to the production ledger export (one sha256 per line) when
+          the caller already holds it as a file in THIS job. Cross-job
+          callers use ledger-artifact instead.
+        required: false
+        default: ""
+        type: string
+      ledger-artifact:
+        description: >-
+          Name of the run artifact holding the production ledger export
+          (uploaded by the caller's earlier job). Preferred over
+          ledger-file: exactly one of the two must resolve.
+        required: false
+        default: ""
+        type: string
+      evidence-file:
+        description: Rehearsal evidence document path (or empty to skip freshness).
+        required: false
+        default: ""
+        type: string
+      evidence-artifact:
+        description: >-
+          Name of the run artifact holding the rehearsal evidence
+          (e.g. the rehearsal-evidence artifact uploaded by
+          reusable-migration-rehearsal). Downloaded here because the
+          uploader job's files are not visible on this runner.
+        required: false
+        default: ""
+        type: string
+      max-age-hours:
+        description: Required rehearsal evidence freshness in hours.
+        required: false
+        default: 24
+        type: number
+      script-ref:
+        description: Required immutable 40-character commit SHA for gate scripts.
+        required: true
+        type: string
+      page-on-failure:
+        description: Auto-file an issue and post to Discord when the gate fails.
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      discord-webhook:
+        description: Discord webhook URL for nightly pages. Never printed.
+        required: false
+
+jobs:
+  drift:
+    name: schema drift gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read # gh run download of the ledger/evidence artifacts
+      issues: write # auto-filed page cards only (page-on-failure)
+    steps:
+      # Pinned: actions/checkout v4. Repin with the SHA, never a moving tag.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate immutable gate-script reference
+        env:
+          SCRIPT_REF: ${{ inputs.script-ref }}
+        run: |
+          [[ "$SCRIPT_REF" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "script-ref must be a full 40-character commit SHA"; exit 2; }
+
+      - name: Fetch canonical gate scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: TogetherWeOwn/paperclip-ops
+          ref: ${{ inputs.script-ref }}
+          path: .paperclip-migration-gates
+          persist-credentials: false
+
+      - name: Fetch ledger and evidence artifacts (cross-job handoff)
+        id: inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LEDGER_ARTIFACT: ${{ inputs.ledger-artifact }}
+          EVIDENCE_ARTIFACT: ${{ inputs.evidence-artifact }}
+          LEDGER_FILE_INPUT: ${{ inputs.ledger-file }}
+          EVIDENCE_FILE_INPUT: ${{ inputs.evidence-file }}
+        run: |
+          set -euo pipefail
+          case "$LEDGER_FILE_INPUT$EVIDENCE_FILE_INPUT" in *$'\n'*|*$'\r'*)
+            echo "ledger/evidence file inputs must not contain line breaks" >&2; exit 2;;
+          esac
+          mkdir -p .paperclip-drift-inputs/ledger .paperclip-drift-inputs/evidence
+          if [ -n "$LEDGER_ARTIFACT" ]; then
+            gh run download "$GITHUB_RUN_ID" -n "$LEDGER_ARTIFACT" -D .paperclip-drift-inputs/ledger
+            count="$(find .paperclip-drift-inputs/ledger -type f | wc -l)"
+            [ "$count" -eq 1 ] || { echo "ledger-artifact '$LEDGER_ARTIFACT' must hold exactly one file (found $count)"; exit 2; }
+            find .paperclip-drift-inputs/ledger -type f -print -quit > .paperclip-drift-inputs/ledger.path
+          fi
+          if [ -n "$EVIDENCE_ARTIFACT" ]; then
+            gh run download "$GITHUB_RUN_ID" -n "$EVIDENCE_ARTIFACT" -D .paperclip-drift-inputs/evidence
+            passed_evidence=()
+            while IFS= read -r candidate; do
+              if python3 - "$candidate" <<'PY'
+          import json
+          import sys
+
+          try:
+              with open(sys.argv[1], encoding="utf-8") as fh:
+                  document = json.load(fh)
+          except (OSError, ValueError):
+              raise SystemExit(1)
+          raise SystemExit(0 if document.get("status") == "passed" else 1)
+          PY
+              then
+                passed_evidence+=("$candidate")
+              fi
+            done < <(find .paperclip-drift-inputs/evidence -type f -name '*.json' -print)
+            [ "${#passed_evidence[@]}" -eq 1 ] || {
+              echo "evidence-artifact '$EVIDENCE_ARTIFACT' must hold exactly one passed JSON evidence document (found ${#passed_evidence[@]})"
+              exit 2
+            }
+            printf '%s' "${passed_evidence[0]}" > .paperclip-drift-inputs/evidence.path
+          fi
+          {
+            if [ -f .paperclip-drift-inputs/ledger.path ]; then
+              printf 'DRIFT_LEDGER_FILE=%s\n' "$(cat .paperclip-drift-inputs/ledger.path)"
+            else
+              printf 'DRIFT_LEDGER_FILE=%s\n' "$LEDGER_FILE_INPUT"
+            fi
+            if [ -f .paperclip-drift-inputs/evidence.path ]; then
+              printf 'DRIFT_EVIDENCE_FILE=%s\n' "$(cat .paperclip-drift-inputs/evidence.path)"
+            else
+              printf 'DRIFT_EVIDENCE_FILE=%s\n' "$EVIDENCE_FILE_INPUT"
+            fi
+          } >> "$GITHUB_ENV"
+
+      - name: Build candidate digests and run the drift gate
+        id: gate
+        env:
+          MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
+          MAX_AGE_HOURS: ${{ inputs.max-age-hours }}
+        run: |
+          set -euo pipefail
+          test -r "${DRIFT_LEDGER_FILE:-}" \
+            || { echo "drift gate needs a ledger: pass ledger-artifact (preferred) or ledger-file"; exit 2; }
+          if [ -n "${DRIFT_EVIDENCE_FILE:-}" ]; then
+            test -r "$DRIFT_EVIDENCE_FILE" \
+              || { echo "drift gate: evidence input is set but unreadable: $DRIFT_EVIDENCE_FILE"; exit 2; }
+          fi
+          (cd "$MIGRATIONS_DIR" && sha256sum ./*.sql) > /tmp/candidate-hashes.txt
+          EXTRA=()
+          if [ -n "${DRIFT_EVIDENCE_FILE:-}" ]; then
+            EXTRA=(--evidence "$DRIFT_EVIDENCE_FILE" --max-age-hours "$MAX_AGE_HOURS")
+          fi
+          python3 .paperclip-migration-gates/migration_drift_gate.py \
+            --sql-hashes /tmp/candidate-hashes.txt \
+            --ledger "$DRIFT_LEDGER_FILE" "${EXTRA[@]}"
+
+      - name: Page on drift (auto-filed card)
+        if: failure() && inputs.page-on-failure && (steps.gate.outcome == 'failure' || steps.inputs.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Labels may not exist in the caller repo yet: create-then-use so
+          # the page is never lost to a missing-label error.
+          gh label create drift --color B60205 --description "schema drift pages" 2>/dev/null || true
+          gh label create automated-page --color 0E8A16 --description "automatically filed pages" 2>/dev/null || true
+          gh issue create \
+            --title "schema drift: production ledger vs $REF_NAME ($(date -u +%Y-%m-%d))" \
+            --label "drift,automated-page" \
+            --body "The nightly schema-drift gate failed on $REF_NAME at $GITHUB_SHA. See the failing run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Runbook: docs/migration-standard.md."
+
+      - name: Page on drift (Discord)
+        if: failure() && inputs.page-on-failure && (steps.gate.outcome == 'failure' || steps.inputs.outcome == 'failure')
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.discord-webhook }}
+        run: |
+          set -euo pipefail
+          test -n "${DISCORD_WEBHOOK_URL:-}" || { echo "page-on-failure with no discord-webhook secret: card filed, Discord skipped"; exit 0; }
+          python3 -c 'import json,os,urllib.request; url=os.environ["DISCORD_WEBHOOK_URL"]; body=json.dumps({"content":"schema drift page: nightly gate failed, card auto-filed. Run: %s/%s/actions/runs/%s"} % (os.environ["GITHUB_SERVER_URL"],os.environ["GITHUB_REPOSITORY"],os.environ["GITHUB_RUN_ID"])).encode(); urllib.request.urlopen(urllib.request.Request(url,data=body,headers={"Content-Type":"application/json"}),timeout=30)'

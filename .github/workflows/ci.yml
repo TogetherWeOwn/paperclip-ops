@@ -1193,6 +1193,14 @@ jobs:
       - name: TLS and Neon dependency probes suite
         run: ./test_case_60330d6f_dependency_probes.sh
 
+      # Registrar domain-expiry (RDAP expiration event) complement to the
+      # TLS certificate probe: warn/crit/down mapping, fail-closed on
+      # unverifiable RDAP, config refusals, token-off-argv, anchor mutants.
+      # Hermetic: one stub server for Gatus pushes and RDAP GETs on
+      # 127.0.0.1 (no network beyond loopback, no credentials).
+      - name: registrar domain-expiry probe suite
+        run: ./test_case_60330d6f_domain_expiry.sh
+
       # case_f3715a38. Router shadow-log freshness + window-landing gauge Gatus
       # module: fragment shape, secret sweep, fail-closed pushes, freshness
       # and joint-landing semantics from fixture inputs, staleness horizon
@@ -1288,6 +1296,11 @@ jobs:
       # (no network/creds).
       - name: queue forecast gatus module suite
         run: ./test_case_60330d6f_queue_forecast.sh
+      # case_658bf6b9. CI queue-age measurement and healthy/failing push
+      # contracts. Hermetic offline suite (no network/creds).
+      - name: queue age depth contract suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_queue_age_depth.sh
 
       # case_b24794c2. GARM pool-health module: strict per-pool evaluator
       # (absent fields fail closed) + endpoint renderer. Hermetic: synthetic
@@ -1355,7 +1368,7 @@ jobs:
       # Reconciler holds and hide-noop predicates, backlog-promoter, board-jobs, orphan-PRs and focus-gate fail-closed timeouts, PR-supply card text, flow-guard stages and host-pressure gate fail-closed contract. Offline: temp files and stubs.
       - name: review reconciler and ops guard suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody) && (cd ops/paperclip && python3 -m unittest -v test_focus_gate_bounds)
+        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody) && (cd ops/paperclip && python3 -m unittest -v test_focus_gate_bounds)
       # case_0d0fab73. reviewer-eval survival report atomic write: the eval
       # report persists through write_json_atomic (same-dir temp, fsync,
       # atomic rename) and a failing write exits non-zero with the previous
@@ -2187,6 +2200,22 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_beszel_gatus_bridge.sh
 
+      # case_f2010cb7 producer halves. The adapter is the only translator
+      # from Beszel-native records into the bridge contract: a wrong GiB
+      # factor, load divisor, or failed-services index would mis-score
+      # every host while looking healthy, and the forwarder is the only
+      # consumer of the Discord routing table (real Beszel title shapes +
+      # 500-char cap + https-only webhook never in argv). The fetch
+      # wrapper is the only handler of the hub password and token
+      # (0600 files, token charset gate, https-unless-loopback).
+      # Offline: native fixtures + stub curl.
+      - name: Beszel adapter and Discord forwarder suites
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: |
+          python3 -B test_beszel_adapter.py
+          python3 -B test_beszel_discord_forwarder.py
+          bash test_fetch_beszel_normalized.sh
+
       # case_c542accd. CI main-conclusion + job-runtime Gatus module: a script
       # that scores a red, slow, or unreadable main as healthy would
       # greenwash the merge gate fleet-wide. Offline: stub gh feeds fixture
@@ -2368,6 +2397,17 @@ jobs:
       - name: review bot sandbox canary suite
         run: ./test_review_bot_sandbox_canary.sh
 
+      # Activation contract (paperclip-upgrade/activation.sh): one
+      # service-scoped deployment lock across drain phases, verify-only
+      # post-restart hardening with no reachable ownership change, and
+      # fail-closed identity/pressure/window bindings. Hermetic: stub
+      # docker and stub drain.sh over temp fixtures; no daemon, DB or
+      # network. Without this step the suite runs only in the full
+      # local verify-fast tier while CI runs --parse-only, so a lock or
+      # binding regression would merge green.
+      - name: activation contract suite
+        run: ./paperclip-upgrade/test-activation-offline.sh
+
       # case_9cc4c0ad: offline, recorded-model auth evidence. The real incident is
       # INSUFFICIENT; cross-model successes and pre-inference aborts are not
       # controls. Mutation kills require two named assertions, never errors.
@@ -2536,6 +2576,13 @@ jobs:
       - name: cold-start detector suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_cold_start_detector.sh
+
+      # The sibling-run guard is tracked in this repo (toolkit-tracked
+      # allowlist survivor), so its offline regression suite runs here
+      # against the tree, not the pinned toolkit bytes.
+      - name: sibling-run guard suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_sibling_guard.sh
 
       # case_e77a1e99. The measuring half of the watchdog red-main detector
       # (case_311c4d5b item 6): poll company-repo mains through the fail-closed
@@ -4738,6 +4785,21 @@ jobs:
       - name: staged Tier-0 port drift gate
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 test_staged_drift.py
+
+      # Shared migration safety gates (docs/migration-standard.md): the
+      # timeout-preamble injector, the squawk + file-standard gate, the
+      # prod-clone rehearsal driver and the ledger-vs-candidate drift gate,
+      # each with an offline suite. Fully hermetic: fixture files, fake
+      # provider CLIs by absolute path, no database, no network, no
+      # credentials. Root test_* fallthrough already wakes core; the pins
+      # in ci_changes.py record the intent.
+      - name: migration safety gates suites
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: |
+          ./test_migration_timeout_preamble.sh
+          ./test_migration_squawk.sh
+          ./test_migration_rehearsal.sh
+          python3 -m unittest -v test_migration_drift_gate
 
       # == area: runbook (was runbook-gates; runs only when runbook or full changed) ==
       - name: DLQ redrive CLI standalone suite

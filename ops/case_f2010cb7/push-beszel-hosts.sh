@@ -30,9 +30,14 @@
 #     "disk_history":[{"t":1696000000,"used_bytes":40000000000}, ...]}, ...]
 # `failed_units` takes a count or a list of unit names. `disk_history` plus
 # `disk_total_bytes` enable the forecast; without them the forecast is
-# skipped (never scored healthy-or-not on missing history). Every other
-# field is required: a host missing one is pushed success=false naming the
-# field — missing data fails CLOSED, never healthy.
+# skipped (never scored healthy-or-not on missing history).
+# `inode_used_percent` and `container_restarts_24h` are OPTIONAL the same
+# way: Beszel records neither (no inode field; container stats carry no
+# restart count — see beszel_adapter.py provenance), so an adapter-fed
+# payload can never supply them honestly. Absent = skipped, never scored;
+# present-but-not-a-number still fails CLOSED like any malformed field.
+# Every other field is required: a host missing one is pushed
+# success=false naming the field — missing data fails CLOSED, never healthy.
 #
 # Env:
 #   push mode:  GATUS_URL, GATUS_EXTERNAL_TOKEN (via _gatus_push.sh),
@@ -169,12 +174,18 @@ eval_host() {
   [[ -n "$name" ]] || { echo "host record without a name"; return; }
   reasons=(); missing=()
   local f
-  for f in disk_used_percent inode_used_percent cpu_used_percent mem_used_percent load15_per_cpu failed_units container_restarts_24h; do
+  for f in disk_used_percent cpu_used_percent mem_used_percent load15_per_cpu failed_units; do
     jq -e --arg f "$f" '
       .[$f] != null and
       (if $f == "failed_units" then ((.[$f] | type) == "number" or ((.[$f] | type) == "array"))
        else ((.[$f] | type) == "number") end)' <<<"$host_json" >/dev/null 2>&1 \
       || missing+=("$f")
+  done
+  # Optional fields (no Beszel-native provenance): absent = skipped below,
+  # present-but-not-a-number = malformed, fails closed like a missing field.
+  for f in inode_used_percent container_restarts_24h; do
+    jq -e --arg f "$f" 'if .[$f] == null then true else ((.[$f] | type) == "number") end' \
+      <<<"$host_json" >/dev/null 2>&1 || missing+=("$f")
   done
   if (( ${#missing[@]} > 0 )); then
     printf 'missing field(s): %s\n' "${missing[*]}"
@@ -182,17 +193,20 @@ eval_host() {
   fi
   local disk inode cpu mem load restarts
   disk="$(jq -r '.disk_used_percent' <<<"$host_json")"
-  inode="$(jq -r '.inode_used_percent' <<<"$host_json")"
+  inode="$(jq -r '.inode_used_percent // "-"' <<<"$host_json")"
   cpu="$(jq -r '.cpu_used_percent' <<<"$host_json")"
   mem="$(jq -r '.mem_used_percent' <<<"$host_json")"
   load="$(jq -r '.load15_per_cpu' <<<"$host_json")"
-  restarts="$(jq -r '.container_restarts_24h' <<<"$host_json")"
+  restarts="$(jq -r '.container_restarts_24h // "-"' <<<"$host_json")"
   python3 - "$disk" "$DISK_CRIT" "$inode" "$INODE_CRIT" "$cpu" "$CPU_CRIT" \
             "$mem" "$MEM_CRIT" "$load" "$LOAD_CRIT" <<'PY'
 import sys
-disk, dc, ino, ic, cpu, cc, mem, mc, load, lc = map(float, sys.argv[1:])
+def num(s):  # "-" = optional field absent: skip, never score
+    return None if s == "-" else float(s)
+disk, ino, cpu, mem, load = (num(sys.argv[i]) for i in (1, 3, 5, 7, 9))
+dc, ic, cc, mc, lc = (float(sys.argv[i]) for i in (2, 4, 6, 8, 10))
 if disk >= dc: print(f"disk {disk:g}% >= {dc:g}%")
-if ino >= ic: print(f"inode {ino:g}% >= {ic:g}%")
+if ino is not None and ino >= ic: print(f"inode {ino:g}% >= {ic:g}%")
 if cpu >= cc: print(f"cpu {cpu:g}% >= {cc:g}%")
 if mem >= mc: print(f"mem {mem:g}% >= {mc:g}%")
 if load >= lc: print(f"load15/cpu {load:g} >= {lc:g}")

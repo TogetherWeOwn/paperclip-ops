@@ -1,0 +1,111 @@
+# Reusable migration squawk gate (shared migration safety gates).
+#
+# Callers reference a pinned SHA:
+#   uses: TogetherWeOwn/paperclip-ops/.github/workflows/reusable-migration-squawk.yml@<sha>
+#
+# What it does: checks out the caller, fetches the canonical gate scripts
+# from this repo at its own pinned SHA, then runs the file-standard checks
+# on every migration and squawk itself when available. No database, no
+# credentials, no network beyond the checkouts and the optional install.
+name: migration-squawk (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      migrations-dir:
+        description: Repo-relative directory holding NNNN_slug.sql files.
+        required: false
+        default: packages/db/src/migrations
+        type: string
+      strict:
+        description: Refuse when the squawk binary cannot run.
+        required: false
+        default: true
+        type: boolean
+      squawk-version:
+        description: >-
+          Squawk release to install when no squawk binary is present
+          (e.g. "2.70.0"). The install is skipped when a binary is already
+          on PATH, so preinstalled runners pay nothing; strict callers on a
+          bare ubuntu-latest get a real squawk instead of a refusal.
+        required: false
+        default: "2.70.0"
+        type: string
+      script-ref:
+        description: Required immutable 40-character commit SHA for gate scripts.
+        required: true
+        type: string
+
+jobs:
+  squawk:
+    name: migration squawk
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      # Pinned: actions/checkout v4. Repin with the SHA, never a moving tag.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate immutable gate-script reference
+        env:
+          SCRIPT_REF: ${{ inputs.script-ref }}
+        run: |
+          [[ "$SCRIPT_REF" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "script-ref must be a full 40-character commit SHA"; exit 2; }
+
+      - name: Fetch canonical gate scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: TogetherWeOwn/paperclip-ops
+          ref: ${{ inputs.script-ref }}
+          path: .paperclip-migration-gates
+          persist-credentials: false
+
+      - name: Check for a squawk binary
+        id: squawk
+        run: |
+          set -euo pipefail
+          if command -v squawk >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            squawk --version
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install squawk (pinned release binary, when missing)
+        if: steps.squawk.outputs.exists != 'true'
+        env:
+          SQUAWK_VERSION: ${{ inputs.squawk-version }}
+        run: |
+          set -euo pipefail
+          test -n "$SQUAWK_VERSION" \
+            || { echo "no squawk on PATH and squawk-version is empty: set a pinned version or pre-install squawk"; exit 2; }
+          case "$(uname -m)" in
+            x86_64) GOARCH=x64 ;;
+            aarch64) GOARCH=arm64 ;;
+            *) echo "unsupported architecture: $(uname -m)"; exit 2 ;;
+          esac
+          tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL -o "$tmp/squawk" \
+            "https://github.com/sbdchd/squawk/releases/download/v${SQUAWK_VERSION}/squawk-linux-${GOARCH}"
+          chmod +x "$tmp/squawk"
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 "$tmp/squawk" "$HOME/.local/bin/squawk"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/squawk" --version
+
+      - name: Prove the timeout preamble injector parses
+        run: bash -n .paperclip-migration-gates/migration_timeout_preamble.sh
+
+      - name: Lint migrations (file standard + squawk)
+        env:
+          STRICT: ${{ inputs.strict && '--strict' || '' }}
+          MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          bash .paperclip-migration-gates/migration_squawk.sh \
+            --migrations-dir "$MIGRATIONS_DIR" $STRICT

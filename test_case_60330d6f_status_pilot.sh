@@ -697,7 +697,7 @@ else bad "7i. ro-shell boundary" "forced-command wording missing"; fi
 # (e.g. the old `exec $SSH_ORIGINAL_COMMAND` keeping quotes literal) fail
 # here because the stub sees the wrong argv.
 mkdir -p "$WORK/robin"
-for b in uptime free systemctl docker lxc journalctl df ss logger paperclip-inv-count.sh; do
+for b in uptime free systemctl docker lxc journalctl df ss logger paperclip-inv-count.sh monitor-health.sh; do
   cat > "$WORK/robin/$b" <<SHIM
 #!/usr/bin/env bash
 printf '%s|%s\n' "$b" "\$*" >> "$WORK/ro-argv.log"
@@ -950,6 +950,133 @@ grep -qF "paperclip-inv agents-error-10m" "$SRC/OPERATOR.md" \
 [[ -z "$inv_bad3" ]] \
   && ok "7l3. installed copy works outside the tree, OPERATOR proves one arm" \
   || bad "7l3. outside-tree helper contract" "$inv_bad3"
+# 7m. monitor-health arms (case_66436e78 slice 7): two exact-match
+# `monitor-health beszel|gatus` arms. Secret-free localhost health
+# routes only — the authenticated APIs stay refused (no name, no flags).
+mapfile -t MH_LIST <<'MHARMS'
+monitor-health beszel
+monitor-health gatus
+MHARMS
+mh_bad=""
+for arm in "${MH_LIST[@]}"; do
+  [[ "$(ro_fire "$arm")" == "ALLOWED:1" ]] || mh_bad="$mh_bad [allowed-arm failed: $arm]"
+done
+[[ "$(ro_fire 'monitor-health')" == "REFUSED" ]] || mh_bad="$mh_bad [bare monitor-health admitted]"
+[[ "$(ro_fire 'monitor-health anything-else')" == "REFUSED" ]] || mh_bad="$mh_bad [unlisted name admitted]"
+[[ "$(ro_fire 'monitor-health beszel --follow')" == "REFUSED" ]] || mh_bad="$mh_bad [extra flag admitted]"
+[[ "$(ro_fire 'monitor-health beszel; evil')" == "REFUSED" ]] || mh_bad="$mh_bad [chaining admitted]"
+for arm in "${MH_LIST[@]}"; do
+  name="${arm#monitor-health }"
+  ro_fire "$arm" >/dev/null
+  margv="$(cat "$WORK/ro-argv.log")"
+  [[ "$margv" == "monitor-health.sh|$name" ]] \
+    || mh_bad="$mh_bad [mh argv wrong ($name): $margv]"
+done
+[[ -z "$mh_bad" ]] \
+  && ok "7m. monitor-health: all ${#MH_LIST[@]} arms dispatch once with clean argv, others refused" \
+  || bad "7m. monitor-health dispatch" "$mh_bad"
+# 7m2. helper contract (monitor-health.sh): fixed localhost URLs, fixed
+# up/DOWN lines, fail-closed, upstream body/stderr never printed. Stub
+# curl records argv and enforces the real curl contract (see below); its
+# stderr carries a sentinel the way a real error page could carry host
+# text — a helper echoing it would leak.
+mkdir -p "$WORK/curlbin"
+cat > "$WORK/curlbin/curl" <<CURLSHIM
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$WORK/curl-argv.log"
+# Contract double for real curl: parse the flags the helper must send.
+# Without -o /dev/null the sentinel body reaches stdout (as with real
+# curl); without -w '%{http_code}' no code is printed; missing timeout
+# bounds are a contract violation (exit 99, so the helper reports DOWN).
+stub_out=""; stub_w=""; stub_ct=""; stub_mt=""
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o) stub_out="\${2:-}"; shift 2 ;;
+    -w) stub_w="\${2:-}"; shift 2 ;;
+    --connect-timeout) stub_ct="\${2:-}"; shift 2 ;;
+    --max-time) stub_mt="\${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ "\$stub_ct" != "3" || "\$stub_mt" != "5" ]]; then
+  echo "stub curl: missing timeout bound" >&2; exit 99
+fi
+case "\${CURL_FIXTURE:-ok}" in
+  ok) stub_code=200 ;;
+  http503) stub_code=503 ;;
+  http204) stub_code=204 ;;
+  fail) echo "curl: (7) sentinel-upstream-text-42" >&2; exit 7 ;;
+  *) echo "stub curl: unknown fixture" >&2; exit 99 ;;
+esac
+if [[ "\$stub_out" == "/dev/null" ]]; then
+  :
+elif [[ -n "\$stub_out" ]]; then
+  printf 'sentinel-body-42' > "\$stub_out"
+else
+  printf 'sentinel-body-42'
+fi
+if [[ "\$stub_w" == '%{http_code}' ]]; then printf '%s' "\$stub_code"; fi
+CURLSHIM
+chmod +x "$WORK/curlbin/curl"
+mh_bad2=""
+: > "$WORK/curl-argv.log"
+if out="$(PATH="$WORK/curlbin:/usr/bin:/bin" bash "$SRC/monitor-health.sh" beszel 2>&1)"; then
+  [[ "$out" == "beszel: up" ]] || mh_bad2="$mh_bad2 [beszel output wrong: $out]"
+else mh_bad2="$mh_bad2 [beszel refused a healthy probe: $out]"
+fi
+grep -qF "http://127.0.0.1:8090/api/health" "$WORK/curl-argv.log" \
+  || mh_bad2="$mh_bad2 [beszel URL wrong: $(tr '\n' ' ' < "$WORK/curl-argv.log")]"
+grep -qF -- "--max-time 5" "$WORK/curl-argv.log" \
+  || mh_bad2="$mh_bad2 [probe is unbounded (no --max-time 5)]"
+grep -qF -- "--connect-timeout 3" "$WORK/curl-argv.log" \
+  || mh_bad2="$mh_bad2 [probe is unbounded (no --connect-timeout 3)]"
+grep -qF -- "-o /dev/null" "$WORK/curl-argv.log" \
+  || mh_bad2="$mh_bad2 [probe does not discard the body (no -o /dev/null)]"
+grep -qF -- "-w %{http_code}" "$WORK/curl-argv.log" \
+  || mh_bad2="$mh_bad2 [probe does not capture the status (no -w %{http_code})]"
+if grep -qF "sentinel-body-42" <<<"$out"; then mh_bad2="$mh_bad2 [helper printed the response body]"; fi
+if grep -qiF "authorization" "$WORK/curl-argv.log"; then mh_bad2="$mh_bad2 [probe carries a credential]"; fi
+: > "$WORK/curl-argv.log"
+if out="$(PATH="$WORK/curlbin:/usr/bin:/bin" bash "$SRC/monitor-health.sh" gatus 2>&1)"; then
+  [[ "$out" == "gatus: up" ]] || mh_bad2="$mh_bad2 [gatus output wrong: $out]"
+else mh_bad2="$mh_bad2 [gatus refused a healthy probe: $out]"
+fi
+grep -qF "http://127.0.0.1:8080/health" "$WORK/curl-argv.log" \
+  || mh_bad2="$mh_bad2 [gatus URL wrong: $(tr '\n' ' ' < "$WORK/curl-argv.log")]"
+# non-200 pages (exit 1) with the status, never upstream text.
+out="$(CURL_FIXTURE=http503 PATH="$WORK/curlbin:/usr/bin:/bin" bash "$SRC/monitor-health.sh" gatus 2>&1)"; rc=$?
+(( rc == 1 )) || mh_bad2="$mh_bad2 [503 wrong exit (rc=$rc): $out]"
+[[ "$out" == "gatus: DOWN (http 503)" ]] || mh_bad2="$mh_bad2 [503 output wrong: $out]"
+# only exactly 200 is up: any other 2xx still pages (exit 1).
+out="$(CURL_FIXTURE=http204 PATH="$WORK/curlbin:/usr/bin:/bin" bash "$SRC/monitor-health.sh" gatus 2>&1)"; rc=$?
+(( rc == 1 )) || mh_bad2="$mh_bad2 [204 wrong exit (rc=$rc): $out]"
+[[ "$out" == "gatus: DOWN (http 204)" ]] || mh_bad2="$mh_bad2 [204 output wrong: $out]"
+# unreachable pages (exit 1), sentinel stderr never printed.
+out="$(CURL_FIXTURE=fail PATH="$WORK/curlbin:/usr/bin:/bin" bash "$SRC/monitor-health.sh" beszel 2>&1)"; rc=$?
+(( rc == 1 )) || mh_bad2="$mh_bad2 [unreachable wrong exit (rc=$rc): $out]"
+[[ "$out" == "beszel: DOWN (unreachable)" ]] || mh_bad2="$mh_bad2 [unreachable output wrong: $out]"
+if grep -qF "sentinel-upstream-text-42" <<<"$out"; then mh_bad2="$mh_bad2 [helper printed upstream stderr]"; fi
+# unknown name refused (exit 2) with zero probes.
+: > "$WORK/curl-argv.log"
+out="$(PATH="$WORK/curlbin:/usr/bin:/bin" bash "$SRC/monitor-health.sh" 'anything-else; evil' 2>&1)"; rc=$?
+(( rc == 2 )) || mh_bad2="$mh_bad2 [unlisted name admitted (rc=$rc): $out]"
+[[ -s "$WORK/curl-argv.log" ]] && mh_bad2="$mh_bad2 [refused run probed]"
+# a non-localhost override is refused (exit 2) with zero probes: even the
+# test-only override cannot aim the probe off-host.
+: > "$WORK/curl-argv.log"
+out="$(MONITOR_HEALTH_BESZEL_URL="http://example.com/api/health" PATH="$WORK/curlbin:/usr/bin:/bin" bash "$SRC/monitor-health.sh" beszel 2>&1)"; rc=$?
+(( rc == 2 )) || mh_bad2="$mh_bad2 [off-host override admitted (rc=$rc): $out]"
+[[ -s "$WORK/curl-argv.log" ]] && mh_bad2="$mh_bad2 [off-host run probed]"
+# OPERATOR documents the helper and proves both arms.
+grep -qF "monitor-health.sh" "$SRC/OPERATOR.md" \
+  || mh_bad2="$mh_bad2 [OPERATOR.md misses the monitor-health helper]"
+grep -qF "monitor-health beszel" "$SRC/OPERATOR.md" \
+  || mh_bad2="$mh_bad2 [OPERATOR.md prove block misses the beszel arm]"
+grep -qF "monitor-health gatus" "$SRC/OPERATOR.md" \
+  || mh_bad2="$mh_bad2 [OPERATOR.md prove block misses the gatus arm]"
+[[ -z "$mh_bad2" ]] \
+  && ok "7m2. helper: fixed localhost health per name, fail-closed, no upstream text, OPERATOR proves both" \
+  || bad "7m2. monitor-health helper contract" "$mh_bad2"
 # 7k. phase 1 admits exactly one SSH host under forced command (not zero,
 # not open). Multi-line prose: join continuation lines before matching.
 if grep -qiE 'ONLY SSH|exactly one SSH|one SSH host' <<<"$(tr '\n' ' ' < "$SRC/OPERATOR.md")" \
@@ -980,8 +1107,8 @@ fi
 # path), mirroring the ops/case_654dd2ec/gatus-endpoints.yaml pattern so the page
 # itself says what breached and who owns it.
 desc_lines="$(grep -cE '^\s*description: "' "$CFG")"
-if [[ "$desc_lines" == "36" ]]; then ok "9. thirty-six alert descriptions present (17 endpoints x discord+custom, plus the ci-queue-age escalation pair)"
-else bad "9. description count" "found $desc_lines, want 36"; fi
+if [[ "$desc_lines" == "38" ]]; then ok "9. thirty-eight alert descriptions present (18 endpoints x discord+custom, plus the ci-queue-age escalation pair)"
+else bad "9. description count" "found $desc_lines, want 38"; fi
 missing_tor="$(grep -E '^\s*description: "' "$CFG" | grep -v 'THRESHOLD' || true)"
 if [[ -z "$missing_tor" ]]; then ok "9b. every description carries THRESHOLD"; else bad "9b. THRESHOLD missing" "$missing_tor"; fi
 missing_owner="$(grep -E '^\s*description: "' "$CFG" | grep -vE 'OWNER (director|devops|automation)' || true)"

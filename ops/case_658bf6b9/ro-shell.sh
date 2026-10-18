@@ -168,5 +168,19 @@ case "$SSH_ORIGINAL_COMMAND" in
   "paperclip-inv db-pool-waiters")
     exec paperclip-inv-count.sh db-pool-waiters
     ;;
+  # Monitor self-health (case_66436e78 item 8): the on-call agent sees a
+  # Gatus/Beszel alert but needs to know whether the monitor itself is
+  # up. One exact-match arm per service; the helper probes only the
+  # public unauthenticated localhost health routes (Beszel /api/health,
+  # Gatus /health) and prints a fixed up/DOWN line — never the upstream
+  # body. The authenticated APIs (Gatus statuses, Beszel systems) need
+  # credentials and stay refused here: no other name, no flags, no
+  # parameters — the list grows by patch + re-review, never by wildcard.
+  "monitor-health beszel")
+    exec monitor-health.sh beszel
+    ;;
+  "monitor-health gatus")
+    exec monitor-health.sh gatus
+    ;;
   *) deny ;;
 esac

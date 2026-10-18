@@ -98,6 +98,16 @@ class StepTest(unittest.TestCase):
                             % OUT_OF_SAMPLE_SHA in p for p in stub.posts))
         self.assertIn("label:review-ready", stub.posts)
 
+    def test_label_is_posted_before_comment(self):
+        # Label-first ordering avoids an orphan comment when the label
+        # write fails; the reviewer invocation tolerates either order at
+        # review time, but this repo always writes the label first.
+        stub = Stub(runs=green_runs())
+        self.assertEqual(run_with(stub), 0)
+        self.assertEqual(stub.posts[0], "label:review-ready")
+        self.assertIn("@togetherweown-reviewer review %s" % OUT_OF_SAMPLE_SHA,
+                      stub.posts[1])
+
     def test_existing_trigger_is_not_reposted(self):
         stub = Stub(runs=green_runs(), comments=[
             {"body": "@togetherweown-reviewer review %s\n\nready head"

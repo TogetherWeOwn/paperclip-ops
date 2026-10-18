@@ -403,13 +403,16 @@ EOF
 
 # Strict A.4 predicate over profiled required names. Argv: layoutdir label
 # required_json manifest_json provided_json("null" skips drift, "MALFORMED"
-# refuses). Prints one PASS/FAIL/REFUSED TSV line; exit 0 verdict, 2 refused.
+# refuses) [strict_extra]. Prints one PASS/FAIL/REFUSED TSV line; exit 0
+# verdict, 2 refused. strict_extra=1 keeps the legacy rule for the preserved
+# paperclip entries: any BAD or unfinished non-required run also fails/pends.
 ci_profile_predicate() {
-  python3 - "$1" "$2" "$3" "$4" "$5" <<'EOF'
+  python3 - "$1" "$2" "$3" "$4" "$5" "${6:-0}" <<'EOF'
 import json, sys
 d, label, required, manifest, provided = (
     sys.argv[1], sys.argv[2], json.loads(sys.argv[3]),
     json.loads(sys.argv[4]), sys.argv[5])
+strict = len(sys.argv) > 6 and sys.argv[6] == "1"
 try:
     runs = json.load(open(d + "/check_runs.json"))
     cr = runs.get("check_runs", runs if isinstance(runs, list) else [])
@@ -465,6 +468,21 @@ for name in required:
         pend.append("%s:%s" % (name, r.get("status"))); continue
     if r.get("conclusion") != "success":
         failing.append("%s(%s id %s)" % (name, r.get("conclusion"), r.get("id")))
+# Preserved defaults keep the legacy rule: any completed run with a BAD
+# conclusion fails, and any unfinished run pends, whether required or not.
+# Other profiles watch only their required names (completed skipped/neutral
+# extras never block, matching legacy which only fails BAD conclusions).
+if strict:
+    required_names = set(required)
+    BAD_EXTRA = {"failure", "timed_out", "cancelled", "action_required", "startup_failure"}
+    for extra in sorted(latest):
+        if extra in required_names:
+            continue
+        rr = latest[extra][1]
+        if rr.get("status") != "completed":
+            pend.append("%s:%s" % (extra, rr.get("status")))
+        elif (rr.get("conclusion") or "") in BAD_EXTRA:
+            failing.append("%s(%s id %s)" % (extra, rr.get("conclusion"), rr.get("id")))
 if failing:
     print("FAIL\t%s failing on %s: %s" % (label, sha[:12], ", ".join(failing))); sys.exit(0)
 if stale:
@@ -516,14 +534,18 @@ profile_eval() {
     for i in $(seq 0 $((n-1))); do
       file="$(jq -r ".[$i].file" <<<"$manifest")"
       want="$(jq -r ".[$i].blob_sha" <<<"$manifest")"
-      out="$WORK/drift_$side_$i.json"
+      out="$WORK/drift_${side}_${i}.json"
       c="$(api_get "/repos/$repo/contents/.github/workflows/$file?ref=$branch" "$out")"
       [ "$c" = "200" ] || { echo "REFUSED profile-stale: cannot re-resolve $file on $repo@$branch (HTTP $c); refresh profile + fixtures"; return 2; }
       got="$(jq -r '.sha // empty' "$out")"
       [ "$got" = "$want" ] || { echo "REFUSED profile-stale: $file changed on $repo@$branch; refresh profile + fixtures"; return 2; }
     done
   fi
-  ci_profile_predicate "$dir" "$label" "$required" "$manifest" "$provided"
+  # Preserved paperclip entries keep the legacy any-run strictness; every
+  # other reviewed profile watches only its required names.
+  local strict_extra=0
+  if printf '%s' "$repo" | grep -Eq "^(${CI_REVIEW_KEEPERS})$"; then strict_extra=1; fi
+  ci_profile_predicate "$dir" "$label" "$required" "$manifest" "$provided" "$strict_extra"
 }
 
 eval_fork_ci() { # layoutdir [repo] [fixtures]

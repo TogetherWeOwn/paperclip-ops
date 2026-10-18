@@ -81,8 +81,17 @@ def private_artifact_absent(root, relative):
             return False
         if not entries:
             return False
+        if any(name in DOCS_UPSTREAM_PRIVATE for name in entries):
+            return False
         if any(name not in DOCS_UPSTREAM_PUBLIC for name in entries):
             return False
+        for name in entries:
+            # An allowlisted name that is not a plain file (directory,
+            # symlink) cannot stand in for the public contract: staging it
+            # would copy the wrong bytes or fail, so the bundle stays present.
+            entry = base / name
+            if entry.is_symlink() or not entry.is_file():
+                return False
         return True
     return is_public_snapshot(root) and not os.path.lexists(Path(root) / relative)
 

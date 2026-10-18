@@ -87,7 +87,13 @@ missing/malformed sha in `pr.json` or in a required run is REFUSED,
 exit 2); `status == completed` (else FAIL `[pending]`); `conclusion ==
 success` (`skipped`, `neutral`, empty or unknown conclusions on a
 required check FAIL, never pass); a success on a stale head FAILs
-`stale [pending]`. Extra non-required runs never fail the gate.
+`stale [pending]`. Extra non-required runs never fail the gate, with
+one exception: the preserved `TogetherWeOwn/paperclip` and
+`paperclipai/paperclip` entries keep the legacy strictness (any
+completed run with a `failure`/`timed_out`/`cancelled`/`action_required`/
+`startup_failure` conclusion fails, any unfinished run pends, required
+or not), so their behavior stays byte-identical to the pre-profile
+evaluators. Completed `skipped`/`neutral` extras never block anywhere.
 Unreadable payloads and zero observed runs are REFUSED. Provenance
 (run id, head, app) is quoted in the output. The check-runs API always
 returns `head_sha`; a payload where no run carries one predates
@@ -102,12 +108,18 @@ evidence are refreshed in one reviewed PR.
 
 ## 2. Template-less maintainer memory (contract B)
 
-`memory_init` probes all four candidates in order
+`memory_init` probes the four file candidates in order
 (`<recorded path>`, `.github/pull_request_template.md`,
-`pull_request_template.md`, `docs/pull_request_template.md`):
+`pull_request_template.md`, `docs/pull_request_template.md`), then sweeps
+the further locations GitHub honors: uppercase `PULL_REQUEST_TEMPLATE.md`
+in root and `docs/`, and the multi-template `PULL_REQUEST_TEMPLATE/`
+directory in root, `docs/` and `.github/`:
 
-- Absence is proven ONLY when every candidate is a verifiable HTTP 404.
-  A real template later in the list is still adopted (fallback preserved).
+- Absence is proven ONLY when every file candidate is a verifiable
+  HTTP 404 and every template directory reads absent (HTTP 404 or empty).
+  A real template later in any list is still adopted (fallback preserved);
+  any entry inside a template directory refuses as cannot-verify (a
+  directory is never proof of absence).
 - Any non-file/ambiguous signal (directory, symlink, 403, 5xx, timeout,
   non-JSON) on any candidate is `REFUSED cannot verify PR template
   <cand> (<signal>); memory unchanged`: no write, no weaker fallback, and
@@ -119,17 +131,20 @@ evidence are refreshed in one reviewed PR.
   Changed, Verification, Risks, Model Used, Checklist), the 6 verbatim
   checklist boxes from this repo's own template,
   `pending_ok_at_first_push: ["greptile", "ci gates are green"]`, empty
-  path/blob, `absent: true`, and per-candidate 404 `absence_evidence`
+  path/blob, `absent: true`, per-candidate 404 `absence_evidence` for the
+  four file candidates plus the extended-sweep outcomes,
   with the resolved `default_branch@commit-sha` revision. Signoff
   discovery is preserved (`dco/cla false` with null evidence when
   nothing is found). `checkboxes: []` is forbidden on this path.
 
-Freshness: `lint --live` re-probes the four candidates when memory says
+Freshness: `lint --live` re-probes the four file candidates plus the
+extended uppercase-name and template-directory sweep when memory says
 absent. A newly present template, or new DCO/CLA markers versus
 `detected_from`, is `REFUSED template-fresh: upstream gained a
 <template|signoff policy>; run memory refresh --repo <upstream>`,
 exit 2, until a human runs `memory refresh --repo <upstream>` and
-reviews the new maintainer text. Gate output on absence-memory lines is
+reviews the new maintainer text. A refresh on the absence path preserves
+a hand-recorded CLA, exactly like the template-present path. Gate output on absence-memory lines is
 tagged `template(internal-minimum)` so a pass never implies maintainer
 authorship; empty or placeholder sections still FAIL.
 

@@ -500,5 +500,39 @@ class HostPatchHunkStructure(unittest.TestCase):
             cumulative += new_count - old_count
 
 
+class InstallProcedureGuards(unittest.TestCase):
+    # The host_patch.diff hunks are pure additions with no context lines,
+    # so `patch --forward` alone cannot reject a wrong or already-patched
+    # file. These tests pin the fail-closed INSTALL.md procedure that is
+    # the real gate: SHA/size abort, idempotency marker, dry-run/apply
+    # status checks with backup restore, and .rej detection.
+    @classmethod
+    def setUpClass(cls):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "INSTALL.md")
+        with open(path) as f:
+            cls.text = f.read()
+
+    def test_fails_closed(self):
+        self.assertIn("set -eu", self.text)
+
+    def test_sha_precondition_gated(self):
+        self.assertIn("sha256sum -c -", self.text)
+
+    def test_idempotency_marker_stops_reapply(self):
+        self.assertIn("grep -q 'served_bearer' live_accounts.py", self.text)
+
+    def test_dry_run_status_checked(self):
+        self.assertIn("patch --batch --forward --dry-run", self.text)
+        self.assertIn("Patch dry-run failed", self.text)
+
+    def test_apply_failure_restores_backup(self):
+        self.assertIn("Patch apply failed; restoring the backup.", self.text)
+        self.assertIn('cp -a "$backup" live_accounts.py', self.text)
+
+    def test_reject_file_restores_backup(self):
+        self.assertIn("test -e live_accounts.py.rej", self.text)
+        self.assertIn("live_accounts.py.rej; restoring the backup.", self.text)
+
+
 if __name__ == "__main__":
     unittest.main()

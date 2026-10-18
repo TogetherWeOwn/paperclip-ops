@@ -8,23 +8,41 @@ Source-only handoff for `ops/cliproxy-live/live_accounts.py`; this issue does **
 
 ## Operator procedure (only when separately authorized)
 
-1. On the host, enter the directory containing `live_accounts.py` and verify the exact preimage before touching it:
+1. On the host, enter the directory containing `live_accounts.py` and verify the exact preimage before touching it. Every check below aborts the shell on failure (`set -eu`); run the whole block, not line by line:
 
    ```sh
+   set -eu
    test "$(wc -c < live_accounts.py)" -eq 42536
    echo '93a99797b20726182f14938b394f58c4ec6b3adcc87fdfc7bcce787e465bf75e  live_accounts.py' | sha256sum -c -
+   if grep -q 'served_bearer' live_accounts.py; then
+     printf 'servedModels carrier already applied; stop.\n' >&2
+     exit 1
+   fi
    ```
 
-   Stop without applying if either check fails. Do not try the old carrier against a different source.
+   Stop without applying if any check fails. Do not try the old carrier against a different source. The `served_bearer` marker check makes a second application fail closed even if the operator restarts the block from the top.
 
-2. Dry-run the patch, then make a same-filesystem backup and apply it. Record the printed backup path for rollback. The SHA precondition makes a second application invalid; commands are noninteractive and will not reverse an applied patch:
+2. Dry-run the patch, then make a same-filesystem backup and apply it. Record the printed backup path for rollback. The dry-run and apply exit statuses are checked, and any failure restores the backup; commands are noninteractive and will not reverse an applied patch:
 
    ```sh
-   patch --batch --forward --dry-run -p0 < /path/to/host_patch.diff
+   set -eu
+   if ! patch --batch --forward --dry-run -p0 < /path/to/host_patch.diff; then
+     printf 'Patch dry-run failed; stop without applying.\n' >&2
+     exit 1
+   fi
    backup="live_accounts.py.pre-servedmodels-$(date -u +%Y%m%dT%H%M%SZ)"
    cp -a live_accounts.py "$backup"
    printf 'Rollback source: %s\n' "$backup"
-   patch --batch --forward -p0 < /path/to/host_patch.diff
+   if ! patch --batch --forward -p0 < /path/to/host_patch.diff; then
+     printf 'Patch apply failed; restoring the backup.\n' >&2
+     cp -a "$backup" live_accounts.py
+     exit 1
+   fi
+   if test -e live_accounts.py.rej; then
+     printf 'Patch created live_accounts.py.rej; restoring the backup.\n' >&2
+     cp -a "$backup" live_accounts.py
+     exit 1
+   fi
    ```
 
 3. Verify syntax before restarting anything:

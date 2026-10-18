@@ -306,7 +306,27 @@ rules:
               - pattern: httpx.$METHOD(..., url=$URL, ...)
               - metavariable-regex:
                   metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head|request|options|stream)$
+          # Keyword form on direct constructor chains and httpx.stream:
+          # Session().get(url=...), Client().stream("GET", url=...), etc.
+          # The literal guards below (url="...") are position-safe: the
+          # literal sits in url= position, so a generic $METHOD guard cannot
+          # match a method-string first argument here.
+          - patterns:
+              - pattern: requests.Session().$METHOD(..., url=$URL, ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
                   regex: (?i)^(get|post|put|patch|delete|head|request|options)$
+          - patterns:
+              - pattern: httpx.Client().$METHOD(..., url=$URL, ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head|request|options|stream)$
+          - patterns:
+              - pattern: httpx.AsyncClient().$METHOD(..., url=$URL, ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i)^(get|post|put|patch|delete|head|request|options|stream)$
           # Direct constructor chains only. A Session/Client assigned to a
           # variable first (`s = requests.Session(); s.get(...)`) cannot be
           # named without matching every `.get(` in a codebase, so it stays
@@ -328,9 +348,10 @@ rules:
                   regex: (?i)^(get|post|put|patch|delete|head|options)$
           # Two-argument request/stream on direct constructor chains: the
           # first argument is the method string, so the URL is second. Each
-          # branch carries its own second-argument literal guard below: the
-          # generic Session/Client `$METHOD("...", ...)` guards would also
-          # match the method string here and silently kill these branches.
+          # branch carries its own second-argument literal guard below, and
+          # the Session/Client first-argument guards are per-verb: a generic
+          # `$METHOD("...", ...)` guard would also match the method string
+          # here and silently kill these branches.
           - pattern: requests.Session().request($M, $URL, ...)
           - pattern: httpx.Client().request($M, $URL, ...)
           - pattern: httpx.AsyncClient().request($M, $URL, ...)
@@ -369,9 +390,30 @@ rules:
       - pattern-not: httpx.AsyncClient().stream($M, "...", ...)
       - pattern-not: requests.$METHOD(..., url="...", ...)
       - pattern-not: httpx.$METHOD(..., url="...", ...)
-      - pattern-not: requests.Session().$METHOD("...", ...)
-      - pattern-not: httpx.Client().$METHOD("...", ...)
-      - pattern-not: httpx.AsyncClient().$METHOD("...", ...)
+      - pattern-not: requests.Session().get("...", ...)
+      - pattern-not: requests.Session().post("...", ...)
+      - pattern-not: requests.Session().put("...", ...)
+      - pattern-not: requests.Session().patch("...", ...)
+      - pattern-not: requests.Session().delete("...", ...)
+      - pattern-not: requests.Session().head("...", ...)
+      - pattern-not: requests.Session().options("...", ...)
+      - pattern-not: httpx.Client().get("...", ...)
+      - pattern-not: httpx.Client().post("...", ...)
+      - pattern-not: httpx.Client().put("...", ...)
+      - pattern-not: httpx.Client().patch("...", ...)
+      - pattern-not: httpx.Client().delete("...", ...)
+      - pattern-not: httpx.Client().head("...", ...)
+      - pattern-not: httpx.Client().options("...", ...)
+      - pattern-not: httpx.AsyncClient().get("...", ...)
+      - pattern-not: httpx.AsyncClient().post("...", ...)
+      - pattern-not: httpx.AsyncClient().put("...", ...)
+      - pattern-not: httpx.AsyncClient().patch("...", ...)
+      - pattern-not: httpx.AsyncClient().delete("...", ...)
+      - pattern-not: httpx.AsyncClient().head("...", ...)
+      - pattern-not: httpx.AsyncClient().options("...", ...)
+      - pattern-not: requests.Session().$METHOD(..., url="...", ...)
+      - pattern-not: httpx.Client().$METHOD(..., url="...", ...)
+      - pattern-not: httpx.AsyncClient().$METHOD(..., url="...", ...)
       - pattern-not: urllib.request.urlopen("...", ...)
       # Unanchored (see the JS rule): f-string, concat and str()-wrapped
       # request shapes must fire, not just the bare request.args["u"] form.

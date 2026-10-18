@@ -209,8 +209,10 @@ else
     # regex rule (axios.get<T>(...)), which no call pattern can bind.
     # The $METHOD split is pinned too: post/put/patch payload objects in
     # second position stay silent (the config is third there), as do
-    # axios.create/isAxiosError shapes the method regex excludes, and the
-    # Python options-method lines stay silent for the same reason. The .ts
+    # axios.create/isAxiosError shapes the method regex excludes. The
+    # Python options verbs fire like the other verbs, and Session/Client
+    # request/stream two-argument branches fire with branch-local literal
+    # guards. The .ts
     # config url values run to the property boundary so comma-carrying
     # path.join/new-URL expressions fire, while payload and nested-spread
     # typed lines stay silent exactly like the untyped rule. Constant-url
@@ -236,7 +238,9 @@ else
     # shapes pin the new baseURL/lookahead lines, mybaseURL/x-baseURL
     # template/concat lines pin the key anchor, and bracket-join plus
     # headers-prefixed bare lines pin the older value-class/nest-prefix
-    # sites.
+    # sites. Typed axios.options lines pin the |options alternative on all
+    # 14 typed entries, and the Python Session.request/stream lines pin the
+    # six two-argument branches with their second-argument literal guards.
     cat > "$FX/fx-ssrf.js" <<'EOF'
 async function h(req, searchParams, url, body) {
   await fetch("https://api.example.com/health");
@@ -596,6 +600,20 @@ async function h(req: any, data: any, url: any) {
   await axios.postForm<User>("/x", { a: 1 }, { ...req.body });
   await axios.putForm<User>("/x", { a: 1 }, { ...req.body });
   await axios.patchForm<User>("/x", { a: 1 }, { ...req.body });
+  await axios.options<User>(req.query.u);
+  await axios.options<User>(`/x/${req.query.p}`);
+  await axios.options<User>("/x/" + req.query.p);
+  await axios.options<User>({ url: req.query.u });
+  await axios.options<User>({ baseURL: req.query.h });
+  await axios.options<User>({ url: `/x/${req.query.p}` });
+  await axios.options<User>({ baseURL: `https://${req.query.h}/` });
+  await axios.options<User>({ url: "/x/" + req.query.p });
+  await axios.options<User>({ baseURL: "/x/" + req.query.h });
+  await axios.options<User>({ ...req.body });
+  await axios.options<User>("/x", { baseURL: req.query.h });
+  await axios.options<User>("/x", { baseURL: `https://${req.query.h}/` });
+  await axios.options<User>("/x", { baseURL: "/x/" + req.query.h });
+  await axios.options<User>("/x", { ...req.body });
 }
 EOF
     cat > "$FX/fx-ssrf.py" <<'EOF'
@@ -645,6 +663,20 @@ def h(request):
     requests.Session().options(request.args["u"])
     httpx.Client().options(request.args["u"])
     httpx.AsyncClient().options(request.args["u"])
+    requests.Session().request("GET", request.args["u"])
+    requests.Session().request("GET", "https://x/request.html")
+    httpx.Client().request("GET", request.args["u"])
+    httpx.Client().request("GET", "https://x/request.html")
+    httpx.AsyncClient().request("GET", request.args["u"])
+    httpx.AsyncClient().request("GET", "https://x/request.html")
+    httpx.stream("GET", request.args["u"])
+    httpx.stream("GET", "https://x/request.html")
+    httpx.Client().stream("GET", request.args["u"])
+    httpx.Client().stream("GET", "https://x/request.html")
+    httpx.AsyncClient().stream("GET", request.args["u"])
+    httpx.AsyncClient().stream("GET", "https://x/request.html")
+    requests.options("https://x/request.html")
+    httpx.options("https://x/request.html")
 EOF
     # Redirect fixtures: literal targets and safe builders stay silent
     # (both argument positions, literal-URL construction, url_for), while
@@ -817,16 +849,16 @@ for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24, 27, 29, 31, 35, 38, 41, 42, 43, 4
           f"behavioural fx-ssrf.js:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.js", "tier0-open-redirect-js")
 expect_hit("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253))
-expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 81, 82, 86, 87, 88, 89, 94, 95, 96, 101, 102, 103, 104, 105, 109, 110, 111, 112, 113, 114, 116, 117, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294, 295))
+expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 81, 82, 86, 87, 88, 89, 94, 95, 96, 101, 102, 103, 104, 105, 109, 110, 111, 112, 113, 114, 116, 117, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309))
 for ln in (23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 58, 59, 66, 76, 77, 78, 79, 80, 83, 84, 85, 90, 91, 92, 93, 97, 98, 99, 100, 106, 107, 108, 115, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 181, 197, 198, 199, 200, 201, 202, 203, 204):
     check(ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts"), set())
           and ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js"), set()),
           f"behavioural fx-ssrf.ts:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.ts", "tier0-open-redirect-js")
-expect_hit("fx-ssrf.py", "tier0-ssrf-dynamic-url-py", (4, 5, 6, 7, 8, 13, 15, 17, 18, 19, 21, 22, 23))
+expect_hit("fx-ssrf.py", "tier0-ssrf-dynamic-url-py", (4, 5, 6, 7, 8, 13, 15, 17, 18, 19, 21, 22, 23, 40, 41, 42, 43, 44, 45, 46, 47, 49, 51, 53, 55, 57))
 check(3 not in hits.get(("fx-ssrf.py", "tier0-ssrf-dynamic-url-py"), set()),
       "behavioural fx-ssrf.py:3 literal request stays silent")
-for ln in (9, 10, 11, 12, 14, 16, 20, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46):
+for ln in (9, 10, 11, 12, 14, 16, 20, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 48, 50, 52, 54, 56, 58, 59, 60):
     check(ln not in hits.get(("fx-ssrf.py", "tier0-ssrf-dynamic-url-py"), set()),
           f"behavioural fx-ssrf.py:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.py", "tier0-open-redirect-py")

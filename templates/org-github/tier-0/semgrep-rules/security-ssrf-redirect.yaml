@@ -287,12 +287,12 @@ rules:
               - pattern: requests.$METHOD($URL, ...)
               - metavariable-regex:
                   metavariable: $METHOD
-                  regex: (?i)^(get|post|put|patch|delete|head)$
+                  regex: (?i)^(get|post|put|patch|delete|head|options)$
           - patterns:
               - pattern: httpx.$METHOD($URL, ...)
               - metavariable-regex:
                   metavariable: $METHOD
-                  regex: (?i)^(get|post|put|patch|delete|head)$
+                  regex: (?i)^(get|post|put|patch|delete|head|options)$
           # Two-argument request(method, url): the URL is second.
           - pattern: requests.request($M, $URL, ...)
           - pattern: httpx.request($M, $URL, ...)
@@ -301,12 +301,12 @@ rules:
               - pattern: requests.$METHOD(..., url=$URL, ...)
               - metavariable-regex:
                   metavariable: $METHOD
-                  regex: (?i)^(get|post|put|patch|delete|head|request)$
+                  regex: (?i)^(get|post|put|patch|delete|head|request|options)$
           - patterns:
               - pattern: httpx.$METHOD(..., url=$URL, ...)
               - metavariable-regex:
                   metavariable: $METHOD
-                  regex: (?i)^(get|post|put|patch|delete|head|request)$
+                  regex: (?i)^(get|post|put|patch|delete|head|request|options)$
           # Direct constructor chains only. A Session/Client assigned to a
           # variable first (`s = requests.Session(); s.get(...)`) cannot be
           # named without matching every `.get(` in a codebase, so it stays
@@ -315,17 +315,28 @@ rules:
               - pattern: requests.Session().$METHOD($URL, ...)
               - metavariable-regex:
                   metavariable: $METHOD
-                  regex: (?i)^(get|post|put|patch|delete|head)$
+                  regex: (?i)^(get|post|put|patch|delete|head|options)$
           - patterns:
               - pattern: httpx.Client().$METHOD($URL, ...)
               - metavariable-regex:
                   metavariable: $METHOD
-                  regex: (?i)^(get|post|put|patch|delete|head)$
+                  regex: (?i)^(get|post|put|patch|delete|head|options)$
           - patterns:
               - pattern: httpx.AsyncClient().$METHOD($URL, ...)
               - metavariable-regex:
                   metavariable: $METHOD
-                  regex: (?i)^(get|post|put|patch|delete|head)$
+                  regex: (?i)^(get|post|put|patch|delete|head|options)$
+          # Two-argument request/stream on direct constructor chains: the
+          # first argument is the method string, so the URL is second. Each
+          # branch carries its own second-argument literal guard below: the
+          # generic Session/Client `$METHOD("...", ...)` guards would also
+          # match the method string here and silently kill these branches.
+          - pattern: requests.Session().request($M, $URL, ...)
+          - pattern: httpx.Client().request($M, $URL, ...)
+          - pattern: httpx.AsyncClient().request($M, $URL, ...)
+          - pattern: httpx.stream($M, $URL, ...)
+          - pattern: httpx.Client().stream($M, $URL, ...)
+          - pattern: httpx.AsyncClient().stream($M, $URL, ...)
           - pattern: urllib.request.urlopen($URL, ...)
       # Pure literals never reach the regex (see the JS rule); the fragment
       # list stays narrow — request accessors only — so configured constants
@@ -340,14 +351,22 @@ rules:
       - pattern-not: requests.patch("...", ...)
       - pattern-not: requests.delete("...", ...)
       - pattern-not: requests.head("...", ...)
+      - pattern-not: requests.options("...", ...)
       - pattern-not: httpx.get("...", ...)
       - pattern-not: httpx.post("...", ...)
       - pattern-not: httpx.put("...", ...)
       - pattern-not: httpx.patch("...", ...)
       - pattern-not: httpx.delete("...", ...)
       - pattern-not: httpx.head("...", ...)
+      - pattern-not: httpx.options("...", ...)
       - pattern-not: requests.request($M, "...", ...)
       - pattern-not: httpx.request($M, "...", ...)
+      - pattern-not: requests.Session().request($M, "...", ...)
+      - pattern-not: httpx.Client().request($M, "...", ...)
+      - pattern-not: httpx.AsyncClient().request($M, "...", ...)
+      - pattern-not: httpx.stream($M, "...", ...)
+      - pattern-not: httpx.Client().stream($M, "...", ...)
+      - pattern-not: httpx.AsyncClient().stream($M, "...", ...)
       - pattern-not: requests.$METHOD(..., url="...", ...)
       - pattern-not: httpx.$METHOD(..., url="...", ...)
       - pattern-not: requests.Session().$METHOD("...", ...)

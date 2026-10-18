@@ -13,12 +13,15 @@
 # while flow brackets are balanced) and searched for the token. YAML comments,
 # step names and script paths that merely contain the token pass because they
 # live outside the trigger block. Fail-closed extras: a YAML alias (`*name`,
-# any anchor-name charset) outside quotes in value position inside the trigger
-# block is a hit (it may resolve to the banned trigger; GitHub Actions expands
-# anchors/aliases), as is an unclosed flow bracket at the block end (truncated
-# extraction must not read as clean), a backslash escape inside the trigger
-# block (it may hide the token, e.g. "pull_request\x5ftarget"), a workflow
-# file with no detectable top-level `on:` block (e.g. a root flow document),
+# any anchor-name charset, including a `*`-prefixed name such as `**t`)
+# outside quotes in value position inside the trigger block is a hit (it may
+# resolve to the banned trigger; GitHub Actions expands anchors/aliases),
+# as is an unclosed flow bracket at the block end (truncated extraction must
+# not read as clean), a backslash escape inside the trigger block (it may
+# hide the token, e.g. "pull_request\x5ftarget"), a workflow file with no
+# detectable top-level `on:` block (e.g. a root flow document, indented or
+# not: the first content character decides, so a nested decoy `on:` can
+# never win for one),
 # duplicate `on:` lines at the winning indent, a winning `on:` below column 0
 # while column-0 content exists (the real top-level key is disguised and a
 # decoy line won), or a key position at the minimum indent holding `\`, an
@@ -70,9 +73,12 @@ def _at_scalar_start(line, i):
     # indent), after `[`, `{` or `,`, after `:` (with or without the space:
     # JSON-style `"k":"v"` is a value start too), after `-` or `?` followed
     # by a space, or after a YAML anchor (`&name`) or tag (`!name`/`!!name`
-    # /`!<verbatim>`): `&d "..."`, `&a~b "..."` and `!!str "..."` open a
-    # quoted scalar, otherwise a `}` or `#` inside that string desyncs the
-    # comment/bracket scan. A bare word character is NOT a value start, so
+    # /`!<verbatim>`): `&d "..."`, `&a! "..."`, `&"a" "..."` and `!!str "..."`
+    # open a quoted scalar, otherwise a `}` or `#` inside that string
+    # desyncs the comment/bracket scan. The anchor/tag test is a whole-token
+    # test (any anchor-name charset, including a trailing `&`/`!` or an
+    # embedded quote), never a walk back to the nearest `&`/`!`. A bare word
+    # character is NOT a value start, so
     # an apostrophe inside a plain scalar (e.g. `description: it's` or
     # `name: Don't deploy`) is literal text and must not open quote mode.
     # Closing an already-open scalar is always allowed.
@@ -87,23 +93,33 @@ def _at_scalar_start(line, i):
         return True
     if line[j] in "-?" and j < i - 1:
         return True
-    # Verbatim tag `!<...>` directly before the quote: the generic name
-    # scan below would stop at the `,` inside the tag URI, so handle it
-    # here. A `>` that is not a verbatim tag is not a scalar start.
+    # Verbatim tag `!<...>` directly before the quote: the tag URI may hold
+    # `,` (e.g. `!<tag:yaml.org,2002:str>`), which would split a generic
+    # token scan, so handle it here. A `>` that is not a verbatim tag falls
+    # through to the anchor/tag token scan below (e.g. `&<> "..."` is an
+    # anchor named `<>`, not a verbatim tag).
     if line[j] == ">":
         k = j - 1
         while k >= 0 and line[k] not in (" ", "\t", '"', "'"):
             if line[k] == "<":
-                return k - 1 >= 0 and line[k - 1] == "!"
+                if k - 1 >= 0 and line[k - 1] == "!":
+                    return True
+                break
             k -= 1
-    # Anchor/tag name directly before the quote: the name runs to
-    # whitespace or a flow indicator (anchor/tag names admit punctuation
-    # such as `~:+@%`, e.g. `&a~b`, `&a:b`, `!e:t`), so scan back to the
-    # `&`/`!` that terminates the name.
+    # Anchor/tag name directly before the quote: take the whitespace- and
+    # flow-delimited token ending at j (an anchor/tag name admits any other
+    # character, including `&`, `!`, quotes, `~:+@%` and `<>`, e.g. `&a!`,
+    # `&a&`, `&!`, `&"a"`, `&<>`) and accept it when it starts with `&` or
+    # `!`. The walk never stops at `&`, `!` or quotes, so a name ending in
+    # `&`/`!` or holding a quote still resolves. Fail closed on an empty
+    # token (a quote right after a flow bracket in an odd position).
     k = j
-    while k >= 0 and line[k] not in " \t,[]{}&!\"'":
+    while k >= 0 and line[k] not in " \t,[]{}":
         k -= 1
-    return k >= 0 and line[k] in "&!" and k < j
+    token = line[k + 1:j + 1]
+    if token == "":
+        return True
+    return token[0] in "&!"
 
 
 def _strip_line(line, in_single, in_double):
@@ -303,6 +319,19 @@ def find_on_block(text):
     top-level key plus a decoy line) yields no block at all.
     """
     lines, code_lines, literal, cands = find_on_candidates(text)
+    for code in code_lines:
+        stripped = code.strip()
+        if stripped == "":
+            continue
+        if stripped[0] in ("{", "["):
+            # A root flow document (`{"on": {...}}`, possibly indented) has
+            # no `on:` line at a trustworthy position: any `on:`-looking
+            # line is a nested decoy while the real trigger sits mid-line
+            # where the extractor never looks, so yield no block (the
+            # caller fails this closed). An indented root has no column-0
+            # content, which is exactly what let the decoy win.
+            return set()
+        break
     if not cands:
         return set()
     best = min(indent for _, indent in cands)
@@ -409,9 +438,11 @@ def _suspicious_top_key(code_lines, literal):
                 m = ALIAS_NAME.match(key, k + 1)
                 if not m:
                     continue
-                if key[k + 1] == "*":
-                    # `**` glob fragment, not an alias tail.
-                    continue
+                # No `**` glob skip: a value-position `*` always starts an
+                # alias (an anchor name may itself start with `*`, e.g.
+                # `&*t` / `**t`), while mid-scalar globs (`docs/**`) are
+                # already excluded by the value-position test below and an
+                # unquoted scalar cannot start with `*` at all.
                 j = k - 1
                 while j >= 0 and key[j] in (" ", "\t"):
                     j -= 1
@@ -466,10 +497,11 @@ def _unquoted_alias_hit(pairs):
                 if not m:
                     i += 1
                     continue
-                # `**` glob fragments: a second `*` is not an alias tail.
-                if code[i + 1] == "*":
-                    i += 1
-                    continue
+                # No `**` glob skip: a value-position `*` always starts an
+                # alias (an anchor name may itself start with `*`, e.g.
+                # `&*t` / `**t`), while mid-scalar globs (`docs/**`) are
+                # already excluded by the value-position test below and an
+                # unquoted scalar cannot start with `*` at all.
                 j = i - 1
                 while j >= 0 and code[j] in (" ", "\t"):
                     j -= 1

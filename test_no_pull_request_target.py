@@ -222,6 +222,42 @@ FAIL = {
         '  name: x\n  &t "on":\n    pull_request_target: {}\n  env:\n'
         "    on: x\n  jobs:\n    b:\n      runs-on: ubuntu-latest\n"
         "      steps:\n        - run: echo hi\n"),
+    # Paperclip Review round 6: anchor/tag names ending in `&`/`!`
+    # (`&a!`, `&a&`, `&!`), holding a quote (`&"a"`) or holding `<>`
+    # (`&<>`) still open a quoted scalar; a `}` or `#` inside must not hide
+    # a later pull_request_target. All read clean before (the walk-back
+    # stopped at the first `&`/`!`/quote and the verbatim branch rejected a
+    # `<...>` not preceded by `!`).
+    "bang anchor quoted brace hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a! "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "amp anchor quoted brace hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a& "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "bang-only anchor quoted brace hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &! "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "quote-bearing anchor quoted scalar hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &"a" "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "angle anchor quoted brace hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &<> "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    # Paperclip Review round 6: an anchor name may start with `*`, so a
+    # value-position `**t` is a live alias, not a glob fragment. Both read
+    # clean before (the `**` skip in both scanners).
+    "star-star alias trigger": (
+        "name: &*t pull_request_target\non: **t\n" + JOB),
+    "star-star alias flow trigger": (
+        "name: &*t pull_request_target\non: [**t]\n" + JOB),
+    # Paperclip Review round 6 (late-novel): an indented root flow document
+    # has no column-0 content, so the nested decoy `env.on` won and the
+    # real mid-line `"on"` went unscanned. Reads clean before.
+    "indented root flow document with decoy": (
+        ' {"env": {\n    "on": x,\n    "b": 2}, "name": "x", '
+        '"on": {"pull_request_target": {}}}\n'
+        '  "jobs": {"a": {"runs-on": "ubuntu-latest", '
+        '"steps": [{"run": "ls"}]}}}\n'),
 }
 
 

@@ -2192,6 +2192,22 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_beszel_gatus_bridge.sh
 
+      # case_f2010cb7 producer halves. The adapter is the only translator
+      # from Beszel-native records into the bridge contract: a wrong GiB
+      # factor, load divisor, or failed-services index would mis-score
+      # every host while looking healthy, and the forwarder is the only
+      # consumer of the Discord routing table (real Beszel title shapes +
+      # 500-char cap + https-only webhook never in argv). The fetch
+      # wrapper is the only handler of the hub password and token
+      # (0600 files, token charset gate, https-unless-loopback).
+      # Offline: native fixtures + stub curl.
+      - name: Beszel adapter and Discord forwarder suites
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: |
+          python3 -B test_beszel_adapter.py
+          python3 -B test_beszel_discord_forwarder.py
+          bash test_fetch_beszel_normalized.sh
+
       # case_c542accd. CI main-conclusion + job-runtime Gatus module: a script
       # that scores a red, slow, or unreadable main as healthy would
       # greenwash the merge gate fleet-wide. Offline: stub gh feeds fixture
@@ -2372,6 +2388,17 @@ jobs:
       # a mutation self-check that restores the vacuous form and must fail.
       - name: review bot sandbox canary suite
         run: ./test_review_bot_sandbox_canary.sh
+
+      # Activation contract (paperclip-upgrade/activation.sh): one
+      # service-scoped deployment lock across drain phases, verify-only
+      # post-restart hardening with no reachable ownership change, and
+      # fail-closed identity/pressure/window bindings. Hermetic: stub
+      # docker and stub drain.sh over temp fixtures; no daemon, DB or
+      # network. Without this step the suite runs only in the full
+      # local verify-fast tier while CI runs --parse-only, so a lock or
+      # binding regression would merge green.
+      - name: activation contract suite
+        run: ./paperclip-upgrade/test-activation-offline.sh
 
       # case_9cc4c0ad: offline, recorded-model auth evidence. The real incident is
       # INSUFFICIENT; cross-model successes and pre-inference aborts are not

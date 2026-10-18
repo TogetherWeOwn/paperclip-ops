@@ -544,7 +544,7 @@ profile_eval() {
   # Preserved paperclip entries keep the legacy any-run strictness; every
   # other reviewed profile watches only its required names.
   local strict_extra=0
-  if printf '%s' "$repo" | grep -Eq "^(${CI_REVIEW_KEEPERS})$"; then strict_extra=1; fi
+  if grep -Eq "^(${CI_REVIEW_KEEPERS})$" <<<"$repo"; then strict_extra=1; fi
   ci_profile_predicate "$dir" "$label" "$required" "$manifest" "$provided" "$strict_extra"
 }
 

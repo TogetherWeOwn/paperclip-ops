@@ -764,17 +764,16 @@ def memory_init(repo: str, mdir: str | None, refresh: bool) -> str:
             found = (cand, text, blob)
             break
         except Refused as exc:
-            if is_missing_api_resource(exc):
-                continue
-            if "is not a file" in str(exc):
+            # Fall back only when the candidate is verifiably absent. An
+            # unreadable one (503, network) must not select a weaker template.
+            if not (is_missing_api_resource(exc) or "is not a file" in str(exc)):
+                raise Refused("cannot read PR template %s; memory unchanged: %s" % (cand, exc))
+            if "is not a file" in str(exc) and not is_missing_api_resource(exc):
                 # A non-file candidate never proves absence, but a real
                 # template later in the list is still adopted.
                 if non_file is None:
                     non_file = (cand, str(exc))
-                continue
-            # An unreadable candidate (403, 5xx, network) must not select a
-            # weaker template.
-            raise Refused("cannot read PR template %s; memory unchanged: %s" % (cand, exc))
+            continue
     if found is None and non_file is not None:
         raise Refused("cannot verify PR template %s (%s); memory unchanged" % (
             non_file[0], non_file[1]))

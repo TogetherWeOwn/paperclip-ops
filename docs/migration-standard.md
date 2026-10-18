@@ -135,7 +135,11 @@ opaque secret bundle). PlanetScale uses the standard service-token ID/token
 environment variables and waits for the created branch to be ready; without
 a token pair it requires valid `pscale auth check` credentials. Generated
 PlanetScale branch names use lowercase letters, digits, and hyphens (maximum
-48 characters). Normal completion and unexpected shell exits use the script's
+48 characters). Generated names include a random suffix; caller-supplied names
+must be unique per run. The gate refuses a pre-existing branch before
+creation (`pscale branch show` must report the verified `branch <B> does
+not exist in database <D>` not-found text). Normal completion and unexpected
+shell exits use the script's
 cleanup trap; the reusable workflow also retries an `always()` cleanup step
 up to three times after cancellation or timeout when its unique-run marker
 shows clone creation began. A final failure names the exact branch to delete.

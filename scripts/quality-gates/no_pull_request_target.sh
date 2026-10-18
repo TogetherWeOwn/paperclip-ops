@@ -96,18 +96,19 @@ def _at_scalar_start(line, i):
     if line[j] in "-?" and j < i - 1:
         return True
     # Verbatim tag `!<...>` directly before the quote: the tag URI may hold
-    # `,` (e.g. `!<tag:yaml.org,2002:str>`), which would split a generic
-    # token scan, so handle it here. A `>` that is not a verbatim tag falls
-    # through to the anchor/tag token scan below (e.g. `&<> "..."` is an
-    # anchor named `<>`, not a verbatim tag).
+    # `,`, `<` or quotes (e.g. `!<tag:yaml.org,2002:str>`, `!<(<,>`,
+    # `!<?',>`, `!<a,b'c>`), so locate the opening `!<` by scanning back to
+    # the nearest whitespace (verbatim tags cannot hold whitespace) instead
+    # of stopping at the first `<` or quote. A `>` that is not a verbatim
+    # tag falls through to the anchor/tag token scan below (e.g. `&<> "..."`
+    # is an anchor named `<>`, not a verbatim tag).
     if line[j] == ">":
-        k = j - 1
-        while k >= 0 and line[k] not in (" ", "\t", '"', "'"):
-            if line[k] == "<":
-                if k - 1 >= 0 and line[k - 1] == "!":
-                    return True
-                break
+        k = j
+        while k >= 0 and line[k] not in (" ", "\t"):
             k -= 1
+        token = line[k + 1:j + 1]
+        if token.startswith("!<") and token.endswith(">"):
+            return True
     # Anchor/tag name directly before the quote: take the whitespace- and
     # flow-delimited token ending at j (an anchor/tag name admits any other
     # character, including `&`, `!`, quotes, `~:+@%` and `<>`, e.g. `&a!`,
@@ -288,12 +289,36 @@ def _literal_flags(lines):
     return flags
 
 
+def _strip_leading_props(s):
+    # Consume leading YAML node properties (`&anchor`, `!tag`, `!!tag`,
+    # `!h!suffix`, `!<verbatim>`) plus whitespace, returning the remainder.
+    # Verbatim URIs hold no whitespace, so a whitespace split is exact.
+    rest = s
+    while True:
+        rest = rest.lstrip(" \t")
+        if rest.startswith("!<"):
+            end = rest.find(">")
+            if end == -1:
+                break
+            rest = rest[end + 1:]
+            continue
+        m = re.match(r"[&!]\S*", rest)
+        if m:
+            rest = rest[m.end():]
+            continue
+        break
+    return rest.lstrip(" \t")
+
+
 def find_on_candidates(text):
     """Split text into lines/code/literal flags plus TOP_ON candidates.
 
     Returns (lines, code_lines, literal, cands) where cands holds
     (line index, indent) for every non-literal `on:`-looking line.
     """
+    # A leading UTF-8 BOM is not content: strip it so `on:`, `---`, `%YAML`
+    # and root flow documents resolve (str.strip() keeps U+FEFF).
+    text = text.lstrip("﻿")
     lines = text.splitlines()
     literal = _literal_flags(lines)
     code_lines = strip_comments_crossline(lines, literal)
@@ -328,7 +353,7 @@ def find_on_block(text):
     """
     lines, code_lines, literal, cands = find_on_candidates(text)
     for code in code_lines:
-        stripped = code.strip()
+        stripped = code.strip().lstrip("﻿")
         if stripped == "":
             continue
         if stripped.startswith("%"):
@@ -338,8 +363,25 @@ def find_on_block(text):
                 or stripped.startswith("---\t") or stripped == "..."):
             # A document marker before any content is not content either.
             # Content after `---` on the same line decides: `--- {` is a
-            # root flow document.
+            # root flow document. Node properties on the marker line
+            # (`--- &r`, `--- !!map`) are not content either: skip them and
+            # decide on what follows, continuing when only properties sit
+            # on the marker line.
             rest = stripped[3:].strip()
+            if rest == "":
+                continue
+            rest = _strip_leading_props(rest)
+            if rest == "":
+                continue
+            if rest[0] in ("{", "["):
+                return set()
+            break
+        if stripped[0] in ("&", "!"):
+            # A node property on its own line (`&r`, `!!map`, `&r !!map`)
+            # before a root flow document is not content: skip it and decide
+            # on the next content line. Properties glued to content
+            # (`&t on:`, `&r {`) fall through to the remainder test below.
+            rest = _strip_leading_props(stripped)
             if rest == "":
                 continue
             if rest[0] in ("{", "["):
@@ -347,12 +389,12 @@ def find_on_block(text):
             break
         if stripped[0] in ("{", "["):
             # A root flow document (`{"on": {...}}`, possibly indented, and
-            # possibly behind a directive/`---` preamble skipped above) has
-            # no `on:` line at a trustworthy position: any `on:`-looking
-            # line is a nested decoy while the real trigger sits mid-line
-            # where the extractor never looks, so yield no block (the
-            # caller fails this closed). An indented root has no column-0
-            # content, which is exactly what let the decoy win.
+            # possibly behind a directive/`---`/property preamble skipped
+            # above) has no `on:` line at a trustworthy position: any
+            # `on:`-looking line is a nested decoy while the real trigger
+            # sits mid-line where the extractor never looks, so yield no
+            # block (the caller fails this closed). An indented root has no
+            # column-0 content, which is exactly what let the decoy win.
             return set()
         break
     if not cands:
@@ -552,7 +594,7 @@ def main():
     hits = []
     for path in files:
         try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
+            with open(path, encoding="utf-8-sig", errors="replace") as fh:
                 text = fh.read()
         except OSError:
             continue

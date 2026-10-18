@@ -66,6 +66,11 @@ PASS = {
     # names the trigger.
     "apostrophe in name with trigger comment in block": (
         "name: Don't deploy\non:\n  push:\n    branches: [main]  # never pull_request_target\n" + JOB),
+    # Paperclip Review round 8: a legitimate BOM'd workflow whose first line
+    # is `on:` must keep passing (the BOM is stripped, not treated as
+    # content that hides the trigger block).
+    "bom on-first workflow passes": (
+        '\ufeffon:\n  push:\n' + JOB),
 }
 
 FAIL = {
@@ -295,6 +300,64 @@ FAIL = {
         '"on": {"pull_request_target": {}},\n'
         '"jobs": {"a": {"runs-on": "ubuntu-latest", '
         '"steps": [{"run": "ls"}]}}}\n'),
+    # Paperclip Review round 8: a UTF-8 BOM before a root flow document (or
+    # before `---` / `%YAML`) defeats the preamble scan (`str.strip()` keeps
+    # U+FEFF), so the nested decoy `env.on` wins. All read clean before
+    # (gate read files as plain `utf-8`).
+    "bom before root flow with decoy": (
+        '\ufeff{"env": {\n"on": x,\n"b": 2}, "name": "x", '
+        '"on": {"pull_request_target": {}},\n'
+        '"jobs": {"a": {"runs-on": "ubuntu-latest", '
+        '"steps": [{"run": "ls"}]}}}\n'),
+    "bom marker before root flow with decoy": (
+        '\ufeff---\n{"env": {\n"on": x,\n"b": 2}, "name": "x", '
+        '"on": {"pull_request_target": {}},\n'
+        '"jobs": {"a": {"runs-on": "ubuntu-latest", '
+        '"steps": [{"run": "ls"}]}}}\n'),
+    "bom directive plus marker before root flow": (
+        '\ufeff%YAML 1.2\n---\n{"env": {\n"on": x,\n"b": 2}, "name": "x", '
+        '"on": {"pull_request_target": {}},\n'
+        '"jobs": {"a": {"runs-on": "ubuntu-latest", '
+        '"steps": [{"run": "ls"}]}}}\n'),
+    # Paperclip Review round 8: an anchor/tag on its own line (or on the
+    # `---` line) hides the root-flow guard (it only inspected the first
+    # content line), so the nested decoy `env.on` wins. Same-line `&r {`
+    # was already caught via the top-key check; the own-line forms read
+    # clean before.
+    "anchor-only line before root flow with decoy": (
+        '&r\n{"env": {\n"on": x,\n"b": 2}, "name": "x", '
+        '"on": {"pull_request_target": {}},\n'
+        '"jobs": {"a": {"runs-on": "ubuntu-latest", '
+        '"steps": [{"run": "ls"}]}}}\n'),
+    "tag-only line before root flow with decoy": (
+        '!!map\n{"env": {\n"on": x,\n"b": 2}, "name": "x", '
+        '"on": {"pull_request_target": {}},\n'
+        '"jobs": {"a": {"runs-on": "ubuntu-latest", '
+        '"steps": [{"run": "ls"}]}}}\n'),
+    "marker anchor before root flow with decoy": (
+        '--- &r\n{"env": {\n"on": x,\n"b": 2}, "name": "x", '
+        '"on": {"pull_request_target": {}},\n'
+        '"jobs": {"a": {"runs-on": "ubuntu-latest", '
+        '"steps": [{"run": "ls"}]}}}\n'),
+    "marker tag before root flow with decoy": (
+        '--- !!map\n{"env": {\n"on": x,\n"b": 2}, "name": "x", '
+        '"on": {"pull_request_target": {}},\n'
+        '"jobs": {"a": {"runs-on": "ubuntu-latest", '
+        '"steps": [{"run": "ls"}]}}}\n'),
+    # Paperclip Review round 8: a verbatim tag whose URI holds a comma plus
+    # `<` or a quote (`!<(<,>`, `!<?',>`, `!<a,b'c>`) broke the `!<...>`
+    # back-scan (it stopped at the inner `<`/quote), so the quote after the
+    # tag was missed and a `}`/`#` inside the string hid a later
+    # pull_request_target. All read clean before.
+    "verbatim inner-angle tag hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<(<,> "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "verbatim inner-quote tag hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {description: !<?',> 'a }}}} # b'}}}},"
+        " pull_request_target: {}}" + "\n" + JOB),
+    "verbatim comma-quote tag hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<a,b\'c> "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
 }
 
 

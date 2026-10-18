@@ -379,8 +379,19 @@ authz_file_lines() {
     fi
     awk '{ print NR "|+" $0 }' <"$file"
   else
-    if ! git cat-file -e "HEAD:$file" 2>/dev/null; then
-      return 0 # deleted in HEAD: no added content
+    if git cat-file -e "HEAD:$file" 2>/dev/null; then
+      : # present in HEAD: continue to diff collection below
+    else
+      # cat-file failed: either deleted in HEAD or a query error. Positively
+      # verify deletion; any verification failure fails closed.
+      ls_out=""
+      if ! ls_out="$(git --literal-pathspecs ls-tree HEAD -- "$file" 2>/dev/null)"; then
+        return 1
+      fi
+      if [[ -n "$ls_out" ]]; then
+        return 1 # present in HEAD but cat-file failed: query error, fail closed
+      fi
+      return 0 # verified absent in HEAD: deleted, no added content
     fi
     if ! git --literal-pathspecs diff -U0 "$BASE"...HEAD -- "$file" >"$SCRATCH_DIR/file.diff" 2>/dev/null; then
       return 1

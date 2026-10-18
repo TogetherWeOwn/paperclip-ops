@@ -46,6 +46,9 @@ fi
 if [[ "${FAIL_AUTHZ_READ:-0}" == 1 && "${1:-}" == cat-file && "${2:-}" == blob ]]; then
   exit 74
 fi
+if [[ "${FAIL_AUTHZ_EXIST:-0}" == 1 && "${1:-}" == cat-file && "${2:-}" == -e ]]; then
+  exit 73
+fi
 exec "$REAL_GIT_BIN" "$@"
 EOF
   chmod +x "$WORK/bin/git"
@@ -1131,6 +1134,17 @@ FAIL_AUTHZ_READ=1 run_check
 [[ "$RC" -eq 1 ]] && has_row FAIL authz \
   && ok "Rust lexical context read error fails closed" \
   || bad "Rust lexical context read error fails closed (rc=$RC)"
+# A HEAD existence-query failure on a present file must fail closed, not pass
+# as a deletion. ls-tree still reports the file, so the mismatch is an error.
+new_repo
+printf 'password: %s\n' "$FIXTURE_VALUE" > "$REPO_DIR/payload.txt"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "test(auth): fail closed on HEAD existence query errors"
+FAIL_AUTHZ_EXIST=1 run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && grep -q "cannot collect added lines" <<<"$OUT" \
+  && ok "HEAD existence query error fails closed" \
+  || bad "HEAD existence query error fails closed (rc=$RC)"
 # An untracked name holding `=` must still be scanned: awk would otherwise
 # read the operand as a variable assignment and see no content.
 new_repo

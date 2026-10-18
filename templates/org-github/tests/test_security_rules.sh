@@ -528,6 +528,74 @@ async function h(req: any, data: any, url: any) {
   await axios.post<User>("/x", data, { ...f(g(h(a), req.query)) });
   await axios.post<User>("/x", fn(a, b), { baseURL: `https://${req.query.h}/` });
   await axios.post<User>("/x", fn(a, b), { baseURL: "/x/" + req.query.h });
+  await got<User>(`/x/${req.query.p}`);
+  await got.post<User>("/x/" + req.query.p, { json: data });
+  await axios.options(req.query.u);
+  await axios.postForm(req.body.url, data);
+  await axios.putForm(req.body.url, data);
+  await axios.patchForm(req.body.url, data);
+  await axios.options({ url: req.query.u });
+  await axios.postForm({ url: req.body.u });
+  await axios.putForm({ url: req.body.u });
+  await axios.patchForm({ url: req.body.u });
+  await axios.options({ baseURL: req.query.h, url: "/x" });
+  await axios.postForm({ baseURL: req.body.h, url: "/x" });
+  await axios.putForm({ baseURL: req.body.h, url: "/x" });
+  await axios.patchForm({ baseURL: req.body.h, url: "/x" });
+  await axios.options({ ...req.body });
+  await axios.postForm({ ...req.body });
+  await axios.putForm({ ...req.body });
+  await axios.patchForm({ ...req.body });
+  await axios.options("/x", { baseURL: req.query.h });
+  await axios.options("/x", { ...req.body });
+  await axios.postForm("/x", data, { baseURL: req.body.h });
+  await axios.putForm("/x", data, { baseURL: req.body.h });
+  await axios.patchForm("/x", data, { baseURL: req.body.h });
+  await axios.postForm("/x", data, { ...req.body });
+  await axios.putForm("/x", data, { ...req.body });
+  await axios.patchForm("/x", data, { ...req.body });
+  await axios.postForm<User>(req.query.u);
+  await axios.putForm<User>(req.query.u);
+  await axios.patchForm<User>(req.query.u);
+  await axios.postForm<User>(`/x/${req.query.p}`);
+  await axios.putForm<User>(`/x/${req.query.p}`);
+  await axios.patchForm<User>(`/x/${req.query.p}`);
+  await axios.postForm<User>("/x/" + req.query.p);
+  await axios.putForm<User>("/x/" + req.query.p);
+  await axios.patchForm<User>("/x/" + req.query.p);
+  await axios.postForm<User>({ url: req.query.u });
+  await axios.putForm<User>({ url: req.query.u });
+  await axios.patchForm<User>({ url: req.query.u });
+  await axios.postForm<User>({ baseURL: req.query.h });
+  await axios.putForm<User>({ baseURL: req.query.h });
+  await axios.patchForm<User>({ baseURL: req.query.h });
+  await axios.postForm<User>({ url: `/x/${req.query.p}` });
+  await axios.putForm<User>({ url: `/x/${req.query.p}` });
+  await axios.patchForm<User>({ url: `/x/${req.query.p}` });
+  await axios.postForm<User>({ baseURL: `https://${req.query.h}/` });
+  await axios.putForm<User>({ baseURL: `https://${req.query.h}/` });
+  await axios.patchForm<User>({ baseURL: `https://${req.query.h}/` });
+  await axios.postForm<User>({ url: "/x/" + req.query.p });
+  await axios.putForm<User>({ url: "/x/" + req.query.p });
+  await axios.patchForm<User>({ url: "/x/" + req.query.p });
+  await axios.postForm<User>({ baseURL: "/x/" + req.query.h });
+  await axios.putForm<User>({ baseURL: "/x/" + req.query.h });
+  await axios.patchForm<User>({ baseURL: "/x/" + req.query.h });
+  await axios.postForm<User>({ ...req.body });
+  await axios.putForm<User>({ ...req.body });
+  await axios.patchForm<User>({ ...req.body });
+  await axios.postForm<User>("/x", { a: 1 }, { baseURL: req.query.h });
+  await axios.putForm<User>("/x", { a: 1 }, { baseURL: req.query.h });
+  await axios.patchForm<User>("/x", { a: 1 }, { baseURL: req.query.h });
+  await axios.postForm<User>("/x", { a: 1 }, { baseURL: `https://${req.query.h}/` });
+  await axios.putForm<User>("/x", { a: 1 }, { baseURL: `https://${req.query.h}/` });
+  await axios.patchForm<User>("/x", { a: 1 }, { baseURL: `https://${req.query.h}/` });
+  await axios.postForm<User>("/x", { a: 1 }, { baseURL: "/x/" + req.query.h });
+  await axios.putForm<User>("/x", { a: 1 }, { baseURL: "/x/" + req.query.h });
+  await axios.patchForm<User>("/x", { a: 1 }, { baseURL: "/x/" + req.query.h });
+  await axios.postForm<User>("/x", { a: 1 }, { ...req.body });
+  await axios.putForm<User>("/x", { a: 1 }, { ...req.body });
+  await axios.patchForm<User>("/x", { a: 1 }, { ...req.body });
 }
 EOF
     cat > "$FX/fx-ssrf.py" <<'EOF'
@@ -748,8 +816,8 @@ for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24, 27, 29, 31, 35, 38, 41, 42, 43, 4
     check(ln not in hits.get(("fx-ssrf.js", "tier0-ssrf-dynamic-fetch-js"), set()),
           f"behavioural fx-ssrf.js:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.js", "tier0-open-redirect-js")
-expect_hit("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5))
-expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 81, 82, 86, 87, 88, 89, 94, 95, 96, 101, 102, 103, 104, 105, 109, 110, 111, 112, 113, 114, 116, 117, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227))
+expect_hit("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253))
+expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 81, 82, 86, 87, 88, 89, 94, 95, 96, 101, 102, 103, 104, 105, 109, 110, 111, 112, 113, 114, 116, 117, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294, 295))
 for ln in (23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 58, 59, 66, 76, 77, 78, 79, 80, 83, 84, 85, 90, 91, 92, 93, 97, 98, 99, 100, 106, 107, 108, 115, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 181, 197, 198, 199, 200, 201, 202, 203, 204):
     check(ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts"), set())
           and ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js"), set()),

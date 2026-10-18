@@ -429,6 +429,45 @@ async function h(req: any, data: any, url: any) {
   await axios<User>({ ...ctx.Query });
   await axios.get<User>(URL_CONST, { ...ctx.Query });
   await axios.post<User>(URL_CONST, data, { ...ctx.Query });
+  await axios<User>({ url: routes[req.query.k] });
+  await axios<User>({ url: a(b(c(d, req.query.u))) });
+  await axios<User>({ baseURL: routes[req.query.k] });
+  await axios<User>({ baseURL: a(b(c(d, req.query.u))) });
+  await axios<User>({ url: "/x/" + routes[req.query.k] });
+  await axios<User>({ url: "/x/" + a(b(c(d, req.query.u))) });
+  await axios<User>({ baseURL: "/x/" + routes[req.query.k] });
+  await axios<User>({ baseURL: "/x/" + a(b(c(d, req.query.u))) });
+  await axios.get<User>("/x", { baseURL: routes[req.query.k] });
+  await axios.get<User>("/x", { baseURL: a(b(c(d, req.query.u))) });
+  await axios.post<User>("/x", data, { baseURL: routes[req.query.k] });
+  await axios.post<User>("/x", data, { baseURL: a(b(c(d, req.query.u))) });
+  await axios<User>({ ...merge(DEFAULTS, ctx.Query) });
+  await axios<User>({ ...f(g(h(a, b)), c) + req.query });
+  await axios.get<User>(URL_CONST, { ...merge(DEFAULTS, ctx.Query) });
+  await axios.get<User>(URL_CONST, { ...f(g(h(a, b)), c) + req.query });
+  await axios.post<User>(URL_CONST, data, { ...merge(DEFAULTS, ctx.Query) });
+  await axios.post<User>(URL_CONST, data, { ...f(g(h(a, b)), c) + req.query });
+  await axios<User>({ ...f(g(req.query)) });
+  await axios<User>({ ...sanitize(JSON.parse(req.body)) });
+  await axios<User>({ ...f(g(h(a, req.query))) });
+  await axios.get<User>(URL_CONST, { ...f(g(req.query)) });
+  await axios.get<User>(URL_CONST, { ...sanitize(JSON.parse(req.body)) });
+  await axios.get<User>(URL_CONST, { ...f(g(h(a, req.query))) });
+  await axios.post<User>(URL_CONST, data, { ...f(g(req.query)) });
+  await axios.post<User>(URL_CONST, data, { ...sanitize(JSON.parse(req.body)) });
+  await axios.post<User>(URL_CONST, data, { ...f(g(h(a, req.query))) });
+  await axios.get<User>("/x", { baseURL: "https://" + req.query.h });
+  await axios.get<User>("/x", { baseURL: `https://${req.query.h}/` });
+  await axios.post<User>("/x", data, { baseURL: "https://" + req.query.h });
+  await axios.post<User>("/x", data, { baseURL: `https://${req.query.h}/` });
+  await axios.get<User>("/x", { baseURL: "/x/" + routes[req.query.k] });
+  await axios.post<User>("/x", data, { baseURL: "/x/" + routes[req.query.k] });
+  await axios<User>({ ...f(g(ctx.Query)) });
+  await axios<User>({ ...f(g(h(a, ctx.Query))) });
+  await axios.get<User>(URL_CONST, { ...f(g(ctx.Query)) });
+  await axios.get<User>(URL_CONST, { ...f(g(h(a, ctx.Query))) });
+  await axios.post<User>(URL_CONST, data, { ...f(g(ctx.Query)) });
+  await axios.post<User>(URL_CONST, data, { ...f(g(h(a, ctx.Query))) });
 }
 EOF
     cat > "$FX/fx-ssrf.py" <<'EOF'
@@ -650,7 +689,7 @@ for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24, 27, 29, 31, 35, 38, 41, 42, 43, 4
           f"behavioural fx-ssrf.js:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.js", "tier0-open-redirect-js")
 expect_hit("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5))
-expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 81, 82, 86, 87, 88, 89, 94, 95, 96, 101, 102, 103, 104, 105, 109, 110, 111, 112, 113, 114, 116, 117, 131, 132, 133, 134, 135, 136))
+expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 81, 82, 86, 87, 88, 89, 94, 95, 96, 101, 102, 103, 104, 105, 109, 110, 111, 112, 113, 114, 116, 117, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175))
 for ln in (23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 58, 59, 66, 76, 77, 78, 79, 80, 83, 84, 85, 90, 91, 92, 93, 97, 98, 99, 100, 106, 107, 108, 115, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130):
     check(ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts"), set())
           and ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js"), set()),

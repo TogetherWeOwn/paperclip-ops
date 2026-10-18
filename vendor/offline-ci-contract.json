@@ -310,6 +310,7 @@
     "queue age depth contract suite:1",
     "pr6 acceptance suite:1",
     "registrar domain-expiry probe suite:1",
+    "Beszel adapter and Discord forwarder suites:1",
     "activation contract suite:1"
   ],
   "retained": [
@@ -1732,6 +1733,11 @@
       "name": "registrar domain-expiry probe suite",
       "definition_sha256": "e426aa711be5afc17c7cfb64ca76094e19e8c8e3596607a1027b8f4a05bad52b",
       "id": "registrar domain-expiry probe suite:1"
+    },
+    {
+      "name": "Beszel adapter and Discord forwarder suites",
+      "definition_sha256": "95e64baa6bd280f6743477a1ad970c30b44eb74961ffb5f92aa519bf25f114c6",
+      "id": "Beszel adapter and Discord forwarder suites:1"
     },
     {
       "name": "activation contract suite",

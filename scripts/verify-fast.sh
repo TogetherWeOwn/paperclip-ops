@@ -97,7 +97,8 @@ python3 -c 'import ast, sys; [ast.parse(open(path, "rb").read(), path) for path 
   ops/case_0b2823ef/feed_contract.py ops/case_0b2823ef/test_feed_contract.py \
   ops/case_629b4da2/check_operator_copy_risk.py ops/case_629b4da2/test_check_operator_copy_risk.py \
   ops/case_0ce22efa/test_node7b1ff338_pressure_gate.py \
-  || fail "python parse error: ops/pr-hygiene, ops/lib, ops/case_af881f62, ops/case_0b2823ef, ops/case_629b4da2 or ops/case_0ce22efa"
+  ops/case_f2010cb7/beszel_adapter.py ops/case_f2010cb7/forward_beszel_discord.py \
+  || fail "python parse error: ops/pr-hygiene, ops/lib, ops/case_af881f62, ops/case_0b2823ef, ops/case_629b4da2, ops/case_0ce22efa or ops/case_f2010cb7"
 rm -rf omniroute/__pycache__ __pycache__
 for f in mcp/*.mjs mcp/test/*.mjs; do
   node --check --input-type=module < "$f" || fail "node ESM parse error: $f"
@@ -136,6 +137,9 @@ node --test hooks/disposition-stop-guard/disposition-stop-guard.test.mjs hooks/d
 python3 -m unittest test_deploy_window_manifest || fail "deploy-window manifest gate suite failed"
 ./test_credential_chain_lockdown.sh || fail "credential-chain lockdown fixture suite failed"
 python3 -m unittest test_ci_required_checks_audit || fail "required-checks audit failed"
+python3 -B test_beszel_adapter.py || fail "beszel adapter suite failed"
+python3 -B test_beszel_discord_forwarder.py || fail "beszel discord forwarder suite failed"
+bash test_fetch_beszel_normalized.sh || fail "beszel fetch wrapper suite failed"
 python3 -m unittest test_private_mutation_gates || fail "private mutation harness failed"
 ./test_ci_gating.sh || fail "change-gating contract failed"
 ./test_readme_script_index.sh || fail "readme script-index gate failed"

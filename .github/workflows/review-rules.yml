@@ -12,23 +12,25 @@ jobs:
     permissions:
       contents: read
     # Known central limitation (Paperclip Review on #27): the pinned reusable
-    # checks its engine out at 60af3686, which predates the merged
-    # review-rules/ tree from TogetherWeOwn/.github#26 (12 fix commits).
-    # Stale scans are quadratic-time: the svelte scan (~30 min on a 2 MiB
-    # .svelte file) AND shell_checks on .sh/.bash files and workflow run:
-    # bodies (232 KB .sh = 26.7 s stale vs 0.04 s merged; ~2 MiB hits the
-    # job's 20-min timeout; run.py has no in-process budget, blob cap 2 MiB).
-    # Step continue-on-error does NOT stop the job-level timeout, and "no
-    # .svelte in repo" does NOT bound it (the PR itself can add the file;
-    # ts+security packs scan .svelte, python-shell-ci+security run
-    # shell_checks). This repo's own 309 .sh files total 0.43 s stale, so
-    # only adversarial/oversized inputs are affected. Real bound: mode warn
-    # + non-required keeps it from blocking merges; cost of a crafted PR is
-    # a wasted 20-min hosted run + non-green advisory check. Residual risk
-    # accepted (warn-only, non-required, contents:read, free public
-    # runners). Follow-up: re-pin once central merges an engine-ref bump
-    # matching the merged tree, then remove this note. Rollback: delete
-    # this file.
+    # 63699075 checks its engine out at 60af3686, which predates the merged
+    # review-rules/ tree from TogetherWeOwn/.github#26 by 12 fix commits
+    # (incl. 27cd096, f22c164, 37da9f8 on exec handling). Findings DIFFER,
+    # not just timing: stale reports shell-trap-exec ERROR on redirect-only
+    # `exec 8>>"$LOCK_PATH"` under an EXIT trap (e.g. paperclip-upgrade/
+    # activation.sh:272; 9 such lines in-repo) where merged reports nothing;
+    # measured over 1378 text files, 4 differ (activation.sh:272 stale-only;
+    # test_host_db_backup.sh :206 stale vs :50 merged; github-runner/
+    # install.sh:254 + paperclip-upgrade/test-offline.sh:372 merged-only).
+    # So shadow calibration data here does NOT describe the merged rules.
+    # Timing too: svelte scan (~30 min on 2 MiB .svelte) AND shell_checks on
+    # .sh/.bash + workflow run: bodies (232 KB .sh = 26.7 s stale vs 0.04 s
+    # merged; ~2 MiB hits the 20-min job timeout; no in-process budget).
+    # Step continue-on-error does NOT stop the job timeout. Real bound: mode
+    # warn + non-required + contents:read keeps it advisory-only; cost is a
+    # wasted hosted run + non-green check + possibly misleading findings.
+    # Residual risk accepted (warn-only, non-required, free public runners).
+    # Follow-up: bump engine ref in TogetherWeOwn/.github to the merged tree,
+    # re-pin this caller, remove this note. Rollback: delete this file.
     uses: TogetherWeOwn/.github/.github/workflows/review-rules.yml@63699075b492914c137281acffd4c89e51cc1c4c
     with:
       packs: python-shell-ci,security,ts

@@ -462,6 +462,41 @@ FAIL = {
         'on: {workflow_dispatch: {inputs: {x: {description: foo\':"p,'
         ' type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
         + "\n" + JOB),
+    # Paperclip Review round 11, finding 1: a space-separated `-`/`?`
+    # inside a plain scalar (`foo - "p`, `foo ? "p`) is scalar text, not a
+    # standalone indicator. Both read clean before (the check only looked
+    # at the character before the indicator).
+    "spaced-dash scalar hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo - "p,'
+        ' type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "spaced-question scalar hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo ? "p,'
+        ' type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    # Paperclip Review round 11, finding 2: two properties after a quoted
+    # key with a glued colon (`"k":&a !t "v"`) broke the backward walk
+    # (previous token read as `"k":&a`), so the string never opened and a
+    # `}`/`#` inside hid a later pull_request_target. All read clean
+    # before (regression from the round-10 token walk).
+    "json-colon two-props hide trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description":&a !t "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "squote json-colon two-props hide trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {'description':&a !t 'a }}}} # b'}}}},"
+        " pull_request_target: {}}" + "\n" + JOB),
+    "json-colon tag-plus-anchor hide trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description":!!str &a "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    # Paperclip Review round 11, finding 3: `_closes_quoted_key` took the
+    # nearest earlier same-type quote as the key opener, which may be the
+    # closing quote of an unrelated string (`','`). The colon after a
+    # plain-scalar apostrophe then counted as a value start. Read clean
+    # before.
+    "unrelated-string apostrophe-colon hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: \',\', default: foo\':"p},'
+        ' y: {description: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
 }
 
 

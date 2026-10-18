@@ -96,6 +96,12 @@ def _before_is_node_start(line, s):
         return True
     m = k
     while m >= 0 and line[m] not in " \t,[]{}":
+        if line[m] == ":" and m > 0 and line[m - 1] in "\"'":
+            # A `:` directly after a closing quote is a JSON-style key
+            # colon (`"k":`), not part of an anchor/tag name: stop there
+            # so the previous token is just the property (`&a` in
+            # `"k":&a !t "v"`).
+            break
         m -= 1
     prev = line[m + 1:k + 1]
     if prev == "":
@@ -111,25 +117,46 @@ def _before_is_node_start(line, s):
 
 def _closes_quoted_key(line, q):
     # q = index of a quote directly before a glued colon (`"k":"v"`).
-    # True when it closes a quoted key: the matching opening quote sits at
-    # a scalar start. A lone apostrophe inside a plain scalar (`foo':"`)
-    # has no such opener, so the colon after it is scalar text, not a
-    # JSON-style value start.
+    # True when it closes a quoted key: the scanner, run from the start of
+    # the line with the same quote rules, is inside a string of the same
+    # type at q (so q closes a string the scanner itself opened). A lone
+    # apostrophe inside a plain scalar (`foo':"`) never opens, so the
+    # scanner is outside at q and the colon after it is scalar text, not a
+    # JSON-style value start. Never search the line text for the opener:
+    # the nearest earlier same-type quote may be the closing quote of an
+    # unrelated string (e.g. `','`), which sits after `,`/`[`/`{` and would
+    # wrongly read as a key opener.
     want = line[q]
-    p = q - 1
-    while p >= 0:
-        if line[p] == want:
-            if want == '"' and _odd_backslashes(line, p):
-                p -= 1
+    in_single = in_double = False
+    i = 0
+    while i < q:
+        ch = line[i]
+        if ch == "'" and not in_double:
+            if in_single and i + 1 < len(line) and line[i + 1] == "'":
+                if i + 1 == q:
+                    return False
+                i += 2
                 continue
-            if want == "'" and p + 1 < len(line) and line[p + 1] == "'":
-                p -= 2
-                continue
-            if want == "'" and p > 0 and line[p - 1] == "'":
-                p -= 1
-                continue
-            return _at_scalar_start(line, p)
-        p -= 1
+            if in_single or _at_scalar_start(line, i):
+                in_single = not in_single
+        elif ch == '"' and not in_single:
+            if _odd_backslashes(line, i):
+                pass
+            elif in_double or _at_scalar_start(line, i):
+                in_double = not in_double
+        i += 1
+    if want == "'" and not in_double:
+        if not in_single:
+            return False
+        if q + 1 < len(line) and line[q + 1] == "'":
+            return False
+        return True
+    if want == '"' and not in_single:
+        if not in_double:
+            return False
+        if _odd_backslashes(line, q):
+            return False
+        return True
     return False
 
 
@@ -168,8 +195,10 @@ def _at_scalar_start(line, i):
         # key is a value start (see _closes_quoted_key).
         if _closes_quoted_key(line, j - 1):
             return True
-    if (line[j] in "-?" and j < i - 1
-            and (j == 0 or line[j - 1] in " \t,[{")):
+    if line[j] in "-?" and j < i - 1 and _before_is_node_start(line, j):
+        # The indicator itself must sit at a node start: a
+        # space-separated `-`/`?` inside a plain scalar (`foo - "p`) is
+        # scalar text, not an indicator.
         return True
     # Verbatim tag `!<...>` directly before the quote: the tag URI may hold
     # `,`, `<` or quotes (e.g. `!<tag:yaml.org,2002:str>`, `!<(<,>`,

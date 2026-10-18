@@ -14,20 +14,35 @@
 #   3. RUNTIME 2x — a completed duration strictly over 2x baseline pushes
 #      false naming the job; exactly 2x stays green (strictly-greater, not
 #      >=); skipped checks with impossible timestamps are excluded, never
-#      scored; an unlisted job breaches only past 2x the fallback.
+#      scored; an unlisted job breaches only past 2x the fallback. Live
+#      checks age the same way: a stale in-flight check pages naming
+#      "in-flight", while a young or future-started one (conclusion null)
+#      stays green — the empty conclusion must never collapse the row into
+#      "unparseable check timestamps" while CI runs on main.
 #   4. FAIL CLOSED — empty check-runs (the case_b730ec29 vacuous case), an
-#      unreadable API, garbage JSON, and unreadable timestamps all push
-#      false, never healthy.
+#      unreadable API, garbage JSON, and unreadable/grossly-negative
+#      timestamps all push false, never healthy. A small negative span
+#      (-60s..0, a GitHub timestamp artefact on healthy mains) clamps to 0;
+#      exactly -60 clamps green while -61 fails closed (span pins the exact
+#      edge; the live-check age pin uses -65s margin so it cannot flake on a
+#      wall-clock second ticking mid-run).
 #   5. RUNNER UNITS — one inactive unit pushes ci_runner-units false naming
 #      it, exit 1; all active pushes true.
 #   6. REFUSALS — missing GATUS_URL, missing GH_REPOS, a bad factor, an
-#      unreadable baselines file, and missing gh/systemctl binaries each
-#      exit 2 with zero pushes (the 10m heartbeat miss then pages).
+#      unreadable baselines file, missing gh/systemctl binaries, and
+#      colliding endpoint slugs (o/a.b vs o/a-b: dots and dashes both map
+#      to '-', so the last write would mask a red main) each exit 2 with
+#      zero pushes (the 10m heartbeat miss then pages).
 #   7. NON-DISCLOSURE — the Bearer token never reaches curl argv; it
 #      travels in the 0600 curl config only.
-#   8. DEFINITIONS — gatus-endpoints.yaml carries seven endpoints, each
-#      with threshold + owner + runbook anchor; baselines cover the three
-#      repos with per-entry seeds; no secret-shaped strings committed.
+#   8. DEFINITIONS — gatus-endpoints.yaml carries thirteen endpoints
+#      (main + runtime for each of the six covered public repos, plus
+#      runner-units), each with threshold + owner + runbook anchor;
+#      the synthetic baselines fixture covers the same six repos with
+#      per-entry seeds (the real measurement table stays host-side via
+#      CI_BASELINES_FILE and is never committed); endpoint slugs are unique
+#      and within the push-helper key alphabet; no secret-shaped strings
+#      committed.
 #   9. NOT VACUOUS — a mutant with the red-conclusion selector neutered
 #      scores the red-main fixture healthy, proving §2 asserts something.
 #
@@ -166,6 +181,14 @@ cfg_has "unparseable check timestamps" && ok "2l. reason names untimed checks" |
 export GH_FIXTURE_FILE="$FIX/boundary-over.json"
 rc="$(run_tool GH_REPOS="O/R")"
 [[ "$rc" == "1" ]] && ok "2n. mixed-case repo still resolves baselines" || bad "2n. case-insensitive lookup" "got $rc $(cat "$CFG_LOG")"
+# A dotted repo name (TogetherWeOwn/.github shape) must push under a
+# dashed key: the shared helper's key alphabet rejects dots, so an
+# unmapped dot would refuse every push and exit nonzero.
+export GH_FIXTURE_FILE="$FIX/healthy.json"
+rc="$(run_tool GH_REPOS="o/.r")"
+[[ "$rc" == "0" ]] && ok "2o. dotted repo exits 0" || bad "2o. dotted repo exit" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_main-o--r)" == "true" ]] && ok "2p. dotted repo pushes ci_main-o--r" || bad "2p. dotted slug key" "$(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o--r)" == "true" ]] && ok "2q. dotted repo pushes ci_runtime-o--r" || bad "2q. dotted slug key" "$(cat "$CFG_LOG")"
 
 # --- §3 runtime 2x ------------------------------------------------------------
 export GH_FIXTURE_FILE="$FIX/slow-job.json"
@@ -199,6 +222,31 @@ export GH_FIXTURE_FILE="$FIX/inflight.json"
 rc="$(run_tool)"
 [[ "$rc" == "1" ]] && ok "3j. stale in-flight check pages" || bad "3j. in-flight" "got $rc"
 [[ "$(pushes_for ci_main-o-r)" == "true" ]] && ok "3k. live checks never redden the conclusion" || bad "3k. main push" "$(cat "$CFG_LOG")"
+cfg_has "in-flight" && ok "3j2. stale in-flight reason names in-flight ageing" || bad "3j2. in-flight reason" "$(cat "$CFG_LOG")"
+# Young live checks (conclusion null) stay green: the empty conclusion must
+# not collapse the row into "unparseable check timestamps" while CI runs.
+mk_inflight() { # <outfile> <started_at-offset-secs> writes a live Offline-suites + healthy pr-lint fixture
+python3 - "$1" "$2" <<'PY'
+import json, sys, time
+out, offset = sys.argv[1], int(sys.argv[2])
+start = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() + offset))
+json.dump({"check_runs": [
+  {"name": "Offline suites", "status": "in_progress", "conclusion": None, "started_at": start, "completed_at": None},
+  {"name": "pr-lint", "status": "completed", "conclusion": "success", "started_at": "2026-10-03T19:25:46Z", "completed_at": "2026-10-03T19:25:54Z"}],
+  "total_count": 2}, open(out, "w"))
+PY
+}
+mk_inflight "$WORK/inflight-young.json" -30
+export GH_FIXTURE_FILE="$WORK/inflight-young.json"
+rc="$(run_tool)"
+[[ "$rc" == "0" ]] && ok "3l. young in-flight check stays green" || bad "3l. young in-flight" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "true" ]] && ok "3m. young in-flight runtime pushed true" || bad "3m. young runtime" "$(cat "$CFG_LOG")"
+# Future-started live check (clock skew +30s): age clamps to 0, stays green.
+mk_inflight "$WORK/inflight-future.json" 30
+export GH_FIXTURE_FILE="$WORK/inflight-future.json"
+rc="$(run_tool)"
+[[ "$rc" == "0" ]] && ok "3n. future-started in-flight check stays green" || bad "3n. future in-flight" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "true" ]] && ok "3o. future in-flight runtime pushed true" || bad "3o. future runtime" "$(cat "$CFG_LOG")"
 
 # --- §4 fail closed -------------------------------------------------------------
 export GH_FIXTURE_FILE="$FIX/empty.json"
@@ -217,9 +265,41 @@ rc="$(run_tool)"
 [[ "$rc" == "1" ]] && ok "4e. garbage JSON exits 1" || bad "4e. garbage exit" "got $rc"
 export GH_FIXTURE_FILE="$FIX/bad-time.json"
 rc="$(run_tool)"
-[[ "$rc" == "1" ]] && ok "4f. negative duration fails closed" || bad "4f. bad-time exit" "got $rc"
+[[ "$rc" == "1" ]] && ok "4f. grossly negative duration fails closed" || bad "4f. bad-time exit" "got $rc"
 [[ "$(pushes_for ci_runtime-o-r)" == "false" ]] || bad "4f2. bad-time runtime" "$(cat "$CFG_LOG")"
 [[ "$(pushes_for ci_main-o-r)" == "true" ]] && ok "4g. conclusion still evaluated under a bad timestamp" || bad "4g. bad-time main" "$(cat "$CFG_LOG")"
+# Small negative span (-8s): a GitHub timestamp artefact on healthy mains;
+# it clamps to 0 and never pages.
+export GH_FIXTURE_FILE="$FIX/negative-span.json"
+rc="$(run_tool)"
+[[ "$rc" == "0" ]] && ok "4h. small negative span exits 0" || bad "4h. negative-span exit" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "true" ]] && ok "4i. small negative span runtime pushed true" || bad "4i. negative-span runtime" "$(cat "$CFG_LOG")"
+# Clamp boundaries: exactly -60s clamps green, -61s fails closed (span …).
+export GH_FIXTURE_FILE="$FIX/span-minus-60.json"
+rc="$(run_tool)"
+[[ "$rc" == "0" ]] && ok "4h2. span exactly -60s clamps green" || bad "4h2. span -60 exit" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "true" ]] && ok "4h3. span -60s runtime pushed true" || bad "4h3. span -60 runtime" "$(cat "$CFG_LOG")"
+export GH_FIXTURE_FILE="$FIX/span-minus-61.json"
+rc="$(run_tool)"
+[[ "$rc" == "1" ]] && ok "4h4. span -61s fails closed" || bad "4h4. span -61 exit" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "false" ]] && ok "4h5. span -61s runtime pushed false" || bad "4h5. span -61 runtime" "$(cat "$CFG_LOG")"
+cfg_has "unparseable check timestamps" && ok "4h6. span -61s reason names untimed checks" || bad "4h6. span -61 reason" "$(cat "$CFG_LOG")"
+# … and age: a live check started 60s in the future clamps green; the
+# fail-closed side pins with margin at 65s, not exactly 61s, so the pin is
+# wall-clock independent (fixture clock and the tool's date +%s are read
+# milliseconds apart; a second boundary ticking between them would turn an
+# exact -61 into -60 and flake green). The exact -61 edge stays covered by
+# the deterministic static span-minus-61 fixture (4h4/4h5/4h6) above.
+mk_inflight "$WORK/inflight-age-60.json" 60
+export GH_FIXTURE_FILE="$WORK/inflight-age-60.json"
+rc="$(run_tool)"
+[[ "$rc" == "0" ]] && ok "4h7. age -60s clamps green" || bad "4h7. age -60 exit" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "true" ]] && ok "4h8. age -60s runtime pushed true" || bad "4h8. age -60 runtime" "$(cat "$CFG_LOG")"
+mk_inflight "$WORK/inflight-age-65.json" 65
+export GH_FIXTURE_FILE="$WORK/inflight-age-65.json"
+rc="$(run_tool)"
+[[ "$rc" == "1" ]] && ok "4h9. age -65s fails closed" || bad "4h9. age -65 exit" "got $rc $(cat "$CFG_LOG")"
+[[ "$(pushes_for ci_runtime-o-r)" == "false" ]] && ok "4h10. age -65s runtime pushed false" || bad "4h10. age -65 runtime" "$(cat "$CFG_LOG")"
 
 # --- §5 runner units --------------------------------------------------------------
 export GH_FIXTURE_FILE="$FIX/healthy.json" SYSTEMCTL_FIXTURE=one-dead
@@ -262,6 +342,11 @@ set +e; env PATH="$WORK/bin:/usr/bin:/bin" HOME="$HOME" TMPDIR="$WORK" \
   GH_BIN="$WORK/bin/gh" SYSTEMCTL_BIN="$WORK/bin/no-such-systemctl" \
   CI_BASELINES_FILE="$WORK/baselines.json" bash "$TOOL" >/dev/null 2>&1; rc=$?; set -e
 [[ "$rc" == "2" ]] && [[ ! -s "$CFG_LOG" ]] && ok "6d. missing systemctl refuses exit 2" || bad "6d. systemctl refusal" "rc=$rc"
+# Dots and dashes both map to '-': distinct repos sharing one endpoint key
+# would let the last write mask a red main, so the run refuses upfront.
+export GH_FIXTURE_FILE="$FIX/healthy.json"
+rc="$(run_tool GH_REPOS="o/a.b o/a-b")"
+[[ "$rc" == "2" ]] && [[ ! -s "$CFG_LOG" ]] && ok "6e. slug collision refuses (exit 2, zero pushes)" || bad "6e. slug collision" "rc=$rc pushes=$(grep -c endpoints/ "$CFG_LOG" || true)"
 
 # --- §7 non-disclosure -----------------------------------------------------------
 : > "$ARGV_LOG"; : > "$CFG_LOG"
@@ -274,12 +359,12 @@ if grep -q "SENTINELTOKEN" "$ARGV_LOG"; then bad "7. token in argv" "$(cat "$ARG
 grep -q "Authorization: Bearer" "$CFG_LOG" && ok "7b. token travels in curl config" || bad "7b. config transport" "missing"
 
 # --- §8 definitions ----------------------------------------------------------------
-[[ "$(grep -c '^  - name: ' "$YAML")" == 7 ]] \
-  && ok "8. seven gatus endpoints" || bad "8. endpoint count" "$(grep -c '^  - name: ' "$YAML")"
-for e in main-togetherweown-two-bot-next main-togetherweown-two-web-next main-togetherweown-paperclip-ops runtime-togetherweown-two-bot-next runtime-togetherweown-two-web-next runtime-togetherweown-paperclip-ops runner-units; do
+[[ "$(grep -c '^  - name: ' "$YAML")" == 13 ]] \
+  && ok "8. thirteen gatus endpoints" || bad "8. endpoint count" "$(grep -c '^  - name: ' "$YAML")"
+for e in main-togetherweown-two-bot-next main-togetherweown-two-web-next main-togetherweown-nntunev2 main-togetherweown-routeware-shadow-api main-togetherweown-paperclip-ops main-togetherweown--github runtime-togetherweown-two-bot-next runtime-togetherweown-two-web-next runtime-togetherweown-nntunev2 runtime-togetherweown-routeware-shadow-api runtime-togetherweown-paperclip-ops runtime-togetherweown--github runner-units; do
   grep -q "name: $e" "$YAML" && ok "endpoint $e" || bad "endpoint $e missing"
 done
-[[ "$(grep -c THRESHOLD "$YAML")" -ge 7 ]] && ok "8b. thresholds declared" || bad "8b. thresholds missing"
+[[ "$(grep -c THRESHOLD "$YAML")" -ge 13 ]] && ok "8b. thresholds declared" || bad "8b. thresholds missing"
 { grep -q "OWNER on-call" "$YAML" && grep -q "OWNER devops" "$YAML"; } \
   && ok "8c. owners declared" || bad "8c. owners missing"
 for a in main-conclusion job-runtime runner-units; do
@@ -287,34 +372,48 @@ for a in main-conclusion job-runtime runner-units; do
     && ok "runbook pointer $a" || bad "runbook pointer $a missing"
 done
 if grep -En '://' "$YAML"; then bad "8d. yaml carries a URL literal"; else ok "8d. yaml has no URL literals"; fi
-[[ "$(grep -c 'GATUS_EXTERNAL_TOKEN' "$YAML")" -ge 7 ]] \
+[[ "$(grep -c 'GATUS_EXTERNAL_TOKEN' "$YAML")" -ge 13 ]] \
   && ok "8e. token only via env reference" || bad "8e. token reference missing"
-# Only the private measured-baseline integration check is absent in the public
-# snapshot. All synthetic runtime, boundary, refusal and mutation checks run.
-if python3 - "$HERE" <<'PY'
-import sys
-sys.path.insert(0, sys.argv[1])
-from public_snapshot_test_support import private_artifact_absent
-raise SystemExit(0 if private_artifact_absent(sys.argv[1], "ops/case_c542accd/job_baselines.json") else 1)
-PY
-then
-  printf '%s\n' 'SKIP: historical private CI runtime measurements are excluded from the fresh public snapshot; synthetic runtime and mutation tests remain enabled.'
+# The real measurement table stays host-side via CI_BASELINES_FILE and is never
+# committed here; the synthetic fixture below proves the shape/slug/key/GH_REPOS
+# agreement checks without publishing private job names or timings.
+if [[ -e "$BASE" ]]; then
+  bad "8f. real baselines file must stay out of the public snapshot" "$BASE"
 else
-python3 - "$BASE" <<'PY'
-import json, sys
+  ok "8f0. no real baselines file committed"
+fi
+python3 - "$FIX/synthetic-baselines.json" "$YAML" "$OPDOC" <<'PY'
+import json, re, sys
 d = json.load(open(sys.argv[1]))
 repos = d["repos"]
-assert set(repos) == {"TogetherWeOwn/paperclip-ops", "TogetherWeOwn/two-bot-next", "TogetherWeOwn/two-web-next"}, sorted(repos)
+expected = {"TogetherWeOwn/.github", "TogetherWeOwn/nntunev2",
+            "TogetherWeOwn/paperclip-ops", "TogetherWeOwn/routeware-shadow-api",
+            "TogetherWeOwn/two-bot-next", "TogetherWeOwn/two-web-next"}
+assert set(repos) == expected, sorted(repos)
 assert isinstance(d["fallback_s"], int) and d["fallback_s"] > 0
 for r, spec in repos.items():
     assert spec["jobs"], r
     for j, e in spec["jobs"].items():
         assert isinstance(e["baseline_s"], int) and e["baseline_s"] > 0, (r, j)
         assert e.get("seed"), (r, j)
+# Every covered repo maps to a unique main-/runtime- endpoint in the YAML
+# under the script's slug rule ('/' and '.' to '-'), and every resulting
+# push key fits the shared helper's alphabet.
+yaml_text = open(sys.argv[2]).read()
+names = re.findall(r"^  - name: (\S+)$", yaml_text, re.M)
+slugs = [r.lower().replace("/", "-").replace(".", "-") for r in repos]
+assert len(slugs) == len(set(slugs)), "slug collision"
+for s in slugs:
+    assert f"main-{s}" in names and f"runtime-{s}" in names, s
+    assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", f"ci_main-{s}"), s
+assert len(names) == 2 * len(repos) + 1 and "runner-units" in names, names
+# OPERATOR-adjacent GH_REPOS agreement is pinned via the endpoint set above;
+# the host GH_REPOS list itself lives in the Operator install and is not
+# checked in this source tree. An endpoint without a matching push pages
+# on heartbeat miss (see OPERATOR.md).
 print("baselines ok")
 PY
-[[ $? -eq 0 ]] && ok "8f. baselines cover three repos with seeded positive entries" || bad "8f. baselines shape"
-fi
+[[ $? -eq 0 ]] && ok "8f. synthetic baselines cover six public repos; slugs unique, keys in alphabet" || bad "8f. baselines shape"
 # Scoped to ops/case_c542accd only: this suite file itself carries the planted
 # webhook positive control below, so scanning it would self-trip.
 if grep -rnE 'discord\.com/api/webhooks/[0-9]|^(DISCORD_WEBHOOK_URL|AKMATORI_ALERTMANAGER_URL|AKMATORI_WEBHOOK_SECRET|GATUS_EXTERNAL_TOKEN)=[^<"$'"'"'[:space:]$]|Bearer [A-Za-z0-9._~-]{8,}' "$HERE/ops/case_c542accd" | grep -v SENTINELTOKEN; then

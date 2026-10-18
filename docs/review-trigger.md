@@ -36,9 +36,12 @@ Check-run and comment reads follow `page=N` to the last page, and exit 1 past
 3000 items rather than decide on a partial view. The file list is capped at
 one page; a full page routes the PR to review.
 
-Trigger record per head: one `@togetherweown-reviewer review <sha>` comment
-(audit trail, checked before posting) plus the `review-ready` label (machine
-signal). The verdict check-run test is the one-review-per-head enforcer:
+Trigger record per head: the `review-ready` label (machine signal) first,
+then one `@togetherweown-reviewer review <sha>` comment (audit trail, checked
+before posting). Label-first avoids an orphan comment when the label write
+fails; the reviewer invocation evaluates the label at review time and
+tolerates either order, but this repo always writes label-first.
+The verdict check-run test is the one-review-per-head enforcer:
 a success/failure verdict is never re-requested on the same head, but
 incomplete runs (action_required, cancelled, timed_out, stale) never block a
 re-request on the next CI completion. Same-head idempotency: just

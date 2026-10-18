@@ -52,6 +52,15 @@ PASS = {
         "on:\n  push:\n    paths:\n      - 'src/*Test.java'\n" + JOB),
     "double-quoted glob passes": (
         'on:\n  push:\n    branches: ["*-release"]\n' + JOB),
+    # Paperclip Review round 5: unquoted globs in nested positions are
+    # ordinary workflow content (the key check only inspects the minimum
+    # indent, and `*` only counts as a value-position alias).
+    "unquoted glob sequence item passes": (
+        "on:\n  push:\n    paths:\n      - docs/**\n" + JOB),
+    "unquoted release glob passes": (
+        "on:\n  push:\n    branches:\n      - release/*\n" + JOB),
+    "multiline flow glob passes": (
+        "on:\n  push:\n    paths: [docs/**,\n      other]\n" + JOB),
     # An apostrophe in a plain scalar is literal text, not a quote: it must
     # neither blind the scan to a later alias nor hide a `#` comment that
     # names the trigger.
@@ -170,6 +179,49 @@ FAIL = {
     "indented aliased on key with decoy": (
         "  k: &k on\n  *k : {pull_request_target: {}}\n  jobs:\n    j:\n"
         "      runs-on: ubuntu-latest\n      env:\n        on: x\n"),
+    # Paperclip Review round 5: a quote after a punctuation anchor/tag
+    # name (`&a~b`, `&a:b`, `&a+b`, `&a@b`, `!e:t`, `!t%21`,
+    # `!<tag:yaml.org,2002:str>`) opens a quoted scalar; a `}` or `#`
+    # inside must not hide a later pull_request_target. All read clean
+    # before (old scan only admitted `[A-Za-z0-9_\\-./]` in the name).
+    "tilde anchor quoted brace hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a~b "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "colon anchor quoted brace hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a:b "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "plus anchor quoted brace hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a+b "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "at anchor quoted brace hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a@b "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "colon tag quoted brace hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !e:t "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "percent tag quoted brace hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !t%21 "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "verbatim tag quoted brace hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: '
+        '!<tag:yaml.org,2002:str> "a }}}} # b"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    # Paperclip Review round 5 (late-novel): an anchor/tag on the `on:`
+    # key (`&t on:`, `!!str on:`, `&t "on":`) never matched the extractor,
+    # so in a uniformly indented file the `env: on: x` decoy won and the
+    # real trigger went unscanned. All read clean before.
+    "indented anchored on key with decoy": (
+        "  name: x\n  &t on:\n    pull_request_target: {}\n  env:\n"
+        "    on: x\n  jobs:\n    b:\n      runs-on: ubuntu-latest\n"
+        "      steps:\n        - run: echo hi\n"),
+    "indented tagged on key with decoy": (
+        "  name: x\n  !!str on:\n    pull_request_target: {}\n  env:\n"
+        "    on: x\n  jobs:\n    b:\n      runs-on: ubuntu-latest\n"
+        "      steps:\n        - run: echo hi\n"),
+    "indented anchored quoted on key with decoy": (
+        '  name: x\n  &t "on":\n    pull_request_target: {}\n  env:\n'
+        "    on: x\n  jobs:\n    b:\n      runs-on: ubuntu-latest\n"
+        "      steps:\n        - run: echo hi\n"),
 }
 
 

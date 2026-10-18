@@ -5,9 +5,10 @@
 # token; this repo has no workflow that needs it. HARD mode: any hit fails.
 # Exits 1 on a hit, 0 when clean. Scans tracked workflow files only
 # (git ls-files), so untracked scratch never trips it. Only trigger positions
-# count: the top-level `on:` block is extracted (quoted "on" included, inline
-# or next-line flow lists included, zero-indent `- ` sequences included, and
-# uniformly indented files handled by matching `on:` at any indent and ending
+# count: the top-level `on:` block is extracted (quoted "on" included,
+# leading `&anchor`/`!tag` properties skipped, inline or next-line flow
+# lists included, zero-indent `- ` sequences included, and uniformly
+# indented files handled by matching `on:` at any indent and ending
 # the block at the first line at or above its indent that is not a `- ` item
 # while flow brackets are balanced) and searched for the token. YAML comments,
 # step names and script paths that merely contain the token pass because they
@@ -20,10 +21,13 @@
 # file with no detectable top-level `on:` block (e.g. a root flow document),
 # duplicate `on:` lines at the winning indent, a winning `on:` below column 0
 # while column-0 content exists (the real top-level key is disguised and a
-# decoy line won), or a key position at any indent holding `\`, an unquoted
-# `*` or an explicit `?` (escaped/aliased `on:`, including in a uniformly
-# indented file where the decoy sits below the hidden key). Quote state is carried
-# across lines but a quote only opens at a scalar start, so neither a
+# decoy line won), or a key position at the minimum indent holding `\`, an
+# unquoted `&`/`!`, a value-position `*alias` or an explicit `?`
+# (escaped/aliased/anchored `on:`, including in a uniformly indented file
+# where the decoy sits below the hidden key; nested globs and continuations
+# are ordinary content). Quote state is carried
+# across lines but a quote only opens at a scalar start (anchors/tags admit
+# punctuation, verbatim `!<...>` included), so neither a
 # multi-line quoted scalar nor an apostrophe in a plain scalar (e.g.
 # `description: it's`) can desync the comment/bracket scan. Literal `|`/`>`
 # block-scalar content is opaque text: `on:`-looking lines there never win the
@@ -41,7 +45,7 @@ import subprocess
 import sys
 
 TOKEN = re.compile(r"(?<![A-Za-z0-9_])pull_request_target(?![A-Za-z0-9_])")
-TOP_ON = re.compile(r"""^([ \t]*)["']?on["']?\s*:""")
+TOP_ON = re.compile(r"""^([ \t]*)(?:[&!][^\s]*[ \t]+)*["']?on["']?\s*:""")
 SEQ_ITEM = re.compile(r"^[ \t]*-(?:[ \t]|$)")
 INDENT = re.compile(r"^[ \t]*")
 # An alias name runs to whitespace or `,[]{}`: a YAML anchor may hold any
@@ -65,13 +69,13 @@ def _at_scalar_start(line, i):
     # A quote opens a YAML scalar only at a value start: line start (after
     # indent), after `[`, `{` or `,`, after `:` (with or without the space:
     # JSON-style `"k":"v"` is a value start too), after `-` or `?` followed
-    # by a space, or after a YAML anchor (`&name`) or tag (`!name`/`!!name`):
-    # `&d "..."` and `!!str "..."` open a quoted scalar, otherwise a `}` or
-    # `#` inside that string desyncs the comment/bracket scan. A bare word
-    # character is NOT a value start, so an apostrophe inside a plain scalar
-    # (e.g. `description: it's` or `name: Don't deploy`) is literal text and
-    # must not open quote mode. Closing an already-open scalar is always
-    # allowed.
+    # by a space, or after a YAML anchor (`&name`) or tag (`!name`/`!!name`
+    # /`!<verbatim>`): `&d "..."`, `&a~b "..."` and `!!str "..."` open a
+    # quoted scalar, otherwise a `}` or `#` inside that string desyncs the
+    # comment/bracket scan. A bare word character is NOT a value start, so
+    # an apostrophe inside a plain scalar (e.g. `description: it's` or
+    # `name: Don't deploy`) is literal text and must not open quote mode.
+    # Closing an already-open scalar is always allowed.
     j = i - 1
     while j >= 0 and line[j] in (" ", "\t"):
         j -= 1
@@ -83,10 +87,21 @@ def _at_scalar_start(line, i):
         return True
     if line[j] in "-?" and j < i - 1:
         return True
-    # Anchor/tag name directly before the quote: scan back over the name;
-    # the char before it must be `&` or `!`.
+    # Verbatim tag `!<...>` directly before the quote: the generic name
+    # scan below would stop at the `,` inside the tag URI, so handle it
+    # here. A `>` that is not a verbatim tag is not a scalar start.
+    if line[j] == ">":
+        k = j - 1
+        while k >= 0 and line[k] not in (" ", "\t", '"', "'"):
+            if line[k] == "<":
+                return k - 1 >= 0 and line[k - 1] == "!"
+            k -= 1
+    # Anchor/tag name directly before the quote: the name runs to
+    # whitespace or a flow indicator (anchor/tag names admit punctuation
+    # such as `~:+@%`, e.g. `&a~b`, `&a:b`, `!e:t`), so scan back to the
+    # `&`/`!` that terminates the name.
     k = j
-    while k >= 0 and (line[k].isalnum() or line[k] in "_-./"):
+    while k >= 0 and line[k] not in " \t,[]{}&!\"'":
         k -= 1
     return k >= 0 and line[k] in "&!" and k < j
 
@@ -348,16 +363,26 @@ def _suspicious_top_key(code_lines, literal):
     """Return a report line if any key hides the trigger, else None.
 
     A top-level `on:` written with a YAML escape (`"\\x6fn"`), through an
-    alias (`*k : ...`) or as an explicit `?` key never matches TOP_ON. If
-    any other `on:`-looking line exists it would win as a clean decoy, so
-    fail closed when a backslash or an unquoted `*` appears in a key
-    position (text before the first unquoted `:`) at ANY indent -- a
-    uniformly indented file can hide the real trigger behind a decoy `on:`
-    below it -- or when a line opens an explicit key. Ordinary quoted keys
-    (`"on":`) hold neither and pass.
+    alias (`*k : ...`), with a node property (`&t on:`, `!!str on:`) or as
+    an explicit `?` key never matches TOP_ON without its property prefix.
+    If any other `on:`-looking line exists it would win as a clean decoy,
+    so fail closed when a backslash, an unquoted `&`/`!`, a value-position
+    `*alias` or an explicit `?` key appears in key position (text before
+    the first unquoted `:`) at the minimum indent -- the document's
+    top-level indent, so a uniformly indented file keeps its coverage while
+    nested globs (`- docs/**`), nested continuations (`ls *.txt`) and
+    multi-line flow fragments are ordinary content. Ordinary quoted keys
+    (`"on":`) hold none of these and pass.
     """
+    nonblank = [c for c, lit in zip(code_lines, literal)
+                if not lit and c.strip() != ""]
+    if not nonblank:
+        return None
+    min_indent = min(_indent_of(c) for c in nonblank)
     for code, is_lit in zip(code_lines, literal):
         if is_lit or code.strip() == "":
+            continue
+        if _indent_of(code) != min_indent:
             continue
         if code.lstrip(" \t").startswith("?"):
             return code.strip()[:120]
@@ -367,12 +392,33 @@ def _suspicious_top_key(code_lines, literal):
             if ch == ":" and not quoted[k]:
                 end = k
                 break
+        if end == len(code):
+            # No key colon on a top-level line: a colon-less sequence item
+            # or continuation cannot hide `on:` (`?` handled above).
+            continue
         key, key_quoted = code[:end], quoted[:end]
         if "\\" in key:
             return code.strip()[:120]
         for k, ch in enumerate(key):
-            if ch == "*" and not key_quoted[k]:
+            if ch in "&!" and not key_quoted[k]:
                 return code.strip()[:120]
+        for k, ch in enumerate(key):
+            if ch == "*" and not key_quoted[k]:
+                if k > 0 and re.match(r"[A-Za-z0-9_]", key[k - 1]):
+                    continue
+                m = ALIAS_NAME.match(key, k + 1)
+                if not m:
+                    continue
+                if key[k + 1] == "*":
+                    # `**` glob fragment, not an alias tail.
+                    continue
+                j = k - 1
+                while j >= 0 and key[j] in (" ", "\t"):
+                    j -= 1
+                if j < 0 or key[j] in (":", "[", "{", ","):
+                    return code.strip()[:120]
+                if key[j] in ("-", "?"):
+                    return code.strip()[:120]
     return None
 
 

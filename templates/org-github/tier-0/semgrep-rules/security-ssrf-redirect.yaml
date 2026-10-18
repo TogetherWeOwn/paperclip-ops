@@ -198,8 +198,14 @@ rules:
   # binds as url (the structural rule binds exact property names). Keys may
   # be quoted ("url":), and the property-boundary lookahead recognises
   # quoted and hyphenated names, so a quoted key fires and a quoted later
-  # key still ends the capture. The
-  # boundary
+  # key still ends the capture. A hyphen counts as a boundary char too, so
+  # 'x-url': stays silent like the structural rule. url and baseURL are
+  # separate entries rather than one alternation: a pattern-regex returns
+  # its leftmost match, so a constant first key would consume the match and
+  # hide a tainted later one ({ baseURL: API_BASE, url: req.query.path }
+  # must fire). The same leftmost rule applies to spreads, so each spread
+  # capture carries a taint lookahead and matching restarts at a later
+  # spread ({ ...DEFAULTS, ...req.body } fires). The boundary
   # lookahead uses single backslashes: these patterns live in
   # single-quoted YAML scalars where a backslash is literal, so a doubled
   # backslash would test for a literal backslash and never fire.
@@ -223,14 +229,17 @@ rules:
           # concatenation still cannot match either shape).
           - pattern-regex: '\b(?:axios(?:\.(?:get|post|put|patch|delete|head|request|options))?|got(?:\.(?:get|post|put|patch|delete|head|request|stream))?)<[^()\n]*>\s*\(\s*(?P<URL>`[^`\n]*?\$\{[^`\n]*)'
           - pattern-regex: '\b(?:axios(?:\.(?:get|post|put|patch|delete|head|request|options))?|got(?:\.(?:get|post|put|patch|delete|head|request|stream))?)<[^()\n]*>\s*\(\s*["''][^"''\n]*["'']\s*\+\s*(?P<URL>(?!\s*["''`])(?:[^,()\[\n]|\((?:[^()\n]|\([^()\n]*\))*\)|\[[^\]\n]*\])*)'
-          - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?<![\w$])["'']?(?:url|baseURL)["'']?\s*:\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*["'']?[\w-]+["'']?\s*:)[^}\n])*)'
-          - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?<![\w$])["'']?(?:url|baseURL)["'']?\s*:\s*(?P<URL>`[^`\n]*?\$\{[^`\n]*)'
-          - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?<![\w$])["'']?(?:url|baseURL)["'']?\s*:\s*["''][^"''\n]*["'']\s*\+\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*["'']?[\w-]+["'']?\s*:)[^}\n])*)'
-          - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?\.\.\.(?P<URL>[^,}\n]*)'
-          - pattern-regex: '\baxios(?:\.(?:get|delete|head|options))?<[^()\n]*>\s*\((?:[^,{()\n]|\([^()\n]*\))*,\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?<![\w$])["'']?baseURL["'']?\s*:\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*["'']?[\w-]+["'']?\s*:)[^}\n])*)'
-          - pattern-regex: '\baxios(?:\.(?:get|delete|head|options))?<[^()\n]*>\s*\((?:[^,{()\n]|\([^()\n]*\))*,\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?\.\.\.(?P<URL>[^,}\n]*)'
-          - pattern-regex: '\baxios\.(?:post|put|patch)<[^()\n]*>\s*\((?:[^,{()\n]|\([^()\n]*\))*,(?:[^,{\n]|\([^()\n]*\)|\[[^\]\n]*\]|\{[^{}\n]*\})*,\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?<![\w$])["'']?baseURL["'']?\s*:\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*["'']?[\w-]+["'']?\s*:)[^}\n])*)'
-          - pattern-regex: '\baxios\.(?:post|put|patch)<[^()\n]*>\s*\((?:[^,{()\n]|\([^()\n]*\))*,(?:[^,{\n]|\([^()\n]*\)|\[[^\]\n]*\]|\{[^{}\n]*\})*,\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?\.\.\.(?P<URL>[^,}\n]*)'
+          - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?<![\w$-])["'']?url["'']?\s*:\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*["'']?[\w-]+["'']?\s*:)[^}\n])*)'
+          - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?<![\w$-])["'']?baseURL["'']?\s*:\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*["'']?[\w-]+["'']?\s*:)[^}\n])*)'
+          - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?<![\w$-])["'']?url["'']?\s*:\s*(?P<URL>`[^`\n]*?\$\{[^`\n]*)'
+          - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?<![\w$-])["'']?baseURL["'']?\s*:\s*(?P<URL>`[^`\n]*?\$\{[^`\n]*)'
+          - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?<![\w$-])["'']?url["'']?\s*:\s*["''][^"''\n]*["'']\s*\+\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*["'']?[\w-]+["'']?\s*:)[^}\n])*)'
+          - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?<![\w$-])["'']?baseURL["'']?\s*:\s*["''][^"''\n]*["'']\s*\+\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*["'']?[\w-]+["'']?\s*:)[^}\n])*)'
+          - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?\.\.\.(?P<URL>(?=[^,}\n]*(?i:req\.|request\.|query|params|searchParams|userInput|untrusted|externalUrl|callbackUrl|redirectUrl|returnUrl|targetUrl|destUrl|webhookUrl|nextUrl|inputUrl))[^,}\n]*)'
+          - pattern-regex: '\baxios(?:\.(?:get|delete|head|options))?<[^()\n]*>\s*\((?:[^,{()\n]|\([^()\n]*\))*,\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?<![\w$-])["'']?baseURL["'']?\s*:\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*["'']?[\w-]+["'']?\s*:)[^}\n])*)'
+          - pattern-regex: '\baxios(?:\.(?:get|delete|head|options))?<[^()\n]*>\s*\((?:[^,{()\n]|\([^()\n]*\))*,\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?\.\.\.(?P<URL>(?=[^,}\n]*(?i:req\.|request\.|query|params|searchParams|userInput|untrusted|externalUrl|callbackUrl|redirectUrl|returnUrl|targetUrl|destUrl|webhookUrl|nextUrl|inputUrl))[^,}\n]*)'
+          - pattern-regex: '\baxios\.(?:post|put|patch)<[^()\n]*>\s*\((?:[^,{()\n]|\([^()\n]*\))*,(?:[^,{\n]|\([^()\n]*\)|\[[^\]\n]*\]|\{[^{}\n]*\})*,\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?<![\w$-])["'']?baseURL["'']?\s*:\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*["'']?[\w-]+["'']?\s*:)[^}\n])*)'
+          - pattern-regex: '\baxios\.(?:post|put|patch)<[^()\n]*>\s*\((?:[^,{()\n]|\([^()\n]*\))*,(?:[^,{\n]|\([^()\n]*\)|\[[^\]\n]*\]|\{[^{}\n]*\})*,\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?\.\.\.(?P<URL>(?=[^,}\n]*(?i:req\.|request\.|query|params|searchParams|userInput|untrusted|externalUrl|callbackUrl|redirectUrl|returnUrl|targetUrl|destUrl|webhookUrl|nextUrl|inputUrl))[^,}\n]*)'
       - metavariable-regex:
           metavariable: $URL
           regex: (?is).*(req\.|request\.|query|params|searchParams|userInput|untrusted|externalUrl|callbackUrl|redirectUrl|returnUrl|targetUrl|destUrl|webhookUrl|nextUrl|inputUrl)

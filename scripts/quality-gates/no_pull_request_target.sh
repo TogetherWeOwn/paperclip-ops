@@ -31,9 +31,13 @@
 # are ordinary content). Quote state is carried
 # across lines but a quote only opens at a scalar start (anchors/tags admit
 # punctuation, verbatim `!<...>` included even when glued to a flow bracket,
-# but only when whitespace-separated from the token: a quote glued to an
-# anchor/tag name is part of the name; `:` is a value start only after
-# whitespace or a closing quote, so a colon inside a name is not either),
+# but only when whitespace-separated from the token and at a node start: a
+# quote glued to an anchor/tag name is part of the name, and a property
+# glued to, or spaced after, a plain-scalar word (`foo &b`, `foo!<x>`) is
+# scalar text, not a property; `-`/`?` count only as standalone indicators;
+# `:` is a value start only after whitespace or closing a real quoted key,
+# so a colon inside a name, or after a lone plain-scalar apostrophe, is not
+# either),
 # and lines split on "\n" only (U+2028/U+0085 are scalar content, not
 # line breaks), so neither a
 # multi-line quoted scalar nor an apostrophe in a plain scalar (e.g.
@@ -73,16 +77,77 @@ def _odd_backslashes(line, idx):
     return bs % 2 == 1
 
 
+def _before_is_node_start(line, s):
+    # True when index s (the start of an `&anchor` / `!tag` / `!<...>`
+    # token) sits at a YAML node start: line start, after a flow indicator
+    # (`[`, `{`, `,`), after a mapping colon (`key: &a`, `key:&a`,
+    # `"k":&a`), after a standalone `-`/`?` indicator, or after another
+    # property (`&a &b "v"`). A token glued to, or separated only by spaces
+    # from, a plain-scalar word (`foo &b`, `foo!<x>`) is mid-scalar text,
+    # not a property, so a quote after it must not open.
+    if s <= 0:
+        return True
+    if line[s - 1] in "[{,":
+        return True
+    k = s - 1
+    while k >= 0 and line[k] in (" ", "\t"):
+        k -= 1
+    if k < 0:
+        return True
+    m = k
+    while m >= 0 and line[m] not in " \t,[]{}":
+        m -= 1
+    prev = line[m + 1:k + 1]
+    if prev == "":
+        return True
+    if prev[0] in "&!":
+        return _before_is_node_start(line, m + 1)
+    if prev in ("-", "?"):
+        return m < 0 or line[m] in " \t,[{"
+    if prev.endswith(":"):
+        return True
+    return False
+
+
+def _closes_quoted_key(line, q):
+    # q = index of a quote directly before a glued colon (`"k":"v"`).
+    # True when it closes a quoted key: the matching opening quote sits at
+    # a scalar start. A lone apostrophe inside a plain scalar (`foo':"`)
+    # has no such opener, so the colon after it is scalar text, not a
+    # JSON-style value start.
+    want = line[q]
+    p = q - 1
+    while p >= 0:
+        if line[p] == want:
+            if want == '"' and _odd_backslashes(line, p):
+                p -= 1
+                continue
+            if want == "'" and p + 1 < len(line) and line[p + 1] == "'":
+                p -= 2
+                continue
+            if want == "'" and p > 0 and line[p - 1] == "'":
+                p -= 1
+                continue
+            return _at_scalar_start(line, p)
+        p -= 1
+    return False
+
+
 def _at_scalar_start(line, i):
     # A quote opens a YAML scalar only at a value start: line start (after
     # indent), after `[`, `{` or `,`, after a mapping `:` (whitespace before
     # the quote, or JSON-style `"k":"v"` where the colon directly follows a
-    # closing quote: a colon glued inside an anchor/tag name or plain scalar
-    # such as `&a:"` or `!:'` is part of the name, not a value start),
-    # after `-` or `?` followed by a space, or after a YAML anchor (`&name`)
-    # or tag (`!name`/`!!name` /`!<verbatim>`): `&d "..."`, `&a! "..."`,
-    # `&"a" "..."` and `!!str "..."` open a quoted scalar, otherwise a `}`
-    # or `#` inside that string desyncs the comment/bracket scan. The
+    # closing quote of a real quoted key: a colon glued inside an anchor/tag
+    # name or plain scalar such as `&a:"` or `!:'` is part of the name, not
+    # a value start, and neither is a colon after a lone plain-scalar
+    # apostrophe such as `foo':"`),
+    # after a standalone `-` or `?` indicator (a `-`/`?` glued to, or
+    # trailing, a plain-scalar word such as `foo-` is scalar text, not an
+    # indicator), or after a YAML anchor (`&name`) or tag
+    # (`!name`/`!!name` /`!<verbatim>`) at a node start: `&d "..."`, `&a!
+    # "..."`, `&"a" "..."` and `!!str "..."` open a quoted scalar, but a
+    # mid-scalar `&b`/`!t`/`!<x>` (as in `foo &b "p`) does not -- otherwise
+    # a `}` or `#` inside that string desyncs the comment/bracket scan. The
     # anchor/tag test is a whole-token test (any anchor-name charset,
     # including a trailing `&`/`!` or an embedded quote), never a walk back
     # to the nearest `&`/`!`. A bare word character is NOT a value start, so
@@ -96,9 +161,15 @@ def _at_scalar_start(line, i):
         return True
     if line[j] in "[{,":
         return True
-    if line[j] == ":" and (j < i - 1 or (j > 0 and line[j - 1] in "\"'")):
+    if line[j] == ":" and j < i - 1:
         return True
-    if line[j] in "-?" and j < i - 1:
+    if line[j] == ":" and j == i - 1 and j > 0 and line[j - 1] in "\"'":
+        # Glued JSON-style `"k":"v"`: only a colon closing a real quoted
+        # key is a value start (see _closes_quoted_key).
+        if _closes_quoted_key(line, j - 1):
+            return True
+    if (line[j] in "-?" and j < i - 1
+            and (j == 0 or line[j - 1] in " \t,[{")):
         return True
     # Verbatim tag `!<...>` directly before the quote: the tag URI may hold
     # `,`, `<` or quotes (e.g. `!<tag:yaml.org,2002:str>`, `!<(<,>`,
@@ -107,12 +178,16 @@ def _at_scalar_start(line, i):
     # `[z,!<a,b>`, `{!<a,b>`), so locate the opening `!<` by searching back
     # for it directly (verbatim tags cannot hold whitespace: accept when the
     # `!<...>` span holds no whitespace) instead of taking the token from
-    # the last whitespace or stopping at the first `<` or quote. A `>` that
-    # is not a verbatim tag falls through to the anchor/tag token scan below
-    # (e.g. `&<> "..."` is an anchor named `<>`, not a verbatim tag).
+    # the last whitespace or stopping at the first `<` or quote. The tag
+    # must sit at a node start: a `!<x>` glued to, or spaced after, a
+    # plain-scalar word (as in `foo!<x> "p` or `foo !<x> "p`) is scalar
+    # text, not a tag. A `>` that is not a verbatim tag falls through to
+    # the anchor/tag token scan below (e.g. `&<> "..."` is an anchor named
+    # `<>`, not a verbatim tag).
     if line[j] == ">":
         idx = line.rfind("!<", 0, j)
-        if idx != -1 and not any(c in " \t" for c in line[idx:j + 1]):
+        if (idx != -1 and not any(c in " \t" for c in line[idx:j + 1])
+                and _before_is_node_start(line, idx)):
             return True
     # Anchor/tag name directly before the quote: take the whitespace- and
     # flow-delimited token ending at j (an anchor/tag name admits any other
@@ -129,11 +204,18 @@ def _at_scalar_start(line, i):
         return False
     k = j
     while k >= 0 and line[k] not in " \t,[]{}":
+        if line[k] == ":" and k > 0 and line[k - 1] in "\"'":
+            # A `:` directly after a closing quote is a JSON-style key
+            # colon (`"k":`), not part of an anchor/tag name: stop there
+            # so the token is just the property (`&a` in `"k":&a`).
+            break
         k -= 1
     token = line[k + 1:j + 1]
     if token == "":
         return True
-    return token[0] in "&!"
+    if token[0] in "&!":
+        return _before_is_node_start(line, k + 1)
+    return False
 
 
 def _strip_line(line, in_single, in_double):

@@ -71,6 +71,16 @@ PASS = {
     # content that hides the trigger block).
     "bom on-first workflow passes": (
         '\ufeffon:\n  push:\n' + JOB),
+    # Paperclip Review round 10: the node-start / quoted-key tightening must
+    # not flag clean workflows -- a real anchor before a quoted scalar, and
+    # JSON-style key-colon pairs without the banned trigger, still pass.
+    "anchor with quoted scalar passes": (
+        "on:" + chr(10) + "  workflow_dispatch:" + chr(10)
+        + "    inputs:" + chr(10) + "      x:" + chr(10)
+        + "        description: &a " + chr(34) + "plain text" + chr(34)
+        + chr(10) + JOB),
+    "json-colon pairs without trigger pass": (
+        'on: {"a":"b", "c":"d"}' + chr(10) + JOB),
 }
 
 FAIL = {
@@ -398,6 +408,60 @@ FAIL = {
     "u0085 in scalar before trigger": (
         "on:\n  workflow_dispatch:\n    inputs:\n      x:\n"
         "        description: \"foo\u0085bar\"\n  pull_request_target:\n" + JOB),
+    # Paperclip Review round 10, finding 1: a property between a JSON-style
+    # colon and the quote (`"k":&a "v"`, `"k":!!str "v"`, `'k':&a 'v'`)
+    # broke the token walk (it started at the key's closing quote), so the
+    # string never opened and a `}`/`#` inside hid a later
+    # pull_request_target. All read clean before.
+    "json-colon anchor hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description":&a "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "json-colon tag hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description":!!str "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "squote json-colon anchor hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {'description':&a 'a }}}} # b'}}}},"
+        " pull_request_target: {}}" + "\n" + JOB),
+    # Paperclip Review round 10, finding 2: a quote after a `-`/`?`
+    # trailing a plain scalar (`foo- "p`, `foo? "p`), after a mid-scalar
+    # `&b`/`!t`/`!`/`!<x>` (`foo &b "p`, `foo !t "p`, `foo ! "p`,
+    # `foo!<x> "p`), or after a colon following a plain-scalar apostrophe
+    # (`foo':"p`) spuriously opened a string that ended at the real
+    # string's opening quote, flipping parity so the real `}}}} # r"`
+    # read as live text and hid the later pull_request_target. All read
+    # clean before.
+    "dash-suffixed scalar hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo- "p,'
+        ' type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "question-suffixed scalar hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo? "p,'
+        ' type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "mid-scalar anchor hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo &b "p,'
+        ' type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "mid-scalar tag hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo !t "p,'
+        ' type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "bare-bang scalar hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo ! "p,'
+        ' type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "glued verbatim tag in scalar hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo!<x> "p,'
+        ' type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "dash-suffixed scalar squote hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {description: foo- 'p,"
+        " type: string, default: 'q }}}} # r'}}}}, pull_request_target: {}}"
+        + "\n" + JOB),
+    "apostrophe-colon hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo\':"p,'
+        ' type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
 }
 
 

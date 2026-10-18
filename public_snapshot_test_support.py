@@ -3,6 +3,31 @@ from pathlib import Path
 import os
 
 
+# Public files approved to coexist with the private upstream bundle directory
+# without constituting the private disclosure packet. The compatibility
+# contract is the first such file (its only public location). New public
+# files here require explicit review addition to this allowlist; any other
+# content keeps the bundle present (fail-closed).
+DOCS_UPSTREAM_PUBLIC = frozenset({
+    "compatibility-contract.md",
+})
+
+# The private disclosure packet gated by upstream-bundle-filing-gate.sh and
+# upstream-bundle-filing-strip-gate.sh: exactly their shared SENDABLE plus
+# the filing README. Presence of any of these in a public snapshot means
+# the bundle is present and must be gated, not skipped.
+DOCS_UPSTREAM_PRIVATE = frozenset({
+    "agent-run-credential-isolation.md",
+    "hindsight-company-config-bootstrap.md",
+    "interaction-comment-supersession-default.md",
+    "manifest-refresh-escalation.md",
+    "omniroute-false-cliproxy-terminal-state.md",
+    "omniroute-truncated-reasoning-false-502.md",
+    "plugin-auth-surface.md",
+    "discord-plugin-proactive-job-scope.md",
+    "README.md",
+})
+
 PRIVATE_ARTIFACTS = frozenset({
     ".github/workflows/runner-disk-pressure.yml",
     ".github/workflows/tier-0-quality-gate.yml",
@@ -34,9 +59,31 @@ def private_artifact_absent(root, relative):
 
     Existing partial/empty files, directories and dangling symlinks must still
     reach the original assertions. Nonpublic copies must fail when data is lost.
+
+    docs/upstream hosts one allowlisted public file (compatibility-contract.md)
+    alongside the private disclosure packet. The directory existing for that
+    public file alone still counts as absent; any private packet member or any
+    unreviewed entry keeps it present (fail-closed).
     """
     if relative not in PRIVATE_ARTIFACTS:
         raise ValueError("not a reviewed private-artifact test boundary")
+    if relative == "docs/upstream":
+        if not is_public_snapshot(root):
+            return False
+        base = Path(root) / relative
+        if not os.path.lexists(base):
+            return True
+        if not base.is_dir() or base.is_symlink():
+            return False
+        try:
+            entries = sorted(os.listdir(base))
+        except OSError:
+            return False
+        if not entries:
+            return False
+        if any(name not in DOCS_UPSTREAM_PUBLIC for name in entries):
+            return False
+        return True
     return is_public_snapshot(root) and not os.path.lexists(Path(root) / relative)
 
 

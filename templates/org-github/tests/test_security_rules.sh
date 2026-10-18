@@ -215,7 +215,15 @@ else
     # path.join/new-URL expressions fire, while payload and nested-spread
     # typed lines stay silent exactly like the untyped rule. Constant-url
     # typed lines with later req.* properties (BASE_URL + params/headers)
-    # pin the boundary lookahead itself: without it they fire. Nested
+    # pin the boundary lookahead itself: without it they fire. Constant
+    # first arguments with later req.* arguments (UPSTREAM_URL + body/
+    # params) pin the first-argument top-level-comma boundary: without it
+    # the direct/template/concat captures run past the comma and fire;
+    # a.b(c) + req... and `${a.b(c)}/${req...}` pin the paren-level and
+    # in-backtick spans. DEFAULTS/URL_CONST spread lines pin the spread
+    # comma boundary and the get-style paren group: without them a spread
+    # past a comma fires and path.join(a, b) with a spread config misses.
+    # Nested
     # objects before url/baseURL (headers, method/data) and inline payload
     # objects in post/put/patch second position fire, while nested url/
     # baseURL/spread positions stay silent. Typed post/put/patch calls with
@@ -360,6 +368,17 @@ async function h(req: any, data: any, url: any) {
   await axios.post<User>(path.join(a, b), data, { ...req.body });
   await axios.post<User>("/x", fn(a, b), { ...req.body });
   await axios.put<User>("/x", [1, 2], { ...req.body });
+  await axios.post<User>(UPSTREAM_URL, req.body);
+  await axios.get<User>(UPSTREAM_URL, { params: req.query });
+  await axios.get<User>(`${UPSTREAM}/items`, { params: req.query });
+  await got.post<User>(UPSTREAM_URL, { json: req.body });
+  await axios<User>(UPSTREAM_URL, { params: req.query });
+  await axios.get<User>(a.b(c) + req.query.path);
+  await axios.get<User>(`${a.b(c)}/${req.query.path}`);
+  await axios<User>({ ...DEFAULTS, params: req.query });
+  await axios.get<User>(URL_CONST, { ...DEFAULTS, params: req.query });
+  await axios.post<User>(URL_CONST, data, { ...DEFAULTS, params: req.query });
+  await axios.get<User>(path.join(a, b), { ...req.body });
 }
 EOF
     cat > "$FX/fx-ssrf.py" <<'EOF'
@@ -581,8 +600,8 @@ for ln in (11, 12, 14, 18, 19, 20, 22, 23, 24, 27, 29, 31, 35, 38, 41, 42, 43, 4
           f"behavioural fx-ssrf.js:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.js", "tier0-open-redirect-js")
 expect_hit("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js", (3, 4, 5))
-expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75))
-for ln in (23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 58, 59, 66):
+expect_hit("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts", (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 31, 32, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 81, 82, 86))
+for ln in (23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 58, 59, 66, 76, 77, 78, 79, 80, 83, 84, 85):
     check(ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-generic-fetch-ts"), set())
           and ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js"), set()),
           f"behavioural fx-ssrf.ts:{ln} literal/constant URL stays silent")

@@ -187,7 +187,12 @@ rules:
   # the closing backtick, so a leading constant placeholder still fires.
   # Config url values run to the next property boundary, not the first
   # comma, so path.join(a, req...) and new URL(a, req...).href fire, while
-  # a constant url stays silent even when later properties mention req.*. The boundary
+  # a constant url stays silent even when later properties mention req.*.
+  # The direct, template and concatenation first-argument captures likewise
+  # stop at the first top-level comma (one call-paren level allowed, and the
+  # template capture stays inside the backticks), so a constant first
+  # argument stays silent when later arguments mention req.*, while
+  # a.b(c) + req... and `${a.b(c)}/${req...}` fire. The boundary
   # lookahead uses single backslashes: these patterns live in
   # single-quoted YAML scalars where a backslash is literal, so a doubled
   # backslash would test for a literal backslash and never fire.
@@ -203,13 +208,13 @@ rules:
       tier0: "live"
     patterns:
       - pattern-either:
-          - pattern-regex: '\b(?:axios(?:\.(?:get|post|put|patch|delete|head|request|options))?|got(?:\.(?:get|post|put|patch|delete|head|request|stream))?)<[^()\n]*>\s*\(\s*(?P<URL>(?!\s*[{"''`])[^\n)]*)'
+          - pattern-regex: '\b(?:axios(?:\.(?:get|post|put|patch|delete|head|request|options))?|got(?:\.(?:get|post|put|patch|delete|head|request|stream))?)<[^()\n]*>\s*\(\s*(?P<URL>(?!\s*[{"''`])(?:[^,()\n]|\([^()\n]*\))*)'
           # Templated/concatenated first arguments start with a quote, so
           # the direct branch above excludes them; bind the interpolation
           # or the non-literal operand instead (a pure-literal template or
           # concatenation still cannot match either shape).
-          - pattern-regex: '\b(?:axios(?:\.(?:get|post|put|patch|delete|head|request|options))?|got(?:\.(?:get|post|put|patch|delete|head|request|stream))?)<[^()\n]*>\s*\(\s*(?P<URL>`[^\n]*?\$\{[^\n)]*)'
-          - pattern-regex: '\b(?:axios(?:\.(?:get|post|put|patch|delete|head|request|options))?|got(?:\.(?:get|post|put|patch|delete|head|request|stream))?)<[^()\n]*>\s*\(\s*["''][^"''\n]*["'']\s*\+\s*(?P<URL>(?!\s*["''`])[^\n)]*)'
+          - pattern-regex: '\b(?:axios(?:\.(?:get|post|put|patch|delete|head|request|options))?|got(?:\.(?:get|post|put|patch|delete|head|request|stream))?)<[^()\n]*>\s*\(\s*(?P<URL>`[^`\n]*?\$\{[^`\n]*)'
+          - pattern-regex: '\b(?:axios(?:\.(?:get|post|put|patch|delete|head|request|options))?|got(?:\.(?:get|post|put|patch|delete|head|request|stream))?)<[^()\n]*>\s*\(\s*["''][^"''\n]*["'']\s*\+\s*(?P<URL>(?!\s*["''`])(?:[^,()\n]|\([^()\n]*\))*)'
           - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?:url|baseURL)\s*:\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*\w+\s*:)[^}\n])*)'
           - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?:url|baseURL)\s*:\s*(?P<URL>`[^`\n]*?\$\{[^`\n]*)'
           - pattern-regex: '\baxios(?:\.(?:get|post|put|patch|delete|head|request|options))?<[^()\n]*>\s*\(\s*\{(?:[^{}\n]|\{[^{}\n]*\})*?(?:url|baseURL)\s*:\s*["''][^"''\n]*["'']\s*\+\s*(?P<URL>(?!\s*["''`])(?:(?!,\s*\w+\s*:)[^}\n])*)'

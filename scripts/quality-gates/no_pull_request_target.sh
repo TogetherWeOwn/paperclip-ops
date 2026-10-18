@@ -11,16 +11,24 @@
 # the block at the first line at or above its indent that is not a `- ` item
 # while flow brackets are balanced) and searched for the token. YAML comments,
 # step names and script paths that merely contain the token pass because they
-# live outside the trigger block. Fail-closed extras: a YAML alias (`*name`)
-# outside quotes in value position inside the trigger block is a hit (it may
-# resolve to the banned trigger; GitHub Actions expands anchors/aliases), as
-# is an unclosed flow bracket at the block end (truncated extraction must not
-# read as clean), a backslash escape inside the trigger block (it may hide the
-# token, e.g. "pull_request\x5ftarget"), a workflow file with no detectable
-# top-level `on:` block (e.g. a root flow document), and quote state is
-# carried across lines so a multi-line quoted scalar cannot desync the
-# comment/bracket scan. Quoted `*` globs (e.g. '**/*-lock.json') pass because
-# the alias check ignores quoted text.
+# live outside the trigger block. Fail-closed extras: a YAML alias (`*name`,
+# any anchor-name charset) outside quotes in value position inside the trigger
+# block is a hit (it may resolve to the banned trigger; GitHub Actions expands
+# anchors/aliases), as is an unclosed flow bracket at the block end (truncated
+# extraction must not read as clean), a backslash escape inside the trigger
+# block (it may hide the token, e.g. "pull_request\x5ftarget"), a workflow
+# file with no detectable top-level `on:` block (e.g. a root flow document),
+# duplicate `on:` lines at the winning indent, a winning `on:` below column 0
+# while column-0 content exists (the real top-level key is disguised and a
+# decoy line won), or a column-0 key position holding `\`, an unquoted `*` or
+# an explicit `?` (escaped/aliased top-level `on:`). Quote state is carried
+# across lines but a quote only opens at a scalar start, so neither a
+# multi-line quoted scalar nor an apostrophe in a plain scalar (e.g.
+# `description: it's`) can desync the comment/bracket scan. Literal `|`/`>`
+# block-scalar content is opaque text: `on:`-looking lines there never win the
+# trigger block and quotes/brackets/aliases inside are not structure (the
+# token itself is still scanned). Quoted `*` globs (e.g. '**/*-lock.json')
+# pass because the alias check ignores quoted text.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -35,11 +43,12 @@ TOKEN = re.compile(r"(?<![A-Za-z0-9_])pull_request_target(?![A-Za-z0-9_])")
 TOP_ON = re.compile(r"""^([ \t]*)["']?on["']?\s*:""")
 SEQ_ITEM = re.compile(r"^[ \t]*-(?:[ \t]|$)")
 INDENT = re.compile(r"^[ \t]*")
-ALIAS = re.compile(r"(?<![A-Za-z0-9_])\*[A-Za-z0-9_-]+")
-# Widened alias-name tail (YAML anchors admit punctuation such as `.` and
-# `/`): used only by the quote-aware, value-position scanner below, never as
-# a raw-text search, so quoted globs still pass.
-ALIAS_NAME = re.compile(r"[A-Za-z0-9_.\-/]+")
+# An alias name runs to whitespace or `,[]{}`: a YAML anchor may hold any
+# other character (e.g. `&~t`, `&+t`, `&:t`), so the tail admits punctuation.
+# Used only by the quote-aware, value-position scanner below, never as a
+# raw-text search, so quoted globs still pass.
+ALIAS_NAME = re.compile(r"[^\s,\[\]{}]+")
+BLOCK_SCALAR_HEADER = re.compile(r":\s*[|>](?:[1-9])?[+-]?\s*$")
 
 
 def _odd_backslashes(line, idx):
@@ -51,12 +60,20 @@ def _odd_backslashes(line, idx):
     return bs % 2 == 1
 
 
-def strip_comment(line):
-    # Single-line wrapper kept for the trigger-line report path; the block
-    # scan uses the cross-line variant below so multi-line quoted scalars
-    # cannot desync comment handling.
-    code, _, _ = _strip_line(line, False, False)
-    return code
+def _at_scalar_start(line, i):
+    # A quote opens a YAML scalar only at a value start: line start (after
+    # indent), after `[`, `{` or `,`, or after `:`, `-` or `?` followed by a
+    # space. An apostrophe inside a plain scalar (e.g. `description: it's`
+    # or `name: Don't deploy`) is literal text and must not open quote mode.
+    # Closing an already-open scalar is always allowed.
+    j = i - 1
+    while j >= 0 and line[j] in (" ", "\t"):
+        j -= 1
+    if j < 0:
+        return True
+    if line[j] in "[{,":
+        return True
+    return line[j] in ":-?" and j < i - 1
 
 
 def _strip_line(line, in_single, in_double):
@@ -75,13 +92,15 @@ def _strip_line(line, in_single, in_double):
                 out.append(line[i + 1])
                 i += 2
                 continue
-            in_single = not in_single
+            if in_single or _at_scalar_start(line, i):
+                in_single = not in_single
             out.append(ch)
         elif ch == '"' and not in_single:
             if _odd_backslashes(line, i):
                 out.append(ch)
             else:
-                in_double = not in_double
+                if in_double or _at_scalar_start(line, i):
+                    in_double = not in_double
                 out.append(ch)
         elif ch == "#" and not in_single and not in_double:
             if i == 0 or line[i - 1] in (" ", "\t"):
@@ -93,10 +112,16 @@ def _strip_line(line, in_single, in_double):
     return "".join(out), in_single, in_double
 
 
-def strip_comments_crossline(lines):
+def strip_comments_crossline(lines, literal):
+    # Comment-strip every line, threading quote state across lines. Lines
+    # inside a `|`/`>` literal block are opaque text: they are passed through
+    # unchanged and cannot open or close an outer quoted scalar.
     code_lines = []
     in_single = in_double = False
-    for line in lines:
+    for idx, line in enumerate(lines):
+        if literal[idx]:
+            code_lines.append(line)
+            continue
         code, in_single, in_double = _strip_line(line, in_single, in_double)
         code_lines.append(code)
     return code_lines
@@ -106,17 +131,11 @@ def _indent_of(code):
     return len(INDENT.match(code).group(0).expandtabs(8))
 
 
-def _bracket_delta(code):
-    # Single-chunk wrapper; the block scan threads quote state across lines
-    # via _bracket_delta_state so multi-line scalars cannot desync depth.
-    delta, _, _ = _bracket_delta_state(code, False, False)
-    return delta
-
-
 def _bracket_delta_state(code, in_single, in_double):
     # Net [{-open minus }]-close outside single/double quotes. Quote state
     # persists across calls: the caller threads in_single/in_double through
-    # successive lines of one block.
+    # successive lines of one block. Quotes only open at a scalar start (see
+    # _at_scalar_start) so a plain-scalar apostrophe cannot desync depth.
     delta = 0
     i = 0
     while i < len(code):
@@ -125,12 +144,14 @@ def _bracket_delta_state(code, in_single, in_double):
             if in_single and i + 1 < len(code) and code[i + 1] == "'":
                 i += 2
                 continue
-            in_single = not in_single
+            if in_single or _at_scalar_start(code, i):
+                in_single = not in_single
         elif ch == '"' and not in_single:
             if _odd_backslashes(code, i):
                 i += 1
                 continue
-            in_double = not in_double
+            if in_double or _at_scalar_start(code, i):
+                in_double = not in_double
         elif not in_single and not in_double:
             if ch in "{[":
                 delta += 1
@@ -140,14 +161,96 @@ def _bracket_delta_state(code, in_single, in_double):
     return delta, in_single, in_double
 
 
-def _block_depth(block):
+def _block_depth(pairs):
+    # Net flow-bracket depth over (code, is_literal) block lines. Literal
+    # content is opaque text: its brackets are not structure and its quotes
+    # never touch the threaded quote state.
     depth = 0
     in_single = in_double = False
-    for chunk in block.split("\n"):
+    for code, is_lit in pairs:
+        if is_lit:
+            continue
         d, in_single, in_double = _bracket_delta_state(
-            chunk, in_single, in_double)
+            code, in_single, in_double)
         depth += d
     return depth
+
+
+def _mask_quotes(line):
+    # Replace characters inside single/double quotes with spaces (fresh quote
+    # state per line). Used only to spot block-scalar headers: missing a
+    # header merely treats those lines as normal text (today's behaviour),
+    # never as clean.
+    out = list(line)
+    in_single = in_double = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "'" and not in_double:
+            if in_single and i + 1 < len(line) and line[i + 1] == "'":
+                out[i] = out[i + 1] = " "
+                i += 2
+                continue
+            in_single = not in_single
+            out[i] = " "
+        elif ch == '"' and not in_single:
+            if not _odd_backslashes(line, i):
+                in_double = not in_double
+            out[i] = " "
+        elif in_single or in_double:
+            out[i] = " "
+        i += 1
+    return "".join(out)
+
+
+def _is_block_scalar_header(line):
+    # `key: |` / `key: >-` / `key: |2` (trailing comment allowed): the `|`
+    # or `>` must sit in value position outside quotes.
+    masked = _mask_quotes(line)
+    for k, ch in enumerate(masked):
+        if ch == "#" and (k == 0 or masked[k - 1] in (" ", "\t")):
+            masked = masked[:k]
+            break
+    return bool(BLOCK_SCALAR_HEADER.search(masked))
+
+
+def _literal_flags(lines):
+    # True for lines inside a `|`/`>` literal/folded block scalar. Their
+    # content is opaque text, so `on:`-looking lines there are not trigger
+    # candidates and quotes/brackets/aliases inside are not structure.
+    # Missing a header (or over-matching one) can only move a hit between
+    # fail-closed messages, never to clean: skipped `on:` lines shrink the
+    # candidate set toward the fail-closed empty set.
+    flags = [False] * len(lines)
+    header_indent = None
+    for idx, line in enumerate(lines):
+        if header_indent is not None:
+            if line.strip() == "" or _indent_of(line) > header_indent:
+                flags[idx] = True
+                continue
+            header_indent = None
+        if _is_block_scalar_header(line):
+            header_indent = _indent_of(line)
+    return flags
+
+
+def find_on_candidates(text):
+    """Split text into lines/code/literal flags plus TOP_ON candidates.
+
+    Returns (lines, code_lines, literal, cands) where cands holds
+    (line index, indent) for every non-literal `on:`-looking line.
+    """
+    lines = text.splitlines()
+    literal = _literal_flags(lines)
+    code_lines = strip_comments_crossline(lines, literal)
+    cands = []
+    for idx, code in enumerate(code_lines):
+        if literal[idx] or code.strip() == "":
+            continue
+        m = TOP_ON.match(code)
+        if m:
+            cands.append((idx, len(m.group(1).expandtabs(8))))
+    return lines, code_lines, literal, cands
 
 
 def find_on_block(text):
@@ -162,103 +265,159 @@ def find_on_block(text):
     (`on: {push: {},` + `pull_request_target: {}}` with the continuation at
     column 0) stays inside until its brackets close. Blank and comment-only
     lines never end the block. Quote state (single/double) is carried across
-    lines for both comment stripping and bracket depth, so a multi-line
-    quoted scalar cannot desync the scan. Fail-closed by construction:
-    anything still inside the region counts as a trigger position.
+    lines for both comment stripping and bracket depth, but quotes only open
+    at a scalar start, so a multi-line quoted scalar or a plain-scalar
+    apostrophe cannot desync the scan. Fail-closed by construction:
+    anything still inside the region counts as a trigger position, and a
+    winning `on:` below column 0 while column-0 content exists (a disguised
+    top-level key plus a decoy line) yields no block at all.
     """
-    lines = text.splitlines()
-    code_lines = strip_comments_crossline(lines)
-    best = None
-    for idx, code in enumerate(code_lines):
-        m = TOP_ON.match(code)
-        if m:
-            indent = len(m.group(1).expandtabs(8))
-            if best is None or indent < best[1]:
-                best = (idx, indent)
-    if best is None:
+    lines, code_lines, literal, cands = find_on_candidates(text)
+    if not cands:
         return set()
-    start, indent = best
+    best = min(indent for _, indent in cands)
+    if best > 0 and any(code.strip() != "" and _indent_of(code) == 0
+                        for code in code_lines):
+        # The document has top-level content but its `on:` key was not
+        # recognized (escaped, aliased or explicit `?` key) while a decoy
+        # `on:`-looking line matched below column 0: the real trigger would
+        # go unscanned, so yield no block (the caller fails this closed).
+        return set()
+    start = next(idx for idx, indent in cands if indent == best)
+    indent = best
     member = {start + 1}
     depth, qs, qd = _bracket_delta_state(code_lines[start], False, False)
     for idx in range(start + 1, len(lines)):
         code = code_lines[idx]
         if code.strip() == "":
             member.add(idx + 1)
-            # Blank lines carry no brackets but quote state persists: a
-            # blank line cannot close a multi-line scalar, and _strip_line
-            # already threaded the state, so re-derive it by replaying.
             continue
         if depth <= 0 and _indent_of(code) <= indent and not SEQ_ITEM.match(code):
             break
         member.add(idx + 1)
+        if literal[idx]:
+            continue
         d, qs, qd = _bracket_delta_state(code, qs, qd)
         depth += d
-    # Re-thread quote state correctly across blank lines: replay the whole
-    # member range once so depth reflects multi-line scalars exactly. The
-    # member set above is already conservative (blank lines included), so
-    # only depth needs the exact replay for the unclosed-bracket check.
     return member
 
 
-def on_block(text):
-    lines = text.splitlines()
-    member = find_on_block(text)
-    if not member:
-        return ""
-    code_lines = strip_comments_crossline(lines)
-    return "\n".join(code_lines[i - 1] for i in sorted(member))
-
-
-def _unquoted_alias_hit(code):
-    """Return True if `code` holds a `*alias` outside quotes in value pos.
-
-    Quote-aware: `*` inside single/double quotes (e.g. quoted globs such as
-    '**/*-lock.json') never counts. Value-position: after skipping spaces
-    the previous significant char must be a start, newline, `:`, `[`, `{`,
-    `,` or `-` (sequence item), so `a*b` or `/` continuations do not count.
-    The alias tail admits punctuation (`.`, `/`) beyond `[A-Za-z0-9_-]`.
-    """
+def _quote_states(code):
+    # Per-character quote map for one line (fresh state): True where the
+    # character sits inside single/double quotes. Quote opens use the same
+    # scalar-start rule as the block scan.
+    inside = [False] * len(code)
     in_single = in_double = False
     i = 0
-    n = len(code)
-    while i < n:
+    while i < len(code):
         ch = code[i]
         if ch == "'" and not in_double:
-            if in_single and i + 1 < n and code[i + 1] == "'":
+            if in_single and i + 1 < len(code) and code[i + 1] == "'":
+                inside[i] = inside[i + 1] = True
                 i += 2
                 continue
-            in_single = not in_single
-            i += 1
-            continue
-        if ch == '"' and not in_single:
+            if in_single or _at_scalar_start(code, i):
+                in_single = not in_single
+        elif ch == '"' and not in_single:
             if _odd_backslashes(code, i):
-                i += 1
-                continue
-            in_double = not in_double
-            i += 1
-            continue
-        if ch == "*" and not in_single and not in_double:
-            if i > 0 and re.match(r"[A-Za-z0-9_]", code[i - 1]):
-                i += 1
-                continue
-            m = ALIAS_NAME.match(code, i + 1)
-            if not m:
-                i += 1
-                continue
-            # `**` glob fragments: a second `*` is not an alias tail.
-            if code[i + 1] == "*":
-                i += 1
-                continue
-            j = i - 1
-            while j >= 0 and code[j] in (" ", "\t"):
-                j -= 1
-            if j < 0 or code[j] in ("\n", ":", "[", "{", ","):
-                return True
-            if code[j] == "-":
-                return True
-            i += 1
-            continue
+                inside[i] = in_double
+            elif in_double or _at_scalar_start(code, i):
+                in_double = not in_double
+        else:
+            inside[i] = in_single or in_double
         i += 1
+    return inside
+
+
+def _suspicious_top_key(code_lines, literal):
+    """Return a report line if a column-0 key hides the trigger, else None.
+
+    A top-level `on:` written with a YAML escape (`"\\x6fn"`), through an
+    alias (`*k : ...`) or as an explicit `?` key never matches TOP_ON. If
+    any other `on:`-looking line exists it would win as a clean decoy, so
+    fail closed when a backslash or an unquoted `*` appears in a column-0
+    key position (text before the first unquoted `:`), or when a column-0
+    line opens an explicit key. Ordinary quoted keys (`"on":`) hold neither
+    and pass.
+    """
+    for code, is_lit in zip(code_lines, literal):
+        if is_lit or code.strip() == "" or _indent_of(code) != 0:
+            continue
+        if code.startswith("?"):
+            return code.strip()[:120]
+        quoted = _quote_states(code)
+        end = len(code)
+        for k, ch in enumerate(code):
+            if ch == ":" and not quoted[k]:
+                end = k
+                break
+        key, key_quoted = code[:end], quoted[:end]
+        if "\\" in key:
+            return code.strip()[:120]
+        for k, ch in enumerate(key):
+            if ch == "*" and not key_quoted[k]:
+                return code.strip()[:120]
+    return None
+
+
+def _unquoted_alias_hit(pairs):
+    """Return True if the block holds a `*alias` outside quotes in value pos.
+
+    Quote-aware: `*` inside single/double quotes (e.g. quoted globs such as
+    '**/*-lock.json') never counts, and quotes only open at a scalar start
+    so a plain-scalar apostrophe cannot blind the scan. Value-position: the
+    previous significant char on the line must be a line start, `:`, `[`,
+    `{`, `,`, `-` (sequence item) or `?` (explicit key), so `a*b` does not
+    count. The alias tail runs to whitespace or `,[]{}` because anchor names
+    admit punctuation. Literal block-scalar lines are opaque text and never
+    count (an alias cannot live inside a literal string).
+    """
+    in_single = in_double = False
+    for code, is_lit in pairs:
+        if is_lit:
+            continue
+        i = 0
+        n = len(code)
+        while i < n:
+            ch = code[i]
+            if ch == "'" and not in_double:
+                if in_single and i + 1 < n and code[i + 1] == "'":
+                    i += 2
+                    continue
+                if in_single or _at_scalar_start(code, i):
+                    in_single = not in_single
+                i += 1
+                continue
+            if ch == '"' and not in_single:
+                if _odd_backslashes(code, i):
+                    i += 1
+                    continue
+                if in_double or _at_scalar_start(code, i):
+                    in_double = not in_double
+                i += 1
+                continue
+            if ch == "*" and not in_single and not in_double:
+                if i > 0 and re.match(r"[A-Za-z0-9_]", code[i - 1]):
+                    i += 1
+                    continue
+                m = ALIAS_NAME.match(code, i + 1)
+                if not m:
+                    i += 1
+                    continue
+                # `**` glob fragments: a second `*` is not an alias tail.
+                if code[i + 1] == "*":
+                    i += 1
+                    continue
+                j = i - 1
+                while j >= 0 and code[j] in (" ", "\t"):
+                    j -= 1
+                if j < 0 or code[j] in (":", "[", "{", ","):
+                    return True
+                if code[j] in ("-", "?"):
+                    return True
+                i += 1
+                continue
+            i += 1
     return False
 
 
@@ -283,16 +442,24 @@ def main():
         member = find_on_block(text)
         if not member:
             # Fail closed: a workflow file with no detectable top-level
-            # `on:` block (e.g. a root flow document `{"on": {...}}`)
-            # must not read as clean. Empty files stay clean.
+            # `on:` block (e.g. a root flow document `{"on": {...}}`, or a
+            # disguised top-level key masked by a decoy line) must not read
+            # as clean. Empty files stay clean.
             if text.strip() != "":
                 hits.append(f"{path}: no top-level `on:` trigger found "
                             f"(fail-closed)")
             continue
-        lines = text.splitlines()
-        code_lines = strip_comments_crossline(lines)
+        lines, code_lines, literal, cands = find_on_candidates(text)
+        best = min(indent for _, indent in cands)
+        if sum(1 for _, indent in cands if indent == best) > 1:
+            # Fail closed: two `on:` lines at the winning indent is either
+            # a duplicate top-level key or a decoy next to the real one.
+            hits.append(f"{path}: duplicate `on:` trigger lines "
+                        f"(fail-closed)")
+            continue
         by_no = {i + 1: code_lines[i] for i in range(len(lines))}
-        block = on_block(text)
+        pairs = [(code_lines[i - 1], literal[i - 1]) for i in sorted(member)]
+        block = "\n".join(code for code, _ in pairs)
         if block and TOKEN.search(block):
             # Report the first trigger line for the annotation.
             for lineno in sorted(member):
@@ -303,15 +470,17 @@ def main():
                     break
             else:
                 hits.append(f"{path}: trigger block contains pull_request_target")
-        elif block and _unquoted_alias_hit(block):
+        elif block and _unquoted_alias_hit(pairs):
             # Fail closed: GitHub Actions expands YAML anchors/aliases, so
             # `on: *trig` may resolve to the banned trigger even though the
             # literal token is absent. Only `*alias` outside quotes in value
             # position counts, so quoted globs pass; safe aliases must be
             # inlined instead.
             for lineno in sorted(member):
+                if literal[lineno - 1]:
+                    continue
                 raw = lines[lineno - 1]
-                if _unquoted_alias_hit(by_no.get(lineno, "")):
+                if _unquoted_alias_hit([(by_no.get(lineno, ""), False)]):
                     hits.append(f"{path}:{lineno}: trigger block uses YAML "
                                 f"alias (may resolve to pull_request_target): "
                                 f"{raw.strip()[:120]}")
@@ -319,6 +488,13 @@ def main():
             else:
                 hits.append(f"{path}: trigger block uses YAML alias "
                             f"(may resolve to pull_request_target)")
+        elif block and _suspicious_top_key(code_lines, literal):
+            # Fail closed: a column-0 key position holding a backslash, an
+            # unquoted `*` or an explicit `?` is an escaped/aliased top-level
+            # `on:` that the block extractor cannot see.
+            hits.append(f"{path}: top-level key hides trigger via "
+                        f"escape/alias/explicit key (fail-closed): "
+                        f"{_suspicious_top_key(code_lines, literal)}")
         elif block and "\\" in block:
             # Fail closed: a backslash escape in the trigger block may hide
             # the token (e.g. "pull_request\x5ftarget" resolves to the
@@ -326,7 +502,7 @@ def main():
             hits.append(f"{path}: trigger block contains backslash escape "
                         f"(fail-closed, may hide pull_request_target)")
         elif block:
-            if _block_depth(block) != 0:
+            if _block_depth(pairs) != 0:
                 # Fail closed: truncated flow extraction must not read as
                 # clean (e.g. an unclosed `{`/`[` at the block end).
                 hits.append(f"{path}: trigger block has unclosed flow "

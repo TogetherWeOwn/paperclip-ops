@@ -52,6 +52,11 @@ PASS = {
         "on:\n  push:\n    paths:\n      - 'src/*Test.java'\n" + JOB),
     "double-quoted glob passes": (
         'on:\n  push:\n    branches: ["*-release"]\n' + JOB),
+    # An apostrophe in a plain scalar is literal text, not a quote: it must
+    # neither blind the scan to a later alias nor hide a `#` comment that
+    # names the trigger.
+    "apostrophe in name with trigger comment in block": (
+        "name: Don't deploy\non:\n  push:\n    branches: [main]  # never pull_request_target\n" + JOB),
 }
 
 FAIL = {
@@ -111,6 +116,39 @@ FAIL = {
         '"jobs": {"j": {"runs-on": "ubuntu-latest"}}}\n'),
     "escaped token trigger": (
         'on:\n  - "pull_request\\x5ftarget"\n' + JOB),
+    # Paperclip Review round 3: the alias scan missed the explicit `?` key
+    # form, any alias after a plain-scalar apostrophe in the block, and
+    # anchor names with punctuation; all three resolve via yaml v2.
+    "explicit-key alias trigger": (
+        "x: &t pull_request_target\non:\n  ? *t\n  : {}\n" + JOB),
+    "apostrophe hides later alias": (
+        "x: &t pull_request_target\non:\n  push:\n    branches: [main]\n"
+        "  workflow_dispatch:\n    inputs:\n      a:\n"
+        "        description: it's\n  *t : {}\n" + JOB),
+    "punctuation anchor alias trigger": (
+        "x: &~t pull_request_target\non: *~t\n" + JOB),
+    "plus anchor alias trigger": (
+        "x: &+t pull_request_target\non: *+t\n" + JOB),
+    # Paperclip Review round 3 (late-novel): an escaped or aliased top-level
+    # `on:` never matches the extractor, so any other `on:`-looking line
+    # (nested mapping key or a line inside a `run: |` script) would win as a
+    # clean decoy. Both must fail closed.
+    "escaped on key with decoy": (
+        '"\\x6fn": pull_request_target\njobs:\n  j:\n'
+        "    runs-on: ubuntu-latest\n    env:\n      on: x\n"
+        "    steps:\n      - run: echo hi\n"),
+    "aliased on key with decoy": (
+        "k: &k on\n*k : pull_request_target\njobs:\n  j:\n"
+        "    runs-on: ubuntu-latest\n    env:\n      on: x\n"
+        "    steps:\n      - run: echo hi\n"),
+    "escaped on key with run-script decoy": (
+        '"\\x6fn": pull_request_target\njobs:\n  j:\n'
+        "    runs-on: ubuntu-latest\n    steps:\n      - run: |\n"
+        "        on: x\n"),
+    "explicit top-level on key with decoy": (
+        "k: &k on\n? *k\n: pull_request_target\njobs:\n  j:\n"
+        "    runs-on: ubuntu-latest\n    env:\n      on: x\n"
+        "    steps:\n      - run: echo hi\n"),
 }
 
 

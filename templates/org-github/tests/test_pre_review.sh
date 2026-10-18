@@ -1131,6 +1131,30 @@ FAIL_AUTHZ_READ=1 run_check
 [[ "$RC" -eq 1 ]] && has_row FAIL authz \
   && ok "Rust lexical context read error fails closed" \
   || bad "Rust lexical context read error fails closed (rc=$RC)"
+# An untracked name holding `=` must still be scanned: awk would otherwise
+# read the operand as a variable assignment and see no content.
+new_repo
+printf 'def test_eqname(): pass\n' > "$REPO_DIR/test_eqname.py"
+commit_change "test(auth): seed equals-sign filename fixture"
+FIXTURE_VALUE="Q7m2V9z4L6p8R1s3"
+printf 'password: %s\n' "$FIXTURE_VALUE" > "$REPO_DIR/config=prod.env"
+# config=prod.env stays untracked; the credential must still fail the scan
+# by detection (not by a collection failure that masks the content).
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ! grep -q "cannot collect added lines" <<<"$OUT" \
+  && ok "credential in equals-sign filename fails" \
+  || bad "credential in equals-sign filename fails (rc=$RC)"
+# Deleting a binary file adds no content and must not fail collection.
+new_repo
+printf 'def test_gone(): pass\n' > "$REPO_DIR/test_gone.py"
+printf 'x\000token_payload\000' > "$REPO_DIR/gone.dat"
+commit_change "test(auth): seed deleted-binary fixture"
+$GIT -C "$REPO_DIR" rm -q gone.dat >&2
+commit_change "test(auth): delete binary fixture"
+run_check
+[[ "$RC" -eq 0 ]] && ok "deleted binary passes" \
+  || bad "deleted binary passes (rc=$RC)"
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

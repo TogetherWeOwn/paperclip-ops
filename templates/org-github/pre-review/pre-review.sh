@@ -377,8 +377,11 @@ authz_file_lines() {
     if [[ -s "$file" ]] && ! grep -Iq . -- "$file" 2>/dev/null; then
       return 1
     fi
-    awk '{ print NR "|+" $0 }' -- "$file"
+    awk '{ print NR "|+" $0 }' <"$file"
   else
+    if ! git cat-file -e "HEAD:$file" 2>/dev/null; then
+      return 0 # deleted in HEAD: no added content
+    fi
     if ! git --literal-pathspecs diff -U0 "$BASE"...HEAD -- "$file" >"$SCRATCH_DIR/file.diff" 2>/dev/null; then
       return 1
     fi

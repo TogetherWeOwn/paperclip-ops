@@ -1170,6 +1170,151 @@ run_check
 [[ "$RC" -eq 0 ]] && ok "deleted binary passes" \
   || bad "deleted binary passes (rc=$RC)"
 
+# --- Review round 2: ordinary code passes, literals still fail ---------------
+# A Rust fn signature with a generic return type holds no literal: the `<` in
+# the return position sits outside the parameter's own type position.
+new_repo
+printf 'pub fn new(token: AuthToken) -> Result<Self, AuthError> {\n}\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): add constructor signature"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "rust fn signature passes authz" \
+  || bad "rust fn signature passes authz (rc=$RC)"
+# An inline struct body of recognized types holds no literal either.
+new_repo
+printf 'struct Creds { token: String, secret: Vec<u8> }\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): add inline credential struct"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "inline struct body passes authz" \
+  || bad "inline struct body passes authz (rc=$RC)"
+# A comment mentioning only a type shape is not a credential.
+new_repo
+printf '// token: Option<String> for auth\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): note token type"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "type-mention comment passes authz" \
+  || bad "type-mention comment passes authz (rc=$RC)"
+# But a non-type generic argument in the same position still fails closed.
+# Fixture is literal here (as in earlier generic rows): the scanner shape
+# under test is the angle-bracket argument, not a real credential.
+new_repo
+printf 'fn get(token: Option<supermansecret99>) {\n}\n' > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): reject inline generic credential"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "inline generic credential still fails" \
+  || bad "inline generic credential still fails (rc=$RC)"
+# A typed constructor parameter is a declaration, not a value. The type name
+# rides in a variable so this file holds no adjacent keyword/value shape.
+new_repo
+CTOR_TYPE="AccessTokenValue"
+printf 'constructor(private readonly token: %s) {}\n' "$CTOR_TYPE" > "$REPO_DIR/app.ts"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "feat(app): add typed client constructor"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "typed constructor param passes authz" \
+  || bad "typed constructor param passes authz (rc=$RC)"
+# Identifier and dotted-path call arguments are references, not literals.
+new_repo
+IDENT_ARG="secret_name_value"
+printf 'get_secret(%s)\n' "$IDENT_ARG" > "$REPO_DIR/app.py"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "feat(app): read secret by name"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "identifier call arg passes authz" \
+  || bad "identifier call arg passes authz (rc=$RC)"
+new_repo
+PATH_ARG="user.passwordHash"
+printf 'verify_password(%s)\n' "$PATH_ARG" > "$REPO_DIR/app.py"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "feat(app): verify password hash"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "dotted call arg passes authz" \
+  || bad "dotted call arg passes authz (rc=$RC)"
+# But a literal keyword argument still fails. Neutral variable name so this
+# file holds no adjacent keyword/value shape (see earlier fixture rows).
+new_repo
+KWARG_FIXTURE="hunter2secretvalue99"
+printf 'verify(password=%s)\n' "$KWARG_FIXTURE" > "$REPO_DIR/app.py"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "test(app): reject literal keyword argument"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "literal keyword argument still fails" \
+  || bad "literal keyword argument still fails (rc=$RC)"
+# A long receiver followed by a method call is code, not a credential.
+new_repo
+RECV_OBJ="credentialsStore"
+RECV_METHOD="getTokenValue"
+printf 'const token = %s.%s()[1];\n' "$RECV_OBJ" "$RECV_METHOD" > "$REPO_DIR/app.js"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "feat(app): read cached token"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "method-chain receiver passes authz" \
+  || bad "method-chain receiver passes authz (rc=$RC)"
+# A dot before whitespace still terminates a value (sentence terminator).
+new_repo
+SENTENCE_FIXTURE="abcdefghijklmnop"
+printf 'password: %s. # rotate quarterly\n' "$SENTENCE_FIXTURE" > "$REPO_DIR/config.txt"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "test(app): scan sentence-terminated value"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "sentence dot-space value still fails" \
+  || bad "sentence dot-space value still fails (rc=$RC)"
+# Reading a key from the environment is the recommended practice, not a
+# secret. Object and leaf ride in separate variables so no single line here
+# pairs the keyword with a value shape.
+new_repo
+ENV_OBJ="process.env"
+ENV_LEAF="OPENAI_API_KEY"
+printf 'const client = new OpenAI({ apiKey: %s.%s });\n' "$ENV_OBJ" "$ENV_LEAF" > "$REPO_DIR/app.js"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "feat(app): read key from environment"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "environment key lookup passes authz" \
+  || bad "environment key lookup passes authz (rc=$RC)"
+# A raw string closing on a line with a lifetime must not mark that line as
+# plain code: string content is never exempt from secret detection.
+new_repo
+RAW_FIXTURE="hunter2saltysecret"
+printf 'const CFG: &str = r#"\n' > "$REPO_DIR/auth.rs"
+printf 'password: %s; 32];"#; fn f<'"'"'a>() {}\n' "$RAW_FIXTURE" >> "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): scan raw-string close with lifetime"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "raw-string close with lifetime still fails" \
+  || bad "raw-string close with lifetime still fails (rc=$RC)"
+# A submodule pointer bump adds no text in the superproject and must pass.
+new_repo
+SUBSRC="$WORK/subsrc$N"
+$GIT init -qb main "$SUBSRC" >&2
+$GIT -C "$SUBSRC" config user.email t@example.invalid >&2
+$GIT -C "$SUBSRC" config user.name Test >&2
+$GIT -C "$SUBSRC" config commit.gpgsign false >&2
+echo v1 > "$SUBSRC/f.txt"
+$GIT -C "$SUBSRC" add -A >&2
+$GIT -C "$SUBSRC" commit -qm "feat(sub): v1" >&2
+$GIT -C "$REPO_DIR" -c protocol.file.allow=always submodule add -q "$SUBSRC" sub >&2
+printf 'print("hi")\n' > "$REPO_DIR/app.py"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "feat(app): track upstream module"
+echo v2 > "$SUBSRC/f.txt"
+$GIT -C "$SUBSRC" commit -qam "feat(sub): v2" >&2
+SHA2="$($GIT -C "$SUBSRC" rev-parse HEAD)"
+$GIT -c protocol.file.allow=always -C "$REPO_DIR/sub" fetch -q origin >&2
+$GIT -C "$REPO_DIR/sub" checkout -q "$SHA2" >&2
+$GIT -C "$REPO_DIR" add sub >&2
+commit_change "feat(app): bump upstream module"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz \
+  && ok "submodule bump passes authz" \
+  || bad "submodule bump passes authz (rc=$RC)"
+
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

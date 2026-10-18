@@ -30,7 +30,9 @@
 # where the decoy sits below the hidden key; nested globs and continuations
 # are ordinary content). Quote state is carried
 # across lines but a quote only opens at a scalar start (anchors/tags admit
-# punctuation, verbatim `!<...>` included), so neither a
+# punctuation, verbatim `!<...>` included, but only when whitespace-separated
+# from the token: a quote glued to an anchor/tag name is part of the name),
+# so neither a
 # multi-line quoted scalar nor an apostrophe in a plain scalar (e.g.
 # `description: it's`) can desync the comment/bracket scan. Literal `|`/`>`
 # block-scalar content is opaque text: `on:`-looking lines there never win the
@@ -111,8 +113,14 @@ def _at_scalar_start(line, i):
     # character, including `&`, `!`, quotes, `~:+@%` and `<>`, e.g. `&a!`,
     # `&a&`, `&!`, `&"a"`, `&<>`) and accept it when it starts with `&` or
     # `!`. The walk never stops at `&`, `!` or quotes, so a name ending in
-    # `&`/`!` or holding a quote still resolves. Fail closed on an empty
-    # token (a quote right after a flow bracket in an odd position).
+    # `&`/`!` or holding a quote still resolves. A quote glued to the token
+    # (`&"`, `&'a"`) is part of the anchor/tag name, not a scalar start:
+    # only a quote separated from the token by whitespace opens, so `&" "a`
+    # keeps the first quote inside the name and opens at the real scalar.
+    # Fail closed on an empty token (a quote right after a flow bracket in
+    # an odd position).
+    if line[i - 1] not in (" ", "\t"):
+        return False
     k = j
     while k >= 0 and line[k] not in " \t,[]{}":
         k -= 1
@@ -323,8 +331,23 @@ def find_on_block(text):
         stripped = code.strip()
         if stripped == "":
             continue
+        if stripped.startswith("%"):
+            # A `%YAML`/`%TAG` directive precedes the document: not content.
+            continue
+        if (stripped == "---" or stripped.startswith("--- ")
+                or stripped.startswith("---\t") or stripped == "..."):
+            # A document marker before any content is not content either.
+            # Content after `---` on the same line decides: `--- {` is a
+            # root flow document.
+            rest = stripped[3:].strip()
+            if rest == "":
+                continue
+            if rest[0] in ("{", "["):
+                return set()
+            break
         if stripped[0] in ("{", "["):
-            # A root flow document (`{"on": {...}}`, possibly indented) has
+            # A root flow document (`{"on": {...}}`, possibly indented, and
+            # possibly behind a directive/`---` preamble skipped above) has
             # no `on:` line at a trustworthy position: any `on:`-looking
             # line is a nested decoy while the real trigger sits mid-line
             # where the extractor never looks, so yield no block (the

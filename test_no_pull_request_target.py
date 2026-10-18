@@ -258,6 +258,43 @@ FAIL = {
         '"on": {"pull_request_target": {}}}\n'
         '  "jobs": {"a": {"runs-on": "ubuntu-latest", '
         '"steps": [{"run": "ls"}]}}}\n'),
+    # Paperclip Review round 7: a quote glued to an anchor/tag name is part
+    # of the name, not a scalar start (`&" "a ...` names the anchor `"` and
+    # the real scalar opens at the second quote). All read clean before
+    # (the token test ignored the glue).
+    "glued-quote anchor hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &" "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "glued-squote anchor hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {description: &' 'a }}}} # b'}}},"
+        " pull_request_target: {}}" + "\n" + JOB),
+    "glued-quote anchor with tab hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &"\t"a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    # Paperclip Review round 7: a `---` marker or `%YAML` directive before a
+    # root flow document defeated the guard (it only inspected the first
+    # non-blank line), so the nested decoy `env.on` won. All read clean
+    # before.
+    "doc-start marker before root flow with decoy": (
+        '---\n{"env": {\n"on": x,\n"b": 2}, "name": "x", '
+        '"on": {"pull_request_target": {}},\n'
+        '"jobs": {"a": {"runs-on": "ubuntu-latest", '
+        '"steps": [{"run": "ls"}]}}}\n'),
+    "doc-start marker with inline flow and decoy": (
+        '--- {"env": {\n"on": x,\n"b": 2}, "name": "x", '
+        '"on": {"pull_request_target": {}},\n'
+        '"jobs": {"a": {"runs-on": "ubuntu-latest", '
+        '"steps": [{"run": "ls"}]}}}\n'),
+    "yaml directive plus marker before root flow": (
+        '%YAML 1.2\n---\n{"env": {\n"on": x,\n"b": 2}, "name": "x", '
+        '"on": {"pull_request_target": {}},\n'
+        '"jobs": {"a": {"runs-on": "ubuntu-latest", '
+        '"steps": [{"run": "ls"}]}}}\n'),
+    "comment plus marker before root flow with decoy": (
+        '# a comment\n---\n{"env": {\n"on": x,\n"b": 2}, "name": "x", '
+        '"on": {"pull_request_target": {}},\n'
+        '"jobs": {"a": {"runs-on": "ubuntu-latest", '
+        '"steps": [{"run": "ls"}]}}}\n'),
 }
 
 

@@ -64,6 +64,9 @@ one shell command WITHOUT executing it and refuses (exit 3) when any
     x=$(for i in a b /newline/ do yes; done)           refused (do ends a
                                                         newline-separated
                                                         for list)
+    x=$(((1)); yes) ; x=`((echo hi); yes)`             refused (`((` without
+                                                        a matching arithmetic
+                                                        `))` is subshells)
 
 The following stay allowed, and the suite pins each one:
 
@@ -511,6 +514,21 @@ def _skip_balanced(text: str, i: int, opener: str, closer: str) -> int:
     return n
 
 
+def _arithmetic_end(text: str, i: int) -> int | None:
+    """Return the end of `((...))` at `i`, or None for subshell syntax.
+
+    Bash tries arithmetic first, but reparses as subshells if the expression
+    has no matching `))`. Balance from the SECOND opener: its matching `)`
+    must be immediately followed by another `)`. Merely balancing both
+    openers and checking the last two bytes is insufficient: `((echo);(yes))`
+    ends in `))` but the first expression closes at `);`, so it is subshells.
+    """
+    end = _skip_balanced(text, i + 1, "(", ")")
+    if end < len(text) and text[end] == ")":
+        return end + 1
+    return None
+
+
 def _scan_substitution_ranges(
         command: str, prose_outside: bool = False,
 ) -> list[tuple[int, int, int, int]]:
@@ -520,8 +538,9 @@ def _scan_substitution_ranges(
     blanking uses them to tell span text from prose, so the two can never
     disagree on a boundary.
 
-    Quote-, escape- and comment-aware. `$((...))` arithmetic and `${...}`
-    parameter expansion are not command substitutions and are skipped, but
+    Quote-, escape- and comment-aware. Only a matching arithmetic `))` makes
+    `$((` arithmetic; otherwise Bash reparses it as `$(` plus a subshell.
+    `$((...))` arithmetic and `${...}` parameter expansion are skipped, but
     their interiors are still scanned for nested `$(...)`/backtick spans
     (e.g. `${A:-$(yes)}`, `$(( $(yes) + 1 ))`). `case` pattern `)` never
     closes a span: `case`/`esac` are tracked only in command position and
@@ -642,18 +661,10 @@ def _scan_substitution_ranges(
                     and command[j + 1] == "\n":
                 j += 2
             if j < n and command[j] == "(":
-                if j + 1 < n and command[j + 1] == "(":
-                    # Start at the FIRST paren so both closers of `((...))`
-                    # are consumed: starting at the second lets the final `)`
-                    # pop an enclosing `$(` span (`x=$(n=$((1+1)); yes)`).
-                    end = _skip_balanced(command, j, "(", ")")
-                    if end < n or command[end - 2:end] == "))":
-                        interior = command[j + 2:end - 2] \
-                            if end - 2 > j + 2 else ""
-                    else:
-                        # Unclosed arithmetic: scan the whole tail for nested
-                        # spans instead of chopping a phantom closer.
-                        interior = command[j + 2:]
+                end = _arithmetic_end(command, j) \
+                    if command.startswith("((", j) else None
+                if end is not None:
+                    interior = command[j + 2:end - 2]
                     if interior:
                         # The interior is shell code even in prose mode
                         # (arithmetic containing a substitution), so it
@@ -667,6 +678,9 @@ def _scan_substitution_ranges(
                                           b_s + base, b_e + base))
                     i = end
                     continue
+                # No arithmetic `))`: Bash reparses `$((` as `$(` whose
+                # body starts with a subshell `(`. Let ordinary span depth
+                # count that extra opener, preserving any commands inside.
                 quote_stack.append((single, double, single_dollar))
                 single = False
                 double = False
@@ -879,14 +893,12 @@ def _tokenize(body: str) -> list[tuple[str, str]]:
             i = j + 1 if j < n else n
             continue
         if ch == "$" and i + 1 < n and body[i + 1] == "(":
-            if i + 2 < n and body[i + 2] == "(":
-                # Start at the FIRST paren so both closers of `$((...))`
-                # are consumed: starting at the second leaves a stray `)`
-                # operator that restores command position and turns a
-                # following argument into a command (`echo $((1+2)) yes`).
-                i = _skip_balanced(body, i + 1, "(", ")")
-            else:
-                i = _skip_balanced(body, i + 1, "(", ")")
+            end = _arithmetic_end(body, i + 1) \
+                if body.startswith("((", i + 1) else None
+            # Real arithmetic consumes both closing parens. Otherwise this
+            # is an ordinary substitution (possibly starting a subshell);
+            # its commands are analysed separately by the span extractor.
+            i = end if end is not None else _skip_balanced(body, i + 1, "(", ")")
             continue
         if ch == "$" and i + 1 < n and body[i + 1] == "{":
             i = _skip_balanced(body, i + 1, "{", "}")
@@ -906,9 +918,13 @@ def _tokenize(body: str) -> list[tuple[str, str]]:
             # skip_until_do -- instead of eating a following `do` as the
             # loop variable (`for ((i=0;i<1;i++)) do yes`). Anywhere else
             # the marker is an inert non-`yes` word.
-            i = _skip_balanced(body, i, "(", ")")
-            tokens.append(("word", "(("))
-            continue
+            end = _arithmetic_end(body, i)
+            if end is not None:
+                i = end
+                tokens.append(("word", "(("))
+                continue
+            # Not arithmetic: fall through to ordinary `(` operators, so
+            # `((echo hi); yes)` exposes its command words.
         matched = False
         for op in multi:
             if body.startswith(op, i):

@@ -31,7 +31,9 @@
 #      command, and newline-separated loop lists hide nothing; neither does
 #      in-span quoting inside a heredoc body (glued, quoted-paren,
 #      multi-line, case-pattern and brace-paren forms), a `for ((...))`
-#      prelude, or a heredoc operator mentioned in a comment.
+#      prelude, or a heredoc operator mentioned in a comment. `((` without
+#      a matching arithmetic `))` reparses as subshells, exposing commands;
+#      a matching arithmetic close still keeps yes-named variables inert.
 #   3. Fail-closed pins: `$(yes | head -n 1)`, `$(yes --help)` and
 #      `$(command -v yes)` are refused even though bounded/descriptive.
 #      The gate cannot verify the bound or model per-flag semantics, so it
@@ -182,6 +184,79 @@ want_finding "arithmetic interior refuses"
 
 run_cmd 'x=$(n=$((1+1)); yes)'
 want_finding "arithmetic before yes refuses"
+
+# ---------------------------------------------------------------------------
+hdr "arithmetic openers without a matching double close reparse as subshells"
+run_cmd 'x=$(((1)); yes)'
+want_finding "arithmetic-looking subshell then yes refuses"
+
+run_cmd 'x=$((yes);yes)'
+want_finding "single subshell close then yes refuses"
+
+run_cmd 'x=$(( (1) ); yes)'
+want_finding "spaced subshell then yes refuses"
+
+run_cmd 'y=$(echo $(((1)); yes))'
+want_finding "nested arithmetic-looking subshell refuses"
+
+run_cmd 'echo "value=$((echo hi); yes)"'
+want_finding "double-quoted arithmetic-looking subshell refuses"
+
+run_cmd 'x=$((echo hi);(yes))'
+want_finding "adjacent final closes are not sufficient for arithmetic"
+
+run_cmd 'x=$((echo hi); yes); z=$((1+2))'
+want_finding "later arithmetic cannot supply the missing double close"
+
+run_cmd 'x=`((echo hi); yes)`'
+want_finding "backtick arithmetic-looking subshell refuses"
+
+run_cmd 'x=$( ((echo hi); yes) )'
+want_finding "bare double-open subshell inside dollar-paren refuses"
+
+run_cmd 'x=$((echo hi); y\
+es)'
+want_finding "continued yes after arithmetic-looking subshell refuses"
+
+cat > "$WORK/heredoc-arith-subshell.sh" <<'FIX'
+cat <<EOF
+don't $((echo hi); y'es')
+EOF
+FIX
+run_file "$WORK/heredoc-arith-subshell.sh"
+want_finding "heredoc arithmetic-looking subshell preserves quoting"
+
+run_cmd 'x=$(( (1) + 2 ))'
+want_clean "nested parentheses in genuine arithmetic"
+
+run_cmd 'x=$((yes+1))'
+want_clean "yes variable in compact genuine arithmetic"
+
+run_cmd 'x=$(echo $(( (1) + 2 )) yes)'
+want_clean "argument after genuine nested arithmetic"
+
+run_cmd 'x=$((echo hi); printf yes)'
+want_clean "arithmetic-looking subshell with printf"
+
+run_cmd 'x=`((echo hi); printf yes)`'
+want_clean "backtick subshell with printf"
+
+run_cmd 'x=$( ((yes+1)) )'
+want_clean "yes variable in bare arithmetic command"
+
+run_cmd 'x=$(( (1) + 2 )); yes | head -n 1'
+want_clean "genuine arithmetic then top-level bounded yes"
+
+run_cmd '((echo hi); yes)'
+want_clean "arithmetic-looking subshell outside substitution is out of scope"
+
+cat > "$WORK/quoted-heredoc-arith-subshell.sh" <<'FIX'
+cat <<'EOF'
+$((yes);yes)
+EOF
+FIX
+run_file "$WORK/quoted-heredoc-arith-subshell.sh"
+want_clean "quoted heredoc arithmetic-looking substitution is literal"
 
 # ---------------------------------------------------------------------------
 hdr "case bodies refuse while patterns stay allowed"

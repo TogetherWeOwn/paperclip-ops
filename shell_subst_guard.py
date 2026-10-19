@@ -67,6 +67,8 @@ REMAINING GAPS (honest, out of scope for this proven failure):
       a substitute for this check at the admission boundary.
     * Multi-hop wrappers the gate does not model (`sudo -u <user> yes`,
       `env -u <name> yes`, a function literally named `yes`) are missed.
+    * Matching is exact ASCII `yes` (quote/escape/path normalized). Unicode
+      homoglyph spellings are not modeled.
 
 INTEGRATION BOUNDARY. No Bash-tool admission hook exists in this public
 tree: the fleet-settings hook surface covered by hook_spawn_guard.sh handles

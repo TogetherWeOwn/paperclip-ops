@@ -53,6 +53,17 @@ one shell command WITHOUT executing it and refuses (exit 3) when any
                                                         171, unicode u0079
                                                         and U00000079 all
                                                         decode to yes)
+    cat <<EOF / don't $(yes) / EOF                     refused (quotes and #
+                                                        mean nothing in an
+                                                        unquoted heredoc body)
+    x=$($'\\571es')                                    refused (octal escapes
+                                                        above 255 wrap
+                                                        mod 256 to one byte)
+    x=$(n=$((1+1)); yes)                               refused (arithmetic never
+                                                        truncates the span)
+    x=$(for i in a b /newline/ do yes; done)           refused (do ends a
+                                                        newline-separated
+                                                        for list)
 
 The following stay allowed, and the suite pins each one:
 
@@ -387,7 +398,11 @@ def _strip_heredoc_bodies(text: str, quoted_only: bool = False) -> str:
     the operator lines. With `quoted_only=False` (word analysis) every heredoc
     body is dropped; with `quoted_only=True` (span extraction) only quoted-
     delimiter bodies -- which the shell never expands -- are dropped, so
-    substitution text inside unquoted heredocs is still caught.
+    substitution text inside unquoted heredocs is still caught. Kept unquoted
+    bodies have quote characters and `#` blanked: the shell runs $ and backtick
+    expansions there but gives quotes and `#` no semantics, so an apostrophe
+    in prose (`don't`) must not open quote state and a `#` must not open a
+    comment that would hide a later substitution.
     """
     lines = text.split("\n")
     out: list[str] = []
@@ -399,7 +414,11 @@ def _strip_heredoc_bodies(text: str, quoted_only: bool = False) -> str:
             continue
         if pending:
             _delim, quoted = pending[0]
-            out.append("" if (not quoted_only or quoted) else line)
+            if not quoted_only or quoted:
+                out.append("")
+            else:
+                out.append("".join(
+                    " " if c in "'\"#" else c for c in line))
             continue
         out.append(line)
         pending.extend(_heredoc_delims(line))
@@ -467,6 +486,9 @@ def extract_substitutions(command: str) -> list[str]:
     cannot prove the shell would reject them). Content lines of
     quoted-delimiter heredocs are dropped first: the shell never expands
     them, so `$(yes)` written there is literal stdin, not a substitution.
+    Kept unquoted-heredoc bodies have quotes and `#` blanked first (only $
+    and backtick expansions are live there), so prose punctuation hides no
+    span.
     """
     command = _strip_heredoc_bodies(command, quoted_only=True)
     spans: list[str] = []
@@ -567,9 +589,17 @@ def extract_substitutions(command: str) -> list[str]:
                 j += 2
             if j < n and command[j] == "(":
                 if j + 1 < n and command[j + 1] == "(":
-                    end = _skip_balanced(command, j + 1, "(", ")")
-                    interior = command[j + 2:end - 1] \
-                        if end - 1 > j + 2 else ""
+                    # Start at the FIRST paren so both closers of `((...))`
+                    # are consumed: starting at the second lets the final `)`
+                    # pop an enclosing `$(` span (`x=$(n=$((1+1)); yes)`).
+                    end = _skip_balanced(command, j, "(", ")")
+                    if end < n or command[end - 2:end] == "))":
+                        interior = command[j + 2:end - 2] \
+                            if end - 2 > j + 2 else ""
+                    else:
+                        # Unclosed arithmetic: scan the whole tail for nested
+                        # spans instead of chopping a phantom closer.
+                        interior = command[j + 2:]
                     if interior:
                         spans.extend(extract_substitutions(interior))
                     i = end
@@ -931,7 +961,9 @@ def _normalize_word(word: str) -> str:
                                 digits += word[k]
                                 k += 1
                             try:
-                                buf.append(chr(int(digits, 8)))
+                                # Bash stores one byte: values above 255 wrap
+                                # (`\571` is 377, byte 121, the letter `y`).
+                                buf.append(chr(int(digits, 8) % 256))
                                 j = k
                                 continue
                             except ValueError:
@@ -1086,7 +1118,11 @@ def body_has_unbounded_yes(body: str) -> bool:
             cmd_pos = False
             i += 1
             continue
-        if val in _RESET_KEYWORDS and cmd_pos and not skip_one:
+        # `do` also counts while a `for`/`select` list is open even when
+        # command position is off (a newline-separated list): an unquoted
+        # `do` always terminates the list in Bash, never a list item.
+        if val in _RESET_KEYWORDS and not skip_one \
+                and (cmd_pos or (val == "do" and for_list)):
             # `do` after a `for ((...))` prelude is handled above; a plain
             # `do` resets like the other keywords.
             cmd_pos = True

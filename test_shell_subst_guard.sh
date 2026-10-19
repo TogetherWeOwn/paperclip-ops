@@ -26,7 +26,9 @@
 #      inside double quotes or a `${#..}` length expansion never hides a
 #      substitution; neither does a `case` word in argument position, a
 #      paren inside double quotes, or a `$'...'` escape. ANSI-C hex, octal
-#      and unicode escapes all decode before the `yes` comparison.
+#      (mod-256 wrapped) and unicode escapes all decode before the `yes`
+#      comparison. Quotes/`#` in unquoted heredoc bodies, arithmetic before a
+#      command, and newline-separated loop lists hide nothing.
 #   3. Fail-closed pins: `$(yes | head -n 1)`, `$(yes --help)` and
 #      `$(command -v yes)` are refused even though bounded/descriptive.
 #      The gate cannot verify the bound or model per-flag semantics, so it
@@ -172,6 +174,9 @@ want_finding "default-expansion interior refuses"
 
 run_cmd 'x=$(( $(yes) + 1 ))'
 want_finding "arithmetic interior refuses"
+
+run_cmd 'x=$(n=$((1+1)); yes)'
+want_finding "arithmetic before yes refuses"
 
 # ---------------------------------------------------------------------------
 hdr "case bodies refuse while patterns stay allowed"
@@ -368,6 +373,9 @@ want_finding "short unicode escape refuses"
 run_cmd 'x=$($'"'"'\U00000079es'"'"')'
 want_finding "long unicode escape refuses"
 
+run_cmd 'x=$($'"'"'\571es'"'"')'
+want_finding "wrapped octal escape refuses"
+
 # ---------------------------------------------------------------------------
 hdr "top-level case tracking never swallows following commands"
 run_cmd 'case $x in a) v=$(date);; esac; yes | head -1'
@@ -384,6 +392,32 @@ want_finding "nested case in body refuses"
 
 run_cmd 'x=$(if (echo) then yes; fi)'
 want_finding "then after paren-close refuses"
+
+# ---------------------------------------------------------------------------
+hdr "do ends a newline-separated loop list"
+cat > "$WORK/for-newline-do.sh" <<'EOF'
+x=$(for i in a b
+do yes
+done)
+EOF
+run_file "$WORK/for-newline-do.sh"
+want_finding "newline-separated for list refuses"
+
+cat > "$WORK/for-noin-newline-do.sh" <<'EOF'
+x=$(for i
+do yes
+done)
+EOF
+run_file "$WORK/for-noin-newline-do.sh"
+want_finding "for without in refuses at newline do"
+
+cat > "$WORK/for-newline-allow.sh" <<'EOF'
+x=$(for i in a b
+do printf "%s" "$i"
+done)
+EOF
+run_file "$WORK/for-newline-allow.sh"
+want_clean "newline-separated for list with printf"
 
 # ---------------------------------------------------------------------------
 hdr "fail-closed pins are refused, never silently weakened"
@@ -406,6 +440,30 @@ EOF
 FIX
 run_file "$WORK/unquoted-heredoc.sh"
 want_finding "unquoted-heredoc substitution refuses"
+
+cat > "$WORK/heredoc-apostrophe.sh" <<'FIX'
+cat <<EOF
+don't $(yes)
+EOF
+FIX
+run_file "$WORK/heredoc-apostrophe.sh"
+want_finding "heredoc apostrophe hides nothing"
+
+cat > "$WORK/heredoc-apostrophe-bt.sh" <<'FIX'
+cat <<EOF
+don't `yes`
+EOF
+FIX
+run_file "$WORK/heredoc-apostrophe-bt.sh"
+want_finding "heredoc apostrophe hides no backtick"
+
+cat > "$WORK/heredoc-hash.sh" <<'FIX'
+cat <<EOF
+# not a comment $(yes)
+EOF
+FIX
+run_file "$WORK/heredoc-hash.sh"
+want_finding "heredoc hash hides nothing"
 
 # ---------------------------------------------------------------------------
 hdr "safe fixed-output checks stay allowed"
@@ -449,6 +507,9 @@ want_clean "comment inside substitution"
 run_cmd 'x=$((1 + 2))'
 want_clean "arithmetic expansion"
 
+run_cmd 'x=$(echo $((1+2)))'
+want_clean "echo with arithmetic argument"
+
 run_cmd 'x=$((yes + 1))'
 want_clean "yes-named variable in arithmetic"
 
@@ -474,6 +535,14 @@ EOF
 FIX
 run_file "$WORK/quoted-heredoc.sh"
 want_clean "quoted-heredoc body is literal"
+
+cat > "$WORK/quoted-heredoc-apos.sh" <<'FIX'
+cat <<'EOF'
+don't $(yes)
+EOF
+FIX
+run_file "$WORK/quoted-heredoc-apos.sh"
+want_clean "quoted-heredoc apostrophe body is literal"
 
 cat > "$WORK/heredoc-content.sh" <<'FIX'
 echo $(cat <<EOF

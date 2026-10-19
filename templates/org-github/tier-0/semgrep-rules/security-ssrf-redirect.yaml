@@ -360,6 +360,10 @@ rules:
           - pattern: httpx.AsyncClient().stream($M, $URL, ...)
           - pattern: urllib.request.urlopen($URL, ...)
           - pattern: urllib.request.urlopen(..., url=$URL, ...)
+          - pattern: urllib.request.urlretrieve($URL, ...)
+          - pattern: urllib.request.urlretrieve(..., url=$URL, ...)
+          - pattern: urllib.request.build_opener(...).open($URL, ...)
+          - pattern: urllib.request.build_opener(...).open(..., fullurl=$URL, ...)
       # Pure literals never reach the regex (see the JS rule); the fragment
       # list stays narrow — request accessors only — so configured constants
       # (SLACK_WEBHOOK_URL, settings.EXTERNAL_API_URL) stay silent. The
@@ -417,6 +421,10 @@ rules:
       - pattern-not: httpx.AsyncClient().$METHOD(..., url="...", ...)
       - pattern-not: urllib.request.urlopen("...", ...)
       - pattern-not: urllib.request.urlopen(..., url="...", ...)
+      - pattern-not: urllib.request.urlretrieve("...", ...)
+      - pattern-not: urllib.request.urlretrieve(..., url="...", ...)
+      - pattern-not: urllib.request.build_opener(...).open("...", ...)
+      - pattern-not: urllib.request.build_opener(...).open(..., fullurl="...", ...)
       # Unanchored (see the JS rule): f-string, concat and str()-wrapped
       # request shapes must fire, not just the bare request.args["u"] form.
       # The $METHOD constraints live inside their own branches so the

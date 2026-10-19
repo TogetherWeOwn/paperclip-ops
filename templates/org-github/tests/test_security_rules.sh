@@ -767,6 +767,14 @@ def h(request):
     httpx.AsyncClient().head(url=request.args["u"])
     urllib.request.urlopen(url=request.args["u"])
     urllib.request.urlopen(url="https://x/request.html")
+    urllib.request.urlretrieve(request.args["u"], "/tmp/x")
+    urllib.request.urlretrieve(url=request.args["u"])
+    urllib.request.build_opener().open(request.args["u"])
+    urllib.request.build_opener().open(fullurl=request.args["u"])
+    urllib.request.urlretrieve("https://x/request.html", "/tmp/x")
+    urllib.request.urlretrieve(url="https://x/request.html")
+    urllib.request.build_opener().open("https://x/request.html")
+    urllib.request.build_opener().open(fullurl="https://x/request.html")
 EOF
     # Redirect fixtures: literal targets and safe builders stay silent
     # (both argument positions, literal-URL construction, url_for), while
@@ -945,10 +953,10 @@ for ln in (23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37, 38, 39, 40, 41, 4
           and ln not in hits.get(("fx-ssrf.ts", "tier0-ssrf-dynamic-fetch-js"), set()),
           f"behavioural fx-ssrf.ts:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.ts", "tier0-open-redirect-js")
-expect_hit("fx-ssrf.py", "tier0-ssrf-dynamic-url-py", (4, 5, 6, 7, 8, 13, 15, 17, 18, 19, 21, 22, 23, 40, 41, 42, 43, 44, 45, 46, 47, 49, 51, 53, 55, 57, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149))
+expect_hit("fx-ssrf.py", "tier0-ssrf-dynamic-url-py", (4, 5, 6, 7, 8, 13, 15, 17, 18, 19, 21, 22, 23, 40, 41, 42, 43, 44, 45, 46, 47, 49, 51, 53, 55, 57, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 151, 152, 153, 154))
 check(3 not in hits.get(("fx-ssrf.py", "tier0-ssrf-dynamic-url-py"), set()),
       "behavioural fx-ssrf.py:3 literal request stays silent")
-for ln in (9, 10, 11, 12, 14, 16, 20, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 48, 50, 52, 54, 56, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 125, 126, 127, 128, 129, 150):
+for ln in (9, 10, 11, 12, 14, 16, 20, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 48, 50, 52, 54, 56, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 125, 126, 127, 128, 129, 150, 155, 156, 157, 158):
     check(ln not in hits.get(("fx-ssrf.py", "tier0-ssrf-dynamic-url-py"), set()),
           f"behavioural fx-ssrf.py:{ln} literal/constant URL stays silent")
 expect_silent("fx-ssrf.py", "tier0-open-redirect-py")

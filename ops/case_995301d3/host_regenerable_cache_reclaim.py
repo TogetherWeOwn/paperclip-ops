@@ -207,7 +207,12 @@ def registry_apply_decision(entries, entry_id):
         return (False, "entry state is %r, not active" % entry.get("state"))
     if entry.get("role") != "writer":
         return (False, "entry role is %r, not writer" % entry.get("role"))
-    if REGISTRY_WRITE_TARGET not in (entry.get("writes") or []):
+    writes = entry.get("writes")
+    if writes is None:
+        writes = []
+    if not isinstance(writes, list):
+        return (False, "entry writes is not a list")
+    if REGISTRY_WRITE_TARGET not in writes:
         return (False, "entry does not declare %s" % REGISTRY_WRITE_TARGET)
     return (True, "registry entry %r is an active writer" % entry_id)
 

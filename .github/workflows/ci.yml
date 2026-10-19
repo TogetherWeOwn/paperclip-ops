@@ -1218,6 +1218,19 @@ jobs:
       - name: bounded shadow-reader suite
         run: ./test_case_a38f4d21_shadow_reader_bounded.sh
 
+      # Deferred execution-image packet, ported with a resolved non-root
+      # startup contract (final USER 1000:1000; the inherited entrypoint
+      # execs the application directly without root-only remap or volume
+      # repair). Hermetic source-only checks: manifest consistency, the
+      # fail-closed negative controls, and the Stage-B attestation-policy
+      # suite. No network, no credentials, no image build.
+      - name: execution-image source-only carrier suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: |
+          python3 -B execution-image/test_manifest.py
+          python3 -B execution-image/validate.py execution-image/manifest.json
+          python3 -B execution-image/test_verify_result_policy.py
+
       # case_56fff4c6. Monitoring of the monitor (parent case_66436e78 item 7):
       # off-host Gatus heartbeat probe + staging-only round-trip harness.
       # Offline: stub Gatus/sink/verify server on 127.0.0.1, stub tools, a

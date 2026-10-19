@@ -304,18 +304,39 @@ def _plain_next_for(code, in_single_end, in_double_end, depth_end,
         # branches below. After scalar text (`foo &a`) the line may still
         # continue as plain text. A value may also carry an anchor and a
         # tag as a pair (`&a !!str`): walk back over the whole trailing
-        # property chain before applying the value-position test. Tokens
-        # holding `:` are key boundaries, not chain links, so the walk
-        # stops at them (a `:` before the last token keeps the old verdict).
+        # property chain before applying the value-position test. A token
+        # starting with `&`/`!` is a property regardless of colons inside
+        # it (anchor names may hold `:`, e.g. `&a:b`); only a token that
+        # is not a property can be a key boundary. A verbatim `!<...>`
+        # span is consumed to its closing `>` before tokenizing, never
+        # split on a comma inside its URI. The first property may be glued
+        # to its quoted key's colon (`"k":&a !!str`): a real quoted-key
+        # colon inside the fused token still marks the value boundary.
         j = m.start() - 1
         while j >= 0 and stripped[j] in " \t":
             j -= 1
         while j >= 0:
+            if stripped[j] == ">":
+                idx = stripped.rfind("!<", 0, j + 1)
+                if (idx != -1
+                        and not any(c in " \t" for c in stripped[idx:j + 1])
+                        and (idx == 0 or stripped[idx - 1] in " \t,[]{}:")):
+                    j = idx - 1
+                    while j >= 0 and stripped[j] in " \t":
+                        j -= 1
+                    continue
             k = j
             while k >= 0 and stripped[k] not in " \t,[]{}":
                 k -= 1
             tok = stripped[k + 1:j + 1]
-            if not tok or tok[0] not in "&!" or ":" in tok:
+            if not tok or tok[0] not in "&!":
+                for c_idx in range(k + 1, j + 1):
+                    if stripped[c_idx] != ":":
+                        continue
+                    if c_idx + 1 > j or stripped[c_idx + 1] not in "&!":
+                        continue
+                    if _quoted_key_colon(stripped, c_idx, closed_quote):
+                        return False
                 break
             j = k
             while j >= 0 and stripped[j] in " \t":

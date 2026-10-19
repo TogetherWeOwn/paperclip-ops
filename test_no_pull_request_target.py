@@ -108,6 +108,14 @@ PASS = {
         '  push:' + "\n"
         '    branches:' + "\n"
         '      - &b "main"' + "\n" + JOB),
+    # Paperclip Review round 16: push controls in the chain-walk shapes (the
+    # old walk over-pended, so these flagged as unclosed brackets).
+    "push colon-anchor-tag value next line passes": (
+        'on: {push: {}, x: &a:b !!str' + "\n"
+        '"v # c"}' + "\n" + JOB),
+    "push glued-key chain value next line passes": (
+        'on: {push: {}, x: {"k":&a !!str' + "\n"
+        '"v # c"}}' + "\n" + JOB),
 }
 
 FAIL = {
@@ -901,6 +909,42 @@ FAIL = {
         'on: {workflow_dispatch: {inputs: {x: {description: &a !!str' + "\n"
         '' + "\n"
         '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    # Paperclip Review round 16, finding 1: the chain walk stopped at any
+    # token holding `:` and split verbatim tags on commas, so an earlier
+    # property named `&a:b` or a verbatim `!<a,b>` over-pended and the
+    # next line's value quote never opened. All read clean before.
+    "colon-anchor-tag next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a:b !!str' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "comma-verbatim-anchor next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<a,b> &a' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "colon-verbatim-anchor next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<a:b> &a' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "full-verbatim-anchor next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<tag:yaml.org,2002:str> &a' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    # Paperclip Review round 16, finding 2: the first property glued to its
+    # quoted key's colon (`"k":&a !!str`) fused into one token starting with
+    # a quote, so the walk broke and over-pended. All read clean before,
+    # including across a blank line.
+    "glued-key chain next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description":&a !!str' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}}' + "\n" + JOB),
+    "spaced-glued-key chain next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description" :&a !!str' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}}' + "\n" + JOB),
+    "glued-key verbatim chain next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description":&a !<a,b>' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}}' + "\n" + JOB),
+    "squote-glued-key chain next-line value hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {'description':&a !!str" + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}}' + "\n" + JOB),
+    "glued-key chain blank next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description":&a !!str' + "\n"
+        '' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}}' + "\n" + JOB),
 }
 
 

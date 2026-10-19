@@ -1371,7 +1371,23 @@ for fallback_shape in \
   '@K@ = process.env.@E@ or "@F@"~~fallbackliteral12' \
   '@K@ = os.environ.get("@E@", "@F@")~~fallbackliteral12' \
   '@K@ = os.getenv("@E@", "@F@")~~fallbackliteral12' \
-  '@K@ = ENV.fetch("@E@", "@F@")~~fallbackliteral12'; do
+  '@K@ = ENV.fetch("@E@", "@F@")~~fallbackliteral12' \
+  '@K@ = config.get("credentials", "openai_api_key") or "@F@"~~fallbackliteral12' \
+  '@K@ = config.get("credentials", "openai_api_key") || "@F@"~~fallbackliteral12' \
+  '@K@ = config.get("credentials", "openai_api_key") ?? "@F@"~~fallbackliteral12' \
+  '@K@ = settings.get("credentials", "openai_api_key") or "@F@"~~fallbackliteral12' \
+  '@K@ = os.environ.get("A", os.environ.get("B", "@F@"))~~fallbackliteral12' \
+  '@K@ = os.environ.get("A", os.getenv("B", "@F@"))~~fallbackliteral12' \
+  '@K@ = os.environ.setdefault("@E@", "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.pop("@E@", "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.get("A", os.environ.setdefault("B", "@F@"))~~fallbackliteral12' \
+  '@K@ = os.environ.get("A", os.environ.pop("B", "@F@"))~~fallbackliteral12' \
+  '@K@ = config.get("credentials", "openai_api_key") or ("@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.get ("@E@", "@F@")~~fallbackliteral12' \
+  '@K@ = os.getenv ("@E@", "@F@")~~fallbackliteral12' \
+  '@K@ = config.get("credentials", "openai_api_key") or "@F@"~~abcdefghijkl' \
+  '@K@ = os.environ.get("A", config.get("section", "key")) or "@F@"~~fallbackliteral12' \
+  '@K@ = os.environ.get("@E@", ("@F@"))~~fallbackliteral12'; do
   new_repo
   render_tpl "${fallback_shape%%~~*}" "${fallback_shape##*~~}" > "$REPO_DIR/app.py"
   printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
@@ -1387,6 +1403,20 @@ for lookup_shape in \
   '@K@ = os.environ.get("@E@", "")' \
   '@K@ = config.get("section", "openai_api_key")' \
   '@K@ = settings.get("section", "openai_api_key")' \
+  '@K@ = config.get("credentials", "openai_api_key")' \
+  '@K@ = config.get("credentials", "openai_api_key") or "short"' \
+  '@K@ = config.get("credentials", "openai_api_key") or "abcdefghijk"' \
+  '@K@ = config.get("credentials", "openai_api_key") or fallback_variable' \
+  '@K@ = os.environ.get("A", os.environ.get("LONG_ENVIRONMENT_NAME"))' \
+  '@K@ = os.environ.get("A", config.get("section", "openai_api_key"))' \
+  '@K@ = os.environ.setdefault("LONG_ENVIRONMENT_NAME")' \
+  '@K@ = os.environ.pop("LONG_ENVIRONMENT_NAME", None)' \
+  '@K@ = config.get("section", "or fallbackliteral12")' \
+  '@K@ = config.get("section", "|| fallbackliteral12")' \
+  '@K@ = config.get("section", "os.getenv(X, fallbackliteral12)")' \
+  '@K@ = config.get("credentials", "openai_api_key"); other = os.getenv("B", "fallbackliteral12")' \
+  '@K@ = config.get("credentials", "openai_api_key"); other = x or "fallbackliteral12"' \
+  'const c = { @C@: config.get("section", "openai_api_key"), other: os.getenv("B", "fallbackliteral12") };' \
   'const c = { @C@: process.env.@E@, baseURL: "https://api.openai.com/v1" };' \
   'const c = { @C@: process.env.@E@, "x-long-header-name": 1 };'; do
   new_repo

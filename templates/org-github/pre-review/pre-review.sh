@@ -370,14 +370,6 @@ API_KEY_SECRET_RE="api[_-]?key[\"'[:space:]]*[:=][\"'[:space:]]*([\"'][A-Za-z0-9
 # settings.X, config.X). Quoted values never qualify, since a quoted lookup
 # is a string literal, and the check is case-sensitive on the lookup prefix.
 API_KEY_LOOKUP_RE="^[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][\"'[:space:]]*[:=][[:space:]]*(process\\.env\\.|os\\.environ(\\.|$)|import\\.meta\\.env\\.|ENV\\.|settings\\.|config\\.)"
-# A lookup exempts only its own value: a quoted 12+ literal behind any lookup
-# via `||`, `??` or `or` is a credential. A second call argument is a default
-# only for getters that take one (os.environ.get, os.getenv, ENV.fetch);
-# config.get(section, option) and settings.get(...) take a key name, not a
-# default, so they never trigger on the second argument.
-API_KEY_FALLBACK_OP_RE="${API_KEY_LOOKUP_RE#^}[^[:space:]]*(([[:space:]]*(\\|\\||\\?\\?)|[[:space:]]+or)[[:space:]]*[\"'][^\"']{12,}[\"'])"
-API_KEY_FALLBACK_ARG_RE="[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][\"'[:space:]]*[:=][[:space:]]*(os\\.environ\\.get|os\\.getenv|ENV\\.fetch)\\([^(),]*,[[:space:]]*[\"'][^\"']{12,}[\"']"
-API_KEY_FALLBACK_RE="(${API_KEY_FALLBACK_OP_RE}|${API_KEY_FALLBACK_ARG_RE})"
 RUST_TYPE_PATH="(([A-Za-z_][A-Za-z0-9_]*::)*${RUST_TYPE_NAME})"
 RUST_TYPE_GENERIC_REF="(&[[:space:]]*(mut[[:space:]]+)?('[[:alpha:]_][[:alnum:]_]*[[:space:]]*)?)?"
 RUST_TYPE_GENERIC_ARG1="${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}([[:space:]]*<${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}(,[[:space:]]*${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH})*[[:space:]]*>)?"
@@ -424,11 +416,86 @@ edge_paren_value_is_literal() {
   fi
   return 1
 }
+# Scan each lookup RHS with quote and delimiter context. Regex alone cannot
+# distinguish a key-name argument from a nested default, or traverse argument
+# whitespace without interpreting operators inside quoted key names. Only the
+# second argument of actual environment-default calls is a default; config and
+# settings calls keep their section/key exemption. Stop at the RHS boundary so
+# an unrelated sibling property or statement does not become a credential.
+api_key_fallback_hit() {
+  # A scanner error is a hit (fail closed). No pipeline/early grep can truncate
+  # input or turn an error into a clean result.
+  ! awk '
+    function fallback(s,    i,j,ch,q,word,depth,want,args,defaults,closer) {
+      depth = 0; want = 0; word = ""
+      for (i = 1; i <= length(s); i++) {
+        ch = substr(s, i, 1)
+        if (ch ~ /[[:space:]]/) continue
+        if (ch == "\"" || ch == sq) {
+          q = ch; j = i + 1
+          while (j <= length(s)) {
+            ch = substr(s, j, 1)
+            if (ch == "\\") { j += 2; continue }
+            if (ch == q) break
+            j++
+          }
+          if (want && j - i - 1 >= 12) return 1
+          i = j; word = ""; want = 0; continue
+        }
+        if (ch ~ /[[:alnum:]_.$]/) {
+          j = i
+          while (substr(s, j, 1) ~ /[[:alnum:]_.$]/ && j <= length(s)) j++
+          word = substr(s, i, j - i)
+          want = (word == "or")
+          i = j - 1; continue
+        }
+        if (ch == "(" || ch == "[" || ch == "{") {
+          depth++
+          closer[depth] = (ch == "(" ? ")" : (ch == "[" ? "]" : "}"))
+          defaults[depth] = (ch == "(" && word ~ /^(os[.]environ[.](get|setdefault|pop)|os[.]getenv|ENV[.]fetch)$/)
+          args[depth] = 1
+          # Grouping parentheses retain a pending literal, calls do not.
+          if (ch != "(" || (word != "" && word != "or")) want = 0
+          word = ""; continue
+        }
+        if (ch == ")" || ch == "]" || ch == "}") {
+          if (depth == 0) break
+          if (ch != closer[depth]) return 1
+          depth--; word = ""; want = 0; continue
+        }
+        if (ch == ",") {
+          if (depth == 0) break
+          args[depth]++
+          want = (defaults[depth] && args[depth] == 2)
+          word = ""; continue
+        }
+        if (substr(s, i, 2) == "||" || substr(s, i, 2) == "??") {
+          want = 1; word = ""; i++; continue
+        }
+        if (ch == ";" && depth == 0) break
+        word = ""; want = 0
+      }
+      return 0
+    }
+    BEGIN {
+      sq = sprintf("%c", 39)
+      assignment = "[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][\"" sq "[:space:]]*[:=][[:space:]]*"
+      lookup = "^(process[.]env[.]|os[.]environ([.]|[[]|$)|os[.]getenv[[:space:]]*[(]|import[.]meta[.]env[.]|ENV[.]|settings[.]|config[.])"
+    }
+    {
+      rest = $0
+      while (match(rest, assignment)) {
+        rest = substr(rest, RSTART + RLENGTH)
+        if (rest ~ lookup && fallback(rest)) hit = 1
+      }
+    }
+    END { exit (hit ? 1 : 0) }
+  ' <<<"$1"
+}
 # True when the text holds an api-key assignment whose value is not an
 # environment/config lookup, or a lookup followed by a quoted 12+ literal
-# fallback (`|| "..."`, `?? "..."`, `or "..."`, or a second argument to
-# os.environ.get / os.getenv / ENV.fetch): the lookup exempts its own value,
-# never a literal that rides behind it.
+# fallback/default: the lookup exempts its own value, never a literal that
+# rides behind it.
 # Matches are collected first and filtered after: a pipeline into `grep -q`
 # could be cut short by SIGPIPE and read as a miss.
 api_key_literal_hit() {
@@ -437,7 +504,7 @@ api_key_literal_hit() {
   if [[ -n "$matches" && -n "$(grep -Ev "$API_KEY_LOOKUP_RE" <<<"$matches" || true)" ]]; then
     return 0
   fi
-  grep -Eq "$API_KEY_FALLBACK_RE" <<<"$1"
+  api_key_fallback_hit "$1"
 }
 # True when the byte range [off, off+len) lies wholly inside one region of a
 # space-separated "start:end ..." region list.

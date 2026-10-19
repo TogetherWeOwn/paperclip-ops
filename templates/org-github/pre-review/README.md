@@ -53,11 +53,13 @@ the original added bytes in every file, so nothing below can suppress them.
   `import.meta.env.`, `ENV.`, `settings.`, `config.`) passes; the same text in
   quotes is a string literal and fails. A lookup exempts only its own value: a
   quoted 12+ literal behind it (`|| "..."`, `?? "..."`, `or "..."`) fails, as
-  does a second argument to a getter that takes a default
-  (`os.environ.get("NAME", "...")`, `os.getenv("NAME", "...")`,
-  `ENV.fetch("NAME", "...")`). A second argument to `config.get` or
-  `settings.get` is a key name, not a default, and passes. An unquoted
-  fallback is not examined.
+  does a second argument to an environment method that takes a default
+  (`os.environ.get`, `os.environ.setdefault`, `os.environ.pop`, `os.getenv`,
+  `ENV.fetch`). The fallback scan tracks quotes and delimiters, including
+  whitespace and nested default calls; operators inside key-name strings do
+  not count. A second argument to `config.get` or `settings.get` is a key
+  name, not a default, and passes. Unrelated sibling properties/statements
+  are outside the lookup expression. An unquoted fallback is not examined.
 - **Call and parenthesis forms.** `token(...)`/`token = (...)` values fail
   only when literal-shaped: a quoted 12+ value, or an unquoted run that is not
   a bare identifier (underscore) or a CamelCase type reference. Base64 padding

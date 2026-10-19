@@ -1793,7 +1793,7 @@ if [ "$(jq -j '.body // ""' "$WORK/nl_pr.json" | od -An -tx1 | tr -d ' \n')" = "
 else bad "jq -j preserves a trailing newline without adding one" "jq -j added or dropped a byte"; fi
 
 # ===========================================================================
-hdr "compat profiles: reviewed repo-specific CI profiles fail closed (G0-G28)"
+hdr "compat profiles: reviewed repo-specific CI profiles fail closed (G0-G31)"
 
 # The profile registry is co-located with the gate, so these cases run a copy
 # of the tool from a temp dir whose upstream_ci_profiles.json the suite owns.
@@ -1818,6 +1818,10 @@ data = {"schema_version": 1, "profiles": {
         "fork_required": ["ci / verify", "ci / e2e", "Paperclip Review"],
         "upstream_required": ["ci / verify", "ci / e2e", "Greptile Review"],
         "status": "reviewed", "evidence": ev("master@fixture")},
+    "paperclipai/paperclip": {
+        "fork_required": ["ci / verify", "ci / e2e", "Paperclip Review"],
+        "upstream_required": ["ci / verify", "ci / e2e", "Greptile Review"],
+        "status": "reviewed", "evidence": ev("alias-preserved@fixture")},
     "TogetherWeOwn/CLIProxyAPI": {
         "fork_required": fork_names, "upstream_required": up_names,
         "status": "reviewed", "evidence": ev("dev@e9af1ba")},
@@ -2161,6 +2165,50 @@ expect "G27 keeper passes Gate A with a skipped extra" 0 "GATE A: PASS"
 
 M="$WORK/c_k28"; mk_cli_mirror "$M" bad-extra; run_compat_check "$M"
 expect "G28 non-keeper ignores the same failed extra" 0 "GATE A: PASS"
+
+# Keeper upstream mirror: the preserved paperclipai/paperclip profile keeps
+# the legacy any-run strictness for extras on the upstream-ci side.
+# Overwrites an upstream fixture's check runs with the keeper upstream
+# names on the exact head. Args: dir [mutation]
+mk_keeper_upstream_runs() {
+  python3 - "$1/check_runs.json" "$SHA" "${2:-good}" <<'PYRUNS'
+import json, sys
+path, sha, mut = sys.argv[1], sys.argv[2], sys.argv[3]
+def r(name, status, concl, i, ts="2026-10-06T03:00:00Z"):
+    return {"name": name, "status": status, "conclusion": concl,
+            "completed_at": ts, "started_at": ts, "id": i,
+            "head_sha": sha, "app": {"slug": "github-actions"},
+            "output": {"title": "", "summary": ""}}
+runs = [r("ci / verify", "completed", "success", 41),
+        r("ci / e2e", "completed", "success", 42),
+        r("Greptile Review", "completed", "success", 43)]
+if mut == "bad-extra":
+    runs.append(r("docs-link-check", "completed", "failure", 51, ts="2026-10-06T04:00:00Z"))
+elif mut == "pending-extra":
+    runs.append(r("docs-link-check", "queued", None, 51, ts="2026-10-06T04:00:00Z"))
+json.dump({"total_count": len(runs), "check_runs": runs}, open(path, "w"))
+PYRUNS
+}
+mk_keeper_ready_world() { # dir upstream-runs-mutation
+  local f="$1"
+  mkdir -p "$f/mirror" "$f/upstream"
+  mk_keeper_mirror "$f/mirror" good
+  mk_upstream "$f/upstream"
+  mk_keeper_upstream_runs "$f/upstream" "${2:-good}"
+}
+run_keeper_ready() { OUT="$("$CTOOL" ready --upstream-pr 15142 --upstream-repo paperclipai/paperclip --mirror-pr 52 --fork-repo TogetherWeOwn/paperclip --fixtures "$1" --dry-run 2>&1)"; RC=$?; }
+
+# G29-G31 preserved upstream keeper: a failed extra fails upstream-ci, an
+# unfinished extra pends it, and the world is ready with no extras.
+write_compat_profiles good
+F="$WORK/c_k29"; mk_keeper_ready_world "$F" good; run_keeper_ready "$F"
+expect "G29 keeper upstream world is ready with no extras" 0 "READY"
+
+F="$WORK/c_k30"; mk_keeper_ready_world "$F" bad-extra; run_keeper_ready "$F"
+expect "G30 keeper fails upstream-ci on a failed extra run" 1 "FAIL.*upstream-ci" "docs-link-check"
+
+F="$WORK/c_k31"; mk_keeper_ready_world "$F" pending-extra; run_keeper_ready "$F"
+expect "G31 keeper fails upstream-ci [pending] on an unfinished extra run" 1 "FAIL.*upstream-ci" "\[pending\]"
 
 # ===========================================================================
 hdr "dispatch: unmeasured runs never pass"

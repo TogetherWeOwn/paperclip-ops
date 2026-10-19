@@ -24,8 +24,9 @@
 #     of $DATA) is remapped onto $DATA before resolving, so a link
 #     created inside the container is judged by its real target instead
 #     of failing forever on the host, where the data lives elsewhere.
-#     Only the first hop is remapped: a container-absolute symlink chain
-#     fails closed here, so keep protected trees chain-free;
+#     Every hop of a chain is remapped the same way (file or directory
+#     component), so a container-absolute chain is judged by its real
+#     container-visible target instead of resolving host-side;
 #   - when the bounded Cargo pool is required (or present as a
 #     mountpoint), its ROOT and policy.json are judged the same way,
 #     NON-recursively: slot directories beneath the root stay
@@ -97,7 +98,7 @@ check_path() { # PATH -- owned by EXPECT_OWNER, no group/other write, no symlink
 }
 
 check_tree() { # ROOT -- every descendant judged, verify-only (see header)
-  local root="$1" euid="${EXPECT_OWNER%%:*}" egid="${EXPECT_OWNER##*:}" hits links link raw cand target tst tuid tgid tmode
+  local root="$1" euid="${EXPECT_OWNER%%:*}" egid="${EXPECT_OWNER##*:}" hits links link raw cand mapped target tst tuid tgid tmode found prefix rest comp hops
   if ! hits="$(find "$root" -xdev ! -type l \( ! -user "$euid" -o ! -group "$egid" -o -perm /022 \) -print 2>/dev/null)"; then
     printf 'FAIL: cannot scan protected tree for baseline violations: %s\n' "$root"
     return 1
@@ -118,17 +119,40 @@ check_tree() { # ROOT -- every descendant judged, verify-only (see header)
     # way), so remap that prefix before resolving on the host. Relative
     # targets resolve via the link itself; other absolute targets keep
     # host semantics. The mapped target is then judged exactly like any
-    # other resolved target — remapping never exempts it. Single hop
-    # only: a second container-absolute hop still resolves on the host
-    # and fails closed (see header).
-    raw="$(readlink -- "$link" 2>/dev/null)" \
-      || { printf 'FAIL: protected symlink cannot be read: %s\n' "$link"; return 1; }
-    case "$raw" in
-      /paperclip) cand="$DATA_DIR" ;;
-      /paperclip/*) cand="$DATA_DIR/${raw#/paperclip/}" ;;
-      /*) cand="$raw" ;;
-      *) cand="$link" ;;
-    esac
+    # other resolved target — remapping never exempts it. Every hop is
+    # remapped, file or directory component alike: a later
+    # container-absolute hop resolved host-side could pass owner/mode on
+    # a host /paperclip path while the container-visible $DATA target
+    # stays agent-writable, so the chain is walked hop by hop and each
+    # /paperclip raw target is remapped before resolving further.
+    cand="$link" hops=0
+    # The component walk below tests absolute prefixes; anchor a relative
+    # root (find prints paths as given) to the scan's working directory.
+    [[ "$cand" == /* ]] || cand="$PWD/$cand"
+    while :; do
+      # Leftmost symlink component of $cand, if any: the link itself on
+      # the first pass, then each intermediate in turn.
+      prefix=""; found=""; rest="${cand#/}"
+      while [[ -n "$rest" ]]; do
+        comp="${rest%%/*}"
+        prefix="$prefix/$comp"
+        if [[ -L "$prefix" ]]; then found="$prefix"; break; fi
+        [[ "$rest" == */* ]] || break
+        rest="${rest#*/}"
+      done
+      [[ -n "$found" ]] || break
+      (( ++hops > 40 )) \
+        && { printf 'FAIL: protected symlink chain too deep: %s\n' "$link"; return 1; }
+      raw="$(readlink -- "$found" 2>/dev/null)" \
+        || { printf 'FAIL: protected symlink cannot be read: %s\n' "$link"; return 1; }
+      case "$raw" in
+        /paperclip) mapped="$DATA_DIR" ;;
+        /paperclip/*) mapped="$DATA_DIR/${raw#/paperclip/}" ;;
+        /*) mapped="$raw" ;;
+        *) mapped="$(dirname -- "$found")/$raw" ;;
+      esac
+      cand="$mapped${cand#$found}"
+    done
     # readlink -f tolerates a missing final component, so existence is
     # judged explicitly: a dangling (mapped) target does not resolve.
     target="$(readlink -f -- "$cand" 2>/dev/null)" \

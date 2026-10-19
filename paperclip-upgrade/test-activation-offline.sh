@@ -333,6 +333,24 @@ printf 'x\n' > "$ROOT/data/outside-x"; chmod 0666 "$ROOT/data/outside-x"
 ln -s /paperclip/outside-x "$ROOT/data/.local/bin/tool-abs"
 expect_refused "reharden fails a container-absolute symlink whose mapped target is outside the baseline" "outside the baseline" -- reharden_env
 rm -f "$ROOT/data/.local/bin/tool-abs" "$ROOT/data/outside-x"
+# every container-absolute hop of a chain is remapped, not just the first:
+# a second /paperclip hop must be judged by its data-dir target instead of
+# resolving in the host namespace (where a host /paperclip path could pass
+# owner/mode while the container-visible target stays agent-writable)
+ln -s /paperclip/.local/share/tool/run "$ROOT/data/outside-intermediate"
+ln -s /paperclip/outside-intermediate "$ROOT/data/.local/bin/tool-chain"
+expect_ok "reharden remaps a second container-absolute hop onto its data-dir target" -- reharden_env
+rm -f "$ROOT/data/.local/bin/tool-chain" "$ROOT/data/outside-intermediate"
+printf 'x\n' > "$ROOT/data/outside-x"; chmod 0666 "$ROOT/data/outside-x"
+ln -s /paperclip/outside-x "$ROOT/data/outside-intermediate"
+ln -s /paperclip/outside-intermediate "$ROOT/data/.local/bin/tool-chain"
+expect_refused "reharden judges a chained container-absolute target outside the baseline" "outside the baseline" -- reharden_env
+rm -f "$ROOT/data/.local/bin/tool-chain" "$ROOT/data/outside-intermediate" "$ROOT/data/outside-x"
+# directory-component hops are remapped too
+ln -s /paperclip/.local/share "$ROOT/data/droot"
+ln -s /paperclip/droot/tool/run "$ROOT/data/.local/bin/tool-dchain"
+expect_ok "reharden remaps a container-absolute directory-component hop" -- reharden_env
+rm -f "$ROOT/data/.local/bin/tool-dchain" "$ROOT/data/droot"
 # a broken docker exec must FAIL the probes, never read as "denied"
 : > "$STUB/exec_broken"
 expect_refused "reharden fails when docker exec cannot answer the write-denial probes" "inconclusive" -- reharden_env
@@ -696,6 +714,26 @@ else
   oops "drain.sh lock-proof inheritance wrong (rc=$forged_rc: $(head -c 200 <<<"$forged_out"))"
 fi
 [[ ! -e "$ROOT/state-forged" ]] && pass "forged-fd drain.sh created no state" || oops "forged-fd drain.sh created state"
+rm -f "$LOCKF"
+
+# an unheld lock with a self-opened fd must fail the not-held check, not a
+# later gate: this pins the check order in require_activation_lock (the
+# flock inheritance proof must run after the not-held check, since on an
+# unheld lock it would take the lock itself and mask the refusal)
+LOCKF="$ROOT/lockdir/service.deploy.lock"; rm -f "$LOCKF"; : > "$LOCKF"; chmod 0600 "$LOCKF"
+unheld_out="$(
+  printf 'token=testtoken321\n' > "$LOCKF"
+  exec 9>>"$LOCKF"
+  PAPERCLIP_ACTIVATION_LOCK_PATH="$LOCKF" PAPERCLIP_ACTIVATION_LOCK_TOKEN="testtoken321" \
+  PAPERCLIP_ACTIVATION_LOCK_FD=9 PAPERCLIP_UPGRADE_API_AUTH_FILE="$ROOT/board.curl" \
+  DOCKER="$ROOT/bin/docker" bash "$DRAIN" wait --state-dir "$ROOT/state-unheld" --live 2>&1
+)"; unheld_rc=$?
+if ((unheld_rc == 2)) && grep -qF "activation lock is not held" <<<"$unheld_out"; then
+  pass "drain.sh refuses an unheld lock before the fd inheritance proof"
+else
+  oops "drain.sh lock-check order wrong (rc=$unheld_rc: $(head -c 200 <<<"$unheld_out"))"
+fi
+[[ ! -e "$ROOT/state-unheld" ]] && pass "unheld-lock drain.sh created no state" || oops "unheld-lock drain.sh created state"
 rm -f "$LOCKF"
 
 # the same proof through a symlinked ancestor must also be accepted:

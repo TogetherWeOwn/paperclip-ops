@@ -311,7 +311,8 @@
     "pr6 acceptance suite:1",
     "registrar domain-expiry probe suite:1",
     "Beszel adapter and Discord forwarder suites:1",
-    "activation contract suite:1"
+    "activation contract suite:1",
+    "execution-image source-only carrier suite:1"
   ],
   "retained": [
     {
@@ -1748,6 +1749,11 @@
       "name": "sibling-run guard suite",
       "definition_sha256": "cc22f4f858562b90e61f70a77b2a11d6fc1d0e2adae556d6c569a5515a148beb",
       "id": "sibling-run guard suite:1"
+    },
+    {
+      "name": "execution-image source-only carrier suite",
+      "definition_sha256": "357caeb599d4c9fa89b47735c764caa49ae756d86fd539d88e9d901da83a97e0",
+      "id": "execution-image source-only carrier suite:1"
     }
   ],
   "removed": [

@@ -52,12 +52,16 @@ the original added bytes in every file, so nothing below can suppress them.
   an environment/config lookup (`process.env.`, `os.environ.`,
   `import.meta.env.`, `ENV.`, `settings.`, `config.`) passes; the same text in
   quotes is a string literal and fails. A lookup exempts only its own value: a
-  quoted 12+ literal behind it (`|| "..."`, `?? "..."`, `or "..."`, or a
-  second call argument as in `os.environ.get("NAME", "...")`) fails. An
-  unquoted fallback is not examined.
+  quoted 12+ literal behind it (`|| "..."`, `?? "..."`, `or "..."`) fails, as
+  does a second argument to a getter that takes a default
+  (`os.environ.get("NAME", "...")`, `os.getenv("NAME", "...")`,
+  `ENV.fetch("NAME", "...")`). A second argument to `config.get` or
+  `settings.get` is a key name, not a default, and passes. An unquoted
+  fallback is not examined.
 - **Call and parenthesis forms.** `token(...)`/`token = (...)` values fail
   only when literal-shaped: a quoted 12+ value, or an unquoted run that is not
-  a bare identifier (underscore) or a CamelCase type reference.
+  a bare identifier (underscore) or a CamelCase type reference. Base64 padding
+  (`=`) after the run is part of the value.
 - **Rust.** Rust strings and comments (raw, escaped, byte, nested block) are
   never exempt. In plain code, a match wholly inside a recognized type span
   (`token: Option<Token>,`, `password: impl AsRef<[u8]>`, fn parameters,
@@ -66,8 +70,10 @@ the original added bytes in every file, so nothing below can suppress them.
   (an unclosed list checks its first argument), after `a::b::` module path
   prefixes are dropped. An argument fails only when it is literal-shaped: an
   identifier run of 12+ characters that is lowercase-initial or carries a
-  digit or dash, or any character outside type syntax. CamelCase type names
-  without digits pass. Ambiguous input keeps detection.
+  digit or dash, or any character outside type syntax. Type syntax includes
+  macro and const-generic characters (`!`, `#`, `$`, `{`, `}`), so
+  `Option<Token![:]>,`, `Result<String, !>` and `MyBuffer<{ 32 }>` pass.
+  CamelCase type names without digits pass. Ambiguous input keeps detection.
 - **Collection.** Paths are NUL-delimited and read with literal pathspecs;
   any read, diff or binary-detection failure fails the bucket closed.
 

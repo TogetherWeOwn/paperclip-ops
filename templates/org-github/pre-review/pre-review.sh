@@ -370,7 +370,14 @@ API_KEY_SECRET_RE="api[_-]?key[\"'[:space:]]*[:=][\"'[:space:]]*([\"'][A-Za-z0-9
 # settings.X, config.X). Quoted values never qualify, since a quoted lookup
 # is a string literal, and the check is case-sensitive on the lookup prefix.
 API_KEY_LOOKUP_RE="^[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][\"'[:space:]]*[:=][[:space:]]*(process\\.env\\.|os\\.environ(\\.|$)|import\\.meta\\.env\\.|ENV\\.|settings\\.|config\\.)"
-API_KEY_FALLBACK_RE="${API_KEY_LOOKUP_RE#^}[^[:space:]]*(([[:space:]]*(\\|\\||\\?\\?)|[[:space:]]+or)[[:space:]]*[\"'][^\"']{12,}[\"']|\\([^(),]*,[[:space:]]*[\"'][^\"']{12,}[\"'])"
+# A lookup exempts only its own value: a quoted 12+ literal behind any lookup
+# via `||`, `??` or `or` is a credential. A second call argument is a default
+# only for getters that take one (os.environ.get, os.getenv, ENV.fetch);
+# config.get(section, option) and settings.get(...) take a key name, not a
+# default, so they never trigger on the second argument.
+API_KEY_FALLBACK_OP_RE="${API_KEY_LOOKUP_RE#^}[^[:space:]]*(([[:space:]]*(\\|\\||\\?\\?)|[[:space:]]+or)[[:space:]]*[\"'][^\"']{12,}[\"'])"
+API_KEY_FALLBACK_ARG_RE="[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][\"'[:space:]]*[:=][[:space:]]*(os\\.environ\\.get|os\\.getenv|ENV\\.fetch)\\([^(),]*,[[:space:]]*[\"'][^\"']{12,}[\"']"
+API_KEY_FALLBACK_RE="(${API_KEY_FALLBACK_OP_RE}|${API_KEY_FALLBACK_ARG_RE})"
 RUST_TYPE_PATH="(([A-Za-z_][A-Za-z0-9_]*::)*${RUST_TYPE_NAME})"
 RUST_TYPE_GENERIC_REF="(&[[:space:]]*(mut[[:space:]]+)?('[[:alpha:]_][[:alnum:]_]*[[:space:]]*)?)?"
 RUST_TYPE_GENERIC_ARG1="${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}([[:space:]]*<${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}(,[[:space:]]*${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH})*[[:space:]]*>)?"
@@ -399,16 +406,17 @@ RUST_TOKEN_COLON_RE='([Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss]
 # A match wholly inside one of these spans is a declaration, not a secret.
 RUST_INLINE_TYPE_SPAN_RE="[(,{][[:space:]]*[[:alnum:]_]*([Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])[[:space:]]*:[[:space:]]*(&[[:space:]]*(mut[[:space:]]+)?('[[:alpha:]_][[:alnum:]_]*[[:space:]]*)?|[*](const|mut)[[:space:]]+|dyn[[:space:]]+|impl[[:space:]]+)?([[][^]]+;[[:space:]]*[0-9]+[]]|${RUST_TYPE_PATH}${RUST_TYPE_GENERIC})[[:space:]]*([,;=)}]|$)"
 # True when a paren/call candidate holds a literal: a quoted 12+ value, or an
-# unquoted dotless 12+ run shaped like a credential. Runs containing an
-# underscore are bare identifiers (secret_name_value) and runs with
-# uppercase but no digit or dash are type references (AccessTokenValue);
-# neither counts. Digit/dash runs and solid lowercase runs are literals.
+# unquoted dotless 12+ run shaped like a credential. Base64 padding (`=`)
+# after the run is part of the value. Runs containing an underscore are
+# bare identifiers (secret_name_value) and runs with uppercase but no digit
+# or dash are type references (AccessTokenValue); neither counts.
+# Digit/dash runs and solid lowercase runs are literals.
 edge_paren_value_is_literal() {
   local cand="$1" val
   if [[ "$cand" =~ [\"\']([^\"\']{12,})[\"\'][[:space:]]*\)?$ ]]; then
     return 0
   fi
-  if [[ "$cand" =~ [^A-Za-z0-9_.-]([A-Za-z0-9_-]{12,})[\"\'[:space:]]*\)?$ ]]; then
+  if [[ "$cand" =~ [^A-Za-z0-9_.-]([A-Za-z0-9_-]{12,})=*[\"\'[:space:]]*\)?$ ]]; then
     val="${BASH_REMATCH[1]}"
     [[ "$val" == *[_]* ]] && return 1
     [[ "$val" =~ [0-9-] ]] && return 0
@@ -418,8 +426,9 @@ edge_paren_value_is_literal() {
 }
 # True when the text holds an api-key assignment whose value is not an
 # environment/config lookup, or a lookup followed by a quoted 12+ literal
-# fallback (`|| "..."`, `?? "..."`, `or "..."`, a second call argument): the
-# lookup exempts its own value, never a literal that rides behind it.
+# fallback (`|| "..."`, `?? "..."`, `or "..."`, or a second argument to
+# os.environ.get / os.getenv / ENV.fetch): the lookup exempts its own value,
+# never a literal that rides behind it.
 # Matches are collected first and filtered after: a pipeline into `grep -q`
 # could be cut short by SIGPIPE and read as a miss.
 api_key_literal_hit() {
@@ -468,7 +477,9 @@ rust_generic_args_text() {
   done
   return 1
 }
-RUST_NON_TYPE_CHAR_RE='[^][A-Za-z0-9_[:space:]:<>&'"'"';,()+?*=-]'
+# `!` is macro invocation (Token![..]) and the never type; `#`, `$`, `{`, `}`
+# are macro and const-generic syntax. All are type syntax, not literals.
+RUST_NON_TYPE_CHAR_RE='[^][A-Za-z0-9_[:space:]:<>&'"'"';,()+?*={}$#!-]'
 rust_generic_arg_is_literal() {
   local LC_ALL=C
   local rest="$1" tok

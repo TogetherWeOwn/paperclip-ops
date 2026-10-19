@@ -908,6 +908,17 @@ run_check
 [[ "$RC" -eq 1 ]] && has_row FAIL authz \
   && ok "padded credential call argument fails" \
   || bad "padded credential call argument fails (rc=$RC)"
+# Base64 padding after an unquoted call value is part of the value, not a
+# boundary. The value rides in a variable so this file holds no adjacent
+# keyword/value shape.
+new_repo
+UNQUOTED_PADDED_CALL="QWxhZGRpbjpvcGVuIHNlc2FtZQ=="
+printf 'x = token(%s)\n' "$UNQUOTED_PADDED_CALL" > "$REPO_DIR/config.txt"
+commit_change "test(auth): scan unquoted padded credential call argument"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "unquoted padded credential call argument fails" \
+  || bad "unquoted padded credential call argument fails (rc=$RC)"
 new_repo
 printf 'password("abcdefghijklmnop");\n' > "$REPO_DIR/auth.rs"
 printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
@@ -1358,7 +1369,9 @@ for fallback_shape in \
   'const c = { @C@: process.env.@E@ || "@F@" };~~fallbackliteral12' \
   "const c = { @C@: process.env.@E@ ?? '@F@' };~~fallbackliteral12" \
   '@K@ = process.env.@E@ or "@F@"~~fallbackliteral12' \
-  '@K@ = os.environ.get("@E@", "@F@")~~fallbackliteral12'; do
+  '@K@ = os.environ.get("@E@", "@F@")~~fallbackliteral12' \
+  '@K@ = os.getenv("@E@", "@F@")~~fallbackliteral12' \
+  '@K@ = ENV.fetch("@E@", "@F@")~~fallbackliteral12'; do
   new_repo
   render_tpl "${fallback_shape%%~~*}" "${fallback_shape##*~~}" > "$REPO_DIR/app.py"
   printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
@@ -1372,6 +1385,8 @@ for lookup_shape in \
   '@K@ = os.environ.get("@E@")' \
   '@K@ = os.environ.get("@E@", None)' \
   '@K@ = os.environ.get("@E@", "")' \
+  '@K@ = config.get("section", "openai_api_key")' \
+  '@K@ = settings.get("section", "openai_api_key")' \
   'const c = { @C@: process.env.@E@, baseURL: "https://api.openai.com/v1" };' \
   'const c = { @C@: process.env.@E@, "x-long-header-name": 1 };'; do
   new_repo
@@ -1408,7 +1423,12 @@ for rust_decl in \
   "token: PhantomData<fn(&'static str) -> ()>," \
   'pub token: Option<Token>, // authentication tokens are rotated regularly' \
   'pub client_secret: Secret<String>,' \
-  'fn eat(&mut self, token: &Token) -> Result<(), ParseError> {'; do
+  'fn eat(&mut self, token: &Token) -> Result<(), ParseError> {' \
+  'pub colon_token: Option<Token![:]>,' \
+  'pub semi_token: Option<Token![;]>,' \
+  'token: Result<String, !>,' \
+  'token: MyBuffer<{ 32 }>,' \
+  'token: GenericArray<u8, { 16 }>,'; do
   new_repo
   printf '%s\n' "$rust_decl" > "$REPO_DIR/auth.rs"
   printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"

@@ -26,6 +26,7 @@ import { closeoutPolicy } from './closeout.js'
 import { DEFAULT_DEBOUNCE_MS, pendingNamespace } from './closeout-pending.js'
 import { createCloseoutReview, emptyCounters } from './closeout-sweep.js'
 import { OPEN_ISSUE_LIST_MAX_REQUESTS } from './paperclip-adapter.js'
+import { closeoutDisarmSettings } from './closeout-disarm-wiring.js'
 
 const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]*\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/
 const DEBOUNCE_MIN_MS = 1000
@@ -59,8 +60,10 @@ const plain = (value) => value !== null && typeof value === 'object' && !Array.i
 export function closeoutShadowSettings(config) {
   const block = config?.closeout
   if (block === undefined) return null
-  requireValue(plain(block) && Object.keys(block).every((key) => key === 'shadow'),
+  requireValue(plain(block) && Object.keys(block).every((key) => ['shadow', 'disarmShadow'].includes(key)),
     'closeout configuration holds an unknown key')
+  // Config loading and direct runner construction validate BOTH children.
+  closeoutDisarmSettings(config)
   if (block.shadow === undefined) return null
   const shadow = block.shadow
   requireValue(plain(shadow) && Object.keys(shadow).every((key) =>

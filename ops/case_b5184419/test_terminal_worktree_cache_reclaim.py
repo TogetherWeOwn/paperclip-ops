@@ -1556,6 +1556,132 @@ class RegistryGateTests(unittest.TestCase):
         self.assertTrue(apply, why)
 
 
+class RegistryDiscoveryTests(unittest.TestCase):
+    # Public-distribution contract after the case-directory reorganization:
+    # the tool's default sibling registry is a private reviewed artifact that
+    # does not ship in public snapshots. An absent/unreadable/malformed
+    # registry must refuse apply and report a clean normalized reason; the
+    # gate decision must be machine-readable in dryrun.json, not stderr-only;
+    # and a gate ERROR (unreadable/malformed/missing entry) must count in
+    # n_errors while an intentional dry-run (detector/paused/etc.) must not.
+    # No fallback to another location: the pre-reorg sibling name must never
+    # be consulted.
+
+    def test_default_is_normalized_absolute(self):
+        self.assertTrue(os.path.isabs(REGISTRY_DEFAULT), REGISTRY_DEFAULT)
+        self.assertNotIn("..", REGISTRY_DEFAULT, REGISTRY_DEFAULT)
+        self.assertEqual(REGISTRY_DEFAULT,
+                         os.path.normpath(REGISTRY_DEFAULT))
+
+    def test_absent_sibling_refuses_apply_with_clean_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sibling = os.path.join(tmp, "case_30b51a0f",
+                                   "host-timer-registry.json")
+            os.makedirs(os.path.dirname(sibling))
+            argv = ["--registry-gate", "routine-x", "--registry", sibling]
+            apply, why = resolve_mode(parse_argv(argv))
+            self.assertFalse(apply, why)
+            self.assertIn("registry unreadable", why)
+            self.assertIn(os.path.normpath(sibling), why)
+            self.assertNotIn("..", why)
+            self.assertNotIn("tog-13014", REGISTRY_DEFAULT)
+            old = os.path.join(tmp, "tog-13014",
+                               "host-timer-registry.json")
+            os.makedirs(os.path.dirname(old))
+            with open(old, "w") as handle:
+                json.dump({"entries": [reg_entry()]}, handle)
+            apply2, why2 = resolve_mode(parse_argv(argv))
+            self.assertFalse(apply2, why2)
+
+    def test_gate_error_classification(self):
+        from terminal_worktree_cache_reclaim import (  # noqa: E402
+            registry_apply_decision_ex, resolve_mode_ex)
+        self.assertEqual(
+            registry_apply_decision_ex(None, "routine-x")[2], True)
+        self.assertEqual(
+            registry_apply_decision_ex([], "routine-x")[2], True)
+        self.assertEqual(
+            registry_apply_decision_ex(
+                [reg_entry(), reg_entry()], "routine-x")[2], True)
+        detector = registry_apply_decision_ex(
+            [reg_entry(role="detector")], "routine-x")
+        self.assertEqual((detector[0], detector[2]), (False, False))
+        self.assertEqual(
+            registry_apply_decision_ex(
+                [reg_entry(state="paused")], "routine-x")[2], False)
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = os.path.join(tmp, "absent.json")
+            argv = ["--registry-gate", "routine-x",
+                   "--registry", missing]
+            self.assertEqual(resolve_mode_ex(parse_argv(argv))[2], True)
+            writer = os.path.join(tmp, "registry.json")
+            with open(writer, "w") as handle:
+                json.dump({"entries": [reg_entry()]}, handle)
+            argv = ["--registry-gate", "routine-x",
+                   "--registry", writer]
+            self.assertEqual(resolve_mode_ex(parse_argv(argv)), (True, (
+                "registry entry 'routine-x' is an active writer"), False))
+
+    def test_run_tool_records_gate_decision_in_summary(self):
+        with tempfile.TemporaryDirectory() as out:
+            with mock.patch.object(reclaim_mod, "build_context",
+                                   return_value={}), \
+                    mock.patch.object(reclaim_mod, "enumerate_worktrees",
+                                      return_value=[]):
+                res = run_tool(False, quiet_run, None, out, "/tmp/fake-root",
+                               30, 1, mode_why="registry unreadable: ENOENT",
+                               registry_gate="routine-x", gate_error=True)
+                self.assertEqual(res["summary"]["mode"], "dry-run")
+                self.assertEqual(res["summary"]["mode_reason"],
+                                 "registry unreadable: ENOENT")
+                self.assertEqual(res["summary"]["registry_gate"], "routine-x")
+                self.assertTrue(res["summary"]["registry_gate_error"])
+                self.assertEqual(res["summary"]["n_errors"], 1)
+                with open(os.path.join(out, "dryrun.json")) as handle:
+                    doc = json.load(handle)
+                    self.assertEqual(doc["summary"]["mode"], "dry-run")
+                    self.assertEqual(doc["summary"]["mode_reason"],
+                                     "registry unreadable: ENOENT")
+            with mock.patch.object(reclaim_mod, "build_context",
+                                   return_value={}), \
+                    mock.patch.object(reclaim_mod, "enumerate_worktrees",
+                                      return_value=[]):
+                res = run_tool(False, quiet_run, None, out, "/tmp/fake-root",
+                               30, 1, mode_why="entry role is 'detector'",
+                               registry_gate="routine-x", gate_error=False)
+                self.assertEqual(res["summary"]["n_errors"], 0)
+                self.assertFalse(res["summary"]["registry_gate_error"])
+
+    def test_main_records_absent_registry_in_dryrun_json(self):
+        from terminal_worktree_cache_reclaim import main  # noqa: E402
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "out")
+            sibling = os.path.join(tmp, "case_30b51a0f",
+                                   "host-timer-registry.json")
+            os.makedirs(os.path.dirname(sibling))
+            fake_root = os.path.join(tmp, "fake-root")
+            os.makedirs(fake_root)
+            with mock.patch.object(reclaim_mod, "build_context",
+                                   return_value={}), \
+                    mock.patch.object(reclaim_mod, "enumerate_worktrees",
+                                      return_value=[]), \
+                    contextlib.redirect_stderr(io.StringIO()) as err:
+                main(argv=["--registry-gate", "routine-x",
+                           "--registry", sibling,
+                           "--out-dir", out, "--root", fake_root],
+                     run=quiet_run, api=object())
+            self.assertIn("mode: dry-run (registry unreadable",
+                          err.getvalue())
+            with open(os.path.join(out, "dryrun.json")) as handle:
+                doc = json.load(handle)
+                self.assertEqual(doc["summary"]["mode"], "dry-run")
+                self.assertIn("registry unreadable",
+                              doc["summary"]["mode_reason"])
+                self.assertEqual(doc["summary"]["registry_gate"], "routine-x")
+                self.assertTrue(doc["summary"]["registry_gate_error"])
+                self.assertEqual(doc["summary"]["n_errors"], 1)
+
+
 class RunToolCountTests(unittest.TestCase):
     # One count to escalate on: the apply report's n_errors includes the
     # evaluation errors printed in the summary.

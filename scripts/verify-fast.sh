@@ -89,7 +89,8 @@ for f in ops/productivity/*.sh; do
   bash -n "$f" || fail "bash parse error: $f"
 done
 python3 -c 'import ast, sys; [ast.parse(open(p, "rb").read(), p) for p in sys.argv[1:]]' \
-  ops/productivity/*.py ops/lib/*.py ops/paperclip/*.py || fail "python parse error in ops/productivity, ops/lib or ops/paperclip"
+  ops/productivity/*.py ops/lib/*.py ops/paperclip/*.py ops/agent-tooling/serena-pilot-b/*.py || fail "python parse error in ops/productivity, ops/lib, ops/paperclip or ops/agent-tooling/serena-pilot-b"
+bash -n ops/agent-tooling/serena-pilot-b/code-nav || fail "bash parse error: ops/agent-tooling/serena-pilot-b/code-nav"
 python3 -c 'import ast, sys; [ast.parse(open(path, "rb").read(), path) for path in sys.argv[1:]]' \
   ops/pr-hygiene/sweep.py ops/pr-hygiene/owner_match.py ops/lib/live_run_guard.py \
   ops/case_af881f62/operator_workspace_reconciler.py ops/case_af881f62/test_operator_workspace_reconciler.py \
@@ -170,6 +171,7 @@ python3 -m unittest test_case_dcf07273_assignment_bundle || fail "assignment hos
   || fail "review-error, review-dedup, PR-supply and flow-guard suites failed"
 (cd ops/paperclip && python3 -B -m unittest test_focus_gate_bounds) || fail "focus-gate bounds suite failed"
 (cd ops/lib && python3 -m unittest test_atomic_state) || fail "atomic state suite failed"
+(cd ops/agent-tooling/serena-pilot-b && python3 -B -m unittest test_code_nav) || fail "code-nav suite failed"
 (cd ops/productivity && python3 -m unittest test_stuck_run_state) || fail "stuck-run state suite failed"
 (cd ops/productivity && python3 -m unittest test_idle_waiters_state) || fail "idle-waiter state suite failed"
 (cd ops/owner-guard && python3 -m unittest test_owner_guard_state) || fail "owner-guard state suite failed"

@@ -2,10 +2,10 @@
 
 ## Canary subject
 
-Default: Web Engineer (`69c12a25-80df-4c80-8026-f12651e653eb`), unless the CEO
-redirects. One builder only; the other three keep the binding off until the
-verdict (binding exists but unassigned, or assigned-but-paused — Operator
-records which).
+Default: Web Engineer, unless the CEO redirects. One builder only. Enabling
+is a docs step, not a binding: the host adds BUILDER_TOOLS_SNIPPET.md to the
+canary builder's TOOLS.md first; the other builders get the snippet only on a
+success verdict. No gateway state exists to toggle.
 
 ## Metrics (DevOps owns measurement)
 
@@ -18,15 +18,20 @@ records which).
 ## Verdict
 
 - Success: >=20% fewer input tokens per merged card AND no drop in
-  first-review 5/5. Then bind the remaining three builders.
-- Failure/rollback: Operator removes the binding per OPERATOR_SPEC UNDO;
+  first-review 5/5. Then document the CLI in the remaining builders'
+  TOOLS.md (same snippet).
+- Failure/rollback: Operator removes the install per OPERATOR_SPEC UNDO;
   canary builder returns to whole-file reads. Record the numbers either way.
 
 ## Open gaps
 
-- G1: Stage-0 `RESULTS.md` config snippet + 7-day `REPORT.md` baselines not
-  found in paperclip-ops at this head. Baselines must be pulled from run
-  accounting before the canary starts; reconcile `builder-readonly.yml`
-  with the snippet when located.
-- G2: Company `mcp_local_stdio` registration mechanism IDs (connection row,
-  binding rows) to be reported back by the Operator on the child card.
+- G1: Stage-0 config snippet + 7-day baselines not found in this repo at the
+  spec head. Baselines must be pulled from run accounting before the canary
+  starts; reconcile `contexts/builder-readonly.yml` with the snippet when
+  located.
+- G2 (retired): was the gateway connection/binding IDs. There is no
+  connection in the CLI shape; the Operator reports install paths and primed
+  languages instead (OPERATOR_SPEC step 6).
+- G3: language-server downloads live under `/tmp/serena-home` and are
+  re-downloaded on first use after a /tmp prune (one slow call, then fast).
+  If prunes prove frequent, promote the primed dirs to persistent storage.

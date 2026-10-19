@@ -5,7 +5,7 @@ Status: source-only Stage-B policy check. The checker reads the JSON printed by 
 ## Files
 
 - `verify_result_policy.py`: checker CLI (`main`), bounded parser, and `capture()`, a bounded helper that runs one caller-pinned executable and returns its stdout. It writes no files. The CLI does not call `capture()`, and CI calls it only from the unit tests; an authorized caller supplies argv and the expected executable SHA-256.
-- `test_verify_result_policy.py`: offline unit tests, including a binding test against `manifest.json` `base`. The `offline-suites` job runs them in the `execution-image source-only carrier suite` step when change detection sets `heavy=true`. A `.github/**` change always does, including on a draft PR. Any other change that is not docs-only does on a ready PR; a draft that touches no workflow, dependency or disclosure boundary waits for `ready_for_review`.
+- `test_verify_result_policy.py`: offline unit tests, including a binding test against `manifest.json` `base`. The `suites` job runs them in the `execution-image source-only carrier suite` step when change detection sets `full` or `core` to `true`.
 
 **Scope.** This unit's three files (`verify_result_policy.py`, `test_verify_result_policy.py` and this document) are not listed in `manifest.json` or `validate.py`, and this change does not alter the accepted carrier bytes. Their identity is the commit plus the SHA-256 values recorded in the pull request. They become carrier files only in a later reviewed change.
 
@@ -100,7 +100,7 @@ The gh test fixture `pkg/cmd/attestation/verification/extensions_test.go:18` use
 | `buildSignerURI` equals the signer identity | Unconfirmed for this producer. Mismatch or absence refuses. | Certificate fields from the authorized run's output. |
 | Attempt number of run 37717359076 | Any attempt is accepted (`attempts/[1-9][0-9]{0,8}`). The manifest pins the run, not the attempt. | The authorizing owner pins an attempt or confirms that any attempt is acceptable. |
 | `mediaType` value | Exact value pinned to sigstore-go `VerificationResultMediaType01` (`signed_entity.go:34`, set at `:274`). Not observed in a real output. | One real verifier output, passed through the checker. |
-| `--signer-workflow` form | `execution-image/README.md:127` omits `@refs/heads/master`. The checker reads certificate fields and does not depend on this flag. | The authorizing owner confirms the flag form in an authorized run. |
+| `--signer-workflow` form | `execution-image/README.md:137` omits `@refs/heads/master`. The checker reads certificate fields and does not depend on this flag. | The authorizing owner confirms the flag form in an authorized run. |
 | gh binary SHA-256 | Not pinned. The caller supplies it. No binary was acquired. | The authorizing owner provides the approved binary hash. |
 | Hash-to-exec window in `capture()` | Open residual. | Hash and execute through the same descriptor. |
 | Environment inherited by the capture child | Full environment passed through, including credential variables. No allowlist. | Decision by the authorizing owner on an allowlist, then an authorized run that uses it. |

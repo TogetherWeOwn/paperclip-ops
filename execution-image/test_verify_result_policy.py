@@ -119,7 +119,7 @@ def _valid_doc():
                 "mediaType": "application/vnd.dev.sigstore.verificationresult+json;version=0.1",
                 "signature": {
                     "certificate": {
-                        "issuer": vrp.EXPECTED["issuer"],
+                        "issuer": "https://token.actions.githubusercontent.com",
                         "subjectAlternativeName": vrp.EXPECTED["signer_identity"],
                         "buildSignerURI": vrp.EXPECTED["signer_identity"],
                         "sourceRepositoryURI": vrp.EXPECTED["source_uri"],
@@ -129,8 +129,8 @@ def _valid_doc():
                     }
                 },
                 "statement": {
-                    "_type": vrp.EXPECTED["statement_type"],
-                    "predicateType": vrp.EXPECTED["predicate_type"],
+                    "_type": "https://in-toto.io/Statement/v1",
+                    "predicateType": "https://slsa.dev/provenance/v1",
                     "subject": [copy.deepcopy(SUBJECT_ENTRY)],
                     "predicate": {"buildDefinition": {}},
                 },

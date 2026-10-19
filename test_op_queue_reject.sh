@@ -30,6 +30,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 command -v jq >/dev/null || { echo "ERROR: jq required" >&2; exit 1; }
+command -v timeout >/dev/null || { echo "ERROR: timeout required" >&2; exit 1; }
 
 TOOL="${TOOL_UNDER_TEST:-$HERE/op_queue_reject.sh}"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -131,6 +132,21 @@ else
   bad "unknown mode shape" "rc=$RC out=$OUT"
 fi
 
+# Trailing valueless flags must exit 2, never hang: timeout fails closed
+# (a regressed hang kills rc=124 and fails the case, not the suite).
+timeout 10 "$TOOL" reject --packet >"$TMP/hang-out.txt" 2>"$TMP/stderr.txt"; RC=$?
+if [[ "$RC" == "2" && ! -s "$TMP/hang-out.txt" ]]; then
+  ok "trailing valueless --packet exits 2 (no hang)"
+else
+  bad "trailing valueless --packet" "rc=$RC"
+fi
+timeout 10 "$TOOL" reject --packet "$Q/req-20261019T120000Z-000001.json" --reason >"$TMP/hang-out.txt" 2>"$TMP/stderr.txt"; RC=$?
+if [[ "$RC" == "2" && ! -s "$TMP/hang-out.txt" ]]; then
+  ok "trailing valueless --reason exits 2 (no hang)"
+else
+  bad "trailing valueless --reason" "rc=$RC"
+fi
+
 # Hostile basenames: the CONTENT name is hostile while the queue path stays
 # inside. Never let the hostile name near an ungated path.
 trav() { # $1=hostile basename
@@ -160,6 +176,19 @@ mkdir -p "$Q/not-a-packet.json"
 run_tool reject --packet "$Q/not-a-packet.json" --reason schema-probe
 expect "directory-as-packet refuses on ownership" 5 refused packet_ownership
 rmdir "$Q/not-a-packet.json"
+
+# Unreadable packet (owner-stripped mode bits; skipped as root, where mode
+# bits do not bind and every fixture stays readable).
+if [[ "$(id -u)" == "0" ]]; then
+  ok "unreadable-packet case skipped as root (mode bits do not bind)"
+else
+  mk_packet "req-dark-000007.json" '{"probe":true}' >/dev/null
+  chmod 000 "$Q/req-dark-000007.json"
+  run_tool reject --packet "$Q/req-dark-000007.json" --reason schema-probe
+  expect "unreadable packet refuses" 3 refused packet_unreadable
+  chmod 644 "$Q/req-dark-000007.json"
+  rm -f "$Q/req-dark-000007.json"
+fi
 
 # ===========================================================================
 section "3. reason boundary"
@@ -198,6 +227,12 @@ rmdir "$P/req-busy-000002.json.claim"
 run_tool verify-only --packet "$Q/req-20261019T120000Z-000001.json" --reason schema-probe
 expect "verify-only on a rejected packet replays" 6 refused replay_detected
 
+# An unwritable processed dir is I/O failure, not a concurrent claim.
+mk_packet "req-noproc-000006.json" '{"probe":true}' >/dev/null
+OP_REJECT_PROCESSED_DIR="$TMP/no-such-parent/sub" run_tool reject --packet "$Q/req-noproc-000006.json" --reason schema-probe
+expect "unwritable processed dir fails as I/O, not a claim" 1 failed processed_dir_unwritable
+[ -e "$TMP/no-such-parent" ] && bad "I/O failure must not create parents" || ok "I/O failure creates nothing"
+
 # ===========================================================================
 section "5. filesystem boundary"
 OUTSIDE="$TMP/outside.json"; printf '{"outside":true}' > "$OUTSIDE"
@@ -225,10 +260,15 @@ expect "group-writable packet refuses" 5 refused packet_ownership
 
 # Non-root-owned packet refuses under production ownership rules.
 # The fixture packets are user-owned, so this must refuse on ownership even
-# though every other check would pass.
-mk_packet "req-own-000005.json" '{"probe":true}' >/dev/null
-OP_REJECT_REQUIRE_ROOT_OWNERSHIP=1 run_tool reject --packet "$Q/req-own-000005.json" --reason schema-probe
-expect "user-owned packet refuses when root ownership required" 5 refused packet_ownership
+# though every other check would pass. Skipped as root, where every
+# fixture is root-owned and the gate correctly passes instead.
+if [[ "$(id -u)" == "0" ]]; then
+  ok "user-owned packet case skipped as root (fixtures are root-owned)"
+else
+  mk_packet "req-own-000005.json" '{"probe":true}' >/dev/null
+  OP_REJECT_REQUIRE_ROOT_OWNERSHIP=1 run_tool reject --packet "$Q/req-own-000005.json" --reason schema-probe
+  expect "user-owned packet refuses when root ownership required" 5 refused packet_ownership
+fi
 
 # ===========================================================================
 section "6. non-execution structure"

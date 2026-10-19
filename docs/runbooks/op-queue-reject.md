@@ -21,15 +21,15 @@ outside this verb's contract and needs its own review.
 | File | Role |
 | --- | --- |
 | `op_queue_reject.sh` | The verb. Installed root-owned 755, run once as root. |
-| `test_op_queue_reject.sh` | Offline refusal/regression suite (56 cases). |
+| `test_op_queue_reject.sh` | Offline refusal/regression suite (61 cases). |
 | `docs/runbooks/op-queue-reject.md` | This file. |
 
 Hashes below pin the reviewed revision. The approving reviewer re-checks
 them at the exact head that merges; a re-push re-pins.
 
 ```
-fd4c6c7814624128cb262389d7940ec873b0b3cd157e36a6c6627e6fc64abb5f  op_queue_reject.sh
-0a78a21146ea1a152f980fc794b50ba51d3a50afe7ac55f9411753350d3b974b  test_op_queue_reject.sh
+18e5cdbcba161d8f07976d53f49e847593f9311c7e09883da43322733cbd65fb  op_queue_reject.sh
+ed07cf425a3c37822b37237a0e18d61d63227c1c77f633cffbb477f7697c5a75  test_op_queue_reject.sh
 ```
 
 Trust lineage: the queue-dir jail (`within_dir_strict`) and the root-owned
@@ -62,8 +62,9 @@ no agent account holds a write path to the processed dir or the log.
 
 Re-verification is read-only through existing reads: the receipt under
 `processed/` plus `sha256sum` over the preserved packet re-establishes
-the binding on demand (`verify-only` never runs on the host; it is a
-pre-flight for fixtures only).
+the binding on demand. (`verify-only` runs on the host only as the
+install pre-flight in step 3 below; post-install re-verification uses
+the receipt plus `sha256sum`, never the verb.)
 
 Explicitly NOT chosen: a per-packet exact-argv sudoers grant for an
 agent account. It would widen the standing sudo surface for a one-shot
@@ -108,11 +109,11 @@ or restarts a service.
 
 ```bash
 bash -n op_queue_reject.sh && bash -n test_op_queue_reject.sh
-./test_op_queue_reject.sh          # expect: 56 passed, 0 failed
+./test_op_queue_reject.sh          # expect: 61 passed, 0 failed
 sha256sum op_queue_reject.sh test_op_queue_reject.sh
 ```
 
-Expected: exit 0, `56 passed, 0 failed`, and hashes equal to the manifest
+Expected: exit 0, `61 passed, 0 failed`, and hashes equal to the manifest
 above. On the host (operator only, read-only after install):
 
 ```bash

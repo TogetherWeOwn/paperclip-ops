@@ -76,7 +76,8 @@
 #      Symlinks refuse even to inside targets (packet_is_symlink): the
 #      receipt name must equal the invoked name.
 #   6  replay / concurrent claim (nothing written)
-#   1  I/O failure (could not write claim, receipt, or log line)
+#   1  I/O failure (unwritable processed dir; could not write claim,
+#      receipt, or log line)
 # There is no 4: SHADOW does not apply to a non-executing verb. There is
 # no 7: nothing executes, so nothing can fail post-execution.
 #
@@ -162,8 +163,8 @@ MODE=""; PACKET_FILE=""; REASON=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     reject|verify-only) MODE="$1"; shift ;;
-    --packet) PACKET_FILE="${2:-}"; shift 2 ;;
-    --reason) REASON="${2:-}"; shift 2 ;;
+    --packet) [[ $# -ge 2 ]] || { usage; exit 2; }; PACKET_FILE="$2"; shift 2 ;;
+    --reason) [[ $# -ge 2 ]] || { usage; exit 2; }; REASON="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) log_human "unknown argument: $1"; usage; exit 2 ;;
   esac
@@ -254,9 +255,16 @@ fi
 
 mkdir -- "$PROCESSED_DIR" 2>/dev/null || true
 if ! mkdir -- "$CLAIM" 2>/dev/null; then
-  emit_result "$(result refused concurrent_claim "$PACKET_SHA" "" true)"
-  log_human "concurrent claim in progress; refusing"
-  exit 6
+  # A failed claim mkdir is a busy claim ONLY if the claim exists; an
+  # unwritable processed dir must read as I/O failure, not "retry later".
+  if [[ -e "$CLAIM" ]]; then
+    emit_result "$(result refused concurrent_claim "$PACKET_SHA" "" true)"
+    log_human "concurrent claim in progress; refusing"
+    exit 6
+  fi
+  emit_result "$(result failed processed_dir_unwritable "$PACKET_SHA" "" true)"
+  log_human "processed dir unwritable; refusing"
+  exit 1
 fi
 
 # ---- step 6: one receipt + one log line, secrets scrubbed -------------------------------

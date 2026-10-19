@@ -351,6 +351,29 @@ ln -s /paperclip/.local/share "$ROOT/data/droot"
 ln -s /paperclip/droot/tool/run "$ROOT/data/.local/bin/tool-dchain"
 expect_ok "reharden remaps a container-absolute directory-component hop" -- reharden_env
 rm -f "$ROOT/data/.local/bin/tool-dchain" "$ROOT/data/droot"
+# container-absolute hops are normalized (.. clamped at /, as the container
+# kernel resolves them) before the mount-prefix test: a spelling escaping
+# the mount fails closed even when the host textual twin is safe, a
+# spelling re-entering the mount is judged by its normalized target, and
+# a spelling staying inside the mount still passes
+mkdir -p "$ROOT/tmp"
+printf 'x\n' > "$ROOT/tmp/agent-file"; chmod 0644 "$ROOT/tmp/agent-file"
+ln -s /paperclip/../tmp/agent-file "$ROOT/data/.local/bin/tool-escape"
+expect_refused "reharden fails closed on a container target escaping the mount" "escapes the container mount" -- reharden_env
+rm -f "$ROOT/data/.local/bin/tool-escape" "$ROOT/tmp/agent-file"
+mkdir -p "$ROOT/data/data"
+printf 'x\n' > "$ROOT/data/data/.gitconfig"; chmod 0666 "$ROOT/data/data/.gitconfig"
+ln -s /paperclip/../../paperclip/data/.gitconfig "$ROOT/data/.local/bin/tool-dotdot"
+expect_refused "reharden judges a dotdot spelling by its normalized container target" "outside the baseline" -- reharden_env
+rm -f "$ROOT/data/.local/bin/tool-dotdot" "$ROOT/data/data/.gitconfig"
+ln -s /paperclip/.local/../.gitconfig "$ROOT/data/.local/bin/tool-dotdot-ok"
+expect_ok "reharden still passes a dotdot spelling staying inside the mount" -- reharden_env
+rm -f "$ROOT/data/.local/bin/tool-dotdot-ok"
+# a target ending in a newline is a different file than its stripped twin
+printf 'x\n' > "$ROOT/data/.gitconfig"$'\n'; chmod 0666 "$ROOT/data/.gitconfig"$'\n'
+ln -s $'/paperclip/.gitconfig\n' "$ROOT/data/.local/bin/tool-newline"
+expect_refused "reharden fails closed on a symlink target ending in a newline" "newline" -- reharden_env
+rm -f "$ROOT/data/.local/bin/tool-newline" "$ROOT/data/.gitconfig"$'\n'
 # a broken docker exec must FAIL the probes, never read as "denied"
 : > "$STUB/exec_broken"
 expect_refused "reharden fails when docker exec cannot answer the write-denial probes" "inconclusive" -- reharden_env

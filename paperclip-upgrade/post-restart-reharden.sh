@@ -26,7 +26,10 @@
 #     of failing forever on the host, where the data lives elsewhere.
 #     Every hop of a chain is remapped the same way (file or directory
 #     component), so a container-absolute chain is judged by its real
-#     container-visible target instead of resolving host-side;
+#     container-visible target instead of resolving host-side. Each
+#     container-absolute hop is normalized first (.. clamped at /, as the
+#     container kernel resolves it) before the mount-prefix test; a hop
+#     escaping the mount, or a target containing a newline, fails closed;
 #   - when the bounded Cargo pool is required (or present as a
 #     mountpoint), its ROOT and policy.json are judged the same way,
 #     NON-recursively: slot directories beneath the root stay
@@ -98,7 +101,7 @@ check_path() { # PATH -- owned by EXPECT_OWNER, no group/other write, no symlink
 }
 
 check_tree() { # ROOT -- every descendant judged, verify-only (see header)
-  local root="$1" euid="${EXPECT_OWNER%%:*}" egid="${EXPECT_OWNER##*:}" hits links link raw cand mapped target tst tuid tgid tmode found prefix rest comp hops
+  local root="$1" euid="${EXPECT_OWNER%%:*}" egid="${EXPECT_OWNER##*:}" hits links link raw cand mapped target tst tuid tgid tmode found prefix rest comp hops norm norm_rest norm_comp
   if ! hits="$(find "$root" -xdev ! -type l \( ! -user "$euid" -o ! -group "$egid" -o -perm /022 \) -print 2>/dev/null)"; then
     printf 'FAIL: cannot scan protected tree for baseline violations: %s\n' "$root"
     return 1
@@ -124,7 +127,8 @@ check_tree() { # ROOT -- every descendant judged, verify-only (see header)
     # container-absolute hop resolved host-side could pass owner/mode on
     # a host /paperclip path while the container-visible $DATA target
     # stays agent-writable, so the chain is walked hop by hop and each
-    # /paperclip raw target is remapped before resolving further.
+    # /paperclip raw target is normalized (.. clamped at /) and remapped
+    # before resolving further; mount escapes and newline targets fail.
     cand="$link" hops=0
     # The component walk below tests absolute prefixes; anchor a relative
     # root (find prints paths as given) to the scan's working directory.
@@ -143,11 +147,50 @@ check_tree() { # ROOT -- every descendant judged, verify-only (see header)
       [[ -n "$found" ]] || break
       (( ++hops > 40 )) \
         && { printf 'FAIL: protected symlink chain too deep: %s\n' "$link"; return 1; }
-      raw="$(readlink -- "$found" 2>/dev/null)" \
-        || { printf 'FAIL: protected symlink cannot be read: %s\n' "$link"; return 1; }
+      # NUL-delimited: command substitution strips trailing newlines, so a
+      # target ending in LF would be judged as its stripped twin (a
+      # distinct, agent-creatable file). Newlines never occur in
+      # legitimate protected-tree targets, so any newline fails closed.
+      raw=""
+      if ! IFS= read -r -d '' raw < <(readlink -z -- "$found" 2>/dev/null); then
+        printf 'FAIL: protected symlink cannot be read: %s\n' "$link"; return 1
+      fi
+      if [[ "$raw" == *$'\n'* ]]; then
+        printf 'FAIL: protected symlink target contains a newline: %s\n' "$link"; return 1
+      fi
       case "$raw" in
-        /paperclip) mapped="$DATA_DIR" ;;
-        /paperclip/*) mapped="$DATA_DIR/${raw#/paperclip/}" ;;
+        /paperclip|/paperclip/*)
+          # Normalize the container path lexically, clamping .. at /,
+          # before the mount-prefix test: the container kernel clamps ..
+          # at /, so /paperclip/../../paperclip/X is /paperclip/X in the
+          # container while a textual prefix strip would judge
+          # $DATA_DIR/../../paperclip/X on the host — a different file.
+          # A normalized target outside the mount fails closed: host
+          # stat cannot judge the container-visible file.
+          norm=""; norm_rest="${raw#/}"
+          while [[ -n "$norm_rest" ]]; do
+            norm_comp="${norm_rest%%/*}"
+            if [[ "$norm_rest" == */* ]]; then
+              norm_rest="${norm_rest#*/}"
+            else
+              norm_rest=""
+            fi
+            case "$norm_comp" in
+              ""|.) ;;
+              ..) norm="${norm%/*}" ;;
+              *) norm="$norm/$norm_comp" ;;
+            esac
+          done
+          [[ -z "$norm" ]] && norm="/"
+          case "$norm" in
+            /paperclip) mapped="$DATA_DIR" ;;
+            /paperclip/*) mapped="$DATA_DIR/${norm#/paperclip/}" ;;
+            *)
+              printf 'FAIL: protected symlink escapes the container mount: %s\n' "$link"
+              return 1
+              ;;
+          esac
+          ;;
         /*) mapped="$raw" ;;
         *) mapped="$(dirname -- "$found")/$raw" ;;
       esac

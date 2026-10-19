@@ -450,8 +450,7 @@ fi
 SWEEP_STEP="$(sed -n '/Clean up abandoned PlanetScale clone/,/Upload rehearsal evidence/p' \
   "$HERE/.github/workflows/reusable-migration-rehearsal.yml")"
 grep -q "if: always() && inputs.provider == 'planetscale'" <<< "$SWEEP_STEP" \
-  && grep -q 'No interrupted clone to clean' <<< "$SWEEP_STEP" \
-  && grep -qF '[[ -e "$REHEARSAL_CLEANUP_MARKER" ]]' <<< "$SWEEP_STEP" \
+  && grep -qF '[[ -e "$REHEARSAL_CLEANUP_MARKER" ]] || { echo "No interrupted clone to clean."; exit 0; }' <<< "$SWEEP_STEP" \
   && grep -q 'migration_rehearsal.sh clean' <<< "$SWEEP_STEP" \
   && grep -q 'rm -f "$REHEARSAL_CLEANUP_MARKER"' <<< "$SWEEP_STEP" \
   && ok "workflow sweeper is an always() marker-gated planetscale cleanup" \

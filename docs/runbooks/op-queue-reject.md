@@ -29,7 +29,7 @@ them at the exact head that merges; a re-push re-pins.
 
 ```
 18e5cdbcba161d8f07976d53f49e847593f9311c7e09883da43322733cbd65fb  op_queue_reject.sh
-ed07cf425a3c37822b37237a0e18d61d63227c1c77f633cffbb477f7697c5a75  test_op_queue_reject.sh
+26093fd8b66dc38593f7bf1cd1acfb2cf2da628a62d0017151bbffd471542b38  test_op_queue_reject.sh
 ```
 
 Trust lineage: the queue-dir jail (`within_dir_strict`) and the root-owned

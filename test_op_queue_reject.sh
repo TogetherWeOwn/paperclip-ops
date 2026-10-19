@@ -76,8 +76,16 @@ section "1. happy paths"
 SHA_HAPPY="$(mk_packet "req-20261019T120000Z-000001.json" '{"what":"schema probe","action":"true"}')"
 OP_REJECT_QUEUE_DIR="$Q" run_tool verify-only --packet "$Q/req-20261019T120000Z-000001.json" --reason schema-probe
 expect "verify-only passes on a clean packet" 0 verified would_reject
-[ -e "$P/req-20261019T120000Z-000001.json.rejected.json" ] && bad "verify-only must not write a receipt" || ok "verify-only writes no receipt"
-[ -e "$LOG" ] && bad "verify-only must not write a log line" || ok "verify-only writes no log line"
+if [ -e "$P/req-20261019T120000Z-000001.json.rejected.json" ]; then
+  bad "verify-only must not write a receipt"
+else
+  ok "verify-only writes no receipt"
+fi
+if [ -e "$LOG" ]; then
+  bad "verify-only must not write a log line"
+else
+  ok "verify-only writes no log line"
+fi
 [[ "$(jq -r '.packet_sha256' <<<"$OUT")" == "sha256:$SHA_HAPPY" ]] \
   && ok "verify-only binds the payload hash" \
   || bad "verify-only hash mismatch" "$OUT"
@@ -231,7 +239,11 @@ expect "verify-only on a rejected packet replays" 6 refused replay_detected
 mk_packet "req-noproc-000006.json" '{"probe":true}' >/dev/null
 OP_REJECT_PROCESSED_DIR="$TMP/no-such-parent/sub" run_tool reject --packet "$Q/req-noproc-000006.json" --reason schema-probe
 expect "unwritable processed dir fails as I/O, not a claim" 1 failed processed_dir_unwritable
-[ -e "$TMP/no-such-parent" ] && bad "I/O failure must not create parents" || ok "I/O failure creates nothing"
+if [ -e "$TMP/no-such-parent" ]; then
+  bad "I/O failure must not create parents"
+else
+  ok "I/O failure creates nothing"
+fi
 
 # ===========================================================================
 section "5. filesystem boundary"

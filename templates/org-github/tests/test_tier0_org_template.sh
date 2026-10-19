@@ -193,8 +193,10 @@ for f in (['tier-0/tier-0-quality-gate.yml', 'tier-0/ADOPTION.md']
           + [f'tier-0/semgrep-rules/{p}' for p in
              ('README.md', 'generic-dangerous-functions.yaml',
               'generic-secrets-in-code.yaml', 'template-authz-helper.yaml',
-              'template-check-then-write.yaml')]
-          + ['pull-request-template/SELF-REVIEW-CHECKLIST.md',
+              'template-check-then-write.yaml', 'security-ssrf-redirect.yaml',
+              'security-secrets-extended.yaml')]
+          + ['tier-0/PORT-ADDITIONS.md', 'codeql/codeql-config.yml',
+             'pull-request-template/SELF-REVIEW-CHECKLIST.md',
              'rulesets/tier0-report-only.json', 'rulesets/tier0-required.json',
              'rulesets/OPERATOR-RUNBOOK.md']):
     check(f in readme, f"destination map names {f}")

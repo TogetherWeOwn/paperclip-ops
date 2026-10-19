@@ -313,7 +313,8 @@
     "mutmut budget-kill fixture suite:1",
     "registrar domain-expiry probe suite:1",
     "Beszel adapter and Discord forwarder suites:1",
-    "activation contract suite:1"
+    "activation contract suite:1",
+    "execution-image source-only carrier suite:1"
   ],
   "retained": [
     {
@@ -1760,6 +1761,11 @@
       "name": "mutmut budget-kill fixture suite",
       "definition_sha256": "f1490420e91646453b29b63d75c62ef6939cb9eee789bf6fb0bf9f1b93c55edd",
       "id": "mutmut budget-kill fixture suite:1"
+    },
+    {
+      "name": "execution-image source-only carrier suite",
+      "definition_sha256": "357caeb599d4c9fa89b47735c764caa49ae756d86fd539d88e9d901da83a97e0",
+      "id": "execution-image source-only carrier suite:1"
     }
   ],
   "removed": [

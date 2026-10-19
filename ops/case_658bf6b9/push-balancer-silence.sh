@@ -5,7 +5,11 @@
 # Runs the reviewed guard (balancer_silence_guard.py, case_7edd6ab6) and pushes its
 # verdict to a DEDICATED external endpoint. Stale (exit 1) and unmeasurable
 # (exit 2) both push success=false — silence or blindness never reads healthy.
-# Fresh (exit 0) pushes success=true so Gatus resolves the incident.
+# Fresh (exit 0) pushes success=true so Gatus resolves the incident. An
+# explicitly retired producer (RETIRED verdict, exit 0) likewise pushes
+# success=true with "balancer retired:" text: approved stillness is not an
+# outage. The retirement file itself is operator-owned evidence; this script
+# only forwards its path, never its content beyond the verdict line.
 #
 # FAIL-CLOSED: unreadable/missing/empty/garbage log, bad --now/threshold, or
 # a guard crash pushes success=false and exits 1. Missing GATUS_URL/token,
@@ -27,6 +31,8 @@
 #   BALANCER_SILENCE_STATE (default .../fleet-quota-balancer.state.json),
 #   BALANCER_SILENCE_MAX_AGE_MIN (default 10), BALANCER_SILENCE_WINDOW_H (default 24),
 #   BALANCER_SILENCE_GUARD (default <this-dir>/../../balancer_silence_guard.py),
+#   BALANCER_SILENCE_RETIREMENT (default empty: no retirement evidence;
+#     when set, forwarded as --retirement-file),
 #   BALANCER_SILENCE_NOW (tests only: forwarded as --now).
 # Cron (operator, as root per OPERATOR.md §4 — a --user manager could not
 # read the root-only 0600 env file): `set -a; . /root/.config/paperclip/
@@ -43,6 +49,7 @@ STATE="${BALANCER_SILENCE_STATE:-/paperclip/shared/host-bridge/fleet-quota-balan
 MAX_AGE="${BALANCER_SILENCE_MAX_AGE_MIN:-10}"
 WINDOW_H="${BALANCER_SILENCE_WINDOW_H:-24}"
 GUARD="${BALANCER_SILENCE_GUARD:-$HERE/../../balancer_silence_guard.py}"
+RETIREMENT="${BALANCER_SILENCE_RETIREMENT:-}"
 NOW_OVERRIDE="${BALANCER_SILENCE_NOW:-}"
 
 [[ -n "${GATUS_URL:-}" ]] \
@@ -59,6 +66,9 @@ command -v python3 >/dev/null 2>&1 \
   || { echo "push-balancer-silence: refusing — python3 required" >&2; exit 2; }
 
 args=(--log "$LOG" --state "$STATE" --max-age-min "$MAX_AGE" --window-h "$WINDOW_H")
+if [[ -n "$RETIREMENT" ]]; then
+  args+=(--retirement-file "$RETIREMENT")
+fi
 if [[ -n "$NOW_OVERRIDE" ]]; then
   args+=(--now "$NOW_OVERRIDE")
 fi
@@ -72,9 +82,10 @@ trap 'rm -f "$out_file"' EXIT
 python3 "$GUARD" "${args[@]}" >"$out_file" 2>&1
 rc=$?
 
-# Verdict line only: STALE / FRESH / UNMEASURABLE plus numbers. GAP detail
-# (model/reason rows) stays in the journal, never on the wire.
-verdict="$(grep -aE '^(STALE|FRESH|UNMEASURABLE):' "$out_file" | tail -1 || true)"
+# Verdict line only: STALE / FRESH / RETIRED / UNMEASURABLE plus numbers.
+# GAP detail (model/reason rows) and the retirement: context line (approver,
+# successor) stay in the journal, never on the wire.
+verdict="$(grep -aE '^(STALE|FRESH|RETIRED|UNMEASURABLE):' "$out_file" | tail -1 || true)"
 if [[ -z "$verdict" ]]; then
   # Guard printed no verdict (crash/traceback): fail closed with a fixed phrase.
   verdict="UNMEASURABLE: guard produced no verdict (rc=$rc)"
@@ -86,7 +97,11 @@ verdict="${verdict:0:300}"
 
 case "$rc" in
   0)
-    gatus_push "$ENDPOINT_KEY" true "balancer fresh: $verdict" || exit 1
+    if [[ "$verdict" == RETIRED:* ]]; then
+      gatus_push "$ENDPOINT_KEY" true "balancer retired: $verdict" || exit 1
+    else
+      gatus_push "$ENDPOINT_KEY" true "balancer fresh: $verdict" || exit 1
+    fi
     exit 0
     ;;
   1)

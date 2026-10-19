@@ -1,0 +1,125 @@
+{
+  "profiles": {
+    "TogetherWeOwn/CLIProxyAPI": {
+      "evidence": {
+        "check_run_names": [
+          "build",
+          "close-when-agents-md-changed",
+          "ensure-no-translator-changes"
+        ],
+        "checked_at": "2026-10-18",
+        "policy_ref": "dev@e9af1ba330858c09a3d6aace3669ba087455928c",
+        "workflows_manifest": [
+          {
+            "blob_sha": "f1f0e2879c757ba3e13f0a1967d96c8190162f61",
+            "file": "pr-test-build.yml"
+          },
+          {
+            "blob_sha": "4fe3d93881bf0907806cf7f115763822aef2d99f",
+            "file": "pr-path-guard.yml"
+          },
+          {
+            "blob_sha": "c9ac0cb45b78cb75c720f8d76232390dcdcc81a0",
+            "file": "agents-md-guard.yml"
+          }
+        ]
+      },
+      "fork_required": [
+        "build",
+        "close-when-agents-md-changed",
+        "ensure-no-translator-changes"
+      ],
+      "status": "reviewed",
+      "upstream_required": [
+        "build",
+        "close-when-agents-md-changed",
+        "ensure-no-translator-changes"
+      ]
+    },
+    "TogetherWeOwn/paperclip": {
+      "evidence": {
+        "check_run_names": [
+          "Paperclip Review",
+          "ci / e2e",
+          "ci / verify"
+        ],
+        "checked_at": "2026-10-18",
+        "policy_ref": "retained-default",
+        "workflows_manifest": []
+      },
+      "fork_required": [
+        "Paperclip Review",
+        "ci / e2e",
+        "ci / verify"
+      ],
+      "status": "reviewed",
+      "upstream_required": [
+        "Greptile Review",
+        "ci / e2e",
+        "ci / verify"
+      ]
+    },
+    "paperclipai/paperclip": {
+      "evidence": {
+        "check_run_names": [
+          "Greptile Review",
+          "ci / e2e",
+          "ci / verify"
+        ],
+        "checked_at": "2026-10-18",
+        "policy_ref": "alias-preserved",
+        "workflows_manifest": []
+      },
+      "fork_required": [
+        "Paperclip Review",
+        "ci / e2e",
+        "ci / verify"
+      ],
+      "status": "reviewed",
+      "upstream_required": [
+        "Greptile Review",
+        "ci / e2e",
+        "ci / verify"
+      ]
+    },
+    "router-for-me/CLIProxyAPI": {
+      "evidence": {
+        "check_run_names": [
+          "build",
+          "close-when-agents-md-changed",
+          "ensure-no-translator-changes",
+          "retarget"
+        ],
+        "checked_at": "2026-10-18",
+        "policy_ref": "main@911f49cbd49f4fe2516979754a7488a3fd14fe64",
+        "workflows_manifest": [
+          {
+            "blob_sha": "f1f0e2879c757ba3e13f0a1967d96c8190162f61",
+            "file": "pr-test-build.yml"
+          },
+          {
+            "blob_sha": "4fe3d93881bf0907806cf7f115763822aef2d99f",
+            "file": "pr-path-guard.yml"
+          },
+          {
+            "blob_sha": "c9ac0cb45b78cb75c720f8d76232390dcdcc81a0",
+            "file": "agents-md-guard.yml"
+          }
+        ]
+      },
+      "fork_required": [
+        "build",
+        "close-when-agents-md-changed",
+        "ensure-no-translator-changes"
+      ],
+      "status": "pending-live-confirmation",
+      "upstream_required": [
+        "Greptile Review",
+        "build",
+        "close-when-agents-md-changed",
+        "ensure-no-translator-changes"
+      ]
+    }
+  },
+  "schema_version": 1
+}

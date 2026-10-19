@@ -4,7 +4,8 @@
 Reads the CI head SHA from HEAD_SHA and the repo from REPO, gathers PR,
 check-run and file state through the GitHub REST API (GH_TOKEN), feeds one
 JSON payload to review_trigger.decide(), and on `request` posts exactly one
-`@togetherweown-reviewer review <sha>` comment plus the `review-ready` label.
+`review-ready` label followed by one `@togetherweown-reviewer review <sha>`
+comment (label-first so a failed label write never leaves an orphan comment).
 
 Exit 0 with a notice for every documented skip (no open PR on this head,
 decision is `skip`, trigger already posted, a live or completed review run
@@ -169,8 +170,11 @@ def main():
                % head_sha[:12])
         return 0
 
-    api("/issues/%d/comments" % number, method="POST",
-        body={"body": "%s\n\n%s" % (marker, reason)})
+    # Label first, then comment: the reviewer invocation evaluates the
+    # review-ready label at review time and tolerates either order, but
+    # label-first avoids an orphan comment if the label write fails. A
+    # failed comment leaves no partial trigger because the next CI completion
+    # retries both writes.
     try:
         api("/issues/%d/labels" % number, method="POST",
             body={"labels": [READY_LABEL]})
@@ -183,6 +187,8 @@ def main():
                   "description": "ci-ok green + checklist complete; bot review requested"})
         api("/issues/%d/labels" % number, method="POST",
             body={"labels": [READY_LABEL]})
+    api("/issues/%d/comments" % number, method="POST",
+        body={"body": "%s\n\n%s" % (marker, reason)})
     notice("decision=request (%s); trigger posted" % reason)
     return 0
 

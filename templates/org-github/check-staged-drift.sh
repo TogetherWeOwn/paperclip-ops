@@ -77,14 +77,32 @@ if [[ -f "$TMP/source.yml" ]]; then
     || note "${REL}/tier-0/tier-0-quality-gate.yml (body differs from source at $REF)"
 fi
 
-# Semgrep rules: verbatim port. Compare the union of filenames so an added or
-# removed rule file on either side counts as drift, not a silent pass.
+# Semgrep rules: verbatim port, plus post-pin org additions. Compare the
+# union of filenames so an added or removed rule file on either side counts
+# as drift, not a silent pass — except files listed in tier-0/PORT-ADDITIONS.md
+# (machine list: bullets shaped `- \`semgrep-rules/<file>\``), which are
+# deliberate org-level additions authored after the pin and consumed by the
+# existing Gate 5 folder scan. A listed file missing from staging, or a
+# listed file since merged upstream (present in source), is itself drift.
+ADDITIONS_FILE="$STAGE_DIR/tier-0/PORT-ADDITIONS.md"
+EXEMPT="$( [[ -f "$ADDITIONS_FILE" ]] && sed -n 's/^-[[:space:]]*`semgrep-rules\/\([^`]*\)`.*/\1/p' "$ADDITIONS_FILE" || true )"
 SRC_FILES="$(git -C "$ROOT" ls-tree -r --name-only "$REF" -- semgrep-rules/ 2>/dev/null | sed 's|^semgrep-rules/||' || true)"
 STAGED_FILES="$(cd "$STAGED_RULES" 2>/dev/null && printf '%s\n' * || true)"
-ALL_FILES="$(printf '%s\n%s' "$SRC_FILES" "$STAGED_FILES" | grep . | sort -u)"
+# The exempt (PORT-ADDITIONS.md) names join the union: a listed file deleted
+# from staging appears in neither the source nor the staged set, so without
+# this the missing-staged branch below is unreachable (dead check).
+ALL_FILES="$(printf '%s\n%s\n%s' "$SRC_FILES" "$STAGED_FILES" "$EXEMPT" | grep . | sort -u)"
 [[ -n "$ALL_FILES" ]] || { echo "staged-drift check: ERROR: no semgrep rule files on either side" >&2; exit 2; }
 while IFS= read -r f; do
   [[ -n "$f" ]] || continue
+  if [[ -n "$EXEMPT" ]] && grep -qxF "$f" <<<"$EXEMPT"; then
+    [[ -f "$STAGED_RULES/$f" ]] \
+      || { note "${REL}/tier-0/semgrep-rules/$f (listed in PORT-ADDITIONS.md but missing staged)"; continue; }
+    if git -C "$ROOT" show "$REF:semgrep-rules/$f" > "$TMP/src-rule" 2>/dev/null; then
+      note "${REL}/tier-0/semgrep-rules/$f (listed in PORT-ADDITIONS.md but now present in source at $REF — drop the exemption)"
+    fi
+    continue
+  fi
   if ! git -C "$ROOT" show "$REF:semgrep-rules/$f" > "$TMP/src-rule" 2>/dev/null; then
     note "${REL}/tier-0/semgrep-rules/$f (staged but missing in source at $REF)"
   elif [[ ! -f "$STAGED_RULES/$f" ]]; then

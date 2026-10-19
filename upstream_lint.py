@@ -651,35 +651,68 @@ def is_missing_api_resource(exc: Exception) -> bool:
     return bool(re.search(r"\bHTTP\s+404\b", str(exc)))
 
 
-def memory_init(repo: str, mdir: str | None, refresh: bool) -> str:
-    """Create or refresh the template/signoff facts from the live repo."""
-    info = api_get("/repos/%s" % repo)
-    mem = default_memory(repo)
-    if refresh:
-        mem = load_memory(repo, mdir)
-    mem["default_base"] = info.get("default_branch") or mem["default_base"]
-    tpath = mem["template"].get("path") or ".github/PULL_REQUEST_TEMPLATE.md"
-    found = None
-    for cand in [tpath, ".github/pull_request_template.md", "pull_request_template.md",
-                 "docs/pull_request_template.md"]:
+# Internal minimum for template-less repos: 7 sections mirroring our own
+# public template shape, 6 verbatim checkboxes. Honestly labeled, never
+# presented as upstream maintainer input.
+INTERNAL_MINIMUM_SECTIONS = ["Thinking Path", "Linked Issues or Issue Description",
+                             "What Changed", "Verification", "Risks", "Model Used",
+                             "Checklist"]
+INTERNAL_MINIMUM_CHECKBOXES = [
+    "I wrote a thinking path that runs from the project to this change",
+    "I named the model used, with its version",
+    "I searched for duplicate or related PRs and linked them above",
+    "I ran the tests locally and they pass",
+    "I added or updated tests where applicable",
+    "I updated the documentation this change touches",
+]
+TEMPLATE_CANDIDATES = [".github/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md",
+                       "pull_request_template.md", "docs/pull_request_template.md"]
+# Template locations GitHub also honors that sit outside the four probed
+# files above: uppercase root/docs names, and the multi-template
+# PULL_REQUEST_TEMPLATE/ directory in root, docs/ and .github/ (a directory
+# is never proof of absence: any entry refuses as cannot-verify).
+TEMPLATE_EXTRA_FILE_CANDIDATES = ["PULL_REQUEST_TEMPLATE.md", "docs/PULL_REQUEST_TEMPLATE.md"]
+TEMPLATE_DIR_CANDIDATES = [".github/PULL_REQUEST_TEMPLATE", "PULL_REQUEST_TEMPLATE",
+                           "docs/PULL_REQUEST_TEMPLATE"]
+
+
+def extra_template_hit(repo: str, base: str) -> "tuple | None":
+    """(path, text, blob_sha) when an extra template location holds a
+    maintainer file; None when every extra location reads absent.
+
+    Raises Refused when any extra location cannot be verified (fail-closed:
+    absence is never recorded on an unchecked location). Kept separate from
+    TEMPLATE_CANDIDATES so the four-candidate absence evidence keeps its
+    reviewed shape; the extended sweep is recorded alongside it.
+    """
+    for cand in TEMPLATE_EXTRA_FILE_CANDIDATES:
         try:
-            text, blob = fetch_file(repo, cand, mem["default_base"])
-            found = (cand, text, blob)
-            break
+            text, blob = fetch_file(repo, cand, base)
         except Refused as exc:
-            # Fall back only when the candidate is verifiably absent. An
-            # unreadable one (503, network) must not select a weaker template.
-            if not (is_missing_api_resource(exc) or "is not a file" in str(exc)):
-                raise Refused("cannot read PR template %s; memory unchanged: %s" % (cand, exc))
+            if is_missing_api_resource(exc):
+                continue
+            raise Refused("cannot read PR template %s; memory unchanged: %s" % (cand, exc))
+        return (cand, text, blob)
+    for dpath in TEMPLATE_DIR_CANDIDATES:
+        try:
+            listing = api_get("/repos/%s/contents/%s?ref=%s" % (repo, dpath, base))
+        except Refused as exc:
+            if is_missing_api_resource(exc):
+                continue
+            raise Refused("cannot verify PR template directory %s; memory unchanged: %s" % (dpath, exc))
+        if isinstance(listing, list):
+            if listing:
+                raise Refused("cannot verify PR template %s (directory holds %d template(s)); "
+                              "memory unchanged" % (dpath, len(listing)))
             continue
-    if not found:
-        raise Refused("no PR template found in %s; record one by hand" % repo)
-    parsed = parse_template(found[1])
-    tpl = mem["template"]
-    tpl.update({"path": found[0], "blob_sha": found[2], "sections": parsed["sections"],
-                "checkboxes": parsed["checkboxes"]})
+        raise Refused("cannot verify PR template %s (unexpected contents shape); memory unchanged" % dpath)
+    return None
+
+
+def discover_signoff(repo: str, base: str) -> dict:
+    """DCO/CLA facts from CONTRIBUTING + workflow/root listings (404-tolerant)."""
     try:
-        contributing, _ = fetch_file(repo, "CONTRIBUTING.md", mem["default_base"])
+        contributing, _ = fetch_file(repo, "CONTRIBUTING.md", base)
     except Refused as exc:
         if not is_missing_api_resource(exc):
             raise Refused("cannot read signoff policy from CONTRIBUTING.md; memory unchanged: %s" % exc)
@@ -704,13 +737,121 @@ def memory_init(repo: str, mdir: str | None, refresh: bool) -> str:
     if not isinstance(listing, list):
         raise Refused("repository signoff policy listing is not a JSON array; memory unchanged")
     root = [e["name"] for e in listing if isinstance(e, dict) and e.get("name")]
-    det = detect_signoff(contributing, names + root)
+    return detect_signoff(contributing, names + root)
+
+
+def apply_signoff(mem: dict, det: dict, refresh: bool) -> None:
     if not refresh:
         mem["signoff"] = det
     else:  # a recorded CLA evidence survives a refresh
         mem["signoff"]["dco"] = det["dco"]
         mem["signoff"]["detected_from"] = det["detected_from"]
         mem["signoff"]["cla"] = det["cla"] or mem["signoff"].get("cla", False)
+
+
+def memory_init_absence(repo: str, mdir: str | None, mem: dict, refresh: bool) -> str:
+    """Write the honestly-labeled internal-minimum memory for a proven-404 repo.
+
+    refresh=True preserves a hand-recorded CLA, exactly like the
+    template-present path (a routine refresh must not wipe signoff facts).
+    """
+    import datetime
+    base = mem.get("default_base") or "main"
+    commit_sha = None
+    try:
+        ref = api_get("/repos/%s/commits/%s" % (repo, base))
+        if isinstance(ref, dict):
+            commit_sha = ref.get("sha")
+    except Refused:
+        commit_sha = None
+    if not commit_sha:
+        try:
+            gref = api_get("/repos/%s/git/ref/heads/%s" % (repo, base))
+            if isinstance(gref, dict):
+                commit_sha = (gref.get("object") or {}).get("sha")
+        except Refused as exc:
+            raise Refused("cannot resolve default base %s for %s; memory unchanged: %s" % (base, repo, exc))
+    if not commit_sha:
+        raise Refused("cannot resolve default base %s for %s; memory unchanged" % (base, repo))
+    cands = [mem["template"].get("path") or TEMPLATE_CANDIDATES[0]] + TEMPLATE_CANDIDATES[1:]
+    det = discover_signoff(repo, base)
+    apply_signoff(mem, det, refresh)
+    tpl = mem["template"]
+    tpl.update({"path": "", "blob_sha": "", "sections": list(INTERNAL_MINIMUM_SECTIONS),
+                "checkboxes": [norm(b) for b in INTERNAL_MINIMUM_CHECKBOXES],
+                "pending_ok_at_first_push": ["greptile", "ci gates are green"],
+                "section_rules": [],
+                "absent": True,
+                "origin": "internal-minimum — NOT upstream maintainer input",
+                "absence_evidence": {
+                    "candidates": [{"candidate": c, "outcome": "HTTP 404"} for c in cands],
+                    "source": "GET /repos/%s/contents/<cand>?ref=%s" % (repo, commit_sha),
+                    "revision": "%s@%s" % (base, commit_sha),
+                    "extended_probes": {
+                        "files": [{"candidate": c, "outcome": "HTTP 404"}
+                                  for c in TEMPLATE_EXTRA_FILE_CANDIDATES],
+                        "directories": [{"candidate": c, "outcome": "absent (HTTP 404 or empty)"}
+                                        for c in TEMPLATE_DIR_CANDIDATES]},
+                    "checked_at": datetime.date.today().isoformat()}})
+    mem["updated"] = datetime.date.today().isoformat()
+    return save_memory(repo, mem, mdir)
+
+
+def memory_init(repo: str, mdir: str | None, refresh: bool) -> str:
+    """Create or refresh the template/signoff facts from the live repo."""
+    info = api_get("/repos/%s" % repo)
+    mem = default_memory(repo)
+    if refresh:
+        mem = load_memory(repo, mdir)
+    mem["default_base"] = info.get("default_branch") or mem["default_base"]
+    tpath = mem["template"].get("path") or TEMPLATE_CANDIDATES[0]
+    found = None
+    non_file = None
+    for cand in [tpath] + [c for c in TEMPLATE_CANDIDATES if c != tpath]:
+        try:
+            text, blob = fetch_file(repo, cand, mem["default_base"])
+            found = (cand, text, blob)
+            break
+        except Refused as exc:
+            # Fall back only when the candidate is verifiably absent. An
+            # unreadable one (503, network) must not select a weaker template.
+            if not (is_missing_api_resource(exc) or "is not a file" in str(exc)):
+                raise Refused("cannot read PR template %s; memory unchanged: %s" % (cand, exc))
+            if "is not a file" in str(exc) and not is_missing_api_resource(exc):
+                # A non-file candidate never proves absence, but a real
+                # template later in the list is still adopted.
+                if non_file is None:
+                    non_file = (cand, str(exc))
+            continue
+    if found is None:
+        # The four candidates above are not the only places GitHub honors:
+        # an uppercase root/docs template is adopted, and any entry in a
+        # PULL_REQUEST_TEMPLATE/ directory refuses (fail-closed inside).
+        hit = extra_template_hit(repo, mem["default_base"])
+        if hit is not None:
+            found = hit
+    if found is None and non_file is not None:
+        raise Refused("cannot verify PR template %s (%s); memory unchanged" % (
+            non_file[0], non_file[1]))
+    if found is None:
+        return memory_init_absence(repo, mdir, mem, refresh)
+    parsed = parse_template(found[1])
+    tpl = mem["template"]
+    if tpl.get("absent"):
+        # A live template invalidates a recorded absence: drop the
+        # internal-minimum markers so the facts describe the maintainer
+        # template. pending_ok/section_rules reset to unknown (fail-closed:
+        # nothing is pre-approved as pending for a template never reviewed),
+        # otherwise the freshness REFUSED could never be recovered by refresh.
+        tpl.pop("absent", None)
+        tpl.pop("origin", None)
+        tpl.pop("absence_evidence", None)
+        tpl["pending_ok_at_first_push"] = []
+        tpl["section_rules"] = []
+    tpl.update({"path": found[0], "blob_sha": found[2], "sections": parsed["sections"],
+                "checkboxes": parsed["checkboxes"]})
+    det = discover_signoff(repo, mem["default_base"])
+    apply_signoff(mem, det, refresh)
     import datetime
     mem["updated"] = datetime.date.today().isoformat()
     return save_memory(repo, mem, mdir)
@@ -938,14 +1079,43 @@ def section_stats(text: str) -> dict:
             "chars": len(t.strip())}
 
 
+def live_absence_probe(repo: str, mem: dict) -> "str | None":
+    """Refusal detail when a recorded absence no longer holds live, else None."""
+    base = mem.get("default_base") or "main"
+    for cand in TEMPLATE_CANDIDATES:
+        try:
+            fetch_file(repo, cand, base)
+            return "upstream gained a PR template (%s); run memory refresh --repo %s" % (cand, repo)
+        except Refused as exc:
+            if is_missing_api_resource(exc):
+                continue
+            return "cannot confirm the live PR template: %s" % exc
+    try:
+        hit = extra_template_hit(repo, base)
+    except Refused as exc:
+        return "cannot confirm the live PR template: %s" % exc
+    if hit is not None:
+        return "upstream gained a PR template (%s); run memory refresh --repo %s" % (hit[0], repo)
+    det = discover_signoff(repo, base)
+    rec = mem.get("signoff") or {}
+    if (det.get("dco") and not rec.get("dco")) or (det.get("cla") and not rec.get("cla")):
+        return "upstream gained a signoff policy (%s); run memory refresh --repo %s" % (
+            "; ".join(det.get("detected_from") or []) or "DCO/CLA marker", repo)
+    return None
+
+
 def check_template(rep: Report, title: str, body: str, mem: dict, stage: str, nobody: bool) -> None:
     if nobody:
         rep.add("PASS", "template", "skipped (no PR text yet; checked at publish and ready)")
         return
     tpl = mem.get("template") or {}
+    # Absence-memory lines are tagged internal-minimum so gate output never
+    # implies maintainer authorship. The tag contains "template" so existing
+    # template-failure assertions keep matching.
+    item = "template(internal-minimum)" if tpl.get("absent") else "template"
     want = tpl.get("sections") or []
     if not want:
-        rep.add("REFUSED", "template", "memory records no template sections; run memory refresh")
+        rep.add("REFUSED", item, "memory records no template sections; run memory refresh")
         return
     secs = split_sections(body or "")
     reqs = {s["name"]: s for s in tpl.get("section_rules", []) if isinstance(s, dict)}
@@ -1009,7 +1179,7 @@ def check_template(rep: Report, title: str, body: str, mem: dict, stage: str, no
                 if re.search(r"\bRequired\b|Pick ONE|Bullet list of concrete", c)]
     if leftover:
         rep.add("WARN", "template-comments", "%d template guidance comment(s) left in the body" % len(leftover))
-    rep.add("FAIL" if probs else "PASS", "template", "; ".join(probs) or "all %d template sections present and filled" % len(want))
+    rep.add("FAIL" if probs else "PASS", item, "; ".join(probs) or "all %d template sections present and filled" % len(want))
 
 
 EMPTY_BLOB_SHAS = frozenset({
@@ -1314,13 +1484,21 @@ def lint(repo: str, title: str, body: str, branch: str, commits: list, files: li
     if live:
         try:
             tpl = mem.get("template") or {}
-            _, blob = fetch_file(repo, tpl.get("path", ".github/PULL_REQUEST_TEMPLATE.md"), mem.get("default_base"))
-            if tpl.get("blob_sha") and blob != tpl["blob_sha"]:
-                rep.add("REFUSED", "template-fresh",
-                        "upstream PR template changed (%s -> %s); run upstream_lint.py memory refresh --repo %s" % (
-                            tpl["blob_sha"][:10], blob[:10], repo))
-                return rep
-            rep.add("PASS", "template-fresh", "upstream template unchanged since memory was recorded")
+            if tpl.get("absent"):
+                gained = live_absence_probe(repo, mem)
+                if gained is not None:
+                    rep.add("REFUSED", "template-fresh", gained)
+                    return rep
+                rep.add("PASS", "template-fresh",
+                        "upstream template absence confirmed live for %s" % repo)
+            else:
+                _, blob = fetch_file(repo, tpl.get("path", ".github/PULL_REQUEST_TEMPLATE.md"), mem.get("default_base"))
+                if tpl.get("blob_sha") and blob != tpl["blob_sha"]:
+                    rep.add("REFUSED", "template-fresh",
+                            "upstream PR template changed (%s -> %s); run upstream_lint.py memory refresh --repo %s" % (
+                                tpl["blob_sha"][:10], blob[:10], repo))
+                    return rep
+                rep.add("PASS", "template-fresh", "upstream template unchanged since memory was recorded")
         except Refused as exc:
             rep.add("REFUSED", "template-fresh", "cannot confirm the live PR template: %s" % exc)
             return rep

@@ -170,6 +170,25 @@ test('backfill and review collect before mapping and observe enrolled drafts/hol
   assert.deepEqual(h.kinds('snapshot'), [])
 })
 
+test('failed primary still collects before mapping and observes the scheduled ref', async (t) => {
+  const h = await fixture(t, { closeout: enrolled() })
+  h.snapshots.set(7, { isDraft: true })
+  h.primaryHook = async () => { throw new Error(privateText) }
+  const result = await h.pass()
+  assert.equal(result.ok, false, 'primary failure still fails the pass')
+  assert.equal(result.reason, 'sweeps-incomplete')
+  assert.deepEqual(h.kinds('snapshot'), [['snapshot', A, 7]],
+    'collect-before-mapping observes failed primary refs')
+  assert.equal(result.disarmShadow.counters.wouldDisarm, 1)
+  assert.deepEqual(nonemptyReasons(result), { 'armed-drafted': 1 })
+  assert.deepEqual(result.sweeps.failures, [{ repository: A, number: 7, phase: 'backfill', attempt: 1 }])
+  assert.equal(result.sweeps.processed, 0)
+  assert.equal(result.sweeps.poisonedTotal, 0)
+  assert.deepEqual(result.sweeps.poisonedNow, [])
+  assert.equal(JSON.stringify(result.disarmShadow).includes(privateText), false)
+  assert.equal(JSON.stringify(h.logs).includes(privateText), false)
+})
+
 const negative = [
   ['ready and not held', {}, 'clean', false],
   ['hold is case-sensitive', { labels: { nodes: [{ name: 'Hold' }], pageInfo: { hasNextPage: false } } }, 'clean', false],

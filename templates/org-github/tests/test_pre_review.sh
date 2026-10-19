@@ -1282,13 +1282,169 @@ run_check
 new_repo
 RAW_FIXTURE="hunter2saltysecret"
 printf 'const CFG: &str = r#"\n' > "$REPO_DIR/auth.rs"
-printf 'password: %s; 32];"#; fn f<'"'"'a>() {}\n' "$RAW_FIXTURE" >> "$REPO_DIR/auth.rs"
+# The opening `[` makes the array-type exemption reachable, so only the lexer
+# (not the bare-value branch) decides this row: with the lifetime wrongly
+# restoring plain-code status, the array span would exempt the match.
+printf 'password: [%s; 32];"#; fn f<'"'"'a>() {}\n' "$RAW_FIXTURE" >> "$REPO_DIR/auth.rs"
 printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
 commit_change "test(auth): scan raw-string close with lifetime"
 run_check
 [[ "$RC" -eq 1 ]] && has_row FAIL authz \
   && ok "raw-string close with lifetime still fails" \
   || bad "raw-string close with lifetime still fails (rc=$RC)"
+# Dotted unquoted api-key values are credentials (SendGrid SG.<seg>.<seg>
+# shape); only a known environment/config lookup prefix is exempt. Every
+# value rides in variables so no line here pairs the keyword with a value.
+SEG_A="abcdefghijklmnopqrstuv"
+SEG_B="wxyz0123456789abcdefghijkl"
+DOTTED_KEYS=("SG.${SEG_A}.${SEG_B}" "sk.${SEG_A}" "key.${SEG_A}" "abc.def.${SEG_A}")
+KEY_NAMES=(api_key api-key apikey)
+KEY_SEPS=(': ' ' = ')
+for key_name in "${KEY_NAMES[@]}"; do
+  for key_sep in "${KEY_SEPS[@]}"; do
+    for dotted in "${DOTTED_KEYS[@]}"; do
+      new_repo
+      printf '%s%s%s\n' "$key_name" "$key_sep" "$dotted" > "$REPO_DIR/config.yml"
+      commit_change "test(auth): scan unquoted dotted api key"
+      run_check
+      [[ "$RC" -eq 1 ]] && has_row FAIL authz \
+        && ok "unquoted dotted api key fails: ${key_name}${key_sep}${dotted:0:6}" \
+        || bad "unquoted dotted api key fails: ${key_name}${key_sep}${dotted:0:6} (rc=$RC)"
+    done
+  done
+done
+new_repo
+printf 'pub %s%s%s\n' "api_key" ": " "SG.${SEG_A}.${SEG_B}," > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "test(auth): scan dotted api key in Rust"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "unquoted dotted api key in Rust fails" \
+  || bad "unquoted dotted api key in Rust fails (rc=$RC)"
+new_repo
+printf '%s: "%s.%s"\n' "api_key" "process" "env.${ENV_LEAF}" > "$REPO_DIR/config.yml"
+commit_change "test(auth): scan quoted lookup-shaped api key"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz \
+  && ok "quoted lookup-shaped api key still fails" \
+  || bad "quoted lookup-shaped api key still fails (rc=$RC)"
+LOOKUP_PREFIXES=("process.env." "os.environ.get" "import.meta.env." "ENV." "settings." "config.")
+for lookup_prefix in "${LOOKUP_PREFIXES[@]}"; do
+  new_repo
+  printf '%s = %s%s\n' "api_key" "$lookup_prefix" "OPENAI_API_KEY" > "$REPO_DIR/app.py"
+  printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+  commit_change "feat(app): read key from lookup"
+  run_check
+  [[ "$RC" -eq 0 ]] && ! has_row FAIL authz \
+    && ok "api key lookup passes authz: ${lookup_prefix}" \
+    || bad "api key lookup passes authz: ${lookup_prefix} (rc=$RC)"
+done
+# A lookup exempts only its own value. `os.environ` needs its dot, and a
+# quoted 12+ literal riding behind the lookup (|| ?? or, second call
+# argument) is a credential. Name-only calls and empty/short defaults pass.
+# Templates carry @K@ (key name), @E@ (env leaf) and @F@ (fallback) so no
+# source line here pairs the keyword with a value shape.
+TPL_KEY="api_key"
+TPL_CAMEL="apiKey"
+TPL_LEAF="OPENAI_API_KEY"
+render_tpl() {
+  local out="$1"
+  out="${out//@K@/$TPL_KEY}"; out="${out//@C@/$TPL_CAMEL}"
+  out="${out//@E@/$TPL_LEAF}"; out="${out//@F@/$2}"
+  printf '%s\n' "$out"
+}
+for fallback_shape in \
+  '@K@ = os.environ@F@~~backupkey123' \
+  'const c = { @C@: process.env.@E@ || "@F@" };~~fallbackliteral12' \
+  "const c = { @C@: process.env.@E@ ?? '@F@' };~~fallbackliteral12" \
+  '@K@ = process.env.@E@ or "@F@"~~fallbackliteral12' \
+  '@K@ = os.environ.get("@E@", "@F@")~~fallbackliteral12'; do
+  new_repo
+  render_tpl "${fallback_shape%%~~*}" "${fallback_shape##*~~}" > "$REPO_DIR/app.py"
+  printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+  commit_change "test(app): scan literal behind lookup"
+  run_check
+  [[ "$RC" -eq 1 ]] && has_row FAIL authz \
+    && ok "literal behind api key lookup fails: ${fallback_shape%%~~*}" \
+    || bad "literal behind api key lookup fails: ${fallback_shape%%~~*} (rc=$RC)"
+done
+for lookup_shape in \
+  '@K@ = os.environ.get("@E@")' \
+  '@K@ = os.environ.get("@E@", None)' \
+  '@K@ = os.environ.get("@E@", "")' \
+  'const c = { @C@: process.env.@E@, baseURL: "https://api.openai.com/v1" };' \
+  'const c = { @C@: process.env.@E@, "x-long-header-name": 1 };'; do
+  new_repo
+  render_tpl "$lookup_shape" "" > "$REPO_DIR/app.py"
+  printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+  commit_change "feat(app): read key from lookup"
+  run_check
+  [[ "$RC" -eq 0 ]] && ! has_row FAIL authz \
+    && ok "api key lookup shape passes authz: $lookup_shape" \
+    || bad "api key lookup shape passes authz: $lookup_shape (rc=$RC)"
+done
+# Ordinary Rust credential-typed declarations are not secrets, whatever type
+# the generic argument names; only literal-shaped arguments flag. One fixture
+# per shape so a regression names the shape.
+for rust_decl in \
+  'pub token: Option<Token>,' \
+  'token: Arc<RwLock<String>>,' \
+  'token: Zeroizing<String>,' \
+  'password: impl AsRef<[u8]>,' \
+  'fn login(password: impl AsRef<[u8]>) -> Result<Self> {' \
+  'secret: Box<[u8]>,' \
+  'secret: Vec<[u8; 32]>,' \
+  "pub session_token: Cow<'a, str>," \
+  "token: Option<&'a str>," \
+  'pub access_token: Option<AccessToken>,' \
+  'token: Option<AuthenticationToken>,' \
+  'token: Box<dyn Fn(String) + Send>,' \
+  'token: Option<Vec<u8>>,' \
+  'token: std::sync::Arc<tokio::sync::RwLock<String>>,' \
+  'token: Option<serde_json_helpers::TokenValue>,' \
+  'token: Result<Vec<u8>, Box<dyn Error + Send + Sync>>,' \
+  'fn f(token: Option<Arc<Mutex<HashMap<String, Token>>>>) -> Result<()> {' \
+  'token: Box<dyn Fn(&str) -> Result<(), anyhow::Error> + Send>,' \
+  "token: PhantomData<fn(&'static str) -> ()>," \
+  'pub token: Option<Token>, // authentication tokens are rotated regularly' \
+  'pub client_secret: Secret<String>,' \
+  'fn eat(&mut self, token: &Token) -> Result<(), ParseError> {'; do
+  new_repo
+  printf '%s\n' "$rust_decl" > "$REPO_DIR/auth.rs"
+  printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+  commit_change "feat(auth): add credential-typed declaration"
+  run_check
+  [[ "$RC" -eq 0 ]] && ! has_row FAIL authz \
+    && ok "typed Rust declaration passes authz: $rust_decl" \
+    || bad "typed Rust declaration passes authz: $rust_decl (rc=$RC)"
+done
+# A literal in any position of the generic list fails, not only the first.
+GENERIC_LITERAL="hunter2saltysecret"
+for generic_shape in \
+  'password: HashMap<String, %s>,' \
+  'secret: Result<Vec<u8>, %s>,' \
+  'token: Option<Vec<(String, %s)>>,'; do
+  new_repo
+  printf "$generic_shape\n" "$GENERIC_LITERAL" > "$REPO_DIR/auth.rs"
+  printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+  commit_change "test(auth): scan literal in later generic argument"
+  run_check
+  [[ "$RC" -eq 1 ]] && has_row FAIL authz \
+    && ok "literal in later generic argument fails: $generic_shape" \
+    || bad "literal in later generic argument fails: $generic_shape (rc=$RC)"
+done
+# Literal-shaped generic arguments still fail: lowercase or digit-bearing
+# runs of 12+, and arguments with characters outside type syntax.
+for literal_arg in "supermansecret99" "Q7m2V9z4L6p8R1s3" "abcdefghijklmnop" "abc/defghijklmnop==" '"supermansecret99"' "aB3/dE5/gH7/jK9" "ab.cd.ef.gh.ij"; do
+  new_repo
+  printf 'token: Vec<%s>,\n' "$literal_arg" > "$REPO_DIR/auth.rs"
+  printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+  commit_change "test(auth): scan literal generic argument"
+  run_check
+  [[ "$RC" -eq 1 ]] && has_row FAIL authz \
+    && ok "literal generic argument fails: $literal_arg" \
+    || bad "literal generic argument fails: $literal_arg (rc=$RC)"
+done
 # A submodule pointer bump adds no text in the superproject and must pass.
 new_repo
 SUBSRC="$WORK/subsrc$N"

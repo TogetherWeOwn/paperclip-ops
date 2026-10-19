@@ -356,14 +356,21 @@ echo "$ADDED_LINES" | grep -E 'catch\s*(\([^)]*\))?\s*\{\s*\}' >/dev/null \
 # type position with a non-type generic argument flags. Paren/call values
 # must be quoted literals or literal-shaped runs; typed parameters, bare
 # identifiers, dotted paths and method-chain receivers are not credentials.
-SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[bap]-[A-Za-z0-9-]{8,}|api[_-]?key["'"'"' ]*[:=]["'"'"' ]+(["'"'"'][A-Za-z0-9_.-]{12,}["'"'"']|[A-Za-z0-9_-]{12,})|(token|secret|password)["'"'"' ]*[:=](["'"'"' ]*["'"'"'][^"'"'"' ]{12,}|["'"'"' ]+[^"'"'"' ().<>]{12,}(["'"'"' ,;#]|$)))'
+SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[bap]-[A-Za-z0-9-]{8,}|(token|secret|password)["'"'"' ]*[:=](["'"'"' ]*["'"'"'][^"'"'"' ]{12,}|["'"'"' ]+[^"'"'"' ().<>]{12,}(["'"'"' ,;#]|$)))'
 # Strong credential families are always checked against the original added
-# bytes, before any language-specific match-span classification.
-# api-key values are quoted literals or dotless runs: a dotted value such as
-# process.env.OPENAI_API_KEY is an environment lookup, not a credential.
-STRONG_SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[bap]-[A-Za-z0-9-]{8,}|api[_-]?key["'"'"' ]*[:=]["'"'"' ]+(["'"'"'][A-Za-z0-9_.-]{12,}["'"'"']|[A-Za-z0-9_-]{12,}))'
+# bytes, before any language-specific match-span classification. The api-key
+# family is checked separately (api_key_literal_hit) because its unquoted value
+# keeps dots: a SendGrid-style SG.<segment>.<segment> key is a credential, and
+# only values that start with a known environment/config lookup are dropped.
+STRONG_SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[bap]-[A-Za-z0-9-]{8,})'
 RUST_TYPE_NAME='(Option|String|str|Arc|Result|Vec|HashMap|HashSet|Box|Cow|SecretString|SensitiveString|PasswordHash|SecretWrapper|bool|char|f32|f64|[iu](8|16|32|64|128|size)|[A-Z][A-Za-z0-9_]*(Type|Envelope[0-9]*|Response|Error))'
-API_KEY_SECRET_RE="api[_-]?key[\"'[:space:]]*[:=][\"'[:space:]]*([\"'][A-Za-z0-9_.-]{12,}[\"']|[A-Za-z0-9_-]{12,})"
+API_KEY_SECRET_RE="api[_-]?key[\"'[:space:]]*[:=][\"'[:space:]]*([\"'][A-Za-z0-9_.-]{12,}[\"']|[A-Za-z0-9_.-]{12,})"
+# An unquoted api-key value that starts with one of these is a lookup, not a
+# credential (process.env.X, os.environ[...], import.meta.env.X, ENV.X,
+# settings.X, config.X). Quoted values never qualify, since a quoted lookup
+# is a string literal, and the check is case-sensitive on the lookup prefix.
+API_KEY_LOOKUP_RE="^[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][\"'[:space:]]*[:=][[:space:]]*(process\\.env\\.|os\\.environ(\\.|$)|import\\.meta\\.env\\.|ENV\\.|settings\\.|config\\.)"
+API_KEY_FALLBACK_RE="${API_KEY_LOOKUP_RE#^}[^[:space:]]*(([[:space:]]*(\\|\\||\\?\\?)|[[:space:]]+or)[[:space:]]*[\"'][^\"']{12,}[\"']|\\([^(),]*,[[:space:]]*[\"'][^\"']{12,}[\"'])"
 RUST_TYPE_PATH="(([A-Za-z_][A-Za-z0-9_]*::)*${RUST_TYPE_NAME})"
 RUST_TYPE_GENERIC_REF="(&[[:space:]]*(mut[[:space:]]+)?('[[:alpha:]_][[:alnum:]_]*[[:space:]]*)?)?"
 RUST_TYPE_GENERIC_ARG1="${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}([[:space:]]*<${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}(,[[:space:]]*${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH})*[[:space:]]*>)?"
@@ -409,6 +416,20 @@ edge_paren_value_is_literal() {
   fi
   return 1
 }
+# True when the text holds an api-key assignment whose value is not an
+# environment/config lookup, or a lookup followed by a quoted 12+ literal
+# fallback (`|| "..."`, `?? "..."`, `or "..."`, a second call argument): the
+# lookup exempts its own value, never a literal that rides behind it.
+# Matches are collected first and filtered after: a pipeline into `grep -q`
+# could be cut short by SIGPIPE and read as a miss.
+api_key_literal_hit() {
+  local matches
+  matches="$(grep -Eoi "$API_KEY_SECRET_RE" <<<"$1" || true)"
+  if [[ -n "$matches" && -n "$(grep -Ev "$API_KEY_LOOKUP_RE" <<<"$matches" || true)" ]]; then
+    return 0
+  fi
+  grep -Eq "$API_KEY_FALLBACK_RE" <<<"$1"
+}
 # True when the byte range [off, off+len) lies wholly inside one region of a
 # space-separated "start:end ..." region list.
 offset_in_regions() {
@@ -419,12 +440,54 @@ offset_in_regions() {
   done
   return 1
 }
+# True when a generic argument list (the text inside `<...>`) holds something
+# that looks like a literal rather than a type. Type syntax is open-ended
+# (Option<Token>, impl AsRef<[u8]>, Arc<RwLock<String>>, Cow<'a, str>), so
+# the test is inverted: only literal-shaped arguments flag. An argument is
+# literal-shaped when it holds a character outside type syntax (quote, slash,
+# dot, backslash, ...) or an identifier run of 12+ characters that is
+# lowercase-initial or carries a digit or dash. Module path prefixes
+# (a::b::) are dropped first; CamelCase runs without digits are type names.
+# Prints the text from the start of $1 to the `>` that closes the generic
+# list opened just before it (nested lists included; `->` is not a closer).
+# Returns 1 when the list does not close on this line.
+rust_generic_args_text() {
+  local s="$1" i ch prev="" depth=1
+  for ((i = 0; i < ${#s}; i++)); do
+    ch="${s:i:1}"
+    if [[ "$ch" == "<" ]]; then
+      depth=$((depth + 1))
+    elif [[ "$ch" == ">" && "$prev" != "-" ]]; then
+      depth=$((depth - 1))
+      if [[ "$depth" -eq 0 ]]; then
+        printf '%s' "${s:0:i}"
+        return 0
+      fi
+    fi
+    prev="$ch"
+  done
+  return 1
+}
+RUST_NON_TYPE_CHAR_RE='[^][A-Za-z0-9_[:space:]:<>&'"'"';,()+?*=-]'
+rust_generic_arg_is_literal() {
+  local LC_ALL=C
+  local rest="$1" tok
+  [[ "$rest" =~ $RUST_NON_TYPE_CHAR_RE ]] && return 0
+  while [[ "$rest" =~ [A-Za-z_][A-Za-z0-9_]*:: ]]; do
+    rest="${rest/"${BASH_REMATCH[0]}"/}"
+  done
+  while [[ "$rest" =~ ([A-Za-z0-9_-]{12,}) ]]; do
+    tok="${BASH_REMATCH[1]}"
+    [[ "$tok" =~ ^[a-z] || "$tok" =~ [0-9-] ]] && return 0
+    rest="${rest#*"$tok"}"
+  done
+  return 1
+}
 # Per-occurrence generic check for lines without a line-leading type span.
 # Flags only occurrences whose colon is followed, within one type position
-# (no = ; , ( ) { } - between), by `<` opening a non-type generic argument.
-# Recognized type arguments (String, u8, Vec<u8>) are declarations; anything
-# else (supermansecret99) fails closed. Occurrences inside a recognized span
-# are declarations and never flag.
+# (no = ; , ( ) { } - between), by `<` opening a literal-shaped generic
+# argument (rust_generic_arg_is_literal). Occurrences inside a recognized
+# span are declarations and never flag.
 rust_generic_occurrence_is_suspicious() {
   local LC_ALL=C
   local line="$1" lexical="$2" tks="$3" te="$4" regions="$5"
@@ -440,12 +503,14 @@ rust_generic_occurrence_is_suspicious() {
     fi
     rest="${line:off}"
     if [[ "$rest" =~ ^${RUST_TOKEN_COLON_RE}[^=\;,(){}-]*\< ]]; then
-      arg="${rest#*<}"
-      arg="${arg%%[,>]*}"
-      if [[ "$arg" =~ ^[[:space:]]*${RUST_TYPE_GENERIC_REF}([[][^]]+;[[:space:]]*[0-9]+[]]|${RUST_TYPE_PATH}${RUST_TYPE_GENERIC})[[:space:]]*$ ]]; then
-        continue
+      # The whole generic list when it closes on this line; otherwise only
+      # the first argument, so trailing line text is not read as a type.
+      if ! arg="$(rust_generic_args_text "${rest#*<}")"; then
+        arg="${rest#*<}"
+        arg="${arg%%[,>]*}"
       fi
-      return 0
+      rust_generic_arg_is_literal "$arg" && return 0
+      continue
     fi
   done < <(LC_ALL=C grep -Ebo "$RUST_TOKEN_COLON_RE" <<<"$line" || true)
   return 1
@@ -623,7 +688,7 @@ AUTHZ_RUST_PATTERN_HIT=0
 AUTHZ_COLLECTION_FAILED=0
 STRONG_SECRET_HIT=0
 if grep -Eiq "$STRONG_SECRET_RE" <<<"$ADDED_LINES" \
-  || grep -Eiq "$API_KEY_SECRET_RE" <<<"$ADDED_LINES"; then
+  || api_key_literal_hit "$ADDED_LINES"; then
   STRONG_SECRET_HIT=1
 fi
 for file in "${CHANGED[@]}"; do

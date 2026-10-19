@@ -520,8 +520,15 @@ test('an S3c index overrun that stops the pass before the shadow drain fails ON 
     const result = await h.pass()
     assert.equal(result.ok, false, 'a pre-drain stop fails the pass with or without the shadow')
     assert.equal(result.reason, 'deadline')
-    assert.deepEqual((await h.state()).repos[A].backfill.done, [7], 'primary completed before the index overrun')
+    // Stream admission on a fresh pass is not pinned here: primary work may
+    // or may not run before the held index read stops the pass. What must
+    // hold under either admission is that no shadow drain read runs and any
+    // checkpoint reflects only primary work that actually ran.
+    assert.deepEqual(h.kinds('snapshot'), [], 'no shadow drain read runs after a pre-drain stop')
+    assert.deepEqual((await h.state()).repos[A]?.backfill.done ?? [],
+      h.kinds('primary').length ? [7] : [], 'checkpoint matches only the primary work that ran')
     if (disarm) {
+      assert.equal(result.disarmShadow.counters.total, 0, 'no drain accounting for a stop set before the drain')
       assert.equal(result.disarmShadow.counters.deferred, 0, 'no drain read ran, so nothing is contained')
       assert.deepEqual(h.summaryLogs(), [], 'a stopped pass emits no shadow summary')
     }
@@ -685,6 +692,53 @@ test('bounded summaries never contain helper records, arbitrary fields or transp
   assert.ok(JSON.stringify(h.summaryLogs()[0]).length < 1024, 'fixed summary size, not one record per PR')
   assert.equal(JSON.stringify(h.logs).includes(privateText), false)
   assert.equal(JSON.stringify(result.disarmShadow).includes(privateText), false)
+})
+
+test('a sweeps-first S3c index overrun after primary work still fails ON exactly as OFF', async (t) => {
+  const outcomes = []
+  for (const disarm of [undefined, enrolled()]) {
+    const h = await fixture(t, { closeout: { shadow: { enabledRepositories: [B], indexReadsPerPass: 1 }, ...disarm },
+      repos: [A, B], open: { [A]: [] }, limits: { maxPages: 1, maxSweepItems: 1 } })
+    h.rulesRepositories.add(B)
+    h.snapshots.set(7, { isDraft: true })
+    // Force the deterministic sweeps-first schedule the neighbors use: a
+    // resumed review drain is admitted before the event stream, so primary
+    // work for A/7 (which schedules the shadow ref) completes before the
+    // held index read can stop the pass ahead of the shadow drain.
+    assert.equal((await h.pass()).ok, true, 'setup pass succeeds')
+    const state = await h.state()
+    Object.assign(state.repos[A].review, { phase: 'draining', refs: [7], done: [], listedMs: wall, lastCompleteMs: null })
+    await saveSweepState({ directory: h.config.stateDirectory, state })
+    const boardIssues = `${h.config.boardOrigin}/api/companies/${companyId}/issues`
+    const fetch = h.fetch
+    // Wide real-time margins: instant fixture primary work must finish and
+    // the held index read must start well inside the pass budget, while the
+    // hold itself overruns it, even on a loaded runner.
+    h.fetch = async (url, init) => {
+      if (String(url).startsWith(boardIssues)) await new Promise((resolve) => setTimeout(resolve, 2000))
+      return fetch(url, init)
+    }
+    h.config.limits.durationMs = 1200
+    h.calls.length = 0
+    h.logs.length = 0
+    const result = await h.pass()
+    assert.deepEqual(h.kinds('primary'), [['primary', A, 7]],
+      'measured pass re-reviews A primary before the held index read')
+    assert.ok(h.calls.findIndex((v) => v[0] === 'primary') <
+      h.calls.findIndex((v) => v[0] === 'http' && String(v[2]).startsWith(boardIssues)),
+      'primary work precedes the index overrun')
+    assert.equal(result.ok, false, 'a pre-drain stop fails the pass with or without the shadow')
+    assert.equal(result.reason, 'deadline')
+    assert.deepEqual(h.kinds('snapshot'), [], 'no shadow drain read runs after a pre-drain stop')
+    if (disarm) {
+      assert.equal(result.disarmShadow.counters.total, 0, 'no drain accounting for a stop set before the drain')
+      assert.equal(result.disarmShadow.counters.deferred, 0, 'no drain read ran, so nothing is contained')
+      assert.equal(result.disarmShadow.counters.wouldDisarm, 0)
+      assert.deepEqual(h.summaryLogs(), [], 'a stopped pass emits no shadow summary')
+    }
+    outcomes.push({ ok: result.ok, reason: result.reason, processed: result.sweeps.processed })
+  }
+  assert.deepEqual(outcomes[1], outcomes[0], 'ON hides no pre-drain failure that OFF reports')
 })
 
 test('an unexpected helper failure is observational and counted, not swallowed or product-poisoned', async () => {

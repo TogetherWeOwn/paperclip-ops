@@ -86,6 +86,11 @@ PASS = {
     "push colon-next-line value passes": (
         'on: {push: {}, workflow_dispatch: {inputs: {x: {"description"\n'
         '  :"a }}}} # b", type: string}}}}\n' + JOB),
+    # Paperclip Review round 14: an anchor awaiting its value on the next line
+    # is fresh, not a plain continuation -- the value's quotes must open, so
+    # this stays clean (the previous head flagged it as unclosed brackets).
+    "anchor value next line passes": (
+        'on: {push: {}, x: &a\n"v # c"}\n' + JOB),
 }
 
 FAIL = {
@@ -519,10 +524,16 @@ FAIL = {
     "space-before-colon anchor hides trigger": (
         'on: {workflow_dispatch: {inputs: {x: {"description"  :&a "a }}}}'
         ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    # Paperclip Review round 14: the round-12 single-line shape never marked a
+    # line literal (no following lines exist), so it flagged the buggy script
+    # too. This multi-line shape is clean on the pre-fix script (the forged
+    # header swallows the closing quote and inverts quote state for the last
+    # line) and flagged at head.
     "forged block-scalar header hides trigger": (
-        'on:   {workflow_dispatch: {inputs: {it\'s: {description: "v\': |     w",'
-        ' type: string,   default: "}}}}foo # bar"}}}}}, pull_request_target: {}}}'
-        + "\n" + JOB),
+        'on:   {workflow_dispatch: {inputs: {it\'s: {description: "v\': |\n'
+        '     w", type: string,   default: "x",\n'
+        'q: "}}}}foo # bar"}}}, pull_request_target: {}}\n'
+        + JOB),
     # Paperclip Review round 13, family 1: a quoted key whose colon starts
     # the next line hides the value string (pending-quoted-key state was
     # reset per line). All read clean before.
@@ -582,6 +593,176 @@ FAIL = {
         "on: {workflow_dispatch: {inputs: {x: {description: foo bar\n"
         "  'p, type: string, default: 'q }}}} # r'}}}}, pull_request_target: {}}}"
         + "\n" + JOB),
+    # Paperclip Review round 14, family 1: a flow plain scalar ending in
+    # punctuation continues on the next line (`foo bar%` newline `"p` reads
+    # as `foo bar% "p`). The old tail table only pended word endings, so the
+    # next line's leading quote opened a spurious string and flipped parity.
+    # All read clean before (each verified exit 0 on the previous head).
+    "plain-continuation percent hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar%\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation semicolon hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar;\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation rparen hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar)\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation plus hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar+\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation tilde hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar~\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation dollar hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar$\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation at-sign hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar@\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation backtick hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar`\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation equals hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar=\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation caret hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar^\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation star hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar*\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation ampersand hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar &\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation lparen hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar (\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation less-than hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar<\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation greater-than hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar>\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation trailing-apostrophe hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {description: foo bar'\n"
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation non-ascii-symbol hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\u2605\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation spaced-trailing-dash hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar -\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation spaced-trailing-question hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar ?\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation spaced-trailing-bang hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar !\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    # Paperclip Review round 14, family 2: a blank or comment-only line inside
+    # flow is separation space, so it must carry the pending quoted-key and
+    # plain-continuation state forward instead of resetting it. All read clean
+    # before.
+    "colon-next-line blank hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description"\n'
+        '\n'
+        '  :"a }}}} # b", type: string}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "colon-next-line comment hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description"\n'
+        '  # hi\n'
+        '  :"a }}}} # b", type: string}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "colon-next-line spaces-only hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description"\n'
+        '   \n'
+        '  :"a }}}} # b", type: string}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation blank hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation comment hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  # hi\n'
+        '  "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    # Paperclip Review round 14, family 3: a `-`/`?`-led token chain starting a
+    # plain-continuation line (`- &a "p`, `? !!str "p`) is plain text, not a
+    # fresh node. The old guard only rejected a leading property. All read
+    # clean before.
+    "plain-continuation dash-anchor hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  - &a "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation question-anchor hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  ? &a "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation dash-dash hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  - - "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation question-dash hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  ? - "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation dash-verbatim hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  - !<x> "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation dash-tag hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  - !!str "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation dash-question hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  - ? "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation question-question hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  ? ? "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation question-tag hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  ? !!str "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation question-two-anchors hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  ? &a &b "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation dash-two-anchors hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  - &a &b "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation question-verbatim hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  ? !<x> "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
+    "plain-continuation dash-anchor-dash hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  - &a - "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
+        + "\n" + JOB),
 }
 
 
@@ -598,7 +779,7 @@ def run_gate(workflow_text):
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)
         subprocess.run(["git", "add", "-A"], cwd=root, check=True)
         done = subprocess.run(["bash", str(gate)], cwd=root,
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, timeout=10)
         return done.returncode, done.stdout + done.stderr
 
 
@@ -623,16 +804,24 @@ class TestNoPullRequestTarget(unittest.TestCase):
         # Paperclip Review round 12: the glued `"k":"v"` scan was
         # exponential (16 pairs 0.77s, 20 pairs 11.5s, 24 pairs >100s).
         # Thirty pairs must finish well inside CI time, clean or flagged.
+        # run_gate enforces a 10s subprocess deadline, so a regression fails
+        # here naming the bound instead of hanging the suites job.
         import time
         pairs = ",".join(f'"k{i}":"v{i}"' for i in range(30))
         clean = f'on: {{push: {{}}, x: {{{pairs}}}}}\n' + JOB
         t0 = time.time()
-        code, out = run_gate(clean)
+        try:
+            code, out = run_gate(clean)
+        except subprocess.TimeoutExpired:
+            self.fail("clean 30-pair gate run exceeded its 10s bound")
         self.assertLess(time.time() - t0, 10, out)
         self.assertEqual(code, 0, out)
         trig = f'on: {{push: {{}}, x: {{{pairs}}}, pull_request_target: {{}}}}\n' + JOB
         t0 = time.time()
-        code, out = run_gate(trig)
+        try:
+            code, out = run_gate(trig)
+        except subprocess.TimeoutExpired:
+            self.fail("trigger 30-pair gate run exceeded its 10s bound")
         self.assertLess(time.time() - t0, 10, out)
         self.assertEqual(code, 1, out)
 

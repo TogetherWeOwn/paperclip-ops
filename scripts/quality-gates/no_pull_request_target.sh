@@ -37,7 +37,13 @@
 # scalar text, not a property; `-`/`?` count only as standalone indicators;
 # `:` is a value start only after whitespace or closing a real quoted key,
 # so a colon inside a name, or after a lone plain-scalar apostrophe, is not
-# either),
+# either). A line ending mid plain scalar inside flow pends as a
+# continuation for any non-delimiter ending (letters and trailing
+# punctuation alike), unless it ends with a complete anchor/tag/alias at
+# value position (`key: &a` holds its node on the next line, whose quotes
+# stay fresh); blank and comment-only lines inside flow carry that pending
+# state forward; and a `-`/`?`-led chain starting a continuation line is
+# plain text, never a fresh node),
 # and lines split on "\n" only (U+2028/U+0085 are scalar content, not
 # line breaks), so neither a
 # multi-line quoted scalar nor an apostrophe in a plain scalar (e.g.
@@ -117,6 +123,11 @@ def _before_is_node_start(line, s, closed_quote, pending_key=False,
         return _before_is_node_start(line, m + 1, closed_quote, pending_key,
                                      in_plain_cur)
     if prev in ("-", "?"):
+        if in_plain_cur and (m < 0 or line[:m].strip() == ""):
+            # The `-`/`?` leads a token chain at the start of a
+            # continuation line (`- &a "p`, `? !!str "p`): YAML reads the
+            # whole line as plain text, not a fresh node.
+            return False
         return m < 0 or line[m] in " \t,[{"
     if prev.endswith(":"):
         return True
@@ -247,13 +258,19 @@ def _pending_next_for(code, closed_quote, in_single_end, in_double_end):
     return closed_quote == len(stripped) - 1
 
 
-def _plain_next_for(code, in_single_end, in_double_end, depth_end):
+def _plain_next_for(code, in_single_end, in_double_end, depth_end,
+                    closed_quote=None):
     # True when this line ends inside a flow plain scalar that may continue
-    # on the next line (`description: foo bar` newline `"p ...` reads as
-    # `foo bar "p` in YAML). Only tracked inside flow collections; block
-    # lines never pend (a dedented `*alias` is a fresh key, not a
-    # continuation). A line ending with a delimiter, quote, property or
-    # indicator is fresh, not a continuation.
+    # on the next line (`description: foo bar%` newline `"p ...` reads as
+    # `foo bar% "p` in YAML: a plain scalar may end in almost any
+    # non-indicator character). Only tracked inside flow collections;
+    # block lines never pend (a dedented `*alias` is a fresh key, not a
+    # continuation). Fresh (False): a line ending with a structural
+    # delimiter or key colon, with a real closing quote (pending_key
+    # territory), with a standalone `-`/`?` indicator, or with a complete
+    # anchor/tag/alias at value position (`key: &a` EOL holds its node on
+    # the next line, whose quotes must open). Any other scalar ending
+    # pends, including bare trailing `&`/`!`/`-`/`?` after scalar text.
     if in_single_end or in_double_end:
         return False
     if depth_end <= 0:
@@ -262,17 +279,45 @@ def _plain_next_for(code, in_single_end, in_double_end, depth_end):
     if not stripped:
         return False
     c = stripped[-1]
-    if c in ",:{}[]#&*!|>'\"'":
+    if c in ",:{}[]":
         return False
-    if c in "-?" and (len(stripped) == 1
-                      or stripped[-2] in " \t,[{:"):
-        return False
-    if c.isalnum() or c == "_":
+    if c in "\"'":
+        # A real closing quote ends the value; a stray quote char is
+        # scalar text (e.g. a trailing apostrophe in `foo'`).
+        return closed_quote != len(stripped) - 1
+    if c in "-?":
+        # Standalone at value position (whole line, or after an opening
+        # delimiter, key colon or explicit key) is fresh; after scalar
+        # text (`foo -`) it is plain text and continues.
+        j = len(stripped) - 2
+        while j >= 0 and stripped[j] in " \t":
+            j -= 1
+        if j < 0 or stripped[j] in ",{[:?":
+            return False
         return True
-    if c in "-/." and len(stripped) >= 2 and (
-            stripped[-2].isalnum() or stripped[-2] in "_/-."):
+    if c in "&!":
+        # Bare (naming nothing): awaiting its name at value position
+        # (`key: &` EOL) is fresh; after scalar text (`foo &`) it is
+        # plain text and continues.
+        j = len(stripped) - 2
+        while j >= 0 and stripped[j] in " \t":
+            j -= 1
+        if j < 0 or stripped[j] in ",{[:?-":
+            return False
         return True
-    return False
+    m = re.search(r"!<[^ \t]*>$|[&*!][^\s,\[\]{}]+$", stripped)
+    if m:
+        # A complete anchor/tag/alias at value position (`key: &a`, `[!t`,
+        # `- *t`) is a complete node or a property awaiting its node: the
+        # next line is fresh, so its quotes must open. After scalar text
+        # (`foo &a`) the line may still continue as plain text.
+        j = m.start() - 1
+        while j >= 0 and stripped[j] in " \t":
+            j -= 1
+        if j < 0 or stripped[j] in ",{[:?-":
+            return False
+        return True
+    return True
 
 
 def _scan_line(line, in_single=False, in_double=False, pending_key=False,
@@ -319,10 +364,16 @@ def _scan_line(line, in_single=False, in_double=False, pending_key=False,
                 m = "".join(mask[:i])
                 delta = m.count("{") + m.count("[") - m.count("}") - m.count("]")
                 depth_end = depth + delta
+                if code.strip() == "" and depth > 0:
+                    # Blank or comment-only line inside flow: separation
+                    # space, not a boundary; carry the incoming
+                    # cross-line state forward unchanged.
+                    return (code, m, in_single, in_double, pending_key,
+                            in_plain, depth_end)
                 pending_next = _pending_next_for(code, closed_quote,
                                                  in_single, in_double)
                 in_plain_next = _plain_next_for(code, in_single, in_double,
-                                                depth_end)
+                                                depth_end, closed_quote)
                 return (code, m, in_single, in_double, pending_next,
                         in_plain_next, depth_end)
         elif ch in ",:{}[]" and not was_quoted and not in_single \
@@ -334,8 +385,15 @@ def _scan_line(line, in_single=False, in_double=False, pending_key=False,
     m = "".join(mask)
     delta = m.count("{") + m.count("[") - m.count("}") - m.count("]")
     depth_end = depth + delta
-    pending_next = _pending_next_for(line, closed_quote, in_single, in_double)
-    in_plain_next = _plain_next_for(line, in_single, in_double, depth_end)
+    if line.strip() == "" and depth > 0:
+        # Blank line inside flow: separation space, not a boundary; carry
+        # the incoming cross-line state forward unchanged.
+        pending_next, in_plain_next = pending_key, in_plain
+    else:
+        pending_next = _pending_next_for(line, closed_quote, in_single,
+                                         in_double)
+        in_plain_next = _plain_next_for(line, in_single, in_double,
+                                        depth_end, closed_quote)
     return line, m, in_single, in_double, pending_next, in_plain_next, depth_end
 
 

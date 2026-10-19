@@ -67,8 +67,9 @@ not replay or busy. `verify-only` also refuses an unsafe existing directory,
 but does not create an absent one.
 
 Output ancestors and the audit log remain host provisioning preconditions:
-use protected root-owned ancestor directories and a protected regular audit
-log (or an absent log in a protected directory), never a symlink. The helper
+use protected root-owned ancestor directories and a root-owned regular audit
+log that non-root users cannot write to (or an absent log in a protected
+directory), never a symlink. The helper
 does not validate every ancestor or the audit log's custody. It does not
 repair permissions. Use a restrictive umask (for example `077`) during the
 bounded invocation; a newly created group/other-writable processed directory

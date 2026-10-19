@@ -81,6 +81,11 @@ PASS = {
         + chr(10) + JOB),
     "json-colon pairs without trigger pass": (
         'on: {"a":"b", "c":"d"}' + chr(10) + JOB),
+    # Paperclip Review round 13: a valid push workflow whose quoted key's
+    # colon starts the next line must stay clean (no false unclosed-bracket).
+    "push colon-next-line value passes": (
+        'on: {push: {}, workflow_dispatch: {inputs: {x: {"description"\n'
+        '  :"a }}}} # b", type: string}}}}\n' + JOB),
 }
 
 FAIL = {
@@ -497,6 +502,86 @@ FAIL = {
         'on: {workflow_dispatch: {inputs: {x: {description: \',\', default: foo\':"p},'
         ' y: {description: "q }}}} # r"}}}, pull_request_target: {}}'
         + "\n" + JOB),
+    # Paperclip Review round 12: mid-string line-2 glued pair, space before
+    # the colon of a JSON-style key, and the forged block-scalar header all
+    # read clean before the shared-scanner fix. Pinned here so a revert keeps
+    # CI red (the round-13 review ran that mutant: 108 green without pins).
+    "mid-string line-2 glued pair hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {type: string, description: "abc\n'
+        '  [ ", "default":"v }}}} # b"}}}, pull_request_target: {}}}'
+        + "\n" + JOB),
+    "space-before-colon dquote hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description" :"a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "space-before-colon squote hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {'description' :'a }}}} # b'}}}},"
+        " pull_request_target: {}}" + "\n" + JOB),
+    "space-before-colon anchor hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description"  :&a "a }}}}'
+        ' # b"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "forged block-scalar header hides trigger": (
+        'on:   {workflow_dispatch: {inputs: {it\'s: {description: "v\': |     w",'
+        ' type: string,   default: "}}}}foo # bar"}}}}}, pull_request_target: {}}}'
+        + "\n" + JOB),
+    # Paperclip Review round 13, family 1: a quoted key whose colon starts
+    # the next line hides the value string (pending-quoted-key state was
+    # reset per line). All read clean before.
+    "colon-next-line hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description"\n'
+        '  :"a }}}} # b", type: string}}}, pull_request_target: {}}}'
+        + "\n" + JOB),
+    "colon-next-line anchor hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description"\n'
+        '  :&a "a }}}} # b", type: string}}}, pull_request_target: {}}}'
+        + "\n" + JOB),
+    "colon-next-line tag hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description"\n'
+        '  :!!str "a }}}} # b", type: string}}}, pull_request_target: {}}}'
+        + "\n" + JOB),
+    "colon-next-line squote hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {'description'\n"
+        "  :'a }}}} # b', type: string}}}, pull_request_target: {}}}"
+        + "\n" + JOB),
+    "colon-next-line trailing-space hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description" \n'
+        '  :"a }}}} # b", type: string}}}, pull_request_target: {}}}'
+        + "\n" + JOB),
+    "colon-next-line after multiline hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: "m\n'
+        'n", "description"\n'
+        '  :"a }}}} # b", type: string}}}, pull_request_target: {}}}'
+        + "\n" + JOB),
+    # Paperclip Review round 13, family 2: a flow plain scalar continued on
+    # a line starting like a fresh node opens a spurious quote and flips
+    # parity. All read clean before.
+    "plain-continuation quote hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  "p, type: string, default: "q }}}} # r"}}}}, pull_request_target: {}}}'
+        + "\n" + JOB),
+    "plain-continuation anchor hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  &a "p, type: string, default: "q }}}} # r"}}}}, pull_request_target: {}}}'
+        + "\n" + JOB),
+    "plain-continuation tag hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  !!str "p, type: string, default: "q }}}} # r"}}}}, pull_request_target: {}}}'
+        + "\n" + JOB),
+    "plain-continuation verbatim hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  !<x> "p, type: string, default: "q }}}} # r"}}}}, pull_request_target: {}}}'
+        + "\n" + JOB),
+    "plain-continuation dash hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  - "p, type: string, default: "q }}}} # r"}}}}, pull_request_target: {}}}'
+        + "\n" + JOB),
+    "plain-continuation question hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
+        '  ? "p, type: string, default: "q }}}} # r"}}}}, pull_request_target: {}}}'
+        + "\n" + JOB),
+    "plain-continuation squote hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {description: foo bar\n"
+        "  'p, type: string, default: 'q }}}} # r'}}}}, pull_request_target: {}}}"
+        + "\n" + JOB),
 }
 
 
@@ -533,6 +618,23 @@ class TestNoPullRequestTarget(unittest.TestCase):
     def test_no_workflows_passes(self):
         code, out = run_gate(None)
         self.assertEqual(code, 0, out)
+
+    def test_many_glued_pairs_bounded(self):
+        # Paperclip Review round 12: the glued `"k":"v"` scan was
+        # exponential (16 pairs 0.77s, 20 pairs 11.5s, 24 pairs >100s).
+        # Thirty pairs must finish well inside CI time, clean or flagged.
+        import time
+        pairs = ",".join(f'"k{i}":"v{i}"' for i in range(30))
+        clean = f'on: {{push: {{}}, x: {{{pairs}}}}}\n' + JOB
+        t0 = time.time()
+        code, out = run_gate(clean)
+        self.assertLess(time.time() - t0, 10, out)
+        self.assertEqual(code, 0, out)
+        trig = f'on: {{push: {{}}, x: {{{pairs}}}, pull_request_target: {{}}}}\n' + JOB
+        t0 = time.time()
+        code, out = run_gate(trig)
+        self.assertLess(time.time() - t0, 10, out)
+        self.assertEqual(code, 1, out)
 
 
 if __name__ == "__main__":

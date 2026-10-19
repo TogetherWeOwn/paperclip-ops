@@ -77,14 +77,23 @@ def _odd_backslashes(line, idx):
     return bs % 2 == 1
 
 
-def _before_is_node_start(line, s, closed_quote):
+def _before_is_node_start(line, s, closed_quote, pending_key=False,
+                           in_plain_cur=False):
     # True when index s (the start of an `&anchor` / `!tag` / `!<...>`
     # token) sits at a YAML node start: line start, after a flow indicator
     # (`[`, `{`, `,`), after a mapping colon (`key: &a`, `key:&a`,
     # `"k":&a`), after a standalone `-`/`?` indicator, or after another
     # property (`&a &b "v"`). A token glued to, or separated only by spaces
     # from, a plain-scalar word (`foo &b`, `foo!<x>`) is mid-scalar text,
-    # not a property, so a quote after it must not open.
+    # not a property, so a quote after it must not open. When the previous
+    # line ended inside a flow plain scalar (`in_plain_cur`), a token at the
+    # start of this line is a continuation of that scalar, not a fresh node.
+    if in_plain_cur:
+        k2 = s - 1
+        while k2 >= 0 and line[k2] in (" ", "\t"):
+            k2 -= 1
+        if k2 < 0:
+            return False
     if s <= 0:
         return True
     if line[s - 1] in "[{,":
@@ -96,7 +105,8 @@ def _before_is_node_start(line, s, closed_quote):
         return True
     m = k
     while m >= 0 and line[m] not in " \t,[]{}":
-        if line[m] == ":" and _quoted_key_colon(line, m, closed_quote):
+        if line[m] == ":" and _quoted_key_colon(line, m, closed_quote,
+                                                pending_key):
             # Stop at the real key colon, not at a quote in a property name.
             break
         m -= 1
@@ -104,7 +114,8 @@ def _before_is_node_start(line, s, closed_quote):
     if prev == "":
         return True
     if prev[0] in "&!":
-        return _before_is_node_start(line, m + 1, closed_quote)
+        return _before_is_node_start(line, m + 1, closed_quote, pending_key,
+                                     in_plain_cur)
     if prev in ("-", "?"):
         return m < 0 or line[m] in " \t,[{"
     if prev.endswith(":"):
@@ -112,17 +123,25 @@ def _before_is_node_start(line, s, closed_quote):
     return False
 
 
-def _quoted_key_colon(line, colon, closed_quote):
+def _quoted_key_colon(line, colon, closed_quote, pending_key=False):
     # The scan records actual closing quotes, including on a continuation
     # line. Never replay a prefix with fresh state or search for an opener.
     # YAML permits spaces/tabs before a JSON-style key's adjacent value.
+    # A colon that starts the line (only indent before it) closes a quoted
+    # key from the previous line (`"k"` newline `:"v"` is a valid flow key
+    # plus adjacent value): recognise it via the cross-line pending flag.
     k = colon - 1
     while k >= 0 and line[k] in " \t":
         k -= 1
-    return k >= 0 and k == closed_quote
+    if k >= 0 and k == closed_quote:
+        return True
+    if pending_key and k < 0:
+        return True
+    return False
 
 
-def _at_scalar_start(line, i, closed_quote):
+def _at_scalar_start(line, i, closed_quote, pending_key=False,
+                     in_plain_cur=False):
     # A quote opens a YAML scalar only at a value start: line start (after
     # indent), after `[`, `{` or `,`, after a mapping `:` (whitespace before
     # the quote, or JSON-style `"k" :"v"` where the colon follows a real
@@ -142,20 +161,27 @@ def _at_scalar_start(line, i, closed_quote):
     # to the nearest `&`/`!`. A bare word character is NOT a value start, so
     # an apostrophe inside a plain scalar (e.g. `description: it's` or
     # `name: Don't deploy`) is literal text and must not open quote mode.
+    # A line that continues a flow plain scalar from the previous line
+    # (`in_plain_cur`: `description: foo bar` newline `"p ...`) never opens
+    # at its leading token: YAML reads it as plain text (`foo bar "p`).
     # Closing an already-open scalar is always allowed.
     j = i - 1
     while j >= 0 and line[j] in (" ", "\t"):
         j -= 1
     if j < 0:
+        if in_plain_cur:
+            return False
         return True
     if line[j] in "[{,":
         return True
     if line[j] == ":" and j < i - 1:
         return True
-    if line[j] == ":" and _quoted_key_colon(line, j, closed_quote):
+    if line[j] == ":" and _quoted_key_colon(line, j, closed_quote,
+                                            pending_key):
         return True
     if (line[j] in "-?" and j < i - 1
-            and _before_is_node_start(line, j, closed_quote)):
+            and _before_is_node_start(line, j, closed_quote, pending_key,
+                                      in_plain_cur)):
         # The indicator itself must sit at a node start: a
         # space-separated `-`/`?` inside a plain scalar (`foo - "p`) is
         # scalar text, not an indicator.
@@ -176,7 +202,8 @@ def _at_scalar_start(line, i, closed_quote):
     if line[j] == ">":
         idx = line.rfind("!<", 0, j)
         if (idx != -1 and not any(c in " \t" for c in line[idx:j + 1])
-                and _before_is_node_start(line, idx, closed_quote)):
+                and _before_is_node_start(line, idx, closed_quote,
+                                          pending_key, in_plain_cur)):
             return True
     # Anchor/tag name directly before the quote: take the whitespace- and
     # flow-delimited token ending at j (an anchor/tag name admits any other
@@ -193,7 +220,8 @@ def _at_scalar_start(line, i, closed_quote):
         return False
     k = j
     while k >= 0 and line[k] not in " \t,[]{}":
-        if line[k] == ":" and _quoted_key_colon(line, k, closed_quote):
+        if line[k] == ":" and _quoted_key_colon(line, k, closed_quote,
+                                                pending_key):
             # Preserve the same key boundary through chains of properties.
             break
         k -= 1
@@ -201,18 +229,67 @@ def _at_scalar_start(line, i, closed_quote):
     if token == "":
         return True
     if token[0] in "&!":
-        return _before_is_node_start(line, k + 1, closed_quote)
+        return _before_is_node_start(line, k + 1, closed_quote, pending_key,
+                                     in_plain_cur)
     return False
 
 
-def _scan_line(line, in_single=False, in_double=False):
+def _pending_next_for(code, closed_quote, in_single_end, in_double_end):
+    # True when this (comment-stripped) line ends right after a real closing
+    # quote: the next line may start with that key's colon (`"k"` newline
+    # `:"v"` is a valid flow key plus adjacent value). Only spaces/tabs may
+    # sit between the quote and the line end; an open string never pends.
+    if in_single_end or in_double_end:
+        return False
+    stripped = code.rstrip(" \t")
+    if not stripped or stripped[-1] not in "\"'":
+        return False
+    return closed_quote == len(stripped) - 1
+
+
+def _plain_next_for(code, in_single_end, in_double_end, depth_end):
+    # True when this line ends inside a flow plain scalar that may continue
+    # on the next line (`description: foo bar` newline `"p ...` reads as
+    # `foo bar "p` in YAML). Only tracked inside flow collections; block
+    # lines never pend (a dedented `*alias` is a fresh key, not a
+    # continuation). A line ending with a delimiter, quote, property or
+    # indicator is fresh, not a continuation.
+    if in_single_end or in_double_end:
+        return False
+    if depth_end <= 0:
+        return False
+    stripped = code.rstrip(" \t")
+    if not stripped:
+        return False
+    c = stripped[-1]
+    if c in ",:{}[]#&*!|>'\"'":
+        return False
+    if c in "-?" and (len(stripped) == 1
+                      or stripped[-2] in " \t,[{:"):
+        return False
+    if c.isalnum() or c == "_":
+        return True
+    if c in "-/." and len(stripped) >= 2 and (
+            stripped[-2].isalnum() or stripped[-2] in "_/-."):
+        return True
+    return False
+
+
+def _scan_line(line, in_single=False, in_double=False, pending_key=False,
+               in_plain=False, depth=0):
     # One quote-state machine for comments, flow depth, aliases and literal
     # headers. mask preserves positions outside quoted scalars; quoted bytes
     # are spaces. closed_quote is an actual transition in this scan, never a
-    # recursive replay with a different initial state. Reset its index on
-    # each physical line while carrying the open-quote state across lines.
+    # recursive replay with a different initial state. Quote state is carried
+    # across lines; closed_quote resets per line while `pending_key` (the
+    # previous line ended after a quoted key) and `in_plain` (the previous
+    # line ended in a flow plain scalar) cross the boundary. `depth` is the
+    # flow depth before this line; the returned depth includes this line.
+    # Returns (code, mask, in_single, in_double, pending_next, in_plain_next,
+    # depth_end).
     mask = list(line)
     closed_quote = None
+    in_plain_cur = bool(in_plain and depth > 0)
     i = 0
     while i < len(line):
         ch = line[i]
@@ -225,27 +302,47 @@ def _scan_line(line, in_single=False, in_double=False):
             if in_single:
                 in_single = False
                 closed_quote = i
-            elif _at_scalar_start(line, i, closed_quote):
+            elif _at_scalar_start(line, i, closed_quote, pending_key,
+                                  in_plain_cur):
                 in_single = True
         elif ch == '"' and not in_single:
             if not _odd_backslashes(line, i):
                 if in_double:
                     in_double = False
                     closed_quote = i
-                elif _at_scalar_start(line, i, closed_quote):
+                elif _at_scalar_start(line, i, closed_quote, pending_key,
+                                      in_plain_cur):
                     in_double = True
         elif ch == "#" and not was_quoted:
             if i == 0 or line[i - 1] in (" ", "\t"):
-                return line[:i], "".join(mask[:i]), in_single, in_double
+                code = line[:i]
+                m = "".join(mask[:i])
+                delta = m.count("{") + m.count("[") - m.count("}") - m.count("]")
+                depth_end = depth + delta
+                pending_next = _pending_next_for(code, closed_quote,
+                                                 in_single, in_double)
+                in_plain_next = _plain_next_for(code, in_single, in_double,
+                                                depth_end)
+                return (code, m, in_single, in_double, pending_next,
+                        in_plain_next, depth_end)
+        elif ch in ",:{}[]" and not was_quoted and not in_single \
+                and not in_double:
+            in_plain_cur = False
         if was_quoted or in_single or in_double:
             mask[i] = " "
         i += 1
-    return line, "".join(mask), in_single, in_double
+    m = "".join(mask)
+    delta = m.count("{") + m.count("[") - m.count("}") - m.count("]")
+    depth_end = depth + delta
+    pending_next = _pending_next_for(line, closed_quote, in_single, in_double)
+    in_plain_next = _plain_next_for(line, in_single, in_double, depth_end)
+    return line, m, in_single, in_double, pending_next, in_plain_next, depth_end
 
 
-def _strip_line(line, in_single, in_double):
-    code, _, in_single, in_double = _scan_line(line, in_single, in_double)
-    return code, in_single, in_double
+def _strip_line(line, in_single, in_double, pending_key, in_plain, depth):
+    code, _, in_single, in_double, pending_key, in_plain, depth = _scan_line(
+        line, in_single, in_double, pending_key, in_plain, depth)
+    return code, in_single, in_double, pending_key, in_plain, depth
 
 
 def strip_comments_crossline(lines, literal):
@@ -254,11 +351,14 @@ def strip_comments_crossline(lines, literal):
     # unchanged and cannot open or close an outer quoted scalar.
     code_lines = []
     in_single = in_double = False
+    pending_key = in_plain = False
+    depth = 0
     for idx, line in enumerate(lines):
         if literal[idx]:
             code_lines.append(line)
             continue
-        code, in_single, in_double = _strip_line(line, in_single, in_double)
+        code, in_single, in_double, pending_key, in_plain, depth = _strip_line(
+            line, in_single, in_double, pending_key, in_plain, depth)
         code_lines.append(code)
     return code_lines
 
@@ -267,10 +367,12 @@ def _indent_of(code):
     return len(INDENT.match(code).group(0).expandtabs(8))
 
 
-def _bracket_delta_state(code, in_single, in_double):
-    _, mask, in_single, in_double = _scan_line(code, in_single, in_double)
+def _bracket_delta_state(code, in_single, in_double, pending_key, in_plain,
+                         depth):
+    _, mask, in_single, in_double, pending_key, in_plain, depth_end = \
+        _scan_line(code, in_single, in_double, pending_key, in_plain, depth)
     delta = mask.count("{") + mask.count("[") - mask.count("}") - mask.count("]")
-    return delta, in_single, in_double
+    return delta, in_single, in_double, pending_key, in_plain, depth_end
 
 
 def _block_depth(pairs):
@@ -279,11 +381,13 @@ def _block_depth(pairs):
     # never touch the threaded quote state.
     depth = 0
     in_single = in_double = False
+    pending_key = in_plain = False
     for code, is_lit in pairs:
         if is_lit:
             continue
-        d, in_single, in_double = _bracket_delta_state(
-            code, in_single, in_double)
+        d, in_single, in_double, pending_key, in_plain, depth_end = \
+            _bracket_delta_state(code, in_single, in_double, pending_key,
+                                 in_plain, depth)
         depth += d
     return depth
 
@@ -296,6 +400,7 @@ def _literal_flags(lines):
     flags = [False] * len(lines)
     header_indent = None
     in_single = in_double = False
+    pending_key = in_plain = False
     depth = 0
     for idx, line in enumerate(lines):
         if header_indent is not None:
@@ -303,8 +408,10 @@ def _literal_flags(lines):
                 flags[idx] = True
                 continue
             header_indent = None
-        _, mask, in_single, in_double = _scan_line(line, in_single, in_double)
-        depth += mask.count("{") + mask.count("[") - mask.count("}") - mask.count("]")
+        _, mask, in_single, in_double, pending_key, in_plain, depth_end = \
+            _scan_line(line, in_single, in_double, pending_key, in_plain,
+                       depth)
+        depth = depth_end
         if (depth == 0 and not in_single and not in_double
                 and BLOCK_SCALAR_HEADER.search(mask)):
             header_indent = _indent_of(line)
@@ -437,7 +544,9 @@ def find_on_block(text):
     start = next(idx for idx, indent in cands if indent == best)
     indent = best
     member = {start + 1}
-    depth, qs, qd = _bracket_delta_state(code_lines[start], False, False)
+    depth, qs, qd, qp, qpl, depth_end = _bracket_delta_state(
+        code_lines[start], False, False, False, False, 0)
+    depth = depth_end
     for idx in range(start + 1, len(lines)):
         code = code_lines[idx]
         if code.strip() == "":
@@ -448,7 +557,8 @@ def find_on_block(text):
         member.add(idx + 1)
         if literal[idx]:
             continue
-        d, qs, qd = _bracket_delta_state(code, qs, qd)
+        d, qs, qd, qp, qpl, depth_end = _bracket_delta_state(
+            code, qs, qd, qp, qpl, depth)
         depth += d
     return member
 
@@ -474,10 +584,14 @@ def _suspicious_top_key(code_lines, literal):
         return None
     min_indent = min(_indent_of(c) for c in nonblank)
     in_single = in_double = False
+    pending_key = in_plain = False
+    depth = 0
     for code, is_lit in zip(code_lines, literal):
         if is_lit:
             continue
-        _, mask, in_single, in_double = _scan_line(code, in_single, in_double)
+        _, mask, in_single, in_double, pending_key, in_plain, depth = \
+            _scan_line(code, in_single, in_double, pending_key, in_plain,
+                       depth)
         if code.strip() == "" or _indent_of(code) != min_indent:
             continue
         if mask.lstrip(" \t").startswith("?"):
@@ -533,10 +647,14 @@ def _unquoted_alias_hit(pairs):
     count (an alias cannot live inside a literal string).
     """
     in_single = in_double = False
+    pending_key = in_plain = False
+    depth = 0
     for code, is_lit in pairs:
         if is_lit:
             continue
-        _, mask, in_single, in_double = _scan_line(code, in_single, in_double)
+        _, mask, in_single, in_double, pending_key, in_plain, depth = \
+            _scan_line(code, in_single, in_double, pending_key, in_plain,
+                       depth)
         i = 0
         n = len(mask)
         while i < n:

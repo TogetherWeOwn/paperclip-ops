@@ -221,6 +221,9 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
 # fails when a step's script classifies without `core`, so a new suite cannot
 # repeat this.
 ALSO_CORE_PREFIXES: tuple[str, ...] = (
+    # code-nav tests pin the hash-checked install command, so this spec is
+    # executable contract surface even on a markdown-only PR.
+    "ops/agent-tooling/serena-pilot-b/OPERATOR_SPEC.md",
     # host operations broker: `host operations broker suite` and `installer
     # contract suite` steps, the host-ops/*.sh parse gate, and
     # test_host_ops_broker.py reads host-ops/RUNBOOK.md.

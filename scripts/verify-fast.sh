@@ -90,7 +90,7 @@ for f in ops/productivity/*.sh; do
 done
 python3 -c 'import ast, sys; [ast.parse(open(p, "rb").read(), p) for p in sys.argv[1:]]' \
   ops/productivity/*.py ops/lib/*.py ops/paperclip/*.py ops/agent-tooling/serena-pilot-b/*.py || fail "python parse error in ops/productivity, ops/lib, ops/paperclip or ops/agent-tooling/serena-pilot-b"
-bash -n ops/agent-tooling/serena-pilot-b/code-nav || fail "bash parse error: ops/agent-tooling/serena-pilot-b/code-nav"
+sh -n ops/agent-tooling/serena-pilot-b/code-nav || fail "sh parse error: ops/agent-tooling/serena-pilot-b/code-nav"
 python3 -c 'import ast, sys; [ast.parse(open(path, "rb").read(), path) for path in sys.argv[1:]]' \
   ops/pr-hygiene/sweep.py ops/pr-hygiene/owner_match.py ops/lib/live_run_guard.py \
   ops/case_af881f62/operator_workspace_reconciler.py ops/case_af881f62/test_operator_workspace_reconciler.py \

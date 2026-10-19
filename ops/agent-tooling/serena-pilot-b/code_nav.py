@@ -10,7 +10,7 @@ Usage (run from anywhere inside the repo to navigate):
   code-nav symbol <name_path> [--body] [--in <file-or-dir>] [--depth 0] [--info]
   code-nav refs <name_path> <file>
 
-Stdlib only. Concurrent calls for the same repo are serialized with a flock
+Uses PyYAML from the pinned Serena venv. Concurrent calls for the same repo are serialized with a flock
 (each call starts a ~1.9 GB language server); the whole operation (queue wait
 plus the tool call) is bounded by --timeout (default 120 s).
 
@@ -26,10 +26,13 @@ import fcntl
 import hashlib
 import json
 import os
-import shutil
 import signal
+import stat
 import subprocess
 import sys
+import tempfile
+
+import yaml
 
 DEFAULT_TIMEOUT_S = 120
 MCP_PROTOCOL_VERSION = "2024-11-05"
@@ -120,22 +123,56 @@ def _to_root_rel(root, user_path, kind="path"):
 
 def _ensure_home(home):
     os.makedirs(home, mode=0o700, exist_ok=True)
+    info = os.lstat(home)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+        die("unsafe state directory: %s (must be owned, non-symlink and not group/world writable)" % home, code=2)
+
+
+def _load_config(path):
+    try:
+        with open(path) as f:
+            return yaml.safe_load(f)
+    except (OSError, ValueError, yaml.YAMLError):
+        # Parser exceptions can quote config contents (including auth_secret).
+        die("cannot parse config: %s" % path, code=2)
+
+
+def _validate_config(config, home, path):
+    expected = os.path.join(home, "projects", "$projectFolderName")
+    if (not isinstance(config, dict)
+            or not isinstance(config.get("projects"), list)
+            or config.get("trusted_project_path_patterns") != []
+            or config.get("project_serena_folder_location") != expected):
+        die("unsafe pilot config: %s (requires projects list, trusted_project_path_patterns: [], "
+            "and project_serena_folder_location: %s; inspect and move the old config aside to reseed)"
+            % (path, expected), code=2)
 
 
 def _ensure_global_config(home, template):
-    """Seed the global Serena config if missing. Serena auto-generates one
-    from template defaults when absent, and the defaults put project state
-    back inside the repo -- so this must run before every server start
-    (/tmp/serena-home does not survive a prune). Atomic write; concurrent
-    seeders write identical bytes."""
+    """Render the effective home once; validate safety-critical values on
+    every call. Preserve Serena's normalized config, project list and secret.
+    Unsafe old configs fail closed, never silently overwrite operator state."""
     dest = os.path.join(home, "serena_config.yml")
-    if os.path.exists(dest):
-        return
-    if not os.path.exists(template):
-        die("config template missing: %s (broken install)" % template)
-    tmp = "%s.tmp-%d" % (dest, os.getpid())
-    shutil.copyfile(template, tmp)
-    os.replace(tmp, dest)
+    if not os.path.lexists(dest):
+        config = _load_config(template)
+        if (not isinstance(config, dict) or config.get("project_serena_folder_location")
+                != "@SERENA_HOME@/projects/$projectFolderName"):
+            die("invalid pilot config template: %s" % template, code=2)
+        config["project_serena_folder_location"] = os.path.join(home, "projects", "$projectFolderName")
+        _validate_config(config, home, template)
+        # Publish complete bytes without replacing a concurrent seeder's or
+        # Serena's config. tempfile is private and link is atomic/no-clobber.
+        with tempfile.NamedTemporaryFile(mode="w", dir=home) as tmp:
+            yaml.safe_dump(config, tmp)
+            tmp.flush()
+            try:
+                os.link(tmp.name, dest)
+            except FileExistsError:
+                pass
+    info = os.lstat(dest)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+        die("unsafe config file: %s" % dest, code=2)
+    _validate_config(_load_config(dest), home, dest)
 
 
 class _MCP:
@@ -215,12 +252,13 @@ def _run_once(tool, args, timeout):
     if not os.path.exists(opt["context"]):
         die("context missing: %s (broken install)" % opt["context"])
     root = _repo_root()
-    home = os.environ.get("SERENA_HOME") or "/tmp/serena-home"
-    _ensure_home(home)
-    _ensure_global_config(home, opt["config_template"])
+    home = os.path.realpath(os.environ.get("SERENA_HOME") or "/tmp/serena-home")
+    if (os.path.commonpath([home, root]) == root
+            or home == "/paperclip" or home.startswith("/paperclip/") or "$" in home):
+        die("SERENA_HOME must be outside the repo and /paperclip, with no $ placeholders", code=2)
 
     lock_dir = os.environ.get("CODE_NAV_LOCK_DIR") or "/tmp/code-nav-locks"
-    os.makedirs(lock_dir, mode=0o700, exist_ok=True)
+    _ensure_home(lock_dir)
     lock_path = os.path.join(lock_dir, hashlib.sha1(root.encode()).hexdigest() + ".lock")
 
     argv = [opt["serena_bin"]] + [
@@ -237,6 +275,12 @@ def _run_once(tool, args, timeout):
         # starting a 1.9 GB language server. The alarm bounds queue+call.
         lock_fh = open(lock_path, "a+b")
         fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        _ensure_home(home)
+        _ensure_global_config(home, opt["config_template"])
+        # 2.0.0 falls back to repo/.serena when this directory is absent.
+        # Create it before activation so repo project.yml is never loaded.
+        _ensure_home(os.path.join(home, "projects"))
+        _ensure_home(os.path.join(home, "projects", os.path.basename(root)))
         mcp = _MCP(argv, env, cwd=root)
         mcp.open()
         result = mcp.tool(tool, args)

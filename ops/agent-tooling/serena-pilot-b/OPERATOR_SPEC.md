@@ -1,6 +1,8 @@
 # Operator spec: Serena 2.0.0 Pilot B agent-side CLI (single host step)
 
-One `Operator:` card covers this whole spec. No second card for the same step.
+The designated host executor installs from the merged pilot commit after
+same-head CI and Paperclip Review 5/5. No extra approval or queue hop; never
+create a second host-step card. Builders do not perform this host action.
 
 ## Scope
 
@@ -26,13 +28,14 @@ at the merged pilot commit; `PILOT` below is
 
 1. Create the venv with container python3.13 and install pinned:
    `python3.13 -m venv /paperclip/.local/opt/serena-2.0.0/venv`
-   `/paperclip/.local/opt/serena-2.0.0/venv/bin/pip install --requirement PILOT/requirements-serena-2.0.0-lock.txt`
-   (Lock: `serena-agent==2.0.0`, requires-python `>=3.11,<3.15`;
-   container python3.13 satisfies it. Regenerate hashes at install time.)
-   If `venv` fails with "ensurepip is not available": retry after
-   `apt install -y python3.13-venv`, or fall back to
-   `python3.13 -m venv --without-pip <dir>` plus a get-pip.py bootstrap
-   (verified workaround; the lock installs cleanly either way).
+   `/paperclip/.local/opt/serena-2.0.0/venv/bin/pip install --require-hashes --requirement PILOT/requirements-serena-2.0.0-lock.txt`
+   (Lock: all 74 packages in the resolved closure, including transitives,
+   with committed PyPI SHA256s; Linux x86_64 / CPython 3.13 only. The
+   `serena-agent==2.0.0` Python range is `>=3.11,<3.15`.) Never regenerate
+   the lock or hashes at install time. A hash/resolution failure is a STOP.
+   If `venv` fails with "ensurepip is not available", the host executor
+   installs `python3.13-venv` and retries. Only bundled `ensurepip` may
+   bootstrap pip; no downloaded bootstrap scripts.
 2. Install the pilot files:
    `cp PILOT/code_nav.py PILOT/serena-config.pilot.yml /paperclip/.local/opt/serena-2.0.0/`
    `cp PILOT/contexts/builder-readonly.yml /paperclip/.local/opt/serena-2.0.0/`
@@ -54,10 +57,23 @@ at the merged pilot commit; `PILOT` below is
    - `code-nav outline <file>` prints a symbol outline.
    - `code-nav symbol <NameInThatFile> --in <file> --body` prints the body.
    - `code-nav refs <NameInThatFile> <file>` prints referencing symbols.
-   - `git status --porcelain` in the checkout shows NO `.serena/`: the
-     pilot global config redirects Serena project state to
-     `/tmp/serena-home/projects/<basename>`. A `.serena/` in the repo is a
-     failed install, not a warning.
+   - Before calling, record `git status --porcelain` and a recursive hash
+     inventory of an existing scratch `.serena/` (if absent, create one
+     with a sentinel `project.yml` containing a harmless activation command
+     that writes a scratch marker). After all three calls, status and the
+     inventory must be unchanged and the marker absent. Repeat in a fresh
+     scratch checkout without `.serena/`; none may be created. Any repo
+     write or marker is a failed install, not a warning.
+   - The pilot config explicitly sets `trusted_project_path_patterns: []`.
+     It renders the effective home and pre-creates the external project
+     folder before Serena starts. With `SERENA_HOME=<custom-private-dir>`,
+     verify state stays in `<custom-private-dir>/projects/<basename>` and
+     does not appear in `/tmp/serena-home/projects/<basename>`.
+   - Existing global configs are parsed on every call; unsafe trust or
+     redirect values exit 2 before startup. For an older pilot seed, inspect
+     and move only `serena_config.yml` aside to a private backup, then rerun
+     to seed the reviewed config. Do not overwrite it blindly. Harmless
+     Serena normalization, project entries and auth_secret are preserved.
    - `SERENA_HOME` is never under `/paperclip`: that tree is world-writable
      (same reason context-pack keeps HOME in /tmp). `code-nav` also
      redirects the server child's HOME there when the login HOME is under

@@ -34,14 +34,16 @@
 # but only when whitespace-separated from the token and at a node start: a
 # quote glued to an anchor/tag name is part of the name, and a property
 # glued to, or spaced after, a plain-scalar word (`foo &b`, `foo!<x>`) is
-# scalar text, not a property; `-`/`?` count only as standalone indicators;
+# scalar text, not a property; `-`/`?` count only as standalone indicators
+# (an indicator after a word or mid-scalar property is scalar text too);
 # `:` is a value start only after whitespace or closing a real quoted key,
 # so a colon inside a name, or after a lone plain-scalar apostrophe, is not
 # either). A line ending mid plain scalar inside flow pends as a
 # continuation for any non-delimiter ending (letters and trailing
 # punctuation alike), unless it ends with a complete anchor/tag/alias at
-# value position (`key: &a` holds its node on the next line, whose quotes
-# stay fresh); blank and comment-only lines inside flow carry that pending
+# value position (`key: &a`, any name charset, anchor+tag chains included,
+# holds its node on the next line, whose quotes stay fresh); blank and
+# comment-only lines inside flow carry that pending
 # state forward; and a `-`/`?`-led chain starting a continuation line is
 # plain text, never a fresh node),
 # and lines split on "\n" only (U+2028/U+0085 are scalar content, not
@@ -128,7 +130,12 @@ def _before_is_node_start(line, s, closed_quote, pending_key=False,
             # continuation line (`- &a "p`, `? !!str "p`): YAML reads the
             # whole line as plain text, not a fresh node.
             return False
-        return m < 0 or line[m] in " \t,[{"
+        # The indicator itself must sit at a node start (recurse, as the
+        # `&`/`!` branch does): after a plain-scalar word (`foo - &a "p`)
+        # or a mid-scalar property (`foo &a ? !t "p`) it is scalar text,
+        # not an indicator, so a quote after the chain must not open.
+        return _before_is_node_start(line, m + 1, closed_quote, pending_key,
+                                     in_plain_cur)
     if prev.endswith(":"):
         return True
     return False
@@ -281,10 +288,45 @@ def _plain_next_for(code, in_single_end, in_double_end, depth_end,
     c = stripped[-1]
     if c in ",:{}[]":
         return False
+    if c in "\"'" and closed_quote == len(stripped) - 1:
+        # A real closing quote ends the value (pending_key territory).
+        # Anything else quote-final (a stray quote char, or a quote glued
+        # inside an anchor/tag name such as `&a"`) falls through to the
+        # token test below.
+        return False
+    m = re.search(r"!<[^ \t]*>$|[&*!][^\s,\[\]{}]+$", stripped)
+    if m:
+        # A complete anchor/tag/alias at value position (`key: &a`, `[!t`,
+        # `- *t`) is a complete node or a property awaiting its node: the
+        # next line is fresh, so its quotes must open. The property name
+        # may end in any character (quote, `&`, `!`, `-`, `?`: `&a!` is an
+        # anchor named `a!`), so this test runs before the last-character
+        # branches below. After scalar text (`foo &a`) the line may still
+        # continue as plain text. A value may also carry an anchor and a
+        # tag as a pair (`&a !!str`): walk back over the whole trailing
+        # property chain before applying the value-position test. Tokens
+        # holding `:` are key boundaries, not chain links, so the walk
+        # stops at them (a `:` before the last token keeps the old verdict).
+        j = m.start() - 1
+        while j >= 0 and stripped[j] in " \t":
+            j -= 1
+        while j >= 0:
+            k = j
+            while k >= 0 and stripped[k] not in " \t,[]{}":
+                k -= 1
+            tok = stripped[k + 1:j + 1]
+            if not tok or tok[0] not in "&!" or ":" in tok:
+                break
+            j = k
+            while j >= 0 and stripped[j] in " \t":
+                j -= 1
+        if j < 0 or stripped[j] in ",{[:?-":
+            return False
+        return True
     if c in "\"'":
-        # A real closing quote ends the value; a stray quote char is
-        # scalar text (e.g. a trailing apostrophe in `foo'`).
-        return closed_quote != len(stripped) - 1
+        # A stray quote char is scalar text (e.g. a trailing apostrophe in
+        # `foo'`); a real closing quote returned above.
+        return True
     if c in "-?":
         # Standalone at value position (whole line, or after an opening
         # delimiter, key colon or explicit key) is fresh; after scalar
@@ -300,18 +342,6 @@ def _plain_next_for(code, in_single_end, in_double_end, depth_end,
         # (`key: &` EOL) is fresh; after scalar text (`foo &`) it is
         # plain text and continues.
         j = len(stripped) - 2
-        while j >= 0 and stripped[j] in " \t":
-            j -= 1
-        if j < 0 or stripped[j] in ",{[:?-":
-            return False
-        return True
-    m = re.search(r"!<[^ \t]*>$|[&*!][^\s,\[\]{}]+$", stripped)
-    if m:
-        # A complete anchor/tag/alias at value position (`key: &a`, `[!t`,
-        # `- *t`) is a complete node or a property awaiting its node: the
-        # next line is fresh, so its quotes must open. After scalar text
-        # (`foo &a`) the line may still continue as plain text.
-        j = m.start() - 1
         while j >= 0 and stripped[j] in " \t":
             j -= 1
         if j < 0 or stripped[j] in ",{[:?-":

@@ -91,6 +91,23 @@ PASS = {
     # this stays clean (the previous head flagged it as unclosed brackets).
     "anchor value next line passes": (
         'on: {push: {}, x: &a\n"v # c"}\n' + JOB),
+    # Paperclip Review round 15: push controls in the over-pend shapes
+    # (the old gate wrongly flagged these as unclosed brackets) plus a
+    # sequence-item anchor guard for the indicator recursion.
+    "push bang-anchor value next line passes": (
+        'on: {push: {}, x: &a!' + "\n"
+        '"v # c"}' + "\n" + JOB),
+    "push anchor-tag value next line passes": (
+        'on: {push: {}, x: &a !!str' + "\n"
+        '"v # c"}' + "\n" + JOB),
+    "push tag-anchor value next line passes": (
+        'on: {push: {}, x: !!str &a' + "\n"
+        '"v # c"}' + "\n" + JOB),
+    "sequence anchor quoted scalar passes": (
+        'on:' + "\n"
+        '  push:' + "\n"
+        '    branches:' + "\n"
+        '      - &b "main"' + "\n" + JOB),
 }
 
 FAIL = {
@@ -763,6 +780,127 @@ FAIL = {
         'on: {workflow_dispatch: {inputs: {x: {description: foo bar\n'
         '  - &a - "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}'
         + "\n" + JOB),
+    # Paperclip Review round 15, finding 1: a `-`/`?` after a plain-scalar
+    # word (`foo - &a "p`) or a mid-scalar property (`foo &a ? !t "p`)
+    # is scalar text, not a standalone indicator. The old guard returned
+    # True on the space before the indicator, so the quote after the chain
+    # opened spuriously and flipped parity. All read clean before.
+    # PyYAML-valid except the `?` forms and squote tails (reviewer oracle:
+    # @actions/workflow-parser 0.3.61 + yaml v2 accept those).
+    "word-dash-anchor hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo - &a "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "word-question-anchor hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo ? &a "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "word-dash-tag hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo - !!str "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "word-dash-verbatim hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo - !<x> "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "word-dash-dash hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo - - "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "word-question-dash hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo ? - "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "word-dash-question hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo - ? "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "word-question-question hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo ? ? "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "word-dash-two-anchors hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo - &a &b "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "word-anchor-question-tag hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo &a ? !t "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "word-dash-anchor squote hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {description: foo - &a 'p, type: string, default: 'q }}}} # r''}}}, pull_request_target: {}}" + "\n" + JOB),
+    "word-dash-dash squote hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {description: foo - - 'p, type: string, default: 'q }}}} # r''}}}, pull_request_target: {}}" + "\n" + JOB),
+    "word-anchor-question-tag squote hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {description: foo &a ? !t 'p, type: string, default: 'q }}}} # r''}}}, pull_request_target: {}}" + "\n" + JOB),
+    # Paperclip Review round 15, finding 1 (continuation lines): the same
+    # word-first indicator chains starting a plain-continuation line
+    # (`foo bar` newline `baz - &a "p`). All read clean before.
+    "continuation word-dash-anchor hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar' + "\n"
+        '  baz - &a "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "continuation word-question-tag hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar' + "\n"
+        '  baz ? !!str "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "continuation word-dash-dash hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar' + "\n"
+        '  baz - - "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}' + "\n" + JOB),
+    "continuation word-anchor-question-tag hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: foo bar' + "\n"
+        '  baz &a ? !t "p, type: string, default: "q }}}} # r"}}}, pull_request_target: {}}' + "\n" + JOB),
+    # Paperclip Review round 15, finding 2: a property whose name ends in
+    # a quote, `&`, `!`, `-` or `?` (`&a!`, `!t'`) with its quoted value
+    # on the next line is fresh, not a plain continuation. The old
+    # last-character branches over-pended, so the value quote never opened
+    # and the trigger stripped as a comment. All read clean before.
+    # PyYAML-valid except `&`-endings, quote-endings and `?`-endings
+    # (PyYAML anchor-charset limit; reviewer oracle accepts).
+    "bang-anchor next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a!' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "amp-anchor next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a&' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "question-anchor next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a?' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "dash-anchor next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a-' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "dquote-anchor next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a"' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "squote-anchor next-line value hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {description: &a'" + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "dash-tag next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !t-' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "squote-tag next-line value hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {description: !t'" + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "bang-anchor next-line squote hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a!' + "\n"
+        "  'a }}}} # b', type: string}}}, pull_request_target: {}}" + "\n" + JOB),
+    "dash-anchor next-line squote hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a-' + "\n"
+        "  'a }}}} # b', type: string}}}, pull_request_target: {}}" + "\n" + JOB),
+    "dash-tag next-line squote hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !t-' + "\n"
+        "  'a }}}} # b', type: string}}}, pull_request_target: {}}" + "\n" + JOB),
+    # Paperclip Review round 15, finding 3: an anchor+tag property chain
+    # (`&a !!str`, either order, verbatim included) with its quoted value
+    # on the next line is fresh. The old single-token test saw the `a` of
+    # the preceding property and pended. All read clean before, including
+    # across a blank line (which now carries the fresh state forward).
+    "anchor-tag next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a !!str' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "tag-anchor next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !!str &a' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "anchor-tag1 next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a !t' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "tag1-anchor next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !t &a' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "anchor-verbatim next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a !<x>' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "verbatim-anchor next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<x> &a' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
+    "anchor-tag next-line squote hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a !!str' + "\n"
+        "  'a }}}} # b', type: string}}}, pull_request_target: {}}" + "\n" + JOB),
+    "verbatim-anchor next-line squote hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<x> &a' + "\n"
+        "  'a }}}} # b', type: string}}}, pull_request_target: {}}" + "\n" + JOB),
+    "anchor-tag blank next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a !!str' + "\n"
+        '' + "\n"
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}' + "\n" + JOB),
 }
 
 

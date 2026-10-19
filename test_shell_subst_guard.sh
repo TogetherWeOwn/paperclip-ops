@@ -19,10 +19,14 @@
 #   2. Ordinary `$()`/backtick variants are refused, including nested,
 #      glued quoted-word (`ye"s"`, `$'yes'`), prefixed
 #      (`command`/`builtin`/`env`/`sudo`/`time`/`exec`/`eval`/`nice`),
-#      assignment-prefixed, leading-redirect, pathed and backslash-escaped
-#      spellings, plus interiors of `${...}`/`$((...))` and `case` bodies.
-#      A `#` inside double quotes or a `${#..}` length expansion never
-#      hides a substitution.
+#      assignment-prefixed, leading-redirect (fd-first, stdin-first,
+#      assignment-then-redirect, var-fd `{fd}>`), pathed, backslash-escaped
+#      and line-continued spellings, plus interiors of `${...}`/`$((...))`
+#      and `case` bodies (bare, extglob and quoted-paren patterns). A `#`
+#      inside double quotes or a `${#..}` length expansion never hides a
+#      substitution; neither does a `case` word in argument position, a
+#      paren inside double quotes, or a `$'...'` escape. ANSI-C hex, octal
+#      and unicode escapes all decode before the `yes` comparison.
 #   3. Fail-closed pins: `$(yes | head -n 1)`, `$(yes --help)` and
 #      `$(command -v yes)` are refused even though bounded/descriptive.
 #      The gate cannot verify the bound or model per-flag semantics, so it
@@ -229,6 +233,157 @@ want_finding "nice-prefixed yes refuses"
 
 run_cmd 'x=$(exec 2>/dev/null)'
 want_clean "redirect-only exec stays allowed"
+
+# ---------------------------------------------------------------------------
+hdr "quoted parens never desync span boundaries"
+run_cmd 'x=$(echo "a)b"; yes)'
+want_finding "quoted close-paren before yes refuses"
+
+run_cmd 'x=$(echo "step (1) done"; yes)'
+want_finding "quoted paren pair before yes refuses"
+
+run_cmd 'x=$(echo "("); yes | head -n 1'
+want_clean "quoted open-paren plus top-level bounded yes"
+
+# ---------------------------------------------------------------------------
+hdr "case as an argument hides nothing"
+run_cmd 'x=$(echo case; yes)'
+want_finding "bare case argument refuses"
+
+run_cmd 'x=$(printf '"'"'%s'"'"' case; yes)'
+want_finding "case after printf refuses"
+
+run_cmd 'x=$(echo case in a; yes)'
+want_finding "case/in as arguments refuses"
+
+run_cmd 'x=$(echo a=b case in a; yes)'
+want_finding "case after argument assignment refuses"
+
+run_cmd 'x=$(echo case)'
+want_clean "case as sole argument"
+
+run_cmd 'x=$(echo esac yes)'
+want_clean "esac as argument hides its neighbor"
+
+run_cmd 'x=$(echo if yes)'
+want_clean "if as argument hides its neighbor"
+
+run_cmd 'x=$(case $A in case) echo;; *) yes;; esac)'
+want_finding "case as pattern word refuses"
+
+run_cmd 'x=$(FOO=1 case $A in *) yes;; esac)'
+want_finding "assignment-prefixed case refuses (fail-closed)"
+
+# ---------------------------------------------------------------------------
+hdr "line continuations are deleted before scanning"
+# NOTE: the fixtures below contain literal backslash-newline pairs inside
+# single quotes; bash passes them through to the guard verbatim.
+run_cmd 'x=$(ye\
+s)'
+want_finding "continued command word refuses"
+
+run_cmd 'x=$(FOO=1 ye\
+s)'
+want_finding "continued word after assignment refuses"
+
+run_cmd 'x=$\
+(yes)'
+want_finding "continued dollar-paren refuses"
+
+run_cmd 'x=$("ye\
+s")'
+want_finding "continued word inside double quotes refuses"
+
+# ---------------------------------------------------------------------------
+hdr "dollar-single-quote escapes hold quote state"
+cat > "$WORK/dollar-single-top.sh" <<'EOF'
+a=$'\''; x=$(yes)
+EOF
+run_file "$WORK/dollar-single-top.sh"
+want_finding "escaped quote before substitution refuses"
+
+cat > "$WORK/dollar-single-body.sh" <<'EOF'
+x=$(echo $'a\'b'; yes)
+EOF
+run_file "$WORK/dollar-single-body.sh"
+want_finding "escaped quote inside body refuses"
+
+cat > "$WORK/dollar-single-expansion.sh" <<'EOF'
+x=${A:-$'a\'b'}; y=$(yes)
+EOF
+run_file "$WORK/dollar-single-expansion.sh"
+want_finding "escaped quote inside expansion refuses"
+
+cat > "$WORK/dollar-single-comment.sh" <<'EOF'
+x=$(echo $'a\' b #x'; yes)
+EOF
+run_file "$WORK/dollar-single-comment.sh"
+want_finding "hash after escaped quote refuses"
+
+# ---------------------------------------------------------------------------
+hdr "var-fd redirects never clear command position"
+run_cmd 'x=$({fd}>/dev/null yes)'
+want_finding "var-fd stdout redirect refuses"
+
+run_cmd 'x=$({fd}>&1 yes)'
+want_finding "var-fd duplication refuses"
+
+run_cmd 'x=$({9}>/dev/null yes)'
+want_finding "digits var-fd refuses"
+
+run_cmd 'x=$(echo {fd})'
+want_clean "brace word without redirect"
+
+run_cmd 'x=$(echo {fd} >/dev/null)'
+want_clean "spaced brace word is a literal argument"
+
+# ---------------------------------------------------------------------------
+hdr "extglob and quoted parens in case patterns"
+run_cmd 'x=$(case $A in @(yes|no)) printf ok;; *) yes;; esac)'
+want_finding "extglob pattern refuses"
+
+run_cmd 'x=$(case $A in ")") printf ok;; *) yes;; esac)'
+want_finding "quoted-paren pattern refuses"
+
+run_cmd 'x=$(case $A in *(a|b)) printf ok;; *) yes;; esac)'
+want_finding "star-extglob pattern refuses"
+
+run_cmd 'x=$(case $A in !(a)) printf ok;; *) yes;; esac)'
+want_finding "bang-extglob pattern refuses"
+
+run_cmd 'x=$(case $A in @(a|b)|yes) printf ok;; *) printf no;; esac)'
+want_clean "yes as pattern alternative after extglob"
+
+# ---------------------------------------------------------------------------
+hdr "ANSI-C escapes decode to yes"
+run_cmd 'x=$($'"'"'\x79es'"'"')'
+want_finding "hex escape refuses"
+
+run_cmd 'x=$($'"'"'\171es'"'"')'
+want_finding "octal escape refuses"
+
+run_cmd 'x=$($'"'"'\u0079es'"'"')'
+want_finding "short unicode escape refuses"
+
+run_cmd 'x=$($'"'"'\U00000079es'"'"')'
+want_finding "long unicode escape refuses"
+
+# ---------------------------------------------------------------------------
+hdr "top-level case tracking never swallows following commands"
+run_cmd 'case $x in a) v=$(date);; esac; yes | head -1'
+want_clean "top-level case plus bare bounded yes"
+
+run_cmd 'echo case; for f in *; do v=$(date); done; yes | head -1'
+want_clean "case word plus loop plus bare bounded yes"
+
+run_cmd 'x=$(if case $A in *) yes;; esac; then echo; fi)'
+want_finding "if-case nesting refuses"
+
+run_cmd 'x=$(case $A in a) case $B in *) yes;; esac;; *) echo;; esac)'
+want_finding "nested case in body refuses"
+
+run_cmd 'x=$(if (echo) then yes; fi)'
+want_finding "then after paren-close refuses"
 
 # ---------------------------------------------------------------------------
 hdr "fail-closed pins are refused, never silently weakened"

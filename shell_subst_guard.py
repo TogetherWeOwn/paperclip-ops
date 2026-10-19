@@ -34,6 +34,25 @@ one shell command WITHOUT executing it and refuses (exit 3) when any
                                                         a comment)
     x=$(ye"s") ; x=$(y'es') ; x=$($'yes')              refused (glued quoting)
     x=$(exec yes) ; x=$(eval yes) ; x=$(nice yes)       refused (direct prefixes)
+    x=$(echo "a)b"; yes)                               refused (a paren inside
+                                                        double quotes never
+                                                        closes the span)
+    x=$(echo case; yes)                                refused (case as an
+                                                        argument hides nothing)
+    x=$(ye + line-continuation + s)                   refused (line
+    x=$(dollar + line-continuation + (yes))          continuations are
+                                                        deleted first)
+    a=$'\''; x=$(yes)                                  refused (dollar-single
+                                                        escapes hold)
+    x=$({fd}>/dev/null yes)                            refused (var-fd redirect
+                                                        keeps command position)
+    x=$(case $A in @(a|b)) p;; *) yes;; esac)          refused (extglob groups
+                                                        and quoted parens in
+                                                        patterns)
+    x=$(backslash-escaped yes in $'...')               refused (hex x79, octal
+                                                        171, unicode u0079
+                                                        and U00000079 all
+                                                        decode to yes)
 
 The following stay allowed, and the suite pins each one:
 
@@ -54,6 +73,11 @@ The following stay allowed, and the suite pins each one:
                                                         is collected, so the
                                                         memcg mechanism here
                                                         does not apply)
+    x=$(echo "("); yes | head -n 1                     (quoted paren, and the
+                                                        bare yes is bounded)
+    case $x in a) v=$(date);; esac; yes | head -1      (top-level case never
+                                                        swallows following
+                                                        commands)
 
 INTENTIONAL FAIL-CLOSED OVER-APPROXIMATIONS (pinned by tests, not silent):
 
@@ -131,7 +155,9 @@ _RESET_KEYWORDS = frozenset(
      "select", "esac"}
 )
 
-_OPERATOR_RESETS = frozenset({";", "&", "&&", "|", "||", "(", "{", "!", "\n"})
+_OPERATOR_RESETS = frozenset(
+    {";", "&", "&&", "|", "||", "(", ")", "{", "!", "\n"}
+)
 
 
 def _is_comment_start(text: str, i: int) -> bool:
@@ -161,19 +187,93 @@ def _is_keyword_at(text: str, i: int, kw: str) -> bool:
     return True
 
 
+def _is_dollar_quote(text: str, i: int) -> bool:
+    """True when the `'` at `i` opens `$'...'` ANSI-C quoting: directly
+    preceded by an unescaped `$` (an even run of preceding backslashes, so
+    `\\$'` is a literal `$` plus plain quotes). Inside `$'...'` a backslash
+    escapes the next character, so `\\'` never closes the span. `$$'...'`
+    parity is deliberately not modelled: reading it as `$'...'` only
+    over-approximates (fail-closed)."""
+    if i <= 0 or text[i] != "'" or text[i - 1] != "$":
+        return False
+    j = i - 2
+    while j >= 0 and text[j] == "\\":
+        j -= 1
+    return (i - 2 - j) % 2 == 0
+
+
+# Keywords directly followed by a command, so `case`/`esac` after one of
+# them is a case boundary (`if case ...`, `then case ...`, `time case ...`
+# are all valid Bash). `for`/`select`/`function`/`in` are excluded (followed
+# by names or list items), as are `esac`/`fi`/`done` (verified against Bash
+# 5.2: a separator is required after them).
+_CASE_CMD_WORDS = frozenset(
+    {"if", "then", "elif", "else", "while", "until", "do", "time"}
+)
+
+
+def _case_at_cmd_pos(text: str, i: int) -> bool:
+    """True when a `case`/`esac` keyword at `i` sits in command position.
+
+    Command position holds at the start of input, after a command separator
+    (`;`, `&`, `|`, `(`, `{`, newline, `!`), after a `)` (a pattern close or
+    subshell leaves command position), after a command-establishing keyword
+    (`if`, `then`, ..., `time`), or after an assignment word (`FOO=1 case`
+    is invalid Bash, but tracking it as a case boundary keeps the gate
+    fail-closed there; resolved by recursing before the assignment so
+    `echo a=b case` still reads as an argument). Anything else is an
+    argument or pattern word, never a case boundary.
+    """
+    j = i - 1
+    while j >= 0 and text[j] in " \t":
+        j -= 1
+    if j < 0:
+        return True
+    if text[j] in ";|&({\n!)":
+        return True
+    if text[j] == ")":
+        return True
+    if text[j].isalnum() or text[j] == "_":
+        k = j
+        while k >= 0 and (text[k].isalnum() or text[k] == "_"):
+            k -= 1
+        if text[k + 1:j + 1] in _CASE_CMD_WORDS:
+            return True
+        # The word just scanned may be the right-hand side of an assignment
+        # (`FOO=1`, `A+=x`): look for the `NAME=` prefix and recurse before
+        # it, so only an assignment in command position qualifies.
+        if k >= 0 and text[k] == "=":
+            m = k - 1
+            if m >= 0 and text[m] == "+":
+                m -= 1
+            e = m
+            while e >= 0 and (text[e].isalnum() or text[e] == "_"):
+                e -= 1
+            if text[e + 1:m + 1].isidentifier():
+                return _case_at_cmd_pos(text, e + 1)
+    return False
+
+
 def _strip_comments(text: str) -> str:
     """Blank comment spans outside single/double quotes, keeping newlines so
     line-based command positions survive."""
     out: list[str] = []
     single = double = False
+    single_dollar = False
     i = 0
     n = len(text)
     while i < n:
         ch = text[i]
         if single:
+            if single_dollar and ch == "\\" and i + 1 < n:
+                out.append(ch)
+                out.append(text[i + 1])
+                i += 2
+                continue
             out.append(ch)
             if ch == "'":
                 single = False
+                single_dollar = False
             i += 1
             continue
         if double:
@@ -193,6 +293,7 @@ def _strip_comments(text: str) -> str:
             continue
         if ch == "'":
             single = True
+            single_dollar = _is_dollar_quote(text, i)
             out.append(ch)
             i += 1
             continue
@@ -216,13 +317,18 @@ def _heredoc_delims(line: str) -> list[tuple[str, bool]]:
     on this line, in order. `quoted` is True for `<<'D'` / `<<"D"`."""
     found: list[tuple[str, bool]] = []
     single = double = False
+    single_dollar = False
     i = 0
     n = len(line)
     while i < n:
         ch = line[i]
         if single:
+            if single_dollar and ch == "\\":
+                i += 2
+                continue
             if ch == "'":
                 single = False
+                single_dollar = False
             i += 1
             continue
         if double:
@@ -238,6 +344,7 @@ def _heredoc_delims(line: str) -> list[tuple[str, bool]]:
             continue
         if ch == "'":
             single = True
+            single_dollar = _is_dollar_quote(line, i)
             i += 1
             continue
         if ch == '"':
@@ -302,13 +409,18 @@ def _strip_heredoc_bodies(text: str, quoted_only: bool = False) -> str:
 def _skip_balanced(text: str, i: int, opener: str, closer: str) -> int:
     """Skip from an opening bracket at/before i past its match, quote-aware."""
     single = double = False
+    single_dollar = False
     depth = 0
     n = len(text)
     while i < n:
         ch = text[i]
         if single:
+            if single_dollar and ch == "\\":
+                i += 2
+                continue
             if ch == "'":
                 single = False
+                single_dollar = False
             i += 1
             continue
         if double:
@@ -324,6 +436,7 @@ def _skip_balanced(text: str, i: int, opener: str, closer: str) -> int:
             continue
         if ch == "'":
             single = True
+            single_dollar = _is_dollar_quote(text, i)
         elif ch == '"':
             double = True
         elif ch == opener:
@@ -343,8 +456,15 @@ def extract_substitutions(command: str) -> list[str]:
     parameter expansion are not command substitutions and are skipped, but
     their interiors are still scanned for nested `$(...)`/backtick spans
     (e.g. `${A:-$(yes)}`, `$(( $(yes) + 1 ))`). `case` pattern `)` never
-    closes a span. Unclosed spans run to end of input (fail-closed: the
-    lexer cannot prove the shell would reject them). Content lines of
+    closes a span: `case`/`esac` are tracked only in command position and
+    only at their own substitution depth, and extglob groups (`@(...)` and
+    siblings) in pattern position are counted so only the `)` back at depth
+    zero terminates the pattern. A backslash-newline is deleted before
+    scanning (a line continuation), so it splits neither a `$`+`(` opener
+    nor, in the word lexer, a command word. `$'...'` honors backslash
+    escapes, so `$'\\''` never desyncs the scan. Parens inside double quotes
+    never count. Unclosed spans run to end of input (fail-closed: the lexer
+    cannot prove the shell would reject them). Content lines of
     quoted-delimiter heredocs are dropped first: the shell never expands
     them, so `$(yes)` written there is literal stdin, not a substitution.
     """
@@ -352,11 +472,13 @@ def extract_substitutions(command: str) -> list[str]:
     spans: list[str] = []
     # Open `$(` spans: (body_start, paren_depth).
     stack: list[tuple[int, int]] = []
-    # Saved (single, double) quote contexts, one per open `$(`.
-    quote_stack: list[tuple[bool, bool]] = []
-    # Case-pattern tracking so a pattern `)` never closes a span.
-    case_stack: list[str] = []  # "subject" | "pattern" | "body"
+    # Saved (single, double, single_dollar) quote contexts, one per `$(`.
+    quote_stack: list[tuple[bool, bool, bool]] = []
+    # Case-pattern tracking so a pattern `)` never closes a span:
+    # (state, substitution depth, extglob depth).
+    case_stack: list[tuple[str, int, int]] = []
     single = double = False
+    single_dollar = False
     in_backtick = False
     backtick_start = 0
     i = 0
@@ -364,8 +486,12 @@ def extract_substitutions(command: str) -> list[str]:
     while i < n:
         ch = command[i]
         if single:
+            if single_dollar and ch == "\\" and i + 1 < n:
+                i += 2
+                continue
             if ch == "'":
                 single = False
+                single_dollar = False
             i += 1
             continue
         if ch == "\\":
@@ -374,6 +500,7 @@ def extract_substitutions(command: str) -> list[str]:
         if ch == "'" and not double:
             # Inside double quotes a single quote is a literal character.
             single = True
+            single_dollar = _is_dollar_quote(command, i)
             i += 1
             continue
         if ch == '"':
@@ -394,76 +521,115 @@ def extract_substitutions(command: str) -> list[str]:
                 spans.append(command[backtick_start:i])
             i += 1
             continue
-        # Case keyword tracking (outside quotes/backticks). Tracked at every
-        # level so `case` at top level and nested `case` inside a substitution
-        # both nest correctly; only a `)` while in "pattern" is special.
+        # Case keyword tracking (outside quotes/backticks). `case`/`esac`
+        # count only in command position (`echo case` is an argument) and
+        # only at their own substitution depth, so a nested `$(esac)` never
+        # pops the outer case.
         if not double and not in_backtick:
             if _is_keyword_at(command, i, "case"):
-                case_stack.append("subject")
+                if _case_at_cmd_pos(command, i):
+                    case_stack.append(("subject", len(stack), 0))
                 i += 4
                 continue
-            if case_stack and case_stack[-1] == "subject" \
-                    and _is_keyword_at(command, i, "in"):
-                case_stack[-1] = "pattern"
+            if _is_keyword_at(command, i, "in"):
+                if case_stack and case_stack[-1][0] == "subject" \
+                        and len(stack) == case_stack[-1][1] \
+                        and (i == 0 or command[i - 1] != "$"):
+                    _st, _d, _e = case_stack[-1]
+                    case_stack[-1] = ("pattern", _d, _e)
                 i += 2
                 continue
             if _is_keyword_at(command, i, "esac"):
-                if case_stack:
+                if _case_at_cmd_pos(command, i) and case_stack \
+                        and len(stack) == case_stack[-1][1]:
                     case_stack.pop()
                 i += 4
                 continue
-            if case_stack and case_stack[-1] == "body":
+            if case_stack and case_stack[-1][0] == "body" \
+                    and len(stack) == case_stack[-1][1]:
                 if command.startswith(";;&", i):
-                    case_stack[-1] = "pattern"
+                    _st, _d, _e = case_stack[-1]
+                    case_stack[-1] = ("pattern", _d, _e)
                     i += 3
                     continue
                 if command.startswith(";;", i) \
                         or command.startswith(";&", i):
-                    case_stack[-1] = "pattern"
+                    _st, _d, _e = case_stack[-1]
+                    case_stack[-1] = ("pattern", _d, _e)
                     i += 2
                     continue
-        nxt = command[i + 1] if i + 1 < n else ""
-        if ch == "$" and nxt == "(":
-            if i + 2 < n and command[i + 2] == "(":
-                end = _skip_balanced(command, i + 2, "(", ")")
-                interior = command[i + 3:end - 1] if end - 1 > i + 3 else ""
+        if ch == "$":
+            # A line continuation between `$` and `(`/`{` is deleted by the
+            # shell before parsing, so look past any backslash-newlines.
+            j = i + 1
+            while j + 1 < n and command[j] == "\\" \
+                    and command[j + 1] == "\n":
+                j += 2
+            if j < n and command[j] == "(":
+                if j + 1 < n and command[j + 1] == "(":
+                    end = _skip_balanced(command, j + 1, "(", ")")
+                    interior = command[j + 2:end - 1] \
+                        if end - 1 > j + 2 else ""
+                    if interior:
+                        spans.extend(extract_substitutions(interior))
+                    i = end
+                    continue
+                quote_stack.append((single, double, single_dollar))
+                single = False
+                double = False
+                single_dollar = False
+                stack.append((j + 1, 1))
+                i = j + 1
+                continue
+            if j < n and command[j] == "{":
+                end = _skip_balanced(command, j, "{", "}")
+                interior = command[j + 1:end - 1] \
+                    if end - 1 > j + 1 else ""
                 if interior:
                     spans.extend(extract_substitutions(interior))
                 i = end
                 continue
-            quote_stack.append((single, double))
-            single = False
-            double = False
-            stack.append((i + 2, 1))
+        # An extglob mark directly before `(` in pattern position opens a
+        # group whose `)` closes the group, not the pattern.
+        if ch in "@?*+!" and not double and not in_backtick and case_stack \
+                and case_stack[-1][0] == "pattern" \
+                and len(stack) == case_stack[-1][1] \
+                and i + 1 < n and command[i + 1] == "(":
+            _st, _d, _e = case_stack[-1]
+            case_stack[-1] = (_st, _d, _e + 1)
             i += 2
             continue
-        if ch == "$" and nxt == "{":
-            end = _skip_balanced(command, i + 1, "{", "}")
-            interior = command[i + 2:end - 1] if end - 1 > i + 2 else ""
-            if interior:
-                spans.extend(extract_substitutions(interior))
-            i = end
-            continue
-        if ch == "(" and stack:
-            if case_stack and case_stack[-1] == "pattern":
+        if ch == "(" and not double:
+            if case_stack and case_stack[-1][0] == "pattern" \
+                    and len(stack) == case_stack[-1][1]:
                 i += 1  # leading `(` of a case pattern is not grouping
                 continue
-            start, depth = stack[-1]
-            stack[-1] = (start, depth + 1)
+            if stack:
+                start, depth = stack[-1]
+                stack[-1] = (start, depth + 1)
             i += 1
             continue
-        if ch == ")" and stack:
-            if case_stack and case_stack[-1] == "pattern":
-                case_stack[-1] = "body"
+        if ch == ")" and not double:
+            if case_stack and case_stack[-1][0] == "pattern" \
+                    and len(stack) == case_stack[-1][1]:
+                _st, _d, _e = case_stack[-1]
+                if _e > 0:
+                    case_stack[-1] = (_st, _d, _e - 1)
+                else:
+                    case_stack[-1] = ("body", _d, _e)
                 i += 1
                 continue
-            start, depth = stack.pop()
-            if depth == 1:
-                spans.append(command[start:i])
-                if quote_stack:
-                    single, double = quote_stack.pop()
-            else:
-                stack.append((start, depth - 1))
+            if stack:
+                start, depth = stack.pop()
+                if depth == 1:
+                    spans.append(command[start:i])
+                    if quote_stack:
+                        single, double, single_dollar = quote_stack.pop()
+                    while case_stack \
+                            and case_stack[-1][1] > len(stack):
+                        case_stack.pop()
+                else:
+                    stack.append((start, depth - 1))
             i += 1
             continue
         i += 1
@@ -481,19 +647,20 @@ def extract_substitutions(command: str) -> list[str]:
 _WORD_STOPS = " \t\r\n;|&(){}!<>`$'\""
 
 
-def _consume_quoted(body: str, i: int) -> tuple[str, int]:
+def _consume_quoted(body: str, i: int, dollar: bool = False) -> tuple[str, int]:
     """Consume a quoted section starting at a quote char; return (text, end).
 
-    Handles `$'..'` / `$".."` by including a directly preceding `$`.
+    With `dollar=True` the section is `$'..'` / `$".."` (the `$` is included
+    in the returned text). A backslash escapes the next character inside
+    `"..."` and inside `$'...'`, so `\\'` never closes a dollar-single span;
+    inside plain `'...'` a backslash is literal.
     """
-    start = i
-    if i > 0 and body[i - 1] == "$":
-        start = i - 1
+    start = i - 1 if dollar else i
     quote = body[i]
     i += 1
     n = len(body)
     while i < n:
-        if body[i] == "\\" and quote == '"':
+        if body[i] == "\\" and (quote == '"' or dollar):
             i += 2
             continue
         if body[i] == quote:
@@ -518,8 +685,11 @@ def _consume_glued_word(body: str, i: int) -> tuple[str, int]:
             parts.append(quoted)
             continue
         if ch == "$" and i + 1 < n and body[i + 1] in "'\"":
-            quoted, i = _consume_quoted(body, i + 1)
+            quoted, i = _consume_quoted(body, i + 1, dollar=True)
             parts.append(quoted)
+            continue
+        if ch == "\\" and i + 1 < n and body[i + 1] == "\n":
+            i += 2  # line continuation is deleted; the word continues
             continue
         if ch == "\\" and i + 1 < n and body[i + 1] != "\n":
             parts.append(body[i:i + 2])
@@ -602,7 +772,24 @@ def _tokenize(body: str) -> list[tuple[str, str]]:
                 break
         if matched:
             continue
-        if ch in ";|&(){}!":
+        if ch == "{":
+            # A `{name}`/`{digits}` group directly adjacent to a redirect
+            # (`{fd}>/dev/null`) is a var-fd redirect prefix, not a command:
+            # skip it like an IO number. Anything else (`{ echo; }`,
+            # `{a,b}`, `{fd} >file` with a space) keeps the old tokens.
+            j = i + 1
+            while j < n and (body[j].isalnum() or body[j] == "_"):
+                j += 1
+            name = body[i + 1:j]
+            if name and (name.isidentifier() or name.isdigit()) \
+                    and j < n and body[j] == "}" \
+                    and j + 1 < n and body[j + 1] in "<>":
+                i = j + 1
+                continue
+            tokens.append(("op", ch))
+            i += 1
+            continue
+        if ch in ";|&()}!":
             tokens.append(("op", ch))
             i += 1
             continue
@@ -673,6 +860,9 @@ def _normalize_word(word: str) -> str:
             buf: list[str] = []
             while j < n:
                 if word[j] == "\\" and j + 1 < n:
+                    if word[j + 1] == "\n":
+                        j += 2  # line continuation is deleted in quotes
+                        continue
                     buf.append(word[j + 1])
                     j += 2
                     continue
@@ -709,6 +899,30 @@ def _normalize_word(word: str) -> str:
                                 buf.append(esc)
                                 j += 2
                                 continue
+                        if esc == "u":
+                            hexpart = word[j + 2:j + 6]
+                            if len(hexpart) == 4:
+                                try:
+                                    buf.append(chr(int(hexpart, 16)))
+                                    j += 6
+                                    continue
+                                except ValueError:
+                                    pass
+                            buf.append(esc)
+                            j += 2
+                            continue
+                        if esc == "U":
+                            hexpart = word[j + 2:j + 10]
+                            if len(hexpart) == 8:
+                                try:
+                                    buf.append(chr(int(hexpart, 16)))
+                                    j += 10
+                                    continue
+                                except ValueError:
+                                    pass
+                            buf.append(esc)
+                            j += 2
+                            continue
                         if esc in "01234567":
                             k = j + 1
                             digits = ""
@@ -726,6 +940,9 @@ def _normalize_word(word: str) -> str:
                                 continue
                         buf.append(esc)
                         j += 2
+                        continue
+                    if word[j + 1] == "\n":
+                        j += 2  # line continuation is deleted in quotes
                         continue
                     buf.append(word[j + 1])
                     j += 2
@@ -769,6 +986,7 @@ def body_has_unbounded_yes(body: str) -> bool:
     skip_one = False     # redirect target / function name / for-var
     for_list = False     # inside a `for v [in words]` word list
     case_stack: list[str] = []  # "subject" | "pattern" | "body"
+    case_ext = 0         # extglob group depth while in "pattern"
     skip_until_do = False  # `for ((...))` arithmetic prelude
     skip_test = 0        # inside `[[ ... ]]`
     i = 0
@@ -787,13 +1005,21 @@ def body_has_unbounded_yes(body: str) -> bool:
                 continue
             if case_stack and case_stack[-1] == "pattern":
                 # Pattern position: words, `|` and an optional leading `(`
-                # are patterns, never commands. A closing `)` enters the
-                # case body (`esac` arrives as a word token; see below).
+                # are patterns, never commands. An extglob mark (`@?*+!`)
+                # directly before `(` opens a group whose `)` closes the
+                # group; only the `)` back at depth zero enters the case
+                # body (`esac` arrives as a word token; see below).
                 if val == ")":
-                    case_stack[-1] = "body"
-                    cmd_pos = True
-                elif val == "(":
-                    pass
+                    if case_ext:
+                        case_ext -= 1
+                    else:
+                        case_stack[-1] = "body"
+                        cmd_pos = True
+                elif val == "(" and i > 0:
+                    pk, pv = tokens[i - 1]
+                    if (pk == "word" and pv in ("@", "?", "*", "+")) \
+                            or (pk == "op" and pv == "!"):
+                        case_ext += 1
                 i += 1
                 continue
             if val in (";;", ";&", ";;&"):
@@ -841,6 +1067,7 @@ def body_has_unbounded_yes(body: str) -> bool:
             # `esac` is not a pattern: it closes the case.
             if val == "esac":
                 case_stack.pop()
+                case_ext = 0
                 cmd_pos = True
             i += 1
             continue
@@ -850,12 +1077,16 @@ def body_has_unbounded_yes(body: str) -> bool:
                 cmd_pos = True
             i += 1
             continue
-        if val == "case":
+        # Keywords count only in command position and never as a redirect
+        # target or other skipped word: `echo case` / `echo esac yes` are
+        # plain arguments, so a bare `case` word swallows nothing.
+        if val == "case" and cmd_pos and not skip_one:
             case_stack.append("subject")
+            case_ext = 0
             cmd_pos = False
             i += 1
             continue
-        if val in _RESET_KEYWORDS:
+        if val in _RESET_KEYWORDS and cmd_pos and not skip_one:
             # `do` after a `for ((...))` prelude is handled above; a plain
             # `do` resets like the other keywords.
             cmd_pos = True
@@ -864,7 +1095,7 @@ def body_has_unbounded_yes(body: str) -> bool:
             for_list = False
             i += 1
             continue
-        if val in ("for", "select"):
+        if val in ("for", "select") and cmd_pos and not skip_one:
             skip_one = True  # the loop variable is not a command
             for_list = True
             cmd_pos = False
@@ -875,7 +1106,7 @@ def body_has_unbounded_yes(body: str) -> bool:
             cmd_pos = False
             i += 1
             continue
-        if val == "function":
+        if val == "function" and cmd_pos and not skip_one:
             skip_one = True  # the function name is not a command
             cmd_pos = False
             i += 1

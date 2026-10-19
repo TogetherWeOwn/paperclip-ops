@@ -77,7 +77,7 @@ def _odd_backslashes(line, idx):
     return bs % 2 == 1
 
 
-def _before_is_node_start(line, s):
+def _before_is_node_start(line, s, closed_quote):
     # True when index s (the start of an `&anchor` / `!tag` / `!<...>`
     # token) sits at a YAML node start: line start, after a flow indicator
     # (`[`, `{`, `,`), after a mapping colon (`key: &a`, `key:&a`,
@@ -96,18 +96,15 @@ def _before_is_node_start(line, s):
         return True
     m = k
     while m >= 0 and line[m] not in " \t,[]{}":
-        if line[m] == ":" and m > 0 and line[m - 1] in "\"'":
-            # A `:` directly after a closing quote is a JSON-style key
-            # colon (`"k":`), not part of an anchor/tag name: stop there
-            # so the previous token is just the property (`&a` in
-            # `"k":&a !t "v"`).
+        if line[m] == ":" and _quoted_key_colon(line, m, closed_quote):
+            # Stop at the real key colon, not at a quote in a property name.
             break
         m -= 1
     prev = line[m + 1:k + 1]
     if prev == "":
         return True
     if prev[0] in "&!":
-        return _before_is_node_start(line, m + 1)
+        return _before_is_node_start(line, m + 1, closed_quote)
     if prev in ("-", "?"):
         return m < 0 or line[m] in " \t,[{"
     if prev.endswith(":"):
@@ -115,56 +112,21 @@ def _before_is_node_start(line, s):
     return False
 
 
-def _closes_quoted_key(line, q):
-    # q = index of a quote directly before a glued colon (`"k":"v"`).
-    # True when it closes a quoted key: the scanner, run from the start of
-    # the line with the same quote rules, is inside a string of the same
-    # type at q (so q closes a string the scanner itself opened). A lone
-    # apostrophe inside a plain scalar (`foo':"`) never opens, so the
-    # scanner is outside at q and the colon after it is scalar text, not a
-    # JSON-style value start. Never search the line text for the opener:
-    # the nearest earlier same-type quote may be the closing quote of an
-    # unrelated string (e.g. `','`), which sits after `,`/`[`/`{` and would
-    # wrongly read as a key opener.
-    want = line[q]
-    in_single = in_double = False
-    i = 0
-    while i < q:
-        ch = line[i]
-        if ch == "'" and not in_double:
-            if in_single and i + 1 < len(line) and line[i + 1] == "'":
-                if i + 1 == q:
-                    return False
-                i += 2
-                continue
-            if in_single or _at_scalar_start(line, i):
-                in_single = not in_single
-        elif ch == '"' and not in_single:
-            if _odd_backslashes(line, i):
-                pass
-            elif in_double or _at_scalar_start(line, i):
-                in_double = not in_double
-        i += 1
-    if want == "'" and not in_double:
-        if not in_single:
-            return False
-        if q + 1 < len(line) and line[q + 1] == "'":
-            return False
-        return True
-    if want == '"' and not in_single:
-        if not in_double:
-            return False
-        if _odd_backslashes(line, q):
-            return False
-        return True
-    return False
+def _quoted_key_colon(line, colon, closed_quote):
+    # The scan records actual closing quotes, including on a continuation
+    # line. Never replay a prefix with fresh state or search for an opener.
+    # YAML permits spaces/tabs before a JSON-style key's adjacent value.
+    k = colon - 1
+    while k >= 0 and line[k] in " \t":
+        k -= 1
+    return k >= 0 and k == closed_quote
 
 
-def _at_scalar_start(line, i):
+def _at_scalar_start(line, i, closed_quote):
     # A quote opens a YAML scalar only at a value start: line start (after
     # indent), after `[`, `{` or `,`, after a mapping `:` (whitespace before
-    # the quote, or JSON-style `"k":"v"` where the colon directly follows a
-    # closing quote of a real quoted key: a colon glued inside an anchor/tag
+    # the quote, or JSON-style `"k" :"v"` where the colon follows a real
+    # closed quoted key with optional spaces/tabs: a colon inside an anchor/tag
     # name or plain scalar such as `&a:"` or `!:'` is part of the name, not
     # a value start, and neither is a colon after a lone plain-scalar
     # apostrophe such as `foo':"`),
@@ -190,12 +152,10 @@ def _at_scalar_start(line, i):
         return True
     if line[j] == ":" and j < i - 1:
         return True
-    if line[j] == ":" and j == i - 1 and j > 0 and line[j - 1] in "\"'":
-        # Glued JSON-style `"k":"v"`: only a colon closing a real quoted
-        # key is a value start (see _closes_quoted_key).
-        if _closes_quoted_key(line, j - 1):
-            return True
-    if line[j] in "-?" and j < i - 1 and _before_is_node_start(line, j):
+    if line[j] == ":" and _quoted_key_colon(line, j, closed_quote):
+        return True
+    if (line[j] in "-?" and j < i - 1
+            and _before_is_node_start(line, j, closed_quote)):
         # The indicator itself must sit at a node start: a
         # space-separated `-`/`?` inside a plain scalar (`foo - "p`) is
         # scalar text, not an indicator.
@@ -216,7 +176,7 @@ def _at_scalar_start(line, i):
     if line[j] == ">":
         idx = line.rfind("!<", 0, j)
         if (idx != -1 and not any(c in " \t" for c in line[idx:j + 1])
-                and _before_is_node_start(line, idx)):
+                and _before_is_node_start(line, idx, closed_quote)):
             return True
     # Anchor/tag name directly before the quote: take the whitespace- and
     # flow-delimited token ending at j (an anchor/tag name admits any other
@@ -233,54 +193,59 @@ def _at_scalar_start(line, i):
         return False
     k = j
     while k >= 0 and line[k] not in " \t,[]{}":
-        if line[k] == ":" and k > 0 and line[k - 1] in "\"'":
-            # A `:` directly after a closing quote is a JSON-style key
-            # colon (`"k":`), not part of an anchor/tag name: stop there
-            # so the token is just the property (`&a` in `"k":&a`).
+        if line[k] == ":" and _quoted_key_colon(line, k, closed_quote):
+            # Preserve the same key boundary through chains of properties.
             break
         k -= 1
     token = line[k + 1:j + 1]
     if token == "":
         return True
     if token[0] in "&!":
-        return _before_is_node_start(line, k + 1)
+        return _before_is_node_start(line, k + 1, closed_quote)
     return False
 
 
-def _strip_line(line, in_single, in_double):
-    # Strip a YAML `#` comment, quote-aware. in_single/in_double persist
-    # across lines: a double-quoted (or single-quoted) scalar opened on a
-    # previous line stays open, so `#` on the continuation line is literal
-    # text, not a comment. `''` inside single quotes is an escaped quote;
-    # `\"` (odd backslashes) inside double quotes is escaped.
-    out = []
+def _scan_line(line, in_single=False, in_double=False):
+    # One quote-state machine for comments, flow depth, aliases and literal
+    # headers. mask preserves positions outside quoted scalars; quoted bytes
+    # are spaces. closed_quote is an actual transition in this scan, never a
+    # recursive replay with a different initial state. Reset its index on
+    # each physical line while carrying the open-quote state across lines.
+    mask = list(line)
+    closed_quote = None
     i = 0
     while i < len(line):
         ch = line[i]
+        was_quoted = in_single or in_double
         if ch == "'" and not in_double:
             if in_single and i + 1 < len(line) and line[i + 1] == "'":
-                out.append(ch)
-                out.append(line[i + 1])
+                mask[i] = mask[i + 1] = " "
                 i += 2
                 continue
-            if in_single or _at_scalar_start(line, i):
-                in_single = not in_single
-            out.append(ch)
+            if in_single:
+                in_single = False
+                closed_quote = i
+            elif _at_scalar_start(line, i, closed_quote):
+                in_single = True
         elif ch == '"' and not in_single:
-            if _odd_backslashes(line, i):
-                out.append(ch)
-            else:
-                if in_double or _at_scalar_start(line, i):
-                    in_double = not in_double
-                out.append(ch)
-        elif ch == "#" and not in_single and not in_double:
+            if not _odd_backslashes(line, i):
+                if in_double:
+                    in_double = False
+                    closed_quote = i
+                elif _at_scalar_start(line, i, closed_quote):
+                    in_double = True
+        elif ch == "#" and not was_quoted:
             if i == 0 or line[i - 1] in (" ", "\t"):
-                break
-            out.append(ch)
-        else:
-            out.append(ch)
+                return line[:i], "".join(mask[:i]), in_single, in_double
+        if was_quoted or in_single or in_double:
+            mask[i] = " "
         i += 1
-    return "".join(out), in_single, in_double
+    return line, "".join(mask), in_single, in_double
+
+
+def _strip_line(line, in_single, in_double):
+    code, _, in_single, in_double = _scan_line(line, in_single, in_double)
+    return code, in_single, in_double
 
 
 def strip_comments_crossline(lines, literal):
@@ -303,32 +268,8 @@ def _indent_of(code):
 
 
 def _bracket_delta_state(code, in_single, in_double):
-    # Net [{-open minus }]-close outside single/double quotes. Quote state
-    # persists across calls: the caller threads in_single/in_double through
-    # successive lines of one block. Quotes only open at a scalar start (see
-    # _at_scalar_start) so a plain-scalar apostrophe cannot desync depth.
-    delta = 0
-    i = 0
-    while i < len(code):
-        ch = code[i]
-        if ch == "'" and not in_double:
-            if in_single and i + 1 < len(code) and code[i + 1] == "'":
-                i += 2
-                continue
-            if in_single or _at_scalar_start(code, i):
-                in_single = not in_single
-        elif ch == '"' and not in_single:
-            if _odd_backslashes(code, i):
-                i += 1
-                continue
-            if in_double or _at_scalar_start(code, i):
-                in_double = not in_double
-        elif not in_single and not in_double:
-            if ch in "{[":
-                delta += 1
-            elif ch in "}]":
-                delta -= 1
-        i += 1
+    _, mask, in_single, in_double = _scan_line(code, in_single, in_double)
+    delta = mask.count("{") + mask.count("[") - mask.count("}") - mask.count("]")
     return delta, in_single, in_double
 
 
@@ -347,60 +288,25 @@ def _block_depth(pairs):
     return depth
 
 
-def _mask_quotes(line):
-    # Replace characters inside single/double quotes with spaces (fresh quote
-    # state per line). Used only to spot block-scalar headers: missing a
-    # header merely treats those lines as normal text (today's behaviour),
-    # never as clean.
-    out = list(line)
-    in_single = in_double = False
-    i = 0
-    while i < len(line):
-        ch = line[i]
-        if ch == "'" and not in_double:
-            if in_single and i + 1 < len(line) and line[i + 1] == "'":
-                out[i] = out[i + 1] = " "
-                i += 2
-                continue
-            in_single = not in_single
-            out[i] = " "
-        elif ch == '"' and not in_single:
-            if not _odd_backslashes(line, i):
-                in_double = not in_double
-            out[i] = " "
-        elif in_single or in_double:
-            out[i] = " "
-        i += 1
-    return "".join(out)
-
-
-def _is_block_scalar_header(line):
-    # `key: |` / `key: >-` / `key: |2` (trailing comment allowed): the `|`
-    # or `>` must sit in value position outside quotes.
-    masked = _mask_quotes(line)
-    for k, ch in enumerate(masked):
-        if ch == "#" and (k == 0 or masked[k - 1] in (" ", "\t")):
-            masked = masked[:k]
-            break
-    return bool(BLOCK_SCALAR_HEADER.search(masked))
-
-
 def _literal_flags(lines):
-    # True for lines inside a `|`/`>` literal/folded block scalar. Their
-    # content is opaque text, so `on:`-looking lines there are not trigger
-    # candidates and quotes/brackets/aliases inside are not structure.
-    # Missing a header (or over-matching one) can only move a hit between
-    # fail-closed messages, never to clean: skipped `on:` lines shrink the
-    # candidate set toward the fail-closed empty set.
+    # Only a header outside quoted scalars AND flow collections can make
+    # subsequent indented lines opaque. Use the same cross-line scan as
+    # comment stripping; a plain-scalar apostrophe cannot forge a header,
+    # and a continuation's real closing quote must always be consumed.
     flags = [False] * len(lines)
     header_indent = None
+    in_single = in_double = False
+    depth = 0
     for idx, line in enumerate(lines):
         if header_indent is not None:
             if line.strip() == "" or _indent_of(line) > header_indent:
                 flags[idx] = True
                 continue
             header_indent = None
-        if _is_block_scalar_header(line):
+        _, mask, in_single, in_double = _scan_line(line, in_single, in_double)
+        depth += mask.count("{") + mask.count("[") - mask.count("}") - mask.count("]")
+        if (depth == 0 and not in_single and not in_double
+                and BLOCK_SCALAR_HEADER.search(mask)):
             header_indent = _indent_of(line)
     return flags
 
@@ -547,33 +453,6 @@ def find_on_block(text):
     return member
 
 
-def _quote_states(code):
-    # Per-character quote map for one line (fresh state): True where the
-    # character sits inside single/double quotes. Quote opens use the same
-    # scalar-start rule as the block scan.
-    inside = [False] * len(code)
-    in_single = in_double = False
-    i = 0
-    while i < len(code):
-        ch = code[i]
-        if ch == "'" and not in_double:
-            if in_single and i + 1 < len(code) and code[i + 1] == "'":
-                inside[i] = inside[i + 1] = True
-                i += 2
-                continue
-            if in_single or _at_scalar_start(code, i):
-                in_single = not in_single
-        elif ch == '"' and not in_single:
-            if _odd_backslashes(code, i):
-                inside[i] = in_double
-            elif in_double or _at_scalar_start(code, i):
-                in_double = not in_double
-        else:
-            inside[i] = in_single or in_double
-        i += 1
-    return inside
-
-
 def _suspicious_top_key(code_lines, literal):
     """Return a report line if any key hides the trigger, else None.
 
@@ -594,14 +473,16 @@ def _suspicious_top_key(code_lines, literal):
     if not nonblank:
         return None
     min_indent = min(_indent_of(c) for c in nonblank)
+    in_single = in_double = False
     for code, is_lit in zip(code_lines, literal):
-        if is_lit or code.strip() == "":
+        if is_lit:
             continue
-        if _indent_of(code) != min_indent:
+        _, mask, in_single, in_double = _scan_line(code, in_single, in_double)
+        if code.strip() == "" or _indent_of(code) != min_indent:
             continue
-        if code.lstrip(" \t").startswith("?"):
+        if mask.lstrip(" \t").startswith("?"):
             return code.strip()[:120]
-        quoted = _quote_states(code)
+        quoted = [a != b for a, b in zip(code, mask)]
         end = len(code)
         for k, ch in enumerate(code):
             if ch == ":" and not quoted[k]:
@@ -655,27 +536,12 @@ def _unquoted_alias_hit(pairs):
     for code, is_lit in pairs:
         if is_lit:
             continue
+        _, mask, in_single, in_double = _scan_line(code, in_single, in_double)
         i = 0
-        n = len(code)
+        n = len(mask)
         while i < n:
-            ch = code[i]
-            if ch == "'" and not in_double:
-                if in_single and i + 1 < n and code[i + 1] == "'":
-                    i += 2
-                    continue
-                if in_single or _at_scalar_start(code, i):
-                    in_single = not in_single
-                i += 1
-                continue
-            if ch == '"' and not in_single:
-                if _odd_backslashes(code, i):
-                    i += 1
-                    continue
-                if in_double or _at_scalar_start(code, i):
-                    in_double = not in_double
-                i += 1
-                continue
-            if ch == "*" and not in_single and not in_double:
+            ch = mask[i]
+            if ch == "*":
                 if i > 0 and re.match(r"[A-Za-z0-9_]", code[i - 1]):
                     i += 1
                     continue

@@ -103,6 +103,7 @@ parser, not a standing operator command. Test entry points begin with `test_`.
 | `native_ssh_citation_gate.py` |
 | `notify_paperclip_issue.sh` |
 | `omniroute_combo_cli.sh` |
+| `op_queue_reject.sh` |
 | `org_provisioner.sh` |
 | `org_request_queue.sh` |
 | `pacer_admission_audit.py` |

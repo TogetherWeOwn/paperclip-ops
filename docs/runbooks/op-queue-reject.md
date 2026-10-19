@@ -1,0 +1,130 @@
+# Runbook: queue-packet reject verb (receipt-only, non-executing)
+
+The queue-packet reject verb (`op_queue_reject.sh`) records a terminal
+non-execution disposition for a single operator-queue packet: it binds one
+packet file to one rejection receipt without moving, deleting, relabeling,
+replaying, or executing anything. The queue file is read-only input and its
+bytes never change. There is no execution path, no approval handling, no
+allowlist, and no caller-selected executable. A packet the approval
+executor cannot parse is still rejectable here — that is the point.
+
+SHADOW-independent by design: recording a terminal non-execution receipt is
+not execution, so the shadow marker neither blocks this verb nor is changed
+by it. The approval executor's SHADOW semantics are untouched.
+
+This verb disposes exactly one packet per invocation. There is no queue
+sweep mode and no batch flag; sweeping the queue through a shell loop is
+outside this verb's contract and needs its own review.
+
+## Source / install manifest
+
+| File | Role |
+| --- | --- |
+| `op_queue_reject.sh` | The verb. Installed root-owned 755, run once as root. |
+| `test_op_queue_reject.sh` | Offline refusal/regression suite (56 cases). |
+| `docs/runbooks/op-queue-reject.md` | This file. |
+
+Hashes below pin the reviewed revision. The approving reviewer re-checks
+them at the exact head that merges; a re-push re-pins.
+
+```
+fd4c6c7814624128cb262389d7940ec873b0b3cd157e36a6c6627e6fc64abb5f  op_queue_reject.sh
+0a78a21146ea1a152f980fc794b50ba51d3a50afe7ac55f9411753350d3b974b  test_op_queue_reject.sh
+```
+
+Trust lineage: the queue-dir jail (`within_dir_strict`) and the root-owned
+file check (`check_root_owned_file`) are the same checks as the reviewed
+`op_approval_executor.sh`, applied to the packet file itself since this
+verb has no allowlist, approvers file, or runbook script. One deliberate
+hardening over the executor: symlinks refuse even to inside targets
+(`packet_is_symlink`), so the receipt name always equals the invoked name.
+
+## Credential custody contract
+
+- The verb takes no credential on argv, reads no credential file, and
+  exports no credential variable.
+- There is no free-text input: the only caller choice is a closed reason
+  enum (`schema-probe | unknown-packet | stale-packet`), and the packet
+  basename is charset-gated before any receipt path is built.
+- Receipt and log lines are still passed through the same secret-shape
+  scrub as the approval executor (defence in depth for future fields).
+- Source work never mints, invites, grants, or reads live secrets. The
+  suite asserts the non-execution structure directly (no eval, shell
+  passthrough, exec, network, SHADOW/allowlist/approval coupling).
+
+## Privilege and write-path design
+
+No new principal and no sudoers change. The verb is installed root-owned
+755 by the human host operator, who also runs the single one-shot
+invocation as root inside the same bounded install window below. The
+receipt and the log line inherit root ownership from the root invoker;
+no agent account holds a write path to the processed dir or the log.
+
+Re-verification is read-only through existing reads: the receipt under
+`processed/` plus `sha256sum` over the preserved packet re-establishes
+the binding on demand (`verify-only` never runs on the host; it is a
+pre-flight for fixtures only).
+
+Explicitly NOT chosen: a per-packet exact-argv sudoers grant for an
+agent account. It would widen the standing sudo surface for a one-shot
+disposition and is unnecessary while the host operator already runs a
+bounded install window.
+
+## Install (host operator only, bounded)
+
+All paths are examples. Private host maps stay private.
+
+1. Copy `op_queue_reject.sh` to `/usr/local/sbin/op-queue-reject`
+   (or the private sbin path), `chown root:root`, `chmod 755`.
+2. Confirm the file on disk hashes to the manifest above and `bash -n`
+   passes. On any mismatch, stop: do not run it.
+3. Pre-flight (writes nothing, proves the binding checks hold):
+   `/usr/local/sbin/op-queue-reject verify-only --packet
+   /var/lib/paperclip-operator/queue/<packet>.json --reason <enum>`
+   Expect exit 0, `verified/would_reject`, no receipt file.
+4. Run the single disposition exactly once:
+   `/usr/local/sbin/op-queue-reject reject --packet
+   /var/lib/paperclip-operator/queue/<packet>.json --reason <enum>`
+   Expect exit 0, `rejected/ok`, one receipt at
+   `processed/<packet>.json.rejected.json`.
+5. Re-verify read-only: `cat` the receipt, confirm
+   `packet_sha256` equals `sha256sum` of the queue file, and confirm
+   the queue file's size and mtime are unchanged.
+
+Time bound: under 15 minutes. Blast radius: none — nothing is restarted,
+no service is reloaded, no packet executes, and the queue file is untouched.
+
+## Rollback (bounded)
+
+1. Remove the installed verb binary.
+2. Leave the receipt and the log line in place: they are the terminal
+   record, not install state. Removing them would un-dispose the packet.
+3. No restart is required. Total: under 10 minutes.
+
+## Verification (non-destructive)
+
+Run these from the repo checkout. None touches production, mints anything,
+or restarts a service.
+
+```bash
+bash -n op_queue_reject.sh && bash -n test_op_queue_reject.sh
+./test_op_queue_reject.sh          # expect: 56 passed, 0 failed
+sha256sum op_queue_reject.sh test_op_queue_reject.sh
+```
+
+Expected: exit 0, `56 passed, 0 failed`, and hashes equal to the manifest
+above. On the host (operator only, read-only after install):
+
+```bash
+ls -l /usr/local/sbin/op-queue-reject   # root-owned, no group/other write
+cat /var/lib/paperclip-operator/processed/<packet>.json.rejected.json
+sha256sum /var/lib/paperclip-operator/queue/<packet>.json   # must match receipt
+stat -c '%s %y' /var/lib/paperclip-operator/queue/<packet>.json  # size/mtime unchanged
+```
+
+## Exit codes (pinned by the suite)
+
+0 rejected / verified · 2 usage or bad invocation · 3 evidence/policy
+refusal · 5 filesystem/ownership refusal · 6 replay or concurrent claim
+(nothing written) · 1 I/O failure. There is no 4 (SHADOW does not apply
+to a non-executing verb) and no 7 (nothing executes).

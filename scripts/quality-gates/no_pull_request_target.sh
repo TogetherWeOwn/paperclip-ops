@@ -30,7 +30,9 @@
 # where the decoy sits below the hidden key; nested globs and continuations
 # are ordinary content). Quote state is carried
 # across lines but a quote only opens at a scalar start (anchors/tags admit
-# punctuation, verbatim `!<...>` included even when glued to a flow bracket,
+# punctuation, verbatim `!<...>` included even when glued to a flow bracket
+# (its opening is the nearest `!<` at a token boundary, so an inner `!<`
+# inside the URI never wins),
 # but only when whitespace-separated from the token and at a node start: a
 # quote glued to an anchor/tag name is part of the name, and a property
 # glued to, or spaced after, a plain-scalar word (`foo &b`, `foo!<x>`) is
@@ -41,8 +43,9 @@
 # either). A line ending mid plain scalar inside flow pends as a
 # continuation for any non-delimiter ending (letters and trailing
 # punctuation alike), unless it ends with a complete anchor/tag/alias at
-# value position (`key: &a`, any name charset, anchor+tag chains included,
-# holds its node on the next line, whose quotes stay fresh); blank and
+# value position (`key: &a`, any name charset, anchor+tag chains included
+# even glued to a pending quoted-key colon, holds its node on the next
+# line, whose quotes stay fresh); blank and
 # comment-only lines inside flow carry that pending
 # state forward; and a `-`/`?`-led chain starting a continuation line is
 # plain text, never a fresh node),
@@ -85,6 +88,25 @@ def _odd_backslashes(line, idx):
     return bs % 2 == 1
 
 
+def _verbatim_opens(s, end):
+    # Candidate `!<` openings for the `>` at index `end`, nearest first. A
+    # candidate must sit at a token boundary (line start or after whitespace
+    # / `,[]{}` / `:`) and its `!<...>` span must hold no whitespace
+    # (verbatim URIs cannot). Nearest-first (not rfind-once, not
+    # earliest-first): a second `!<` inside the URI (`!<a!<b,c>`) fails the
+    # boundary test so the outer opening wins, while an earlier unrelated
+    # `!<` (`!<a>,!<b>`) loses to the nearer real opening instead of
+    # spanning the comma. Callers validate the node's own position.
+    idx = s.rfind("!<", 0, end)
+    while idx != -1:
+        if (idx == 0 or s[idx - 1] in " \t,[]{}:") and not any(
+                c in " \t" for c in s[idx:end + 1]):
+            yield idx
+        if idx == 0:
+            break
+        idx = s.rfind("!<", 0, idx)
+
+
 def _before_is_node_start(line, s, closed_quote, pending_key=False,
                            in_plain_cur=False):
     # True when index s (the start of an `&anchor` / `!tag` / `!<...>`
@@ -112,13 +134,26 @@ def _before_is_node_start(line, s, closed_quote, pending_key=False,
     if k < 0:
         return True
     m = k
-    while m >= 0 and line[m] not in " \t,[]{}":
-        if line[m] == ":" and _quoted_key_colon(line, m, closed_quote,
-                                                pending_key):
-            # Stop at the real key colon, not at a quote in a property name.
+    prev = None
+    if line[k] == ">":
+        # A trailing verbatim tag (`!<a,b>`) is one token even though its
+        # URI may hold commas: consume the `!<...>` span whole (opening at
+        # a token boundary, nearest first) instead of splitting it at its
+        # comma. A `>` that is not a verbatim tag (e.g. `&<>`, `a>b`)
+        # yields no candidate and falls through to the token walk below.
+        for idx in _verbatim_opens(line, k):
+            prev = line[idx:k + 1]
+            m = idx - 1
             break
-        m -= 1
-    prev = line[m + 1:k + 1]
+    if prev is None:
+        while m >= 0 and line[m] not in " \t,[]{}":
+            if line[m] == ":" and _quoted_key_colon(line, m, closed_quote,
+                                                    pending_key):
+                # Stop at the real key colon, not at a quote in a property
+                # name.
+                break
+            m -= 1
+        prev = line[m + 1:k + 1]
     if prev == "":
         return True
     if prev[0] in "&!":
@@ -205,24 +240,23 @@ def _at_scalar_start(line, i, closed_quote, pending_key=False,
         # scalar text, not an indicator.
         return True
     # Verbatim tag `!<...>` directly before the quote: the tag URI may hold
-    # `,`, `<` or quotes (e.g. `!<tag:yaml.org,2002:str>`, `!<(<,>`,
-    # `!<?',>`, `!<a,b'c>`), and the tag itself may sit glued to a flow
-    # indicator (`[`, `{` or `,` with no space, e.g. `[!<a,b>`,
-    # `[z,!<a,b>`, `{!<a,b>`), so locate the opening `!<` by searching back
-    # for it directly (verbatim tags cannot hold whitespace: accept when the
-    # `!<...>` span holds no whitespace) instead of taking the token from
-    # the last whitespace or stopping at the first `<` or quote. The tag
-    # must sit at a node start: a `!<x>` glued to, or spaced after, a
-    # plain-scalar word (as in `foo!<x> "p` or `foo !<x> "p`) is scalar
-    # text, not a tag. A `>` that is not a verbatim tag falls through to
-    # the anchor/tag token scan below (e.g. `&<> "..."` is an anchor named
-    # `<>`, not a verbatim tag).
+    # `,`, `<`, a second `!<` or quotes (e.g. `!<tag:yaml.org,2002:str>`,
+    # `!<(<,>`, `!<?',>`, `!<a,b'c>`, `!<x,y!<z>`), and the tag itself may
+    # sit glued to a flow indicator (`[`, `{` or `,` with no space, e.g.
+    # `[!<a,b>`, `[z,!<a,b>`, `{!<a,b>`), so take the opening `!<` from the
+    # nearest-first boundary candidates (verbatim tags cannot hold
+    # whitespace) instead of taking the token from the last whitespace,
+    # stopping at the first `<` or quote, or trusting one rfind hit (which
+    # may be an inner `!<` inside the URI). The tag must sit at a node
+    # start: a `!<x>` glued to, or spaced after, a plain-scalar word (as in
+    # `foo!<x> "p` or `foo !<x> "p`) is scalar text, not a tag. A `>` that
+    # is not a verbatim tag falls through to the anchor/tag token scan
+    # below (e.g. `&<> "..."` is an anchor named `<>`, not a verbatim tag).
     if line[j] == ">":
-        idx = line.rfind("!<", 0, j)
-        if (idx != -1 and not any(c in " \t" for c in line[idx:j + 1])
-                and _before_is_node_start(line, idx, closed_quote,
-                                          pending_key, in_plain_cur)):
-            return True
+        for idx in _verbatim_opens(line, j):
+            if _before_is_node_start(line, idx, closed_quote,
+                                      pending_key, in_plain_cur):
+                return True
     # Anchor/tag name directly before the quote: take the whitespace- and
     # flow-delimited token ending at j (an anchor/tag name admits any other
     # character, including `&`, `!`, quotes, `~:+@%` and `<>`, e.g. `&a!`,
@@ -266,7 +300,7 @@ def _pending_next_for(code, closed_quote, in_single_end, in_double_end):
 
 
 def _plain_next_for(code, in_single_end, in_double_end, depth_end,
-                    closed_quote=None):
+                    closed_quote=None, pending_key=False):
     # True when this line ends inside a flow plain scalar that may continue
     # on the next line (`description: foo bar%` newline `"p ...` reads as
     # `foo bar% "p` in YAML: a plain scalar may end in almost any
@@ -309,18 +343,19 @@ def _plain_next_for(code, in_single_end, in_double_end, depth_end,
         # it (anchor names may hold `:`, e.g. `&a:b`); only a token that
         # is not a property can be a key boundary. A verbatim `!<...>`
         # span is consumed to its closing `>` before tokenizing, never
-        # split on a comma inside its URI. The first property may be glued
-        # to its quoted key's colon (`"k":&a !!str`): a real quoted-key
+        # split on a comma inside its URI; the opening comes from the
+        # nearest-first boundary candidates, so an inner `!<` inside the
+        # URI cannot win over the real opening. The first property may be
+        # glued to its quoted key's colon (`"k":&a !!str`, or a pending
+        # quoted key whose colon starts this line): a real quoted-key
         # colon inside the fused token still marks the value boundary.
         j = m.start() - 1
         while j >= 0 and stripped[j] in " \t":
             j -= 1
         while j >= 0:
             if stripped[j] == ">":
-                idx = stripped.rfind("!<", 0, j + 1)
-                if (idx != -1
-                        and not any(c in " \t" for c in stripped[idx:j + 1])
-                        and (idx == 0 or stripped[idx - 1] in " \t,[]{}:")):
+                idx = next(_verbatim_opens(stripped, j), None)
+                if idx is not None:
                     j = idx - 1
                     while j >= 0 and stripped[j] in " \t":
                         j -= 1
@@ -335,7 +370,8 @@ def _plain_next_for(code, in_single_end, in_double_end, depth_end,
                         continue
                     if c_idx + 1 > j or stripped[c_idx + 1] not in "&!":
                         continue
-                    if _quoted_key_colon(stripped, c_idx, closed_quote):
+                    if _quoted_key_colon(stripped, c_idx, closed_quote,
+                                            pending_key):
                         return False
                 break
             j = k
@@ -424,7 +460,8 @@ def _scan_line(line, in_single=False, in_double=False, pending_key=False,
                 pending_next = _pending_next_for(code, closed_quote,
                                                  in_single, in_double)
                 in_plain_next = _plain_next_for(code, in_single, in_double,
-                                                depth_end, closed_quote)
+                                                depth_end, closed_quote,
+                                                pending_key)
                 return (code, m, in_single, in_double, pending_next,
                         in_plain_next, depth_end)
         elif ch in ",:{}[]" and not was_quoted and not in_single \
@@ -444,7 +481,8 @@ def _scan_line(line, in_single=False, in_double=False, pending_key=False,
         pending_next = _pending_next_for(line, closed_quote, in_single,
                                          in_double)
         in_plain_next = _plain_next_for(line, in_single, in_double,
-                                        depth_end, closed_quote)
+                                        depth_end, closed_quote,
+                                        pending_key)
     return line, m, in_single, in_double, pending_next, in_plain_next, depth_end
 
 

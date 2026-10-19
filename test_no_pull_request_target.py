@@ -116,6 +116,20 @@ PASS = {
     "push glued-key chain value next line passes": (
         'on: {push: {}, x: {"k":&a !!str' + "\n"
         '"v # c"}}' + "\n" + JOB),
+    # Paperclip Review round 17: push controls in the pending-colon and
+    # verbatim-open shapes (the old gate over-pended / suppressed the
+    # value quote, so these flagged as unclosed brackets).
+    "push pending glued chain value next line passes": (
+        'on: {push: {}, workflow_dispatch: {inputs: {x: {"description"\n'
+        '  :&a !!str\n'
+        '  "a # b", type: string}}}}\n' + JOB),
+    "push inner-verbatim chain value next line passes": (
+        'on: {push: {}, x: !<a!<b,c> &a\n'
+        '"v # c"}\n' + JOB),
+    "push verbatim anchor quoted scalar passes": (
+        'on: {push: {}, x: {description: !<a,b> &a "v # c"}}\n' + JOB),
+    "push inner-verbatim quoted scalar passes": (
+        'on: {push: {}, x: {description: !<x,y!<z> "v # c"}}\n' + JOB),
 }
 
 FAIL = {
@@ -945,6 +959,59 @@ FAIL = {
         'on: {workflow_dispatch: {inputs: {x: {"description":&a !!str' + "\n"
         '' + "\n"
         '  "a }}}} # b", type: string}}}, pull_request_target: {}}}' + "\n" + JOB),
+    # Paperclip Review round 17, finding 1: a pending quoted key whose
+    # colon starts the next line, with an anchor+tag chain glued to that
+    # colon, over-pended (`_plain_next_for` never saw `pending_key`), so
+    # the value quote on the line after never opened. All read clean
+    # before, including across a blank line.
+    "pending glued chain next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description"\n'
+        '  :&a !!str\n'
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    "pending tag-first chain next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description"\n'
+        '  :!!str &a\n'
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    "pending squote glued chain next-line value hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {'description'\n"
+        '  :&a !!str\n'
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    "pending blank glued chain next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description"\n'
+        '\n'
+        '  :&a !!str\n'
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    # Paperclip Review round 17, finding 2: the end-of-line chain walk
+    # located the verbatim opening with rfind, which picks an inner `!<`
+    # inside the URI, so the fallback walk split on the URI comma and the
+    # line over-pended. Both read clean before.
+    "inner-bang comma-after next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<a!<b,c> &a\n'
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    "inner-bang comma-before next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<x,y!<z> &a\n'
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    # Paperclip Review round 17, finding 3: `_before_is_node_start`
+    # tokenised the previous property on commas, so a verbatim-comma
+    # tag before an anchor on the same line never opened the value
+    # quote. Both read clean before.
+    "verbatim-comma anchor same-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<a,b> &a '
+        '"a }}}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    "full-verbatim anchor same-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: '
+        '!<tag:yaml.org,2002:str> &a '
+        '"a }}}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    # Paperclip Review round 17, finding 4: `_at_scalar_start` had the
+    # same rfind defect at its older call site, so a verbatim tag with a
+    # comma before an inner `!<` never opened the same-line quote. Both
+    # read clean before.
+    "inner-verbatim same-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<x,y!<z> '
+        '"a }}}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    "anchor inner-verbatim same-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: &a !<x,y!<z> '
+        '"a }}}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
 }
 
 

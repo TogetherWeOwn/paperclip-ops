@@ -301,6 +301,22 @@ class Retirement(GuardCase):
         self.assertIn("STALE", self.all_output())
         self.assertIn("not an object", self.err.getvalue())
 
+    def test_marker_without_optional_evidence_is_retired(self):
+        """`evidence` is recommended but not required: absence still retires."""
+        log = self.write_log(GAP_ROWS)
+        marker = {
+            "retired": True,
+            "producer": "fleet-quota-balancer",
+            "successor": "native-routing",
+            "approved_by": "test-approver",
+            "approved_at": "2026-10-04T17:40:00+00:00",
+        }
+        rc = self.run_guard("--log", log, "--state", self.write_state(),
+                            "--now", AFTER_GAP_NOW,
+                            "--retirement-file", self.write_marker(marker))
+        self.assertEqual(rc, 0)
+        self.assertIn("RETIRED", self.all_output())
+
     def test_marker_missing_required_field_is_ignored(self):
         log = self.write_log(GAP_ROWS)
         marker = {

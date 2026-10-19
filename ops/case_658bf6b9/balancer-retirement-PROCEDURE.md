@@ -42,10 +42,12 @@ readable by both installs (the user timer and the root cron pusher):
 }
 ```
 
-Rules the guard enforces: `retired` must be boolean true; all five string
-fields must be non-empty; `producer` must be exactly
-`fleet-quota-balancer`; `approved_at` must parse and must not be in the
-future. Anything else is ignored with a journal note and STALE stands.
+Rules the guard enforces: `retired` must be boolean true; the four string
+fields `producer`, `successor`, `approved_by` and `approved_at` must be
+non-empty; `producer` must be exactly `fleet-quota-balancer`;
+`approved_at` must parse and must not be in the future. `evidence` is
+optional but recommended: the guard accepts the marker with or without
+it. Anything else is ignored with a journal note and STALE stands.
 
 ## Wiring (two installs, same flag)
 

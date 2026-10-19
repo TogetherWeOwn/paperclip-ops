@@ -1611,6 +1611,33 @@ class RegistryDiscoveryTests(unittest.TestCase):
         self.assertEqual(
             registry_apply_decision_ex(
                 [reg_entry(state="paused")], "routine-x")[2], False)
+        # A writer for another target is an intentional dry-run, not an
+        # error: flipping its gate flag must turn this red.
+        other_target = registry_apply_decision_ex(
+            [reg_entry(writes=["fs:other"])], "routine-x")
+        self.assertEqual((other_target[0], other_target[2]), (False, False))
+        # A missing writes field declares nothing, like an empty list.
+        missing_writes = dict(reg_entry())
+        del missing_writes["writes"]
+        self.assertEqual(
+            registry_apply_decision_ex([missing_writes], "routine-x"),
+            (False, "entry does not declare %s" % REGISTRY_WRITE_TARGET,
+             False))
+        self.assertEqual(
+            registry_apply_decision_ex(
+                [reg_entry(writes=None)], "routine-x")[2], False)
+        # A present-but-non-list writes shape is malformed: it must refuse
+        # apply as a gate ERROR, never crash (int) or authorize through
+        # substring/key matching (str/dict).
+        for bad_writes in (1, REGISTRY_WRITE_TARGET,
+                           "xx %s yy" % REGISTRY_WRITE_TARGET,
+                           {REGISTRY_WRITE_TARGET: True}):
+            with self.subTest(bad_writes=bad_writes):
+                decision = registry_apply_decision_ex(
+                    [reg_entry(writes=bad_writes)], "routine-x")
+                self.assertEqual(
+                    decision,
+                    (False, "entry writes is not a list", True))
         with tempfile.TemporaryDirectory() as tmp:
             missing = os.path.join(tmp, "absent.json")
             argv = ["--registry-gate", "routine-x",
@@ -1623,6 +1650,14 @@ class RegistryDiscoveryTests(unittest.TestCase):
                    "--registry", writer]
             self.assertEqual(resolve_mode_ex(parse_argv(argv)), (True, (
                 "registry entry 'routine-x' is an active writer"), False))
+            malformed = os.path.join(tmp, "malformed.json")
+            with open(malformed, "w") as handle:
+                json.dump({"entries": [reg_entry(writes=1)]}, handle)
+            argv = ["--registry-gate", "routine-x",
+                   "--registry", malformed]
+            self.assertEqual(
+                resolve_mode_ex(parse_argv(argv)),
+                (False, "entry writes is not a list", True))
 
     def test_run_tool_records_gate_decision_in_summary(self):
         with tempfile.TemporaryDirectory() as out:
@@ -1682,6 +1717,100 @@ class RegistryDiscoveryTests(unittest.TestCase):
                 self.assertEqual(doc["summary"]["registry_gate"], "routine-x")
                 self.assertTrue(doc["summary"]["registry_gate_error"])
                 self.assertEqual(doc["summary"]["n_errors"], 1)
+
+    def test_main_records_malformed_writes_in_dryrun_json(self):
+        # A non-list writes shape must dry-run as a gate ERROR with a
+        # machine-readable report, not escape as a TypeError with no
+        # dryrun.json, and never authorize apply.
+        from terminal_worktree_cache_reclaim import main  # noqa: E402
+        for bad_writes in (1, "xx %s yy" % REGISTRY_WRITE_TARGET,
+                           {REGISTRY_WRITE_TARGET: True}):
+            with self.subTest(bad_writes=bad_writes), \
+                    tempfile.TemporaryDirectory() as tmp:
+                out = os.path.join(tmp, "out")
+                registry = os.path.join(tmp, "registry.json")
+                with open(registry, "w") as handle:
+                    json.dump({"entries": [reg_entry(writes=bad_writes)]},
+                              handle)
+                fake_root = os.path.join(tmp, "fake-root")
+                os.makedirs(fake_root)
+                with mock.patch.object(reclaim_mod, "build_context",
+                                       return_value={}), \
+                        mock.patch.object(reclaim_mod, "enumerate_worktrees",
+                                          return_value=[]), \
+                        contextlib.redirect_stderr(io.StringIO()) as err:
+                    main(argv=["--registry-gate", "routine-x",
+                               "--registry", registry,
+                               "--out-dir", out, "--root", fake_root],
+                         run=quiet_run, api=object())
+                self.assertIn("mode: dry-run (entry writes is not a list)",
+                              err.getvalue())
+                with open(os.path.join(out, "dryrun.json")) as handle:
+                    doc = json.load(handle)
+                    self.assertEqual(doc["summary"]["mode"], "dry-run")
+                    self.assertEqual(doc["summary"]["mode_reason"],
+                                     "entry writes is not a list")
+                    self.assertTrue(doc["summary"]["registry_gate_error"])
+                    self.assertEqual(doc["summary"]["n_errors"], 1)
+
+    def test_gate_error_adds_to_evaluation_errors(self):
+        # A gate ERROR increments n_errors on top of evaluation errors;
+        # setting it to 1 would hide evaluation errors from the one
+        # count automation escalates on.
+        bad = {"w": "/w/case_d02d0252", "reason": "find-error", "det": {},
+               "caches": [], "git": None}
+        with tempfile.TemporaryDirectory() as out, \
+                mock.patch.object(reclaim_mod, "build_context",
+                                  return_value={}), \
+                mock.patch.object(reclaim_mod, "enumerate_worktrees",
+                                  return_value=["/w/case_d02d0252"]), \
+                mock.patch.object(reclaim_mod, "evaluate_worktree",
+                                  return_value=bad):
+            res = run_tool(False, quiet_run, None, out, "/tmp/fake-root",
+                           30, 1, mode_why="registry unreadable: ENOENT",
+                           registry_gate="routine-x", gate_error=True)
+            self.assertEqual(res["summary"]["n_errors"], 2, res["summary"])
+            with open(os.path.join(out, "dryrun.json")) as handle:
+                self.assertEqual(json.load(handle)["summary"]["n_errors"], 2)
+
+    def test_run_tool_records_apply_mode_in_summary(self):
+        # The machine-readable mode must say apply on an apply pass, not
+        # always dry-run. Empty enumeration deletes nothing.
+        with tempfile.TemporaryDirectory() as out, \
+                mock.patch.object(reclaim_mod, "build_context",
+                                  return_value={}), \
+                mock.patch.object(reclaim_mod, "enumerate_worktrees",
+                                  return_value=[]):
+            res = run_tool(True, quiet_run, None, out, "/tmp/fake-root",
+                           30, 1, mode_why="--apply",
+                           registry_gate=None, gate_error=False)
+            self.assertEqual(res["summary"]["mode"], "apply", res["summary"])
+            with open(os.path.join(out, "dryrun.json")) as handle:
+                self.assertEqual(json.load(handle)["summary"]["mode"], "apply")
+
+    def test_main_records_apply_mode_in_dryrun_json(self):
+        # End to end: a writer registry authorizes apply and the report
+        # says so. Empty enumeration deletes nothing.
+        from terminal_worktree_cache_reclaim import main  # noqa: E402
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "out")
+            registry = os.path.join(tmp, "registry.json")
+            with open(registry, "w") as handle:
+                json.dump({"entries": [reg_entry()]}, handle)
+            fake_root = os.path.join(tmp, "fake-root")
+            os.makedirs(fake_root)
+            with mock.patch.object(reclaim_mod, "build_context",
+                                   return_value={}), \
+                    mock.patch.object(reclaim_mod, "enumerate_worktrees",
+                                      return_value=[]), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                main(argv=["--registry-gate", "routine-x",
+                           "--registry", registry,
+                           "--out-dir", out, "--root", fake_root],
+                     run=quiet_run, api=object())
+            with open(os.path.join(out, "dryrun.json")) as handle:
+                self.assertEqual(json.load(handle)["summary"]["mode"],
+                                 "apply")
 
 
 class RunToolCountTests(unittest.TestCase):

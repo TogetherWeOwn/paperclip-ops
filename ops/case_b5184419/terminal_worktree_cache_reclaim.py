@@ -255,8 +255,10 @@ def registry_apply_decision_ex(entries, entry_id):
     its role is `writer`, and it declares the one write target this tool
     touches. A detector/paused/planned/retired entry or a writer for another
     target is an intentional dry-run (gate_error False). A missing/duplicate
-    entry or a malformed entries list is a gate ERROR (gate_error True): the
-    firing still dry-runs, but the summary counts it. Flipping a routine from
+    entry, a malformed entries list, or a present-but-non-list `writes`
+    shape is a gate ERROR (gate_error True): the firing still dry-runs,
+    but the summary counts it. A missing `writes` field declares nothing,
+    like an empty list (intentional dry-run). Flipping a routine from
     reporting to deleting is a registry change through exact-head review and
     CI, not a routine-text edit.
     """
@@ -275,7 +277,12 @@ def registry_apply_decision_ex(entries, entry_id):
     if entry.get("role") != "writer":
         return (False, "entry role is %r, not writer" % entry.get("role"),
                 False)
-    if REGISTRY_WRITE_TARGET not in (entry.get("writes") or []):
+    writes = entry.get("writes")
+    if writes is None:
+        writes = []
+    if not isinstance(writes, list):
+        return (False, "entry writes is not a list", True)
+    if REGISTRY_WRITE_TARGET not in writes:
         return (False, "entry does not declare %s" % REGISTRY_WRITE_TARGET,
                 False)
     return (True, "registry entry %r is an active writer" % entry_id, False)

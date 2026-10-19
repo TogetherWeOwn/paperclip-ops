@@ -1584,11 +1584,13 @@ class RegistryDiscoveryTests(unittest.TestCase):
             self.assertIn("registry unreadable", why)
             self.assertIn(os.path.normpath(sibling), why)
             self.assertNotIn("..", why)
-            self.assertNotIn("tog-13014", REGISTRY_DEFAULT)
-            old = os.path.join(tmp, "tog-13014",
-                               "host-timer-registry.json")
-            os.makedirs(os.path.dirname(old))
-            with open(old, "w") as handle:
+            self.assertTrue(REGISTRY_DEFAULT.endswith(
+                os.path.join("case_30b51a0f", "host-timer-registry.json")),
+                REGISTRY_DEFAULT)
+            other = os.path.join(tmp, "case_aaaaaaa0",
+                                 "host-timer-registry.json")
+            os.makedirs(os.path.dirname(other))
+            with open(other, "w") as handle:
                 json.dump({"entries": [reg_entry()]}, handle)
             apply2, why2 = resolve_mode(parse_argv(argv))
             self.assertFalse(apply2, why2)

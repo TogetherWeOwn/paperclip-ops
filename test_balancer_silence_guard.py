@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
+import re
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -215,6 +217,186 @@ class Unmeasurable(GuardCase):
                             "--state", os.path.join(self.tmp.name, "absent.json"),
                             "--now", AFTER_GAP_NOW)
         self.assertEqual(rc, 1)
+
+
+class Retirement(GuardCase):
+    """Explicit retirement excuses quantified silence, never blindness.
+
+    Every rejection below is a positive control for fail-closed: a bad
+    file must leave the stale verdict standing, not mask it and not
+    crash the guard.
+    """
+
+    def write_marker(self, payload):
+        path = os.path.join(self.tmp.name, "fleet-quota-balancer.retired.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            if isinstance(payload, str):
+                handle.write(payload)
+            else:
+                json.dump(payload, handle)
+        return path
+
+    def valid_marker(self, **overrides):
+        marker = {
+            "retired": True,
+            "producer": "fleet-quota-balancer",
+            "successor": "native-routing",
+            "approved_by": "test-approver",
+            "approved_at": "2026-10-04T17:40:00+00:00",
+            "evidence": "synthetic-fixture",
+        }
+        marker.update(overrides)
+        return self.write_marker(marker)
+
+    def test_stale_log_with_valid_marker_is_retired(self):
+        log = self.write_log(GAP_ROWS)
+        rc = self.run_guard("--log", log, "--state", self.write_state(),
+                            "--now", AFTER_GAP_NOW,
+                            "--retirement-file", self.valid_marker())
+        self.assertEqual(rc, 0)
+        output = self.all_output()
+        self.assertIn("RETIRED", output)
+        self.assertIn("explicitly retired", output)
+        self.assertIn("GAP 193", output)  # the audit trail is preserved
+        self.assertIn("retirement: producer=fleet-quota-balancer", output)
+        self.assertNotIn("STALE", output)
+
+    def test_stale_log_with_missing_marker_file_still_alarms(self):
+        """The flag names a file that is absent: no evidence, still stale."""
+        log = self.write_log(GAP_ROWS)
+        rc = self.run_guard("--log", log, "--state", self.write_state(),
+                            "--now", AFTER_GAP_NOW,
+                            "--retirement-file",
+                            os.path.join(self.tmp.name, "absent.json"))
+        self.assertEqual(rc, 1)
+        self.assertIn("STALE", self.all_output())
+        self.assertIn("retirement file missing", self.err.getvalue())
+        self.assertIn("retirement ignored", self.err.getvalue())
+
+    def test_marker_with_retired_false_is_ignored(self):
+        log = self.write_log(GAP_ROWS)
+        rc = self.run_guard("--log", log, "--state", self.write_state(),
+                            "--now", AFTER_GAP_NOW,
+                            "--retirement-file",
+                            self.valid_marker(retired=False))
+        self.assertEqual(rc, 1)
+        self.assertIn("STALE", self.all_output())
+        self.assertIn("retired is not true", self.err.getvalue())
+
+    def test_malformed_marker_is_ignored(self):
+        log = self.write_log(GAP_ROWS)
+        rc = self.run_guard("--log", log, "--state", self.write_state(),
+                            "--now", AFTER_GAP_NOW,
+                            "--retirement-file", self.write_marker("not json{"))
+        self.assertEqual(rc, 1)
+        self.assertIn("STALE", self.all_output())
+        self.assertIn("unreadable", self.err.getvalue())
+
+    def test_marker_array_is_ignored(self):
+        log = self.write_log(GAP_ROWS)
+        rc = self.run_guard("--log", log, "--state", self.write_state(),
+                            "--now", AFTER_GAP_NOW,
+                            "--retirement-file", self.write_marker("[1, 2]"))
+        self.assertEqual(rc, 1)
+        self.assertIn("STALE", self.all_output())
+        self.assertIn("not an object", self.err.getvalue())
+
+    def test_marker_missing_required_field_is_ignored(self):
+        log = self.write_log(GAP_ROWS)
+        marker = {
+            "retired": True,
+            "producer": "fleet-quota-balancer",
+            "successor": "native-routing",
+            "approved_at": "2026-10-04T17:40:00+00:00",
+        }  # approved_by deliberately absent
+        rc = self.run_guard("--log", log, "--state", self.write_state(),
+                            "--now", AFTER_GAP_NOW,
+                            "--retirement-file", self.write_marker(marker))
+        self.assertEqual(rc, 1)
+        self.assertIn("STALE", self.all_output())
+        self.assertIn("approved_by", self.err.getvalue())
+
+    def test_marker_with_future_approval_is_ignored(self):
+        """An approval stamped after --now did not exist at replay time."""
+        log = self.write_log(GAP_ROWS)
+        rc = self.run_guard("--log", log, "--state", self.write_state(),
+                            "--now", AFTER_GAP_NOW,
+                            "--retirement-file", self.valid_marker(
+                                approved_at="2026-10-04T18:40:00+00:00"))
+        self.assertEqual(rc, 1)
+        self.assertIn("STALE", self.all_output())
+        self.assertIn("in the future", self.err.getvalue())
+
+    def test_marker_for_other_producer_is_ignored(self):
+        log = self.write_log(GAP_ROWS)
+        rc = self.run_guard("--log", log, "--state", self.write_state(),
+                            "--now", AFTER_GAP_NOW,
+                            "--retirement-file",
+                            self.valid_marker(producer="other-writer"))
+        self.assertEqual(rc, 1)
+        self.assertIn("STALE", self.all_output())
+        self.assertIn("mismatch", self.err.getvalue())
+
+    def test_marker_with_unparseable_approval_is_ignored(self):
+        log = self.write_log(GAP_ROWS)
+        rc = self.run_guard("--log", log, "--state", self.write_state(),
+                            "--now", AFTER_GAP_NOW,
+                            "--retirement-file",
+                            self.valid_marker(approved_at="someday"))
+        self.assertEqual(rc, 1)
+        self.assertIn("STALE", self.all_output())
+        self.assertIn("unparseable", self.err.getvalue())
+
+    def test_live_log_with_valid_marker_stays_fresh(self):
+        """The marker excuses silence; a live feed needs no excuse."""
+        end = datetime(2026, 10, 5, 5, 0, tzinfo=timezone.utc)
+        log = self.write_log(healthy_rows(end))
+        rc = self.run_guard("--log", log, "--state", self.write_state(),
+                            "--now", end.isoformat(),
+                            "--retirement-file", self.valid_marker())
+        self.assertEqual(rc, 0)
+        output = self.all_output()
+        self.assertIn("FRESH", output)
+        self.assertNotIn("RETIRED", output)
+
+    def test_missing_log_with_valid_marker_stays_unmeasurable(self):
+        """Blindness is never retired: the marker needs a quantified tail."""
+        rc = self.run_guard("--log", os.path.join(self.tmp.name, "absent.log"),
+                            "--state", self.write_state(),
+                            "--retirement-file", self.valid_marker())
+        self.assertEqual(rc, 2)
+        self.assertIn("UNMEASURABLE", self.err.getvalue())
+        self.assertNotIn("RETIRED", self.all_output())
+
+
+class NoProducerWrite(unittest.TestCase):
+    """Static pin: the guard cannot re-enable, rewrite or reroute anything.
+
+    Retirement evidence flows one way (file in, verdict out). A guard that
+    could restart the producer, write a model default or mutate a roster
+    could turn a retirement marker into a resurrection; this test fails if
+    any control, write-mode or network surface ever lands in the source.
+    """
+
+    FORBIDDEN_TOKENS = (
+        "systemctl", "subprocess", "os.system", "os.exec", "os.remove",
+        "os.unlink", "os.rename", "os.replace", "shutil", "socket", "urllib",
+        "http.client", "requests", "pathlib",
+    )
+
+    def test_guard_source_has_no_write_or_control_surface(self):
+        src = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "balancer_silence_guard.py")
+        with open(src, "r", encoding="utf-8") as handle:
+            text = handle.read()
+        for token in self.FORBIDDEN_TOKENS:
+            self.assertNotIn(token, text,
+                             f"guard source must not contain {token!r}")
+        for match in re.finditer(r"open\s*\([^)]*\)", text):
+            call = match.group(0)
+            self.assertNotRegex(
+                call, r"""['"][^'"]*[wax+][^'"]*['"]""",
+                f"guard must only open files read-only: {call}")
 
 
 if __name__ == "__main__":

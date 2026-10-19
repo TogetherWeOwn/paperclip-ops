@@ -17,7 +17,9 @@
 #   4. FAIL-CLOSED — stale (193-min gap fixture) pushes success=false
 #      (exit 1); missing/empty/garbage log pushes success=false (exit 1),
 #      never success=true. Fresh pushes success=true (exit 0): the recovery
-#      signal that closes the incident.
+#      signal that closes the incident. Stale plus a valid retirement file
+#      pushes success=true as "balancer retired:"; a malformed file stays
+#      false, and a fresh log stays fresh however the file reads.
 #   5. DELIVERY FAILURE VISIBLE — a 500 from Gatus exits nonzero.
 #   6. REGISTRY — MODULES.md lists the endpoint key, fragment, push script
 #      and this suite.
@@ -131,6 +133,7 @@ base_env() {
   export BALANCER_SILENCE_GUARD="$GUARD"
   export BALANCER_SILENCE_STATE="$WORK/state.json"
   unset BALANCER_SILENCE_NOW || true
+  unset BALANCER_SILENCE_RETIREMENT || true
 }
 
 # === 1. FRAGMENT SHAPE ========================================================
@@ -267,6 +270,72 @@ elif ! python3 -c 'import json,sys; recs=[json.loads(l) for l in open(sys.argv[1
 elif grep -q "muse-spark" "$PUSH_FILE"; then
   bad "4f. wire text" "raw model string reached the push record"
 else ok "4f. wire text carries verdict only (no raw model rows)"; fi
+
+# --- retirement fixtures: explicit evidence converts stale to retired -------
+cat > "$WORK/retired.json" <<'JSON'
+{"retired": true, "producer": "fleet-quota-balancer", "successor": "native-routing",
+ "approved_by": "retirement-approver-sentinel", "approved_at": "2026-10-04T17:40:00+00:00"}
+JSON
+echo 'not json{' > "$WORK/retired-bad.json"
+own_push_text() {  # URL-decoded query text of the record appended by the last run_push, or MISSING
+  python3 - "$PUSH_FILE" "${RUN_PUSH_BEFORE:-0}" <<'PY' 2>/dev/null
+import json, sys, urllib.parse
+try:
+    rec = json.loads(open(sys.argv[1]).read().splitlines()[int(sys.argv[2])])
+    print(urllib.parse.unquote(rec["path"]))
+except (IndexError, ValueError, KeyError):
+    print("MISSING")
+PY
+}
+
+export BALANCER_SILENCE_LOG="$WORK/gap.log"
+export BALANCER_SILENCE_NOW="2026-10-04T17:45:00+00:00"
+export BALANCER_SILENCE_RETIREMENT="$WORK/retired.json"
+run_push; rc=$?
+push_path="$(own_push_path)"
+push_text="$(own_push_text)"
+if [[ $rc -eq 0 && "$push_path" == *"success=true"* && "$push_text" == *"balancer retired:"* ]]; then
+  ok "4g. stale + valid retirement pushes success=true (exit 0, approved stillness)"
+else bad "4g. retired pushes success=true" "rc=$rc path=$push_path text=$push_text"; fi
+# positive control: a mutant mapping retired to false must go red here
+if grep -q 'gatus_push "$ENDPOINT_KEY" true "balancer retired' "$PUSH"; then
+  ok "4h. retired branch pins success=true (mutant to false would flip this line)"
+else bad "4h. retired branch" "retired push line missing/true expected"; fi
+
+export BALANCER_SILENCE_RETIREMENT="$WORK/retired-bad.json"
+run_push; rc=$?
+push_path="$(own_push_path)"
+if [[ $rc -eq 1 && "$push_path" == *"success=false"* ]]; then
+  ok "4i. stale + malformed retirement pushes success=false (exit 1, fail-closed)"
+else bad "4i. malformed retirement fail-closed" "rc=$rc path=$push_path"; fi
+
+export BALANCER_SILENCE_LOG="$WORK/fresh.log"
+export BALANCER_SILENCE_NOW="2026-10-05T05:00:00+00:00"
+export BALANCER_SILENCE_RETIREMENT="$WORK/retired.json"
+run_push; rc=$?
+push_path="$(own_push_path)"
+push_text="$(own_push_text)"
+if [[ $rc -eq 0 && "$push_path" == *"success=true"* && "$push_text" == *"balancer fresh:"* && "$push_text" != *"retired"* ]]; then
+  ok "4j. fresh + valid retirement still pushes fresh (marker excuses silence only)"
+else bad "4j. fresh with marker stays fresh" "rc=$rc path=$push_path text=$push_text"; fi
+unset BALANCER_SILENCE_RETIREMENT || true
+# retirement detail never reaches the wire: the approver/successor strings
+# stay in the journal. Structural non-vacuity as in 4f: the marker MUST
+# carry the sentinel, the decoded history MUST contain a retired push, every
+# record MUST carry a body — only then does absence mean no leak. (The
+# history is URL-encoded on the wire, so decode before asserting either way:
+# an encoded leak must fail exactly like a literal one.)
+python3 -c 'import sys,urllib.parse; print(urllib.parse.unquote(open(sys.argv[1]).read()))' \
+  "$PUSH_FILE" > "$WORK/pushes.decoded"
+if ! grep -q "retirement-approver-sentinel" "$WORK/retired.json"; then
+  bad "4k. retirement non-disclosure" "marker lacks sentinel — absence would be vacuous"
+elif ! grep -q "balancer retired:" "$WORK/pushes.decoded"; then
+  bad "4k. retirement non-disclosure" "history lacks a retired push — assertion sees nothing"
+elif grep -q "retirement-approver-sentinel" "$WORK/pushes.decoded"; then
+  bad "4k. retirement non-disclosure" "approver string reached the push record"
+elif grep -q '"successor"' "$WORK/pushes.decoded"; then
+  bad "4k. retirement non-disclosure" "marker field reached the push record"
+else ok "4k. retirement detail stays local (verdict line only on the wire)"; fi
 
 # === 5. DELIVERY FAILURE + NON-DISCLOSURE =====================================
 if grep -q "test-token" "$WORK/argv.log" 2>/dev/null; then

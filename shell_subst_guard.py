@@ -23,6 +23,17 @@ one shell command WITHOUT executing it and refuses (exit 3) when any
     x=$(FOO=1 yes) ; x=$(/usr/bin/yes) ; x=$("yes")     refused
     x=$(yes | head -n 1)                                refused (fail-closed pin,
                                                         see below)
+    x=${A:-$(yes)} ; x=$(( $(yes) + 1 ))                refused (nested inside
+                                                        expansion/arithmetic)
+    x=$(case $A in *) yes;; esac)                      refused (case body)
+    x=$(2>/dev/null yes) ; x=$(</dev/null yes)         refused (leading
+    x=$(FOO=1 2>/dev/null yes)                           redirect does not clear
+                                                        command position)
+    echo "a #b $(yes)" ; x=$(echo ${#A}; yes)          refused (# inside double
+                                                        quotes / ${#..} is not
+                                                        a comment)
+    x=$(ye"s") ; x=$(y'es') ; x=$($'yes')              refused (glued quoting)
+    x=$(exec yes) ; x=$(eval yes) ; x=$(nice yes)       refused (direct prefixes)
 
 The following stay allowed, and the suite pins each one:
 
@@ -65,10 +76,13 @@ REMAINING GAPS (honest, out of scope for this proven failure):
     * Commands assembled at runtime (`eval "$DYN"`, variable-held scripts)
       are invisible to any lexical gate. A wording-only instruction is not
       a substitute for this check at the admission boundary.
-    * Multi-hop wrappers the gate does not model (`sudo -u <user> yes`,
-      `env -u <name> yes`, a function literally named `yes`) are missed.
-    * Matching is exact ASCII `yes` (quote/escape/path normalized). Unicode
-      homoglyph spellings are not modeled.
+    * Flag-argument wrappers the gate does not model (`sudo -u <user> yes`,
+      `env -u <name> yes`, `nice -n <n> yes`, a function literally named
+      `yes`) are missed. Direct `exec`/`eval`/`nice` prefixes with no
+      flag-argument (e.g. `$(exec yes)`) ARE refused.
+    * Matching is exact ASCII `yes` (quote/escape/path normalized, including
+      glued `ye"s"`/`$'yes'` forms). Unicode homoglyph spellings are not
+      modeled.
 
 INTEGRATION BOUNDARY. No Bash-tool admission hook exists in this public
 tree: the fleet-settings hook surface covered by hook_spawn_guard.sh handles
@@ -99,9 +113,15 @@ FINDING_NAME = "unbounded-yes-substitution"
 EXCERPT_LEN = 160
 
 # Words that, in command position, pass command position through to the next
-# word (with `-flag` words skipped). Anything deeper (`sudo -u <user> yes`)
-# is a documented gap, not a silent allow.
-_TRANSPARENT_PREFIXES = frozenset({"command", "builtin", "env", "time", "sudo"})
+# word (with `-flag` words skipped). Flag-argument forms (`sudo -u <user> yes`,
+# `env -u <name> yes`, `nice -n <n> yes`) are a documented gap, not a silent
+# allow. `exec`/`eval`/`nice` take their command directly like
+# `command`/`builtin`, so their direct forms are modelled here; a bare
+# redirect-only `exec 2>/dev/null` with no command word stays allowed because
+# no `yes` word follows it.
+_TRANSPARENT_PREFIXES = frozenset(
+    {"command", "builtin", "env", "time", "sudo", "exec", "eval", "nice"}
+)
 
 # Keywords that reset the parser to command position. `in` is deliberately
 # absent: after `case X in` / `for v in` the words are patterns/list items,
@@ -121,7 +141,24 @@ def _is_comment_start(text: str, i: int) -> bool:
         return False
     if i == 0:
         return True
+    # `${#A}` / `${#}` length expansion is not a comment: the `#`
+    # directly follows `${`.
+    if text[i - 1] == "{" and i >= 2 and text[i - 2] == "$":
+        return False
     return text[i - 1] in " \t;|&({\n!"
+
+
+def _is_keyword_at(text: str, i: int, kw: str) -> bool:
+    """True when `kw` starts at `i` on word boundaries (not part of a longer
+    word such as `cases` for `case`)."""
+    if not text.startswith(kw, i):
+        return False
+    if i > 0 and (text[i - 1].isalnum() or text[i - 1] == "_"):
+        return False
+    j = i + len(kw)
+    if j < len(text) and (text[j].isalnum() or text[j] == "_"):
+        return False
+    return True
 
 
 def _strip_comments(text: str) -> str:
@@ -303,16 +340,22 @@ def extract_substitutions(command: str) -> list[str]:
     """Return the body of every `$(...)` and backtick span in the command.
 
     Quote-, escape- and comment-aware. `$((...))` arithmetic and `${...}`
-    parameter expansion are not command substitutions and are skipped.
-    Unclosed spans run to end of input (fail-closed: the lexer cannot prove
-    the shell would reject them). Content lines of quoted-delimiter heredocs
-    are dropped first: the shell never expands them, so `$(yes)` written
-    there is literal stdin, not a substitution.
+    parameter expansion are not command substitutions and are skipped, but
+    their interiors are still scanned for nested `$(...)`/backtick spans
+    (e.g. `${A:-$(yes)}`, `$(( $(yes) + 1 ))`). `case` pattern `)` never
+    closes a span. Unclosed spans run to end of input (fail-closed: the
+    lexer cannot prove the shell would reject them). Content lines of
+    quoted-delimiter heredocs are dropped first: the shell never expands
+    them, so `$(yes)` written there is literal stdin, not a substitution.
     """
     command = _strip_heredoc_bodies(command, quoted_only=True)
     spans: list[str] = []
     # Open `$(` spans: (body_start, paren_depth).
     stack: list[tuple[int, int]] = []
+    # Saved (single, double) quote contexts, one per open `$(`.
+    quote_stack: list[tuple[bool, bool]] = []
+    # Case-pattern tracking so a pattern `)` never closes a span.
+    case_stack: list[str] = []  # "subject" | "pattern" | "body"
     single = double = False
     in_backtick = False
     backtick_start = 0
@@ -337,7 +380,8 @@ def extract_substitutions(command: str) -> list[str]:
             double = not double
             i += 1
             continue
-        if ch == "#" and _is_comment_start(command, i):
+        if ch == "#" and not double and not in_backtick \
+                and _is_comment_start(command, i):
             while i < n and command[i] != "\n":
                 i += 1
             continue
@@ -350,26 +394,74 @@ def extract_substitutions(command: str) -> list[str]:
                 spans.append(command[backtick_start:i])
             i += 1
             continue
+        # Case keyword tracking (outside quotes/backticks). Tracked at every
+        # level so `case` at top level and nested `case` inside a substitution
+        # both nest correctly; only a `)` while in "pattern" is special.
+        if not double and not in_backtick:
+            if _is_keyword_at(command, i, "case"):
+                case_stack.append("subject")
+                i += 4
+                continue
+            if case_stack and case_stack[-1] == "subject" \
+                    and _is_keyword_at(command, i, "in"):
+                case_stack[-1] = "pattern"
+                i += 2
+                continue
+            if _is_keyword_at(command, i, "esac"):
+                if case_stack:
+                    case_stack.pop()
+                i += 4
+                continue
+            if case_stack and case_stack[-1] == "body":
+                if command.startswith(";;&", i):
+                    case_stack[-1] = "pattern"
+                    i += 3
+                    continue
+                if command.startswith(";;", i) \
+                        or command.startswith(";&", i):
+                    case_stack[-1] = "pattern"
+                    i += 2
+                    continue
         nxt = command[i + 1] if i + 1 < n else ""
         if ch == "$" and nxt == "(":
             if i + 2 < n and command[i + 2] == "(":
-                i = _skip_balanced(command, i + 2, "(", ")")
+                end = _skip_balanced(command, i + 2, "(", ")")
+                interior = command[i + 3:end - 1] if end - 1 > i + 3 else ""
+                if interior:
+                    spans.extend(extract_substitutions(interior))
+                i = end
                 continue
+            quote_stack.append((single, double))
+            single = False
+            double = False
             stack.append((i + 2, 1))
             i += 2
             continue
         if ch == "$" and nxt == "{":
-            i = _skip_balanced(command, i + 1, "{", "}")
+            end = _skip_balanced(command, i + 1, "{", "}")
+            interior = command[i + 2:end - 1] if end - 1 > i + 2 else ""
+            if interior:
+                spans.extend(extract_substitutions(interior))
+            i = end
             continue
         if ch == "(" and stack:
+            if case_stack and case_stack[-1] == "pattern":
+                i += 1  # leading `(` of a case pattern is not grouping
+                continue
             start, depth = stack[-1]
             stack[-1] = (start, depth + 1)
             i += 1
             continue
         if ch == ")" and stack:
+            if case_stack and case_stack[-1] == "pattern":
+                case_stack[-1] = "body"
+                i += 1
+                continue
             start, depth = stack.pop()
             if depth == 1:
                 spans.append(command[start:i])
+                if quote_stack:
+                    single, double = quote_stack.pop()
             else:
                 stack.append((start, depth - 1))
             i += 1
@@ -384,7 +476,9 @@ def extract_substitutions(command: str) -> list[str]:
 
 # Word characters stop a bare word. `#` is intentionally NOT a delimiter:
 # comments are pre-stripped, so a surviving `#` is an in-word literal.
-_WORD_STOPS = " \t\r\n;|&(){}!<>'\"`$"
+# `<`/`>` ARE delimiters: they separate redirects (`2>/dev/null` is `2`,
+# `>`, `/dev/null`, never one word).
+_WORD_STOPS = " \t\r\n;|&(){}!<>`$'\""
 
 
 def _consume_quoted(body: str, i: int) -> tuple[str, int]:
@@ -408,11 +502,43 @@ def _consume_quoted(body: str, i: int) -> tuple[str, int]:
     return body[start:], n  # unclosed quote runs out (fail-closed)
 
 
+def _consume_glued_word(body: str, i: int) -> tuple[str, int]:
+    """Consume one full shell word of glued bare/quoted/escaped segments.
+
+    Adjacent segments with no delimiter between them form ONE shell word:
+    `ye"s"`, `y'es'`, `"y"es`, `ye''s`, `$'yes'` and `\\y\\e\\s` are each a
+    single word that executes as `yes`. Returns (verbatim_text, end).
+    """
+    parts: list[str] = []
+    n = len(body)
+    while i < n:
+        ch = body[i]
+        if ch in "'\"":
+            quoted, i = _consume_quoted(body, i)
+            parts.append(quoted)
+            continue
+        if ch == "$" and i + 1 < n and body[i + 1] in "'\"":
+            quoted, i = _consume_quoted(body, i + 1)
+            parts.append(quoted)
+            continue
+        if ch == "\\" and i + 1 < n and body[i + 1] != "\n":
+            parts.append(body[i:i + 2])
+            i += 2
+            continue
+        if ch in " \t\r\n;|&(){}!<>`$":
+            break
+        parts.append(ch)
+        i += 1
+    return "".join(parts), i
+
+
 def _tokenize(body: str) -> list[tuple[str, str]]:
     """Split a substitution body into ("word"|"op", text) tokens.
 
-    Quotes stay attached to their word (`"yes"` is one word token) for
-    normalization. Nested `$(...)`, backticks, `$((...))`, `${...}` and
+    Glued bare/quoted/escaped segments form one word token (`ye"s"` is one
+    word) for normalization. A bare digits word directly adjacent to a
+    redirect (`2>/dev/null`) is an IO-number redirect prefix, not a command,
+    and is skipped. Nested `$(...)`, backticks, `$((...))`, `${...}` and
     `<(...)`/`>(...)` spans are skipped whole -- they are analysed as their
     own spans by the extractor.
     """
@@ -453,28 +579,12 @@ def _tokenize(body: str) -> list[tuple[str, str]]:
         if ch == "$" and i + 1 < n and body[i + 1] == "{":
             i = _skip_balanced(body, i + 1, "{", "}")
             continue
+        if ch == "$" and i + 1 < n and body[i + 1] in "'\"":
+            word, i = _consume_glued_word(body, i)
+            tokens.append(("word", word))
+            continue
         if ch in "'\"":
-            quoted, i = _consume_quoted(body, i)
-            word = quoted
-            # Glue adjacent word characters and quotes: `"a"b`, `a"b"`.
-            while i < n and body[i] not in _WORD_STOPS + "\\":
-                if body[i] in "'\"":
-                    more, i = _consume_quoted(body, i)
-                    word += more
-                else:
-                    word += body[i]
-                    i += 1
-            while i < n and body[i] == "\\" and i + 1 < n \
-                    and body[i + 1] not in "\n":
-                word += body[i:i + 2]
-                i += 2
-                while i < n and body[i] not in _WORD_STOPS + "\\":
-                    if body[i] in "'\"":
-                        more, i = _consume_quoted(body, i)
-                        word += more
-                    else:
-                        word += body[i]
-                        i += 1
+            word, i = _consume_glued_word(body, i)
             tokens.append(("word", word))
             continue
         if ch == "(" and i + 1 < n and body[i + 1] == "(":
@@ -500,46 +610,147 @@ def _tokenize(body: str) -> list[tuple[str, str]]:
             tokens.append(("op", ch))
             i += 1
             continue
-        # Bare word (may carry backslash escapes, kept verbatim).
-        start = i
-        while i < n and body[i] not in _WORD_STOPS + "\\":
-            i += 1
-        while i < n and body[i] == "\\" and i + 1 < n \
-                and body[i + 1] != "\n":
-            i += 2
-            while i < n and body[i] not in _WORD_STOPS + "\\":
+        if ch == "$":
+            # `$VAR` / `$1` / `$@` style expansion: one word, never `yes`.
+            j = i + 1
+            if j < n and body[j] in "@*#?$!-0123456789":
+                j += 1
+            elif j < n and (body[j].isalpha() or body[j] == "_"):
+                j += 1
+                while j < n and (body[j].isalnum() or body[j] == "_"):
+                    j += 1
+            else:
+                tokens.append(("word", "$"))
                 i += 1
-        tokens.append(("word", body[start:i] or ch))
-        if not body[start:i]:
+                continue
+            tokens.append(("word", body[i:j]))
+            i = j
+            continue
+        # Bare / glued word (may carry escapes and quoted segments).
+        word, ni = _consume_glued_word(body, i)
+        if not word:
+            # Unconsumable char (should not happen): advance to avoid a loop.
+            tokens.append(("word", ch))
             i += 1
+            continue
+        # A bare digits word directly adjacent to a redirect is an IO number
+        # (`2>/dev/null`, `2>&1`): part of the redirect, not a command.
+        if word.isdigit() and ni < n and body[ni] in "<>":
+            i = ni
+            continue
+        tokens.append(("word", word))
+        i = ni
     return tokens
 
 
 def _normalize_word(word: str) -> str:
-    """Reduce a command word to its bare command name for comparison."""
-    w = word
-    if w[:2] in ("$'", '$"'):
-        w = w[2:]
-    # Strip one layer of surrounding quotes (tokenizer already glued mixes).
-    if len(w) >= 2 and w[0] == w[-1] and w[0] in "'\"":
-        w = w[1:-1]
-    # Backslash escapes: `\y` executes as `y`.
-    out: list[str] = []
+    """Reduce a glued command word to its bare command name for comparison.
+
+    Dequotes segment-wise using shell quoting rules: `'...'` literal,
+    `"..."` with backslash unescaping, `$'...'` ANSI-C escapes, `$"..."`
+    locale contents, and `\\x` -> `x` outside quotes. A path basename is
+    taken last (`/usr/bin/yes` -> `yes`).
+    """
+    res: list[str] = []
     i = 0
-    while i < len(w):
-        if w[i] == "\\" and i + 1 < len(w):
-            out.append(w[i + 1])
+    n = len(word)
+    while i < n:
+        ch = word[i]
+        if ch == "\\" and i + 1 < n:
+            res.append(word[i + 1])
             i += 2
-        else:
-            out.append(w[i])
+            continue
+        if ch == "'":
+            j = word.find("'", i + 1)
+            if j == -1:
+                res.append(word[i + 1:])
+                break
+            res.append(word[i + 1:j])
+            i = j + 1
+            continue
+        if ch == '"':
+            j = i + 1
+            buf: list[str] = []
+            while j < n:
+                if word[j] == "\\" and j + 1 < n:
+                    buf.append(word[j + 1])
+                    j += 2
+                    continue
+                if word[j] == '"':
+                    break
+                buf.append(word[j])
+                j += 1
+            res.append("".join(buf))
+            i = j + 1 if j < n else n
+            continue
+        if ch == "$" and i + 1 < n and word[i + 1] in "'\"":
+            quote = word[i + 1]
+            j = i + 2
+            buf = []
+            while j < n:
+                if word[j] == "\\" and j + 1 < n:
+                    esc = word[j + 1]
+                    if quote == "'":
+                        if esc == "n":
+                            buf.append("\n")
+                            j += 2
+                            continue
+                        if esc == "t":
+                            buf.append("\t")
+                            j += 2
+                            continue
+                        if esc == "x":
+                            hexpart = word[j + 2:j + 4]
+                            try:
+                                buf.append(chr(int(hexpart, 16)))
+                                j += 4
+                                continue
+                            except ValueError:
+                                buf.append(esc)
+                                j += 2
+                                continue
+                        if esc in "01234567":
+                            k = j + 1
+                            digits = ""
+                            while k < n and len(digits) < 3 \
+                                    and word[k] in "01234567":
+                                digits += word[k]
+                                k += 1
+                            try:
+                                buf.append(chr(int(digits, 8)))
+                                j = k
+                                continue
+                            except ValueError:
+                                buf.append(esc)
+                                j += 2
+                                continue
+                        buf.append(esc)
+                        j += 2
+                        continue
+                    buf.append(word[j + 1])
+                    j += 2
+                    continue
+                if word[j] == quote:
+                    break
+                buf.append(word[j])
+                j += 1
+            res.append("".join(buf))
+            i = j + 1 if j < n else n
+            continue
+        if ch == "$":
+            res.append(ch)
             i += 1
-    w = "".join(out)
+            continue
+        res.append(ch)
+        i += 1
+    w = "".join(res)
     if "/" in w:
         w = w.rsplit("/", 1)[-1]
     return w
 
 
 def _looks_like_assignment(word: str) -> bool:
+    """True when the word is a `NAME=value` (or `NAME+=value`) assignment."""
     if "=" not in word:
         return False
     name = word.split("=", 1)[0]
@@ -605,8 +816,10 @@ def body_has_unbounded_yes(body: str) -> bool:
                 i += 1
                 continue
             if val in (">", "<", ">>", "<<", ">&", "<&", "<>", ">|", "<<<"):
+                # A redirect (including a leading IO number, already skipped
+                # by the tokenizer) names only its target: it never clears
+                # command position, so `2>/dev/null yes` still checks `yes`.
                 skip_one = True  # redirect target is a filename, not a command
-                cmd_pos = False
                 i += 1
                 continue
             # Any other operator (`[[` handled above, `]]`, `(`/`)` balanced
@@ -712,6 +925,11 @@ def check_command(command: str) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint: scan one command string, file or stdin without running it.
+
+    Returns 0 when clean, 2 on usage errors (including unreadable or
+    undecodable input), and 3 when a finding refuses the command.
+    """
     parser = argparse.ArgumentParser(
         prog="shell_subst_guard.py",
         description="Refuse an unbounded `yes` in shell command substitution.")
@@ -731,12 +949,17 @@ def main(argv: list[str] | None = None) -> int:
         try:
             with open(args.file, "r", encoding="utf-8") as fh:
                 command = fh.read()
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             print("shell_subst_guard: not readable: %s (%s)"
                   % (args.file, exc), file=sys.stderr)
             return EXIT_REFUSED
     else:
-        command = sys.stdin.read()
+        try:
+            command = sys.stdin.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            print("shell_subst_guard: not readable: stdin (%s)"
+                  % (exc,), file=sys.stderr)
+            return EXIT_REFUSED
     findings = check_command(command)
     if findings:
         for line in findings:

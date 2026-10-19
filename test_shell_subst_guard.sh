@@ -17,8 +17,12 @@
 #      FINDING naming unbounded-yes-substitution. If this goes, the guard
 #      has become the thing that watched the memcg OOM happen.
 #   2. Ordinary `$()`/backtick variants are refused, including nested,
-#      quoted-word, prefixed (`command`/`env`/`sudo`/`time`), assignment-
-#      prefixed, pathed and backslash-escaped spellings.
+#      glued quoted-word (`ye"s"`, `$'yes'`), prefixed
+#      (`command`/`builtin`/`env`/`sudo`/`time`/`exec`/`eval`/`nice`),
+#      assignment-prefixed, leading-redirect, pathed and backslash-escaped
+#      spellings, plus interiors of `${...}`/`$((...))` and `case` bodies.
+#      A `#` inside double quotes or a `${#..}` length expansion never
+#      hides a substitution.
 #   3. Fail-closed pins: `$(yes | head -n 1)`, `$(yes --help)` and
 #      `$(command -v yes)` are refused even though bounded/descriptive.
 #      The gate cannot verify the bound or model per-flag semantics, so it
@@ -156,6 +160,75 @@ want_finding "negated yes refuses"
 
 run_cmd 'echo $(yes'
 want_finding "unclosed substitution refuses (fail-closed)"
+
+# ---------------------------------------------------------------------------
+hdr "nested expansions still expose inner substitutions"
+run_cmd 'x=${A:-$(yes)}'
+want_finding "default-expansion interior refuses"
+
+run_cmd 'x=$(( $(yes) + 1 ))'
+want_finding "arithmetic interior refuses"
+
+# ---------------------------------------------------------------------------
+hdr "case bodies refuse while patterns stay allowed"
+run_cmd 'x=$(case $A in *) yes;; esac)'
+want_finding "case body refuses"
+
+run_cmd 'x=$(case $A in *) echo hi; yes;; esac)'
+want_finding "second case body refuses"
+
+# ---------------------------------------------------------------------------
+hdr "leading redirects never clear command position"
+run_cmd 'x=$(2>/dev/null yes)'
+want_finding "fd-first redirect refuses"
+
+run_cmd 'x=$(</dev/null yes)'
+want_finding "stdin-first redirect refuses"
+
+run_cmd 'x=$(FOO=1 2>/dev/null yes)'
+want_finding "assignment-then-redirect refuses"
+
+run_cmd 'x=$(2>&1 yes)'
+want_finding "fd-duplication redirect refuses"
+
+# ---------------------------------------------------------------------------
+hdr "hash inside quotes and length expansion are not comments"
+run_cmd 'echo "a #b $(yes)"'
+want_finding "hash inside double quotes refuses"
+
+run_cmd 'x=$(echo ${#A}; yes)'
+want_finding "length-expansion hash refuses"
+
+# ---------------------------------------------------------------------------
+hdr "glued quoted spellings refuse"
+run_cmd 'x=$(ye"s")'
+want_finding "glued double-quote refuses"
+
+run_cmd 'x=$(y'"'"'es'"'"')'
+want_finding "glued single-quote refuses"
+
+run_cmd 'x=$("y"es)'
+want_finding "leading quoted segment refuses"
+
+run_cmd 'x=$(ye'"'"''"'"'s)'
+want_finding "empty-quote glue refuses"
+
+run_cmd 'x=$($'"'"'yes'"'"')'
+want_finding "dollar-single-quote refuses"
+
+# ---------------------------------------------------------------------------
+hdr "direct exec/eval/nice prefixes refuse"
+run_cmd 'x=$(exec yes)'
+want_finding "exec-prefixed yes refuses"
+
+run_cmd 'x=$(eval yes)'
+want_finding "eval-prefixed yes refuses"
+
+run_cmd 'x=$(nice yes)'
+want_finding "nice-prefixed yes refuses"
+
+run_cmd 'x=$(exec 2>/dev/null)'
+want_clean "redirect-only exec stays allowed"
 
 # ---------------------------------------------------------------------------
 hdr "fail-closed pins are refused, never silently weakened"
@@ -303,8 +376,18 @@ if [ "$RC" -eq 3 ]; then ok "stdin input path works"; else bad "stdin input path
 OUT="$("$GUARD" check --file "$WORK/does-not-exist" 2>&1)"; RC=$?
 want_rc 2 "missing file is a usage error"
 
+printf 'x=$(yes)\xff\xfe' > "$WORK/bad-utf8.sh"
+OUT="$("$GUARD" check --file "$WORK/bad-utf8.sh" 2>&1)"; RC=$?
+want_rc 2 "undecodable file is a usage error (never exit 1)"
+
 OUT="$("$GUARD" 2>&1)"; RC=$?
 want_rc 2 "missing subcommand is a usage error"
+
+# CI must actually run this suite: verify-fast.sh --parse-only (all CI
+# calls on this path) never reaches it, so it needs its own ci.yml step
+# (same pattern as test_review_route.sh).
+grep -q 'test_shell_subst_guard.sh' .github/workflows/ci.yml \
+  && ok "ci.yml runs the shell-subst guard suite" || bad "ci.yml runs the shell-subst guard suite"
 
 # ---------------------------------------------------------------------------
 hdr "the guard never executes what it scans"

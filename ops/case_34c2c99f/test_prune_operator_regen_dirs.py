@@ -66,10 +66,15 @@ def backdate(path, seconds=7200):
         # covered on purpose: folder_idle_block uses find -maxdepth 3, so
         # their mtimes are part of the idle signal.
         for name in dirnames + filenames:
+            # Tolerate transient entries vanishing between os.walk and
+            # os.utime (e.g. git's .git/*.lock or background maintenance
+            # under a loaded CI runner raced 2/187 cases on CI): a missing
+            # entry has no timestamp to set, so skip it. Broad OSError covers
+            # vanishing entries plus other transient utime failures.
             try:
                 os.utime(os.path.join(dirpath, name), (old, old), follow_symlinks=False)
             except OSError:
-                pass
+                continue
     os.utime(path, (old, old))
 
 

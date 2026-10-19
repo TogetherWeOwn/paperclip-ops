@@ -29,6 +29,13 @@
 #      OWNER devops and the garm-ci-oncall runbook; every routing route plus
 #      the default carries a non-empty owner + runbook. The positive control
 #      is §9: emit still names every host with the shared-token stanza.
+#  13. OPTIONAL FIELDS (adapter provenance) — a healthy payload WITHOUT
+#      inode_used_percent/container_restarts_24h still pushes true (Beszel
+#      records neither; an adapter-fed payload can never carry them), while
+#      a present-but-non-numeric value fails closed, and the adapter's own
+#      output over fixtures/native pushes the up host true and the down
+#      host false. §1/§2 are the positive controls that present values
+#      still score (inode/restarts present there; restarts breach names it).
 #  12. HOSTILE HOSTNAMES (case_6d874ecd follow-up) — names with punctuation or
 #      non-ASCII letters (`Hetzner (main)`, `db:1`, `[edge]`, `*alias`,
 #      `Ünïcode-1`) still push true under the gatus_push charset and emit
@@ -229,6 +236,24 @@ BADKEYS="$(grep -o 'endpoints/[^/]*/external' "$CFG_LOG" | grep -vE 'endpoints/[
 EMIT12="$(GATUS_URL="$GATUS_URL" GATUS_EXTERNAL_TOKEN="$GATUS_EXTERNAL_TOKEN" "$TOOL" --emit-gatus-yaml "$WORK/hostile.json")"
 [[ "$(grep -cE '^  - name: [a-z0-9-]+$' <<<"$EMIT12")" == "6" ]] \
   && ok "12e. emit names are plain-YAML-safe" || bad "12e. emit names" "$EMIT12"
+
+# --- §13 optional fields + adapter end-to-end --------------------------------
+jq 'map(del(.inode_used_percent, .container_restarts_24h))' "$FIX/healthy.json" > "$WORK/no-optionals.json"
+rc="$(run_tool env GATUS_URL="$GATUS_URL" GATUS_EXTERNAL_TOKEN="$GATUS_EXTERNAL_TOKEN" "$TOOL" "$WORK/no-optionals.json")"
+[[ "$rc" == "0" ]] && ok "13. healthy without optional fields exits 0" || bad "13. no-optionals exit" "got $rc: $(cat "$WORK/err.txt")"
+[[ "$(pushes_for beszel_node7b1ff338)" == "true" ]] && ok "13b. pushed true without optionals" || bad "13b. no-optionals push" "$(cat "$CFG_LOG")"
+jq 'map(.inode_used_percent = "many")' "$WORK/no-optionals.json" > "$WORK/bad-optional.json"
+rc="$(run_tool env GATUS_URL="$GATUS_URL" GATUS_EXTERNAL_TOKEN="$GATUS_EXTERNAL_TOKEN" "$TOOL" "$WORK/bad-optional.json")"
+[[ "$rc" == "1" && "$(pushes_for beszel_node7b1ff338)" == "false" ]] \
+  && ok "13c. non-numeric optional fails closed" || bad "13c. bad-optional" "rc=$rc $(cat "$CFG_LOG")"
+if python3 "$HERE/ops/case_f2010cb7/beszel_adapter.py" --now 1792238400 "$FIX/native" > "$WORK/normalized.json" 2>"$WORK/adapter-err.txt"; then
+  rc="$(run_tool env GATUS_URL="$GATUS_URL" GATUS_EXTERNAL_TOKEN="$GATUS_EXTERNAL_TOKEN" "$TOOL" "$WORK/normalized.json")"
+  [[ "$rc" == "1" ]] && ok "13d. adapter output exits 1 (one host down)" || bad "13d. adapter-output exit" "got $rc"
+  [[ "$(pushes_for beszel_node7b1ff338)" == "true" ]] && ok "13e. adapter up host pushed true" || bad "13e. adapter up push" "$(cat "$CFG_LOG")"
+  [[ "$(pushes_for beszel_ovh-1)" == "false" ]] && ok "13f. adapter down host pushed false" || bad "13f. adapter down push" "$(cat "$CFG_LOG")"
+else
+  bad "13d. adapter ran" "$(cat "$WORK/adapter-err.txt")"; bad "13e. adapter up push" "adapter failed"; bad "13f. adapter down push" "adapter failed"
+fi
 
 printf '\nbeszel bridge: %d passed, %d failed\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))

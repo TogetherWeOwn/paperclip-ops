@@ -16,3 +16,8 @@ v0.6.3 637aff8ead6766016ca830fc726a0c91a58df02a e857f31a76f4f4b88a1de514a1b84918
 # full HEAD SHA directly (case_be414e82 fallback). Replace with the release tag
 # once one contains the fix.
 main-533c7ae2 533c7ae2b013340bfae20cfcc711220048295855 3f88a7325590b81250ed6779d87ee13def109ea3e64ca1afa80f539ada215092
+# main-d0324d0 is not a release tag: no tag contains the primary-card-key
+# attribution fix (toolkit PR #87, merged as d0324d0), so this row pins the
+# verified full HEAD SHA directly. Replace with the release tag once one
+# contains the fix.
+main-d0324d0 d0324d0e5dd5a604a375e63a45eb5aa00e507059 390032e7032e9041e82497b4fa90be086fea12df791653c0d5e6818a83d7f791

@@ -241,8 +241,8 @@ MUTANTS = [
      'subject = msg.splitlines()[0] if msg else ""', "lint", ["test_commit_subject_splits_on_lf_only"]),
     ("hook-remote-label-unscrubbed", HOOK, "block \"remote '$remote_label' is not", "block \"remote '$remote_name' is not", "lint",
      ["test_url_used_as_the_remote_name_does_not_echo_userinfo"]),
-    ("gate-audit-collect-crash-passes", GATE, '    if [ $code -ne 0 ]; then\n      line="REFUSED ${line#REFUSED}"; refused=1\n      [ "$hard" -eq 1 ] && hard_refused=1\n    fi\n    items+=("$3: $line")',
-     '    if [ $code -eq 2 ]; then\n      line="REFUSED ${line#REFUSED}"; refused=1\n      [ "$hard" -eq 1 ] && hard_refused=1\n    fi\n    items+=("$3: $line")', "gate",
+    ("gate-audit-collect-crash-passes", GATE, '  collect() { # evaluator dir label [hard: 1=vetoes conversion, 0=mergeable transient]\n    local hard="${4:-1}"\n    line="$($1 "$2")"; code=$?\n    # An evaluator answers through its text (PASS/FAIL) and exits 0; any other\n    # exit is "could not measure", never a blank passing item.\n    if [ $code -ne 0 ]; then\n      line="$(emit_refused "$line")"; refused=1\n      [ "$hard" -eq 1 ] && hard_refused=1\n    fi\n    items+=("$3: $line")',
+     '  collect() { # evaluator dir label [hard: 1=vetoes conversion, 0=mergeable transient]\n    local hard="${4:-1}"\n    line="$($1 "$2")"; code=$?\n    # An evaluator answers through its text (PASS/FAIL) and exits 0; any other\n    # exit is "could not measure", never a blank passing item.\n    if [ $code -eq 2 ]; then\n      line="$(emit_refused "$line")"; refused=1\n      [ "$hard" -eq 1 ] && hard_refused=1\n    fi\n    items+=("$3: $line")', "gate",
      ["an audit evaluator that crashes refuses instead of passing a blank item"]),
     ("lint-template-not-a-file-refuses", LINT, 'if not (is_missing_api_resource(exc) or "is not a file" in str(exc)):',
      "if not is_missing_api_resource(exc):", "lint", ["test_primary_template_that_is_not_a_file_falls_back"]),
@@ -377,28 +377,28 @@ for r in cr:
      "gate", ["new queued Paperclip Review supersedes older 5/5 without timestamps"]),
     ("gate-ready-ignores-reputation", GATE,
      '  line="$(eval_reputation "$vdir" "$mdir/comments.json")"; code=$?\n'
-     '  [ "$code" -eq 2 ] && { echo "REFUSED ${line#REFUSED}"; return $EXIT_REFUSED; }\n'
+     '  [ "$code" -eq 2 ] && { emit_refused "$line"; return $EXIT_REFUSED; }\n'
      '  [ "$code" -eq 0 ] || refuse "reputation evaluator exited $code"\n'
      '  echo "$line"; case "$line" in FAIL*) fail=1;; esac',
      '  line="$(eval_reputation "$vdir" "$mdir/comments.json")"; code=$?\n'
-     '  [ "$code" -eq 2 ] && { echo "REFUSED ${line#REFUSED}"; return $EXIT_REFUSED; }\n'
+     '  [ "$code" -eq 2 ] && { emit_refused "$line"; return $EXIT_REFUSED; }\n'
      '  [ "$code" -eq 0 ] || refuse "reputation evaluator exited $code"\n'
      '  echo "$line"; case "$line" in FAIL*) :;; esac', "gate",
      ["no reputation receipt blocks ready", "a same-family reviewer receipt blocks ready",
       "editing the PR text after the pass invalidates it", "a reputation pass with findings blocks ready"]),
     ("gate-ready-ignores-lint", GATE,
      '  line="$(eval_lint "$vdir")"; code=$?\n  unset LINT_REPO LINT_STAGE LINT_LIVE\n'
-     '  [ "$code" -eq 2 ] && { echo "REFUSED ${line#REFUSED}"; return $EXIT_REFUSED; }\n'
+     '  [ "$code" -eq 2 ] && { emit_refused "$line"; return $EXIT_REFUSED; }\n'
      '  [ "$code" -eq 0 ] || refuse "pre-push linter evaluator exited $code"\n'
      '  echo "$line"; case "$line" in FAIL*) fail=1;; esac',
      '  line="$(eval_lint "$vdir")"; code=$?\n  unset LINT_REPO LINT_STAGE LINT_LIVE\n'
-     '  [ "$code" -eq 2 ] && { echo "REFUSED ${line#REFUSED}"; return $EXIT_REFUSED; }\n'
+     '  [ "$code" -eq 2 ] && { emit_refused "$line"; return $EXIT_REFUSED; }\n'
      '  [ "$code" -eq 0 ] || refuse "pre-push linter evaluator exited $code"\n'
      '  echo "$line"; case "$line" in FAIL*) :;; esac', "gate",
      ["a behavior change without a test blocks ready (linter)", "an internal id in the diff blocks ready (linter)",
       "an over-budget diff blocks ready (linter)"]),
-    ("gate-ready-allows-pending", GATE, 'GATE_ALLOW_PENDING=0 run_gate_a "$mdir"; local gcode=$?',
-     'GATE_ALLOW_PENDING=1 run_gate_a "$mdir"; local gcode=$?', "gate", ["ready refuses while fork CI is still running"]),
+    ("gate-ready-allows-pending", GATE, 'GATE_ALLOW_PENDING=0 run_gate_a "$mdir" "$repo" "$fixtures"; local gcode=$?',
+     'GATE_ALLOW_PENDING=1 run_gate_a "$mdir" "$repo" "$fixtures"; local gcode=$?', "gate", ["ready refuses while fork CI is still running"]),
     ("gate-serial-flag-ignored", GATE, 'if [ "$serial" -eq 1 ]; then GATE_ALLOW_PENDING=0; else GATE_ALLOW_PENDING=1; fi',
      "GATE_ALLOW_PENDING=1", "gate", ["--serial refuses while a gate is still running"]),
     ("gate-publish-lint-ignored", GATE, '  case "$lline" in FAIL*)\n', '  case "$lline" in NEVER*)\n', "gate",

@@ -171,7 +171,7 @@ class OfflineContractTest(unittest.TestCase):
         for quote in ('"', "'"):
             rogue = (f"  {quote}quoted-first{quote}:\n    steps:\n"
                      "      - name: hidden duplicate\n"
-                     "        run: bash test_sibling_guard.sh\n")
+                     "        run: bash test_blocked_audit.sh\n")
             mutant = self.text.replace("\njobs:\n", "\njobs:\n" + rogue, 1)
             errors = gate.validate(mutant, self.contract)
             self.assertTrue(any("unrecognised job key" in error for error in errors), errors)
@@ -180,10 +180,10 @@ class OfflineContractTest(unittest.TestCase):
         for prefix in ("$GITHUB_WORKSPACE/", "${GITHUB_WORKSPACE}/", "/checkout/", "./"):
             rogue = ("  duplicate-portable:\n    steps:\n"
                      "      - name: absolute duplicate\n"
-                     f'        run: bash "{prefix}test_sibling_guard.sh"\n')
+                     f'        run: bash "{prefix}test_blocked_audit.sh"\n')
             errors = gate.validate(self.text.replace("\njobs:\n", "\njobs:\n" + rogue, 1),
                                    self.contract)
-            self.assertIn("portable input reintroduced: test_sibling_guard.sh", errors)
+            self.assertIn("portable input reintroduced: test_blocked_audit.sh", errors)
 
     def test_all_manifest_mappings_are_bound_to_reviewed_contract(self):
         with tempfile.TemporaryDirectory(dir=os.environ.get("PAPERCLIP_SCRATCH_DIR")) as directory:

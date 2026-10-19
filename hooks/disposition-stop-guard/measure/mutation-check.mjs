@@ -53,7 +53,7 @@ const HOOK_MUTANTS = [
   ["mode off is ignored", 'if (mode === "off")', "if (false)"],
   ["an unwritable counter still blocks", "if (!writeCounter(env, key, counter.handbacks + 1))", "if (false)"],
   ["an unreadable counter with stop_hook_active still blocks", "if (input.stop_hook_active && !counter.ok)", "if (false)"],
-  ["an unreadable card blocks", 'if (!cardRead.ok) return { action: "allow"', 'if (!cardRead.ok) return { action: "block"'],
+  ["an unreadable card blocks", '    }\n    return {\n      action: "allow",\n      why: cardRead.timeout', '    }\n    return {\n      action: "block",\n      why: cardRead.timeout'],
   ["a throwing dependency escapes", "  } catch {\n    // Any failure, including", "  } finally {\n    // Any failure, including"],
   ["the deadline is not clamped", "Math.min(wanted, HARD_DEADLINE_MS)", "wanted"],
   ["the counter file collides with the Muse guard's", "`disposition-stop-guard.${String(key)", "`${String(key)"],

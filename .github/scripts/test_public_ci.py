@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 
@@ -19,6 +20,17 @@ HOSTED_TEST_GUARD = (
     "TogetherWeOwn/.github/.github/workflows/test-guard.yml@"
     "866275517a9875f02110f946411401db8907ec8a"
 )
+# Reviewed immutable shadow review engine (TogetherWeOwn/.github#26, merged):
+# warn-only changed-file signals; on this public repo its runner input
+# defaults to ubuntu-latest when runs-on-json is omitted.
+REVIEW_RULES_GUARD = (
+    "TogetherWeOwn/.github/.github/workflows/review-rules.yml@"
+    "63699075b492914c137281acffd4c89e51cc1c4c"
+)
+# Pack names accepted by the pinned review-rules reusable at REVIEW_RULES_GUARD.
+REVIEW_RULES_PACKS = frozenset({"rust", "ts", "python-shell-ci", "php", "security"})
+# Input keys accepted by the pinned review-rules reusable at REVIEW_RULES_GUARD.
+REVIEW_RULES_INPUTS = frozenset({"packs", "mode", "runs-on-json"})
 
 
 class PublicCI(unittest.TestCase):
@@ -28,6 +40,15 @@ class PublicCI(unittest.TestCase):
         for workflow in workflows:
             data = yaml.safe_load(workflow.read_text())
             self.assertIsInstance(data, dict, str(workflow))
+            # Fail closed on workflow-level permission widening: job-level
+            # absent inherits from here, so a top-level write-all would
+            # widen the token handed to the callee. Live workflows are
+            # read-only or empty; anything else needs inspection.
+            top_perms = data.get("permissions")
+            if top_perms is not None:
+                self.assertIsInstance(top_perms, dict, str(workflow))
+                for scope, access in top_perms.items():
+                    self.assertEqual(access, "read", f"{workflow.name}: {scope}")
             jobs = data.get("jobs")
             self.assertIsInstance(jobs, dict, str(workflow))
             self.assertTrue(jobs, str(workflow))
@@ -35,20 +56,64 @@ class PublicCI(unittest.TestCase):
                 label = f"{workflow.name}: {name}"
                 self.assertIsInstance(job, dict, label)
                 if "uses" in job:
-                    self.assertEqual(job["uses"], HOSTED_TEST_GUARD, label)
+                    self.assertIn(job["uses"],
+                                  (HOSTED_TEST_GUARD, REVIEW_RULES_GUARD), label)
                     self.assertNotIn("runs-on", job, label)
+                    # Fail closed on job-level keys that can widen authority
+                    # or execution (secrets inherit, env, if, strategy,
+                    # concurrency, ...). `name` is display-only and kept for
+                    # the test-guard caller's byte-identical id/name contract.
+                    self.assertFalse(
+                        set(job) - {"uses", "with", "permissions", "name"}, label)
                     inputs = job.get("with", {})
                     self.assertIsInstance(inputs, dict, label)
-                    try:
-                        route = json.loads(inputs.get("runs-on-json", "null"))
-                    except (TypeError, ValueError):
-                        self.fail(f"{label}: runner input must be literal JSON")
-                    self.assertEqual(route, ["ubuntu-latest"], label)
+                    if job["uses"] == REVIEW_RULES_GUARD:
+                        self.assertEqual(job.get("permissions"),
+                                         {"contents": "read"}, label)
+                        self.assert_review_rules_inputs(inputs, label)
+                    else:
+                        # Test-guard callers carry no job permissions today
+                        # (workflow-level only); pin that to absent-or-read so
+                        # a later `permissions: write-all` edit fails closed.
+                        # The callee caps its own permissions, so impact is low,
+                        # but the guard should prove the bound it claims.
+                        perms = job.get("permissions")
+                        self.assertTrue(
+                            perms is None or perms == {"contents": "read"},
+                            label)
+                        try:
+                            route = json.loads(inputs.get("runs-on-json", "null"))
+                        except (TypeError, ValueError):
+                            self.fail(f"{label}: runner input must be literal JSON")
+                        self.assertEqual(route, ["ubuntu-latest"], label)
                 else:
                     # Fail closed on expressions, matrices, groups, aliases to
                     # private labels, and missing routes. This public snapshot
                     # needs no private branch in its routing expression.
                     self.assertEqual(job.get("runs-on"), "ubuntu-latest", label)
+
+    def assert_review_rules_inputs(self, inputs, label):
+        # Fail closed on unknown inputs, expressions, enforcement mode,
+        # unknown packs, and non-hosted runner overrides. The pinned
+        # reusable only accepts packs/mode/runs-on-json; anything else
+        # needs inspection, not a silent pass.
+        self.assertFalse(set(inputs) - REVIEW_RULES_INPUTS, label)
+        self.assertEqual(inputs.get("mode"), "warn", label)
+        packs = inputs.get("packs", "")
+        self.assertIsInstance(packs, str, label)
+        self.assertTrue(packs and "${{" not in packs, label)
+        selected = {pack.strip() for pack in packs.split(",")}
+        self.assertTrue(selected and all(selected), label)
+        self.assertFalse(selected - REVIEW_RULES_PACKS, label)
+        for key, value in inputs.items():
+            self.assertNotIn("${{", str(value), label)
+        runner = inputs.get("runs-on-json", "")
+        if runner:
+            try:
+                route = json.loads(runner)
+            except (TypeError, ValueError):
+                self.fail(f"{label}: runner input must be literal JSON")
+            self.assertEqual(route, ["ubuntu-latest"], label)
 
     def test_all_runner_routes_are_standard_hosted(self):
         self.assert_public_hosted_routes(ROOT / ".github/workflows")
@@ -61,6 +126,9 @@ class PublicCI(unittest.TestCase):
             (directory / "reusable.yml").write_text(
                 "on: pull_request\njobs:\n  guard:\n    uses: " + HOSTED_TEST_GUARD
                 + "\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n")
+            (directory / "review.yml").write_text(
+                "on: pull_request\njobs:\n  review-rules:\n    name: review-rules\n    permissions:\n      contents: read\n    uses: " + REVIEW_RULES_GUARD
+                + "\n    with:\n      packs: python-shell-ci,security,ts\n      mode: warn\n")
             self.assert_public_hosted_routes(directory)
 
     def test_public_routing_guard_rejects_private_dynamic_and_unreviewed_jobs(self):
@@ -78,6 +146,40 @@ class PublicCI(unittest.TestCase):
                 + "\n    with:\n      runs-on-json: '[\"self-hosted\", \"two-ephemeral\"]'\n",
             "reusable-expression": "    uses: " + HOSTED_TEST_GUARD
                 + "\n    with:\n      runs-on-json: ${{ inputs.runner }}\n",
+            "review-rules-enforce": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    permissions:\n      contents: read\n    with:\n      packs: ts\n      mode: enforce\n",
+            "review-rules-moving-ref": "    uses: TogetherWeOwn/.github/.github/workflows/review-rules.yml@v1"
+                + "\n    with:\n      packs: ts\n      mode: warn\n",
+            "review-rules-unknown-pack": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    permissions:\n      contents: read\n    with:\n      packs: ts,unreviewed-pack\n      mode: warn\n",
+            "review-rules-expression-packs": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    permissions:\n      contents: read\n    with:\n      packs: ${{ inputs.packs }}\n      mode: warn\n",
+            "review-rules-private-runner": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    permissions:\n      contents: read\n    with:\n      packs: ts\n      mode: warn\n      runs-on-json: '[\"self-hosted\"]'\n",
+            "review-rules-unknown-input": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    permissions:\n      contents: read\n    with:\n      packs: ts\n      mode: warn\n      unreviewed-input: 'yes'\n",
+            "review-rules-secrets-inherit": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    permissions:\n      contents: read\n    secrets: inherit\n    with:\n      packs: ts\n      mode: warn\n",
+            "review-rules-env": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    permissions:\n      contents: read\n    env:\n      UNREVIEWED: 'yes'\n    with:\n      packs: ts\n      mode: warn\n",
+            "review-rules-if": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    permissions:\n      contents: read\n    if: github.event_name == 'pull_request'\n    with:\n      packs: ts\n      mode: warn\n",
+            "review-rules-strategy": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    permissions:\n      contents: read\n    strategy:\n      matrix:\n        pack: [ts]\n    with:\n      packs: ts\n      mode: warn\n",
+            "review-rules-permissions-write": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    permissions: write-all\n    with:\n      packs: ts\n      mode: warn\n",
+            "review-rules-permissions-contents-write": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    permissions:\n      contents: write\n    with:\n      packs: ts\n      mode: warn\n",
+            "review-rules-missing-permissions": "    uses: " + REVIEW_RULES_GUARD
+                + "\n    with:\n      packs: ts\n      mode: warn\n",
+            "test-guard-secrets-inherit": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    secrets: inherit\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-if": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    if: github.event_name == 'pull_request'\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-permissions-write": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    permissions: write-all\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-permissions-contents-write": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    permissions:\n      contents: write\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
         }
         for name, job in bad_jobs.items():
             for suffix in (".yml", ".yaml"):
@@ -90,6 +192,34 @@ class PublicCI(unittest.TestCase):
                         "jobs:\n  green:\n    runs-on: ubuntu-latest\n  unsafe:\n" + job)
                     with self.assertRaises(AssertionError):
                         self.assert_public_hosted_routes(directory)
+
+    def test_public_routing_guard_rejects_widening_top_level_permissions(self):
+        # Job-level absent inherits workflow-level, so a top-level write
+        # would widen the token handed to the callee. Live workflows are
+        # read-only or empty; anything wider must fail closed.
+        bad_tops = {
+            "top-write-all": "permissions: write-all\n",
+            "top-contents-write": "permissions:\n  contents: write\n",
+            "top-extra-write": "permissions:\n  contents: read\n  issues: write\n",
+        }
+        for name, top in bad_tops.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                directory = Path(tmp)
+                (directory / "workflow.yml").write_text(
+                    top + "jobs:\n  green:\n    runs-on: ubuntu-latest\n")
+                with self.assertRaises(AssertionError):
+                    self.assert_public_hosted_routes(directory)
+        # Read-only and empty tops stay green.
+        for name, top in {
+            "top-read": "permissions:\n  contents: read\n",
+            "top-multi-read": "permissions:\n  contents: read\n  pull-requests: read\n",
+            "top-empty": "permissions: {}\n",
+        }.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                directory = Path(tmp)
+                (directory / "workflow.yml").write_text(
+                    top + "jobs:\n  green:\n    runs-on: ubuntu-latest\n")
+                self.assert_public_hosted_routes(directory)
 
     def test_drift_gate_runs_public_semantics_without_private_provenance(self):
         import hashlib
@@ -168,6 +298,60 @@ class PublicCI(unittest.TestCase):
         push = workflow[True]["push"]  # YAML 1.1 parses bare `on:` as True
         self.assertEqual(push["branches-ignore"], ["gh-readonly-queue/**"])
 
+    def test_public_safety_concurrency_isolated_by_event(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/public-safety.yml").read_text())
+        concurrency = workflow["concurrency"]
+        group = concurrency["group"]
+        self.assertIn("${{ github.event_name }}", group)
+        self.assertIn("github.event.pull_request.number", group)
+        self.assertIn("github.sha", group)
+        self.assertEqual(concurrency["cancel-in-progress"],
+                         "${{ github.event_name == 'pull_request' }}")
+
+    def test_gitleaks_digest_allowlist_is_narrowly_scoped(self):
+        config = tomllib.loads((ROOT / ".gitleaks.toml").read_text())
+        rules = [rule for rule in config["allowlists"]
+                 if rule.get("description", "").startswith(
+                     "Exact reviewed historical SHA-256 entries")]
+        self.assertEqual(len(rules), 1)
+        rule = rules[0]
+        self.assertEqual(set(rule["targetRules"]),
+                         {"generic-api-key", "discord-api-token"})
+        self.assertEqual(rule["paths"], [
+            r"(^|/)vendor/offline\-ci\-contract\.json$"])
+        self.assertEqual(rule["regexTarget"], "line")
+        # gitleaks defaults to OR when `condition` is absent, so paths-alone
+        # would suppress unrelated findings. Pin AND on the target rule and
+        # sweep every allowlist so a flipped or deleted condition fails.
+        self.assertEqual(rule.get("condition"), "AND")
+        for allow in config["allowlists"]:
+            self.assertEqual(allow.get("condition"), "AND",
+                             allow.get("description"))
+        expected_files = {
+            "gh_embedded_token_remediate.py",
+            "git_remote_credential_scan.sh",
+            "org_access_review.sh",
+            "scripts/discord_job_health.js",
+            "secret_exposure_audit.sh",
+            "test_credential_chain_audit.sh",
+            "test_credential_chain_pin_gate.sh",
+            "test_gh_token_api_body.sh",
+            "test_gh_token_dispatch.sh",
+        }
+        self.assertEqual(len(rule["regexes"]), len(expected_files))
+        matched_files = set()
+        for pattern in rule["regexes"]:
+            self.assertTrue(pattern.startswith("(?m)^"), pattern)
+            self.assertTrue(pattern.endswith("$"), pattern)
+            parts = pattern.split('"')
+            self.assertEqual(len(parts), 5, pattern)
+            self.assertEqual(parts[0], r"(?m)^\s*", pattern)
+            self.assertEqual(parts[2], r":\s*", pattern)
+            self.assertRegex(parts[3], r"^[0-9a-f]{64}$")
+            self.assertEqual(parts[4], ",?$", pattern)
+            matched_files.add(parts[1].replace(r"\.", "."))
+        self.assertEqual(matched_files, expected_files)
+
     def test_lint_attests_hosted_environment_not_runner_name(self):
         text = (ROOT / ".github/workflows/pr-lint.yml").read_text()
         self.assertIn('"${RUNNER_ENVIRONMENT:-}" == github-hosted', text)
@@ -236,6 +420,286 @@ class PublicCI(unittest.TestCase):
         safety = (ROOT / ".github/workflows/public-safety.yml").read_text()
         self.assertIn("gitleaks", safety)
         self.assertIn("public_safety.py", safety)
+        # The history scan fails closed: no --all sweep of unrelated
+        # branches, no narrowed single-commit fallback (on a pull-request
+        # merge commit -p -U0 prints no patch, passing vacuously).
+        # Pushes validate BEFORE and every range validates via rev-list.
+        self.assertNotIn('--log-opts="--all"', safety)
+        self.assertNotIn('RANGE="-1 HEAD"', safety)
+        self.assertIn("git merge-base origin/main HEAD", safety)
+        self.assertIn("github.event.before", safety)
+        self.assertIn('git cat-file -e "$BEFORE^{commit}"', safety)
+        self.assertIn('git rev-list --count "$RANGE"', safety)
+        self.assertIn("pull-request history range", safety)
+
+    def test_history_range_survives_advanced_main(self):
+        # Pins the range logic against a scratch repo shaped like the review
+        # probe: a PR that adds a credential-shaped file in one commit and
+        # removes it in the next, with main advanced afterwards. The old
+        # origin/main ancestor check then fails (fallback territory) while
+        # the merge-base range still contains both PR commits and the old
+        # single-commit scan of the synthetic merge commit sees nothing.
+        try:
+            subprocess.run(["git", "--version"], capture_output=True,
+                           check=True)
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest("git not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ,
+                       GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                       GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+            def git(*args):
+                subprocess.run(["git", *args], cwd=tmp, env=env,
+                               capture_output=True, text=True, check=True)
+            git("init", "-q")
+            git("checkout", "-q", "-B", "main")
+            Path(tmp, "base.txt").write_text("base\n")
+            git("add", "base.txt")
+            git("commit", "-qm", "base")
+            git("checkout", "-qb", "pr")
+            Path(tmp, "secret.txt").write_text("token = hunter2-hunter2\n")
+            git("add", "secret.txt")
+            git("commit", "-qm", "add credential-shaped file")
+            git("rm", "-q", "secret.txt")
+            git("commit", "-qm", "remove credential-shaped file")
+            git("checkout", "-q", "main")
+            Path(tmp, "other.txt").write_text("advance\n")
+            git("add", "other.txt")
+            git("commit", "-qm", "advance main")
+            # Synthetic pull-request merge ref on a side branch, then main
+            # advances again so origin/main is no longer an ancestor of the
+            # merge commit.
+            git("checkout", "-qb", "tmp-merge")
+            git("merge", "--no-ff", "--no-edit", "-q", "pr", "-m", "merge pr")
+            git("branch", "-f", "merge-ref", "HEAD")
+            git("checkout", "-q", "main")
+            Path(tmp, "later.txt").write_text("later\n")
+            git("add", "later.txt")
+            git("commit", "-qm", "main moves after merge-ref creation")
+            def out(*args):
+                r = subprocess.run(["git", *args], cwd=tmp, env=env,
+                                   capture_output=True, text=True,
+                                   check=True)
+                return r.stdout
+            ancestor = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", "main", "merge-ref"],
+                cwd=tmp, env=env, capture_output=True)
+            self.assertNotEqual(
+                ancestor.returncode, 0,
+                "scratch repo must reproduce the stale-base trigger")
+            base = out("merge-base", "main", "merge-ref").strip()
+            ranged = out("log", "-p", "-U0", base + "..merge-ref")
+            self.assertIn("secret.txt", ranged,
+                          "merge-base range lost the PR history")
+            single = out("log", "-p", "-U0", "-1", "merge-ref")
+            self.assertNotIn("secret.txt", single,
+                             "single-commit scan unexpectedly saw a patch")
+
+    def _history_scan_shell(self):
+        # Slice the real `run:` block out of public-safety.yml so this test
+        # executes the workflow's shell, not a reimplementation. Stub only
+        # the docker invocations; every git conditional stays verbatim.
+        data = yaml.safe_load(
+            (ROOT / ".github/workflows/public-safety.yml").read_text())
+        steps = data["jobs"]["public-safety"]["steps"]
+        run = next(
+            s["run"] for s in steps
+            if (s.get("name") or "").startswith("Scan working tree"))
+        script = run.replace(
+            "${{ github.event_name }}", "${EVENT_NAME}").replace(
+            "${{ github.event.before }}", "${BEFORE}")
+        docker_stub = (
+            'docker() { python3 -c "import json, sys; '
+            'print(json.dumps(sys.argv[1:]))" "$@" >> "$DOCKER_LOG"; }\n')
+        return docker_stub + script + "\n"
+
+    def _run_history_scan(self, tmp, base_env, event_name, before):
+        script = self._history_scan_shell()
+        log_path = Path(tmp, "docker-invocations.jsonl")
+        log_path.unlink(missing_ok=True)
+        env = dict(base_env, EVENT_NAME=event_name,
+                   BEFORE=before or "", SCANNER="stub",
+                   DOCKER_LOG=str(log_path))
+        return subprocess.run(
+            ["bash", "-e", "-c", script], cwd=tmp, env=env,
+            capture_output=True, text=True)
+
+    def _assert_scanned_range(self, tmp, expected):
+        invocations = [json.loads(line) for line in
+                       Path(tmp, "docker-invocations.jsonl").read_text().splitlines()]
+        git_scans = [args for args in invocations if "git" in args]
+        self.assertEqual(len(git_scans), 1, invocations)
+        scan_args = git_scans[0]
+        log_opts = next((arg for arg in scan_args if arg.startswith("--log-opts=")), None)
+        self.assertEqual(log_opts, "--log-opts=" + expected, scan_args)
+        self._assert_tree_scanned(tmp)
+        return expected
+
+    def _assert_tree_scanned(self, tmp):
+        # The exit-0 paths are justified by "the working-tree scan covers
+        # this event": pin that the dir scan ran before the early exit, so
+        # deleting or reordering it fails this test.
+        invocations = [json.loads(line) for line in
+                       Path(tmp, "docker-invocations.jsonl").read_text().splitlines()]
+        tree = [args for args in invocations
+                if "dir" in args and "/repo" in args]
+        self.assertEqual(len(tree), 1, invocations)
+
+    def _assert_no_history_scan(self, tmp):
+        invocations = [json.loads(line) for line in
+                       Path(tmp, "docker-invocations.jsonl").read_text().splitlines()]
+        self.assertFalse(any("git" in args for args in invocations), invocations)
+        self._assert_tree_scanned(tmp)
+
+    def test_history_scan_script_uses_fail_closed_ranges(self):
+        # Executes the workflow's actual range block in scratch repos for:
+        # pull_request with and without an advanced main, push with a real
+        # before, zero before (new branch), and unreachable before (force-push),
+        # plus empty PR, dispatch, and zero-before push ranges. The docker
+        # function records argv so the gitleaks --log-opts argument itself is
+        # asserted, not merely the RANGE variable. Range and failure mutations
+        # must break this test.
+        try:
+            subprocess.run(["git", "--version"], capture_output=True,
+                           check=True)
+            subprocess.run(["bash", "--version"], capture_output=True,
+                           check=True)
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest("git or bash not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ,
+                       GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                       GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+            def git(*args):
+                subprocess.run(["git", *args], cwd=tmp, env=env,
+                               capture_output=True, text=True, check=True)
+            def out(*args):
+                r = subprocess.run(["git", *args], cwd=tmp, env=env,
+                                   capture_output=True, text=True,
+                                   check=True)
+                return r.stdout.strip()
+            git("init", "-q")
+            git("checkout", "-q", "-B", "main")
+            Path(tmp, "base.txt").write_text("base\n")
+            git("add", "base.txt")
+            git("commit", "-qm", "base")
+            base0 = out("rev-parse", "main")
+            git("checkout", "-qb", "pr")
+            Path(tmp, "secret.txt").write_text("token = hunter2-hunter2\n")
+            git("add", "secret.txt")
+            git("commit", "-qm", "add credential-shaped file")
+            first_pr = out("rev-parse", "HEAD")
+            git("rm", "-q", "secret.txt")
+            git("commit", "-qm", "remove credential-shaped file")
+            pr_tip = out("rev-parse", "HEAD")
+            git("checkout", "-q", "main")
+            Path(tmp, "other.txt").write_text("advance\n")
+            git("add", "other.txt")
+            git("commit", "-qm", "advance main")
+            main1 = out("rev-parse", "main")
+            git("checkout", "-qb", "tmp-merge")
+            git("merge", "--no-ff", "--no-edit", "-q", "pr", "-m", "merge pr")
+            git("branch", "-f", "merge-ref", "HEAD")
+            git("checkout", "-q", "main")
+            Path(tmp, "later.txt").write_text("later\n")
+            git("add", "later.txt")
+            git("commit", "-qm", "main moves after merge-ref creation")
+            main2 = out("rev-parse", "main")
+            zero = "0" * 40
+            bogus = "d" * 40
+
+            def set_origin(sha_or_none):
+                if sha_or_none is None:
+                    subprocess.run(
+                        ["git", "update-ref", "-d",
+                         "refs/remotes/origin/main"],
+                        cwd=tmp, env=env, capture_output=True)
+                else:
+                    git("update-ref", "refs/remotes/origin/main",
+                        sha_or_none)
+
+            def range_log(rng):
+                r = subprocess.run(
+                    ["git", "log", "-p", "-U0", rng], cwd=tmp, env=env,
+                    capture_output=True, text=True, check=True)
+                return r.stdout
+
+            # 1. pull_request without an advanced main.
+            set_origin(main1)
+            git("checkout", "-q", "merge-ref")
+            r = self._run_history_scan(tmp, env, "pull_request", "")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rng = out("merge-base", "origin/main", "HEAD") + "..HEAD"
+            self._assert_scanned_range(tmp, rng)
+            self.assertIn("secret.txt", range_log(rng))
+
+            # 2. pull_request with main advanced after the merge ref.
+            set_origin(main2)
+            git("checkout", "-q", "merge-ref")
+            r = self._run_history_scan(tmp, env, "pull_request", "")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rng = out("merge-base", "origin/main", "HEAD") + "..HEAD"
+            self._assert_scanned_range(tmp, rng)
+            self.assertIn("secret.txt", range_log(rng),
+                          "merge-base range lost PR history after advance")
+
+            # 3. push with a real before (multi-commit push scans all).
+            set_origin(main2)
+            git("checkout", "-q", "pr")
+            r = self._run_history_scan(tmp, env, "push", first_pr)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rng = first_pr + "..HEAD"
+            self._assert_scanned_range(tmp, rng)
+
+            # 4. push with a zero before (new branch) falls back to
+            # merge-base instead of exiting 1.
+            set_origin(base0)
+            git("checkout", "-q", "pr")
+            r = self._run_history_scan(tmp, env, "push", zero)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rng = out("merge-base", "origin/main", "HEAD") + "..HEAD"
+            self._assert_scanned_range(tmp, rng)
+            self.assertIn("secret.txt", range_log(rng))
+
+            # 5. push with an unreachable before (force-push) has unknown
+            # rewritten history: scan all reachable history instead of an
+            # empty merge-base range.
+            set_origin(base0)
+            git("checkout", "-q", "pr")
+            r = self._run_history_scan(tmp, env, "push", bogus)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self._assert_scanned_range(tmp, "HEAD")
+            self.assertIn("secret.txt", range_log("HEAD"))
+
+            # 6. Fail closed on an empty pull-request range.
+            set_origin(main2)
+            git("checkout", "-q", "main")
+            r = self._run_history_scan(tmp, env, "pull_request", "")
+            self.assertNotEqual(r.returncode, 0,
+                                "empty pull-request history must fail closed")
+            self.assertIn("pull-request history range", r.stderr)
+            self._assert_no_history_scan(tmp)
+
+            # 7. A workflow_dispatch at main scans the tree without invoking
+            # gitleaks on an empty history range.
+            r = self._run_history_scan(tmp, env, "workflow_dispatch", "")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("no new commits", r.stdout)
+            self._assert_no_history_scan(tmp)
+
+            # 8. A zero-before push at the main tip also has no new commits.
+            r = self._run_history_scan(tmp, env, "push", zero)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("no new commits", r.stdout)
+            self._assert_no_history_scan(tmp)
+
+            # 9. A non-zero unreachable push at the main tip (force-push to
+            # main) must not exit 0 with no history scan: the rewritten
+            # commits are unknown, so the full reachable history is scanned.
+            r = self._run_history_scan(tmp, env, "push", bogus)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("no new commits", r.stdout)
+            self._assert_scanned_range(tmp, "HEAD")
 
     def test_metadata_protocol_constant_does_not_exempt_private_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:

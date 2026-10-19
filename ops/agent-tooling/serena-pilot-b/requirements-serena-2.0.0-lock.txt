@@ -1,0 +1,40 @@
+# Pinned dependencies for serena-agent==2.0.0 (Pilot B).
+# Source: PyPI metadata for serena-agent 2.0.0 (requires-python >=3.11,<3.15;
+# container python3.13.5 satisfies it). Regenerate with hashes at install time:
+#   pip hash-checking or `pip-compile --generate-hashes` equivalent.
+# Install with: pip install --requirement requirements-serena-2.0.0-lock.txt
+# Do NOT install the `agno` or `dev` extras (unneeded: sqlalchemy, jupyter-book).
+
+serena-agent==2.0.0
+anthropic==0.117.0
+beautifulsoup4==4.14.2
+click==8.3.1
+cryptography==50.0.0
+docstring-parser==0.17.0
+filelock==3.25.2
+flask==3.1.3
+jinja2==3.1.6
+joblib==1.5.1
+lsprotocol==2025.0.0
+mcp==2.2.0
+oslex==2.0.0
+overrides==7.7.0
+pathspec==0.12.1
+psutil==7.0.0
+pydantic==2.12.5
+pygls==2.1.1
+pystray==0.19.5
+python-dotenv==1.2.2
+python-multipart==0.0.31
+pywebview==6.2
+pyyaml==6.0.2
+regex==2026.2.28
+requests==2.33.0
+ruamel-yaml==0.18.14
+sensai-utils==1.5.0
+starlette==1.3.1
+tiktoken==0.12.0
+tqdm==4.67.1
+types-pyyaml==6.0.12.20250516
+urllib3==2.8.0
+werkzeug==3.1.7

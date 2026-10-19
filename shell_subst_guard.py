@@ -160,10 +160,12 @@ _TRANSPARENT_PREFIXES = frozenset(
 
 # Keywords that reset the parser to command position. `in` is deliberately
 # absent: after `case X in` / `for v in` the words are patterns/list items,
-# never commands.
+# never commands. `for`/`select` are absent too: they open a word list
+# (loop variable plus `in` items) in their own arm below, so a loop
+# variable named `yes` is never read as a command.
 _RESET_KEYWORDS = frozenset(
     {"if", "then", "elif", "else", "fi", "while", "until", "do", "done",
-     "select", "esac"}
+     "esac"}
 )
 
 _OPERATOR_RESETS = frozenset(
@@ -325,7 +327,13 @@ def _strip_comments(text: str) -> str:
 
 def _heredoc_delims(line: str) -> list[tuple[str, bool]]:
     """All `(delim, quoted)` pairs for `<<[-]DELIM` operators outside quotes
-    on this line, in order. `quoted` is True for `<<'D'` / `<<"D"`."""
+    and comments on this line, in order. The delimiter parses as a shell
+    word: any quoted or backslash-escaped segment marks it quoted and
+    contributes its dequoted text (`<<'D'`, `<<"D"`, `<<E'O'F`, `<<\\D`).
+    A `<<` mentioned in comment text opens no heredoc. An unresolvable
+    delimiter (unterminated quote, trailing line-continuation backslash)
+    registers nothing: kept lines are then scanned, which is fail-closed.
+    """
     found: list[tuple[str, bool]] = []
     single = double = False
     single_dollar = False
@@ -362,29 +370,44 @@ def _heredoc_delims(line: str) -> list[tuple[str, bool]]:
             double = True
             i += 1
             continue
+        if ch == "#" and _is_comment_start(line, i):
+            break  # comment text mentions no operator
         if ch == "<" and i + 1 < n and line[i + 1] == "<":
             j = i + 2
             if j < n and line[j] == "-":
                 j += 1
             while j < n and line[j] in " \t":
                 j += 1
-            if j < n and line[j] in "'\"":
-                quote = line[j]
-                j += 1
-                start = j
-                while j < n and line[j] != quote:
+            buf: list[str] = []
+            quoted = False
+            bad = False
+            while j < n and line[j] not in " \t\n|&;()<>":
+                c = line[j]
+                if c in "'\"":
+                    quoted = True
+                    quote = c
                     j += 1
-                if j < n:
-                    found.append((line[start:j], True))
-                    i = j + 1
-                    continue
-                i = n
-                continue
-            start = j
-            while j < n and (line[j].isalnum() or line[j] == "_"):
-                j += 1
-            if j > start:
-                found.append((line[start:j], False))
+                    while j < n and line[j] != quote:
+                        buf.append(line[j])
+                        j += 1
+                    if j >= n:
+                        bad = True  # runs past end of line: unresolvable
+                        break
+                    j += 1
+                elif c == "\\" and j + 1 < n:
+                    quoted = True
+                    buf.append(line[j + 1])
+                    j += 2
+                elif c == "\\":
+                    bad = True  # continuation: delimiter spans lines
+                    break
+                elif c == "#" and _is_comment_start(line, j):
+                    break
+                else:
+                    buf.append(c)
+                    j += 1
+            if buf and not bad:
+                found.append(("".join(buf), quoted))
                 i = j
                 continue
             i += 2
@@ -399,29 +422,49 @@ def _strip_heredoc_bodies(text: str, quoted_only: bool = False) -> str:
     body is dropped; with `quoted_only=True` (span extraction) only quoted-
     delimiter bodies -- which the shell never expands -- are dropped, so
     substitution text inside unquoted heredocs is still caught. Kept unquoted
-    bodies have quote characters and `#` blanked: the shell runs $ and backtick
-    expansions there but gives quotes and `#` no semantics, so an apostrophe
-    in prose (`don't`) must not open quote state and a `#` must not open a
-    comment that would hide a later substitution.
+    bodies have quote characters and `#` blanked outside substitution spans:
+    the shell runs $ and backtick expansions there but gives quotes and `#`
+    no semantics, so an apostrophe in prose (`don't`) must not open quote
+    state and a `#` must not open a comment that would hide a later
+    substitution -- while quotes inside a span keep shell semantics
+    (`$(y'es')` still glues, a quoted paren still does not close).
     """
     lines = text.split("\n")
     out: list[str] = []
+    kept: list[bool] = []  # kept unquoted-body line: blank later, block-wise
     pending: list[tuple[str, bool]] = []
     for line in lines:
         if pending and line.strip() == pending[0][0]:
             out.append(line)  # the delimiter line itself
+            kept.append(False)
             pending.pop(0)
             continue
         if pending:
             _delim, quoted = pending[0]
             if not quoted_only or quoted:
                 out.append("")
+                kept.append(False)
             else:
-                out.append("".join(
-                    " " if c in "'\"#" else c for c in line))
+                out.append(line)
+                kept.append(True)
             continue
         out.append(line)
+        kept.append(False)
         pending.extend(_heredoc_delims(line))
+    # Blank each contiguous kept-body run as one block so multi-line spans
+    # stay intact (a delimiter or operator line always separates bodies).
+    # Blanking is length-preserving, so line positions never shift.
+    i = 0
+    total = len(out)
+    while i < total:
+        if not kept[i]:
+            i += 1
+            continue
+        j = i
+        while j < total and kept[j]:
+            j += 1
+        out[i:j] = _blank_body_block("\n".join(out[i:j])).split("\n")
+        i = j
     return "\n".join(out)
 
 
@@ -468,8 +511,14 @@ def _skip_balanced(text: str, i: int, opener: str, closer: str) -> int:
     return n
 
 
-def extract_substitutions(command: str) -> list[str]:
-    """Return the body of every `$(...)` and backtick span in the command.
+def _scan_substitution_ranges(
+        command: str, prose_outside: bool = False,
+) -> list[tuple[int, int, int, int]]:
+    """Return `(outer_start, outer_end, body_start, body_end)` for every
+    `$(...)` and backtick span in the command. The single span scanner:
+    `extract_substitutions` slices bodies from these ranges, and heredoc
+    blanking uses them to tell span text from prose, so the two can never
+    disagree on a boundary.
 
     Quote-, escape- and comment-aware. `$((...))` arithmetic and `${...}`
     parameter expansion are not command substitutions and are skipped, but
@@ -483,15 +532,15 @@ def extract_substitutions(command: str) -> list[str]:
     nor, in the word lexer, a command word. `$'...'` honors backslash
     escapes, so `$'\\''` never desyncs the scan. Parens inside double quotes
     never count. Unclosed spans run to end of input (fail-closed: the lexer
-    cannot prove the shell would reject them). Content lines of
-    quoted-delimiter heredocs are dropped first: the shell never expands
-    them, so `$(yes)` written there is literal stdin, not a substitution.
-    Kept unquoted-heredoc bodies have quotes and `#` blanked first (only $
-    and backtick expansions are live there), so prose punctuation hides no
-    span.
+    cannot prove the shell would reject them).
+
+    With `prose_outside=True` the text is an unquoted-heredoc body block:
+    quotes, `#` and case keywords outside spans are literal prose (the
+    shell gives them no semantics there), while `$(`, backtick, `$((` and
+    `${` still open spans whose interiors are shell code with full
+    semantics -- exactly where Bash parses code versus prose.
     """
-    command = _strip_heredoc_bodies(command, quoted_only=True)
-    spans: list[str] = []
+    spans: list[tuple[int, int, int, int]] = []
     # Open `$(` spans: (body_start, paren_depth).
     stack: list[tuple[int, int]] = []
     # Saved (single, double, single_dollar) quote contexts, one per `$(`.
@@ -519,17 +568,20 @@ def extract_substitutions(command: str) -> list[str]:
         if ch == "\\":
             i += 2
             continue
-        if ch == "'" and not double:
+        # In prose (unquoted-heredoc body) quotes and `#` outside spans are
+        # literal characters; inside spans they keep shell semantics.
+        in_code = bool(stack) or in_backtick or not prose_outside
+        if ch == "'" and not double and in_code:
             # Inside double quotes a single quote is a literal character.
             single = True
             single_dollar = _is_dollar_quote(command, i)
             i += 1
             continue
-        if ch == '"':
+        if ch == '"' and in_code:
             double = not double
             i += 1
             continue
-        if ch == "#" and not double and not in_backtick \
+        if ch == "#" and not double and not in_backtick and in_code \
                 and _is_comment_start(command, i):
             while i < n and command[i] != "\n":
                 i += 1
@@ -540,14 +592,16 @@ def extract_substitutions(command: str) -> list[str]:
                 backtick_start = i + 1
             else:
                 in_backtick = False
-                spans.append(command[backtick_start:i])
+                spans.append((backtick_start - 1, i + 1,
+                              backtick_start, i))
             i += 1
             continue
         # Case keyword tracking (outside quotes/backticks). `case`/`esac`
         # count only in command position (`echo case` is an argument) and
         # only at their own substitution depth, so a nested `$(esac)` never
-        # pops the outer case.
-        if not double and not in_backtick:
+        # pops the outer case. In prose, `case` words outside spans are
+        # literal text, never case boundaries.
+        if not double and not in_backtick and in_code:
             if _is_keyword_at(command, i, "case"):
                 if _case_at_cmd_pos(command, i):
                     case_stack.append(("subject", len(stack), 0))
@@ -601,7 +655,16 @@ def extract_substitutions(command: str) -> list[str]:
                         # spans instead of chopping a phantom closer.
                         interior = command[j + 2:]
                     if interior:
-                        spans.extend(extract_substitutions(interior))
+                        # The interior is shell code even in prose mode
+                        # (arithmetic containing a substitution), so it
+                        # scans with prose_outside=False; ranges shift by
+                        # the interior offset. Re-stripping heredocs here
+                        # would be a no-op: the caller already stripped.
+                        base = j + 2
+                        for found in _scan_substitution_ranges(interior):
+                            o_s, o_e, b_s, b_e = found
+                            spans.append((o_s + base, o_e + base,
+                                          b_s + base, b_e + base))
                     i = end
                     continue
                 quote_stack.append((single, double, single_dollar))
@@ -616,7 +679,11 @@ def extract_substitutions(command: str) -> list[str]:
                 interior = command[j + 1:end - 1] \
                     if end - 1 > j + 1 else ""
                 if interior:
-                    spans.extend(extract_substitutions(interior))
+                    base = j + 1
+                    for found in _scan_substitution_ranges(interior):
+                        o_s, o_e, b_s, b_e = found
+                        spans.append((o_s + base, o_e + base,
+                                      b_s + base, b_e + base))
                 i = end
                 continue
         # An extglob mark directly before `(` in pattern position opens a
@@ -652,7 +719,8 @@ def extract_substitutions(command: str) -> list[str]:
             if stack:
                 start, depth = stack.pop()
                 if depth == 1:
-                    spans.append(command[start:i])
+                    # start is just past `$(`, so start-2 is the `$`.
+                    spans.append((start - 2, i + 1, start, i))
                     if quote_stack:
                         single, double, single_dollar = quote_stack.pop()
                     while case_stack \
@@ -664,10 +732,48 @@ def extract_substitutions(command: str) -> list[str]:
             continue
         i += 1
     for start, _depth in stack:
-        spans.append(command[start:])
+        spans.append((start - 2, n, start, n))
     if in_backtick:
-        spans.append(command[backtick_start:])
+        spans.append((backtick_start - 1, n, backtick_start, n))
     return spans
+
+
+def extract_substitutions(command: str) -> list[str]:
+    """Return the body of every `$(...)` and backtick span in the command.
+
+    Bodies are sliced from `_scan_substitution_ranges`, so extraction and
+    heredoc blanking share one span scanner and cannot disagree on a
+    boundary. Content lines of quoted-delimiter heredocs are dropped first:
+    the shell never expands them, so `$(yes)` written there is literal
+    stdin, not a substitution. Kept unquoted-heredoc bodies have quotes
+    and `#` blanked outside spans first (only $ and backtick expansions
+    are live there), so prose punctuation hides no span while span
+    interiors keep shell quoting semantics.
+    """
+    command = _strip_heredoc_bodies(command, quoted_only=True)
+    return [command[b_s:b_e]
+            for _o_s, _o_e, b_s, b_e
+            in _scan_substitution_ranges(command)]
+
+
+def _blank_body_block(block: str) -> str:
+    """Blank `'`, `"` and `#` outside spans in one kept unquoted-heredoc
+    body block, preserving span interiors verbatim.
+
+    The shell runs $ and backtick expansions in the body but gives quotes
+    and `#` no semantics there -- except inside a substitution span, whose
+    content parses as shell code (glued quoting forms one word, a quoted
+    paren does not close the span). Scanning the whole block (not one
+    line) keeps multi-line spans intact. Length-preserving: callers split
+    the result back into the same number of lines.
+    """
+    inside = [(o_s, o_e)
+              for o_s, o_e, _b_s, _b_e
+              in _scan_substitution_ranges(block, prose_outside=True)]
+    return "".join(
+        " " if c in "'\"#" and not any(o_s <= k < o_e for o_s, o_e in inside)
+        else c
+        for k, c in enumerate(block))
 
 
 # Word characters stop a bare word. `#` is intentionally NOT a delimiter:
@@ -740,7 +846,9 @@ def _tokenize(body: str) -> list[tuple[str, str]]:
     redirect (`2>/dev/null`) is an IO-number redirect prefix, not a command,
     and is skipped. Nested `$(...)`, backticks, `$((...))`, `${...}` and
     `<(...)`/`>(...)` spans are skipped whole -- they are analysed as their
-    own spans by the extractor.
+    own spans by the extractor. A bare `((...))` likewise skips whole but
+    emits a `((` marker word so the body parser can tell a `for ((...))`
+    prelude from a missing loop variable.
     """
     tokens: list[tuple[str, str]] = []
     i = 0
@@ -772,7 +880,11 @@ def _tokenize(body: str) -> list[tuple[str, str]]:
             continue
         if ch == "$" and i + 1 < n and body[i + 1] == "(":
             if i + 2 < n and body[i + 2] == "(":
-                i = _skip_balanced(body, i + 2, "(", ")")
+                # Start at the FIRST paren so both closers of `$((...))`
+                # are consumed: starting at the second leaves a stray `)`
+                # operator that restores command position and turns a
+                # following argument into a command (`echo $((1+2)) yes`).
+                i = _skip_balanced(body, i + 1, "(", ")")
             else:
                 i = _skip_balanced(body, i + 1, "(", ")")
             continue
@@ -788,7 +900,14 @@ def _tokenize(body: str) -> list[tuple[str, str]]:
             tokens.append(("word", word))
             continue
         if ch == "(" and i + 1 < n and body[i + 1] == "(":
+            # A `for ((...))` arithmetic prelude (or a bare `((...))`
+            # compound command): skip it whole, but emit a marker word so
+            # `for`'s skip_one consumes the prelude -- setting
+            # skip_until_do -- instead of eating a following `do` as the
+            # loop variable (`for ((i=0;i<1;i++)) do yes`). Anywhere else
+            # the marker is an inert non-`yes` word.
             i = _skip_balanced(body, i, "(", ")")
+            tokens.append(("word", "(("))
             continue
         matched = False
         for op in multi:
@@ -1017,6 +1136,8 @@ def body_has_unbounded_yes(body: str) -> bool:
     skip_flags = False   # after a transparent prefix, skipping -flags
     skip_one = False     # redirect target / function name / for-var
     for_list = False     # inside a `for v [in words]` word list
+    for_in = False       # ... and its `in` word has been seen
+    after_sep = False    # previous token was a separator (`;`, newline...)
     case_stack: list[str] = []  # "subject" | "pattern" | "body"
     case_ext = 0         # extglob group depth while in "pattern"
     skip_until_do = False  # `for ((...))` arithmetic prelude
@@ -1062,8 +1183,11 @@ def body_has_unbounded_yes(body: str) -> bool:
                 continue
             if val in _OPERATOR_RESETS:
                 if val == "\n" and for_list:
-                    # A newline inside a `for v in ...` list (before `do`)
-                    # does not end the list; its words are still not commands.
+                    # A newline inside a `for v in ...` list ends the list:
+                    # the words before it are still not commands, but the
+                    # next `do` is the loop keyword (Bash 5.2: anything
+                    # else there is a syntax error, so nothing executes).
+                    after_sep = True
                     i += 1
                     continue
                 cmd_pos = True
@@ -1071,6 +1195,8 @@ def body_has_unbounded_yes(body: str) -> bool:
                 skip_one = False
                 skip_until_do = False
                 for_list = False
+                for_in = False
+                after_sep = True
                 i += 1
                 continue
             if val in (">", "<", ">>", "<<", ">&", "<&", "<>", ">|", "<<<"):
@@ -1085,6 +1211,8 @@ def body_has_unbounded_yes(body: str) -> bool:
             i += 1
             continue
         # kind == "word"
+        prev_was_sep = after_sep
+        after_sep = False
         if skip_test:
             i += 1
             continue
@@ -1118,11 +1246,15 @@ def body_has_unbounded_yes(body: str) -> bool:
             cmd_pos = False
             i += 1
             continue
-        # `do` also counts while a `for`/`select` list is open even when
-        # command position is off (a newline-separated list): an unquoted
-        # `do` always terminates the list in Bash, never a list item.
+        # `do` terminates a `for`/`select` list only after a separator
+        # (newline ends the list like `;`) or with no `in` at all (`for i
+        # do`): a `do` inside the list (`for i in do yes`) is an ordinary
+        # list word -- Bash 5.2 iterates it, never executes it. A `do`
+        # after a `for ((...))` prelude is consumed by skip_until_do above,
+        # never by `for`'s skip_one.
         if val in _RESET_KEYWORDS and not skip_one \
-                and (cmd_pos or (val == "do" and for_list)):
+                and (cmd_pos or (val == "do" and for_list
+                                 and (prev_was_sep or not for_in))):
             # `do` after a `for ((...))` prelude is handled above; a plain
             # `do` resets like the other keywords.
             cmd_pos = True
@@ -1138,7 +1270,9 @@ def body_has_unbounded_yes(body: str) -> bool:
             i += 1
             continue
         if val == "in" and for_list:
-            # `for v in words...`: list items are not commands until `do`.
+            # `for v in words...`: list items are not commands until a
+            # separator-`do` ends the list.
+            for_in = True
             cmd_pos = False
             i += 1
             continue

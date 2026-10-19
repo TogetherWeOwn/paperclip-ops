@@ -28,7 +28,10 @@
 #      paren inside double quotes, or a `$'...'` escape. ANSI-C hex, octal
 #      (mod-256 wrapped) and unicode escapes all decode before the `yes`
 #      comparison. Quotes/`#` in unquoted heredoc bodies, arithmetic before a
-#      command, and newline-separated loop lists hide nothing.
+#      command, and newline-separated loop lists hide nothing; neither does
+#      in-span quoting inside a heredoc body (glued, quoted-paren,
+#      multi-line, case-pattern and brace-paren forms), a `for ((...))`
+#      prelude, or a heredoc operator mentioned in a comment.
 #   3. Fail-closed pins: `$(yes | head -n 1)`, `$(yes --help)` and
 #      `$(command -v yes)` are refused even though bounded/descriptive.
 #      The gate cannot verify the bound or model per-flag semantics, so it
@@ -38,9 +41,11 @@
 #      'no'` boolean idiom, `yes` as an argument/literal, comments (full-line,
 #      trailing and inside substitutions), arithmetic, parameter expansion,
 #      `[[ ]]` operands, `case` patterns, the descriptive-only `type yes`,
-#      quoted-heredoc bodies and heredoc content lines, redirects into a
-#      file named `yes`, and loop lists. A guard that fires on these gets
-#      muted, which is the same as having no guard.
+#      quoted-heredoc bodies (full, partial-quote and backslash delimiters)
+#      and heredoc content lines, redirects into a file named `yes`, loop
+#      lists (including `do`/`yes` as list words), and a literal `yes`
+#      argument after arithmetic. A guard that fires on these gets muted,
+#      which is the same as having no guard.
 #   5. Scope pin: a bare `yes` with NO substitution (`yes | head -n 1`,
 #      `if yes; ...`) stays allowed. Nothing is collected, so the memcg
 #      mechanism here does not apply; policing bare commands is general
@@ -394,7 +399,7 @@ run_cmd 'x=$(if (echo) then yes; fi)'
 want_finding "then after paren-close refuses"
 
 # ---------------------------------------------------------------------------
-hdr "do ends a newline-separated loop list"
+hdr "do, loop lists and for-arith preludes"
 cat > "$WORK/for-newline-do.sh" <<'EOF'
 x=$(for i in a b
 do yes
@@ -418,6 +423,45 @@ done)
 EOF
 run_file "$WORK/for-newline-allow.sh"
 want_clean "newline-separated for list with printf"
+
+run_cmd 'x=$(for i do yes; done)'
+want_finding "immediate for-i-do refuses"
+
+cat > "$WORK/for-arith-newline-do.sh" <<'EOF'
+x=$(for ((i=0;i<1;i++))
+do yes
+done)
+EOF
+run_file "$WORK/for-arith-newline-do.sh"
+want_finding "for-arith newline do refuses"
+
+run_cmd 'x=$(for ((i=0;i<1;i++)) do yes; done)'
+want_finding "for-arith space do refuses"
+
+run_cmd 'x=$(for ((i=0;i<1;i++)); do yes; done)'
+want_finding "for-arith semicolon do refuses"
+
+run_cmd 'x=$(for ((i=0;i<1;i++)) do printf "%s" "$i"; done)'
+want_clean "for-arith printf body"
+
+run_cmd 'x=$(for i in do yes; do echo $i; done)'
+want_clean "do and yes as loop-list words"
+
+run_cmd 'x=$(for i in a do yes; do echo $i; done)'
+want_clean "mid-list do word"
+
+run_cmd 'x=$(select i in do yes; do echo $i; break; done)'
+want_clean "do and yes as select-list words"
+
+run_cmd 'x=$(select yes in a; do echo; done)'
+want_clean "select loop variable named yes"
+
+cat > "$WORK/select-newline-do.sh" <<'EOF'
+x=$(select i in a
+do yes; break; done)
+EOF
+run_file "$WORK/select-newline-do.sh"
+want_finding "newline-separated select list refuses"
 
 # ---------------------------------------------------------------------------
 hdr "fail-closed pins are refused, never silently weakened"
@@ -465,6 +509,103 @@ FIX
 run_file "$WORK/heredoc-hash.sh"
 want_finding "heredoc hash hides nothing"
 
+cat > "$WORK/heredoc-glued-squote.sh" <<'FIX'
+cat <<EOF
+$(y'es')
+EOF
+FIX
+run_file "$WORK/heredoc-glued-squote.sh"
+want_finding "heredoc glued single-quote refuses"
+
+cat > "$WORK/heredoc-glued-dquote.sh" <<'FIX'
+cat <<EOF
+$(y"e"s)
+EOF
+FIX
+run_file "$WORK/heredoc-glued-dquote.sh"
+want_finding "heredoc glued double-quote refuses"
+
+cat > "$WORK/heredoc-quoted-paren.sh" <<'FIX'
+cat <<EOF
+$(echo ")"; yes)
+EOF
+FIX
+run_file "$WORK/heredoc-quoted-paren.sh"
+want_finding "heredoc quoted paren refuses"
+
+cat > "$WORK/heredoc-ansic-hex.sh" <<'FIX'
+cat <<EOF
+$($'ye\x73')
+EOF
+FIX
+run_file "$WORK/heredoc-ansic-hex.sh"
+want_finding "heredoc ANSI-C hex refuses"
+
+cat > "$WORK/heredoc-wrapped-octal.sh" <<'FIX'
+cat <<EOF
+$($'\571es')
+EOF
+FIX
+run_file "$WORK/heredoc-wrapped-octal.sh"
+want_finding "heredoc wrapped octal refuses"
+
+cat > "$WORK/heredoc-exec-glued.sh" <<'FIX'
+cat <<EOF
+$(exec y'es')
+EOF
+FIX
+run_file "$WORK/heredoc-exec-glued.sh"
+want_finding "heredoc exec-glued refuses"
+
+cat > "$WORK/heredoc-backtick-glued.sh" <<'FIX'
+cat <<EOF
+`y'es'`
+EOF
+FIX
+run_file "$WORK/heredoc-backtick-glued.sh"
+want_finding "heredoc backtick glued refuses"
+
+cat > "$WORK/heredoc-multiline-span.sh" <<'FIX'
+cat <<EOF
+$(echo begin;
+y'es')
+EOF
+FIX
+run_file "$WORK/heredoc-multiline-span.sh"
+want_finding "heredoc multi-line span refuses"
+
+cat > "$WORK/heredoc-case-glued.sh" <<'FIX'
+cat <<EOF
+$(case $A in x) y'es';; esac)
+EOF
+FIX
+run_file "$WORK/heredoc-case-glued.sh"
+want_finding "heredoc case-pattern glued refuses"
+
+cat > "$WORK/heredoc-brace-paren-glued.sh" <<'FIX'
+cat <<EOF
+$(echo ${A:-a)b}; y'es')
+EOF
+FIX
+run_file "$WORK/heredoc-brace-paren-glued.sh"
+want_finding "heredoc brace-paren glued refuses"
+
+cat > "$WORK/comment-heredoc.sh" <<'EOF'
+# note <<'ZZ'
+x=$(yes)
+ZZ
+EOF
+run_file "$WORK/comment-heredoc.sh"
+want_finding "comment mentioning quoted heredoc refuses"
+
+cat > "$WORK/trailing-comment-heredoc.sh" <<'EOF'
+echo hi # <<'EOT'
+x=$(yes)
+EOT
+EOF
+run_file "$WORK/trailing-comment-heredoc.sh"
+want_finding "trailing comment mentioning heredoc refuses"
+
 # ---------------------------------------------------------------------------
 hdr "safe fixed-output checks stay allowed"
 run_cmd 'RUNSET=$([ -n "$PAPERCLIP_RUN_ID" ] && printf '"'"'yes'"'"' || printf '"'"'no'"'"')'
@@ -510,6 +651,9 @@ want_clean "arithmetic expansion"
 run_cmd 'x=$(echo $((1+2)))'
 want_clean "echo with arithmetic argument"
 
+run_cmd 'x=$(echo $((1+2)) yes)'
+want_clean "arithmetic then literal yes argument"
+
 run_cmd 'x=$((yes + 1))'
 want_clean "yes-named variable in arithmetic"
 
@@ -543,6 +687,22 @@ EOF
 FIX
 run_file "$WORK/quoted-heredoc-apos.sh"
 want_clean "quoted-heredoc apostrophe body is literal"
+
+cat > "$WORK/partial-quote-heredoc.sh" <<'FIX'
+cat <<E'OF'
+$(yes)
+EOF
+FIX
+run_file "$WORK/partial-quote-heredoc.sh"
+want_clean "partial-quote delimiter body is literal"
+
+cat > "$WORK/backslash-heredoc.sh" <<'FIX'
+cat <<\EOF
+$(yes)
+EOF
+FIX
+run_file "$WORK/backslash-heredoc.sh"
+want_clean "backslash delimiter body is literal"
 
 cat > "$WORK/heredoc-content.sh" <<'FIX'
 echo $(cat <<EOF

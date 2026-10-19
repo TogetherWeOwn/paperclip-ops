@@ -24,7 +24,7 @@
 # so SHADOW neither blocks it nor is changed by it. The approval executor's
 # SHADOW semantics are untouched — this file shares no code path with it.
 #
-# PRIVILEGE. Installed root-owned 755 by the human host operator, who also
+# PRIVILEGE. Installed root-owned 755 by the authorized host operator, who also
 # runs the single one-shot invocation as root inside the same bounded
 # install window (see docs/runbooks/op-queue-reject.md). No new principal,
 # no new sudoers grant, no agent write path: the receipt and log inherit
@@ -98,6 +98,10 @@ PROCESSED_DIR="${OP_REJECT_PROCESSED_DIR:-/var/lib/paperclip-operator/processed}
 REJECT_LOG="${OP_REJECT_LOG:-/var/lib/paperclip-operator/rejection.log}"
 REQUIRE_ROOT_OWNERSHIP="${OP_REJECT_REQUIRE_ROOT_OWNERSHIP:-1}"
 NOW_OVERRIDE="${OP_REJECT_NOW:-}"
+# A trailing separator must not make a symlink look like its target directory.
+while [[ "$PROCESSED_DIR" != "/" && "$PROCESSED_DIR" == */ ]]; do
+  PROCESSED_DIR="${PROCESSED_DIR%/}"
+done
 
 command -v jq >/dev/null || { echo "$PROG: jq required" >&2; exit 2; }
 
@@ -139,6 +143,18 @@ check_root_owned_file() { # $1=file $2=label -> rc 0 ok
     return 1
   fi
   return 0
+}
+
+# Replay and claim names are trusted only inside a protected real directory.
+check_root_owned_dir() { # $1=directory -> rc 0 ok
+  local d="$1" uid mode
+  [[ -d "$d" && ! -L "$d" ]] || return 1
+  if [[ "$REQUIRE_ROOT_OWNERSHIP" == "1" ]]; then
+    uid="$(stat -c %u -- "$d")" || return 1
+    [[ "$uid" == "0" ]] || return 1
+  fi
+  mode="$(stat -c %a -- "$d")" || return 1
+  (( (8#$mode & 8#022) == 0 ))
 }
 
 # ---- log scrub (same scrub as the approval executor) --------------------------
@@ -241,6 +257,13 @@ PACKET_MTIME="$(date -u -d "@$(stat -c %Y -- "$PACKET_REAL")" +%Y-%m-%dT%H:%M:%S
 # ---- step 5: replay + claim (atomic; nothing writes before this) ----------------------
 RECEIPT="$PROCESSED_DIR/$PACKET_BASE.rejected.json"
 CLAIM="$PROCESSED_DIR/$PACKET_BASE.claim"
+# Reject unsafe existing state before it can masquerade as replay evidence.
+if [[ -e "$PROCESSED_DIR" || -L "$PROCESSED_DIR" ]] &&
+   ! check_root_owned_dir "$PROCESSED_DIR"; then
+  emit_result "$(result refused processed_dir_ownership "$PACKET_SHA" "" true)"
+  log_human "processed dir must be a root-owned real directory without group/other write"
+  exit 5
+fi
 if [[ -e "$RECEIPT" || -L "$RECEIPT" ]]; then
   emit_result "$(result refused replay_detected "$PACKET_SHA" "$RECEIPT" true)"
   log_human "replay: receipt already exists; refusing"
@@ -254,6 +277,18 @@ if [[ "$MODE" == "verify-only" ]]; then
 fi
 
 mkdir -- "$PROCESSED_DIR" 2>/dev/null || true
+# Creation may have failed or another writer may have created the path. Never
+# claim or publish through it until its type, ownership and mode are checked.
+if ! check_root_owned_dir "$PROCESSED_DIR"; then
+  if [[ ! -e "$PROCESSED_DIR" && ! -L "$PROCESSED_DIR" ]]; then
+    emit_result "$(result failed processed_dir_unwritable "$PACKET_SHA" "" true)"
+    log_human "processed dir unavailable"
+    exit 1
+  fi
+  emit_result "$(result refused processed_dir_ownership "$PACKET_SHA" "" true)"
+  log_human "processed dir must be a root-owned real directory without group/other write"
+  exit 5
+fi
 if ! mkdir -- "$CLAIM" 2>/dev/null; then
   # A failed claim mkdir is a busy claim ONLY if the claim exists; an
   # unwritable processed dir must read as I/O failure, not "retry later".

@@ -452,6 +452,148 @@ else
 fi
 
 # ===========================================================================
+section "4c. processed-directory trust before replay and claim"
+if python3 - "$TOOL" "$TMP" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+source = str(Path(sys.argv[1]).resolve())
+root = Path(sys.argv[2]) / "directory-trust"
+queue, bin_dir = root / "queue", root / "bin"
+for directory in (queue, bin_dir):
+    directory.mkdir(parents=True)
+packet = queue / "directory-trust.json"
+packet.write_bytes(b'{"opaque":"never execute"}\n')
+packet.chmod(0o644)
+log = root / "audit.log"
+env = os.environ | {
+    "OP_REJECT_QUEUE_DIR": str(queue), "OP_REJECT_LOG": str(log),
+    "FIXTURE_BIN": str(bin_dir), "FIXTURE_SOURCE": source,
+    "REAL_MKDIR": shutil.which("mkdir"), "REAL_STAT": shutil.which("stat"),
+}
+command = ["bash", "-c", 'umask 022; export PATH="$FIXTURE_BIN:$PATH"; source "$FIXTURE_SOURCE" "$@"', "fixture"]
+before_packet = hashlib.sha256(packet.read_bytes()).hexdigest(), packet.stat().st_mtime_ns
+
+def run(processed, mode="reject", extra=None):
+    result = subprocess.run(command + [mode, "--packet", str(packet), "--reason", "schema-probe"],
+                            env=env | {"OP_REJECT_PROCESSED_DIR": str(processed)} | (extra or {}),
+                            capture_output=True, text=True, timeout=10)
+    return result.returncode, json.loads(result.stdout)
+
+def refused(processed, extra=None):
+    for mode in ("verify-only", "reject"):
+        rc, result = run(processed, mode, extra)
+        assert (rc, result["outcome"], result["reason_code"]) == (5, "refused", "processed_dir_ownership"), (processed, mode, rc, result)
+    assert not log.exists(), "unsafe directory wrote an audit event"
+    assert (hashlib.sha256(packet.read_bytes()).hexdigest(), packet.stat().st_mtime_ns) == before_packet
+
+for name, permissions in (("group-writable", 0o775), ("other-writable", 0o757)):
+    processed = root / name
+    processed.mkdir()
+    processed.chmod(permissions)
+    refused(processed)
+    assert not list(processed.iterdir())
+print("  writable processed directories refuse before verify-only or claim")
+
+for state in ("receipt", "claim"):
+    processed = root / ("forged-" + state)
+    processed.mkdir()
+    processed.chmod(0o777)
+    forged = processed / (packet.name + (".rejected.json" if state == "receipt" else ".claim"))
+    if state == "receipt":
+        forged.write_bytes(b'{"forged":true}\n')
+    else:
+        forged.mkdir()
+    refused(processed)
+    assert list(processed.iterdir()) == [forged]
+    assert forged.read_bytes() == b'{"forged":true}\n' if state == "receipt" else not list(forged.iterdir())
+print("  forged receipt/claim in unsafe directory never counts as replay or busy state")
+
+real_dir = root / "symlink-target"
+real_dir.mkdir()
+linked = root / "linked"
+linked.symlink_to(real_dir, target_is_directory=True)
+refused(linked)
+refused(str(linked) + "///")
+assert not list(real_dir.iterdir())
+dangling = root / "dangling"
+dangling.symlink_to(root / "missing-target", target_is_directory=True)
+refused(dangling)
+refused(str(dangling) + "///")
+not_dir = root / "regular-file"
+not_dir.write_bytes(b"preserve me\n")
+refused(not_dir)
+assert not_dir.read_bytes() == b"preserve me\n"
+print("  symlink, dangling symlink and non-directory refuse without output mutation")
+
+# Simulate only uid metadata: the packet is trusted, but the directory is not.
+# This covers the production ownership branch without root or chown privileges.
+processed = root / "nonroot-owner"
+processed.mkdir()
+stat_shim = bin_dir / "stat"
+stat_shim.write_text('''#!/usr/bin/env python3
+import os, subprocess, sys
+if sys.argv[1:3] == ["-c", "%u"]:
+    print("1000" if sys.argv[-1] == os.environ["OP_REJECT_PROCESSED_DIR"] else "0")
+else:
+    sys.exit(subprocess.run([os.environ["REAL_STAT"], *sys.argv[1:]]).returncode)
+''')
+stat_shim.chmod(0o755)
+try:
+    refused(processed, {"OP_REJECT_REQUIRE_ROOT_OWNERSHIP": "1"})
+    assert not list(processed.iterdir())
+finally:
+    stat_shim.unlink()
+print("  non-root processed owner refuses under production ownership rules (uid fixture)")
+
+# The directory appears after the early existence check. Revalidate mkdir's
+# result, including a substituted symlink, before any claim is attempted.
+mkdir_shim = bin_dir / "mkdir"
+mkdir_shim.write_text('''#!/usr/bin/env python3
+import os, pathlib, subprocess, sys
+if sys.argv[-1] == os.environ["OP_REJECT_PROCESSED_DIR"]:
+    path = pathlib.Path(sys.argv[-1])
+    if os.environ["CREATE_UNSAFE"] == "symlink":
+        path.symlink_to(os.environ["FIXTURE_TARGET"], target_is_directory=True)
+    else:
+        path.mkdir()
+        path.chmod(0o777)
+    sys.exit(0)
+sys.exit(subprocess.run([os.environ["REAL_MKDIR"], *sys.argv[1:]]).returncode)
+''')
+mkdir_shim.chmod(0o755)
+try:
+    for kind in ("writable", "symlink"):
+        processed = root / ("created-" + kind)
+        rc, result = run(processed, extra={"CREATE_UNSAFE": kind, "FIXTURE_TARGET": str(real_dir)})
+        assert (rc, result["reason_code"]) == (5, "processed_dir_ownership"), (rc, result)
+        assert not list(processed.iterdir()) and not log.exists()
+finally:
+    mkdir_shim.unlink()
+print("  creation-time writable directory and symlink are rechecked before claim")
+
+processed = root / "new-protected"
+rc, result = run(processed, "verify-only")
+assert (rc, result["reason_code"]) == (0, "would_reject")
+assert not processed.exists() and not log.exists()
+rc, result = run(processed)
+assert (rc, result["outcome"]) == (0, "rejected")
+assert not (processed.stat().st_mode & 0o022) and not processed.is_symlink()
+assert (hashlib.sha256(packet.read_bytes()).hexdigest(), packet.stat().st_mtime_ns) == before_packet
+print("  absent directory stays absent on verify-only; protected creation still succeeds")
+PY
+then
+  ok "processed-directory trust, forged-state refusals, creation recheck and clean creation"
+else
+  bad "processed-directory trust regressions"
+fi
+
+# ===========================================================================
 section "5. filesystem boundary"
 OUTSIDE="$TMP/outside.json"; printf '{"outside":true}' > "$OUTSIDE"
 run_tool reject --packet "$OUTSIDE" --reason schema-probe

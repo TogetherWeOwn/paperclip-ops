@@ -21,15 +21,15 @@ outside this verb's contract and needs its own review.
 | File | Role |
 | --- | --- |
 | `op_queue_reject.sh` | The verb. Installed root-owned 755, run once as root. |
-| `test_op_queue_reject.sh` | Offline refusal/regression suite (62 cases). |
+| `test_op_queue_reject.sh` | Offline refusal/regression suite (63 cases). |
 | `docs/runbooks/op-queue-reject.md` | This file. |
 
 Hashes below pin the reviewed revision. The approving reviewer re-checks
 them at the exact head that merges; a re-push re-pins.
 
 ```
-595388d1e8c77a08ceec1816b1dd1010e2f95a3c136cdcb35b029271962ee06e  op_queue_reject.sh
-cafb34346bed852abee809f44463542e2b951c14a4942727a0647fd4966d3342  test_op_queue_reject.sh
+c2aa3672340316679dee7dcfe6b90f8ba71c6825c4515e197ee2d56e5877d20b  op_queue_reject.sh
+92140d6b748e44958eee8dcad05cd8f38cb60107f5fc789ce115ed14b70049ff  test_op_queue_reject.sh
 ```
 
 Trust lineage: the queue-dir jail (`within_dir_strict`) and the root-owned
@@ -55,10 +55,24 @@ hardening over the executor: symlinks refuse even to inside targets
 ## Privilege and write-path design
 
 No new principal and no sudoers change. The verb is installed root-owned
-755 by the human host operator, who also runs the single one-shot
+755 by the authorized host operator, who also runs the single one-shot
 invocation as root inside the same bounded install window below. The
 receipt and the log line inherit root ownership from the root invoker;
 no agent account holds a write path to the processed dir or the log.
+The helper validates the processed directory before trusting existing replay
+or claim state, then again after directory creation: it must be a real,
+non-symlink directory, root-owned under production rules, without group/other
+write bits. Unsafe state refuses with exit 5 / `processed_dir_ownership`,
+not replay or busy. `verify-only` also refuses an unsafe existing directory,
+but does not create an absent one.
+
+Output ancestors and the audit log remain host provisioning preconditions:
+use protected root-owned ancestor directories and a protected regular audit
+log (or an absent log in a protected directory), never a symlink. The helper
+does not validate every ancestor or the audit log's custody. It does not
+repair permissions. Use a restrictive umask (for example `077`) during the
+bounded invocation; a newly created group/other-writable processed directory
+is refused before a claim or receipt can be written.
 
 Re-verification is read-only through existing reads: the receipt under
 `processed/` plus `sha256sum` over the preserved packet re-establishes
@@ -124,11 +138,11 @@ or restarts a service.
 
 ```bash
 bash -n op_queue_reject.sh && bash -n test_op_queue_reject.sh
-./test_op_queue_reject.sh          # expect: 62 passed, 0 failed
+./test_op_queue_reject.sh          # expect: 63 passed, 0 failed
 sha256sum op_queue_reject.sh test_op_queue_reject.sh
 ```
 
-Expected: exit 0, `62 passed, 0 failed`, and hashes equal to the manifest
+Expected: exit 0, `63 passed, 0 failed`, and hashes equal to the manifest
 above. On the host (operator only, read-only after install):
 
 ```bash

@@ -23,13 +23,17 @@ verdict stands. Mere inactivity is never healthy.
    no active routing incident). A retirement marker must never be applied
    to explain away an unexamined outage.
 3. The retirement approval is recorded: approver, approval instant, and a
-   receipt reference (decision record or approval id). Those three values
-   go into the marker file verbatim.
+   receipt reference (decision record or approval id). Put `approved_by`
+   and `approved_at` in the marker. The `evidence` field is optional but
+   recommended; copy it verbatim when supplied.
 
 ## Marker file
 
 Create the JSON file next to the state file (same directory as the log),
-readable by both installs (the user timer and the root cron pusher):
+readable by both installs (the user timer and the root cron pusher). Only
+the authorized retirement operator may create, replace, or delete the marker
+or write to its parent directory. The guard validates marker contents only;
+`approved_by` is not an approval-authentication check:
 
 ```json
 {

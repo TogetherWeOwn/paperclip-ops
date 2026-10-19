@@ -273,7 +273,7 @@ else ok "4f. wire text carries verdict only (no raw model rows)"; fi
 
 # --- retirement fixtures: explicit evidence converts stale to retired -------
 cat > "$WORK/retired.json" <<'JSON'
-{"retired": true, "producer": "fleet-quota-balancer", "successor": "native-routing",
+{"retired": true, "producer": "fleet-quota-balancer", "successor": "retirement-successor-sentinel",
  "approved_by": "retirement-approver-sentinel", "approved_at": "2026-10-04T17:40:00+00:00"}
 JSON
 echo 'not json{' > "$WORK/retired-bad.json"
@@ -321,20 +321,25 @@ else bad "4j. fresh with marker stays fresh" "rc=$rc path=$push_path text=$push_
 unset BALANCER_SILENCE_RETIREMENT || true
 # retirement detail never reaches the wire: the approver/successor strings
 # stay in the journal. Structural non-vacuity as in 4f: the marker MUST
-# carry the sentinel, the decoded history MUST contain a retired push, every
-# record MUST carry a body — only then does absence mean no leak. (The
-# history is URL-encoded on the wire, so decode before asserting either way:
-# an encoded leak must fail exactly like a literal one.)
+# carry both sentinels, the decoded history MUST contain a retired push —
+# only then does absence mean no leak. (The history is URL-encoded on the
+# wire, so decode before asserting either way: an encoded leak must fail
+# exactly like a literal one. The guard formats the journal detail unquoted
+# as successor=<value>, so the check rejects the exact sentinel value and
+# the prefix, not a quoted serialization the guard never emits.)
 python3 -c 'import sys,urllib.parse; print(urllib.parse.unquote(open(sys.argv[1]).read()))' \
   "$PUSH_FILE" > "$WORK/pushes.decoded"
-if ! grep -q "retirement-approver-sentinel" "$WORK/retired.json"; then
-  bad "4k. retirement non-disclosure" "marker lacks sentinel — absence would be vacuous"
+if ! grep -q "retirement-approver-sentinel" "$WORK/retired.json" \
+  || ! grep -q "retirement-successor-sentinel" "$WORK/retired.json"; then
+  bad "4k. retirement non-disclosure" "marker lacks a sentinel — absence would be vacuous"
 elif ! grep -q "balancer retired:" "$WORK/pushes.decoded"; then
   bad "4k. retirement non-disclosure" "history lacks a retired push — assertion sees nothing"
 elif grep -q "retirement-approver-sentinel" "$WORK/pushes.decoded"; then
   bad "4k. retirement non-disclosure" "approver string reached the push record"
-elif grep -q '"successor"' "$WORK/pushes.decoded"; then
-  bad "4k. retirement non-disclosure" "marker field reached the push record"
+elif grep -q "retirement-successor-sentinel" "$WORK/pushes.decoded"; then
+  bad "4k. retirement non-disclosure" "successor string reached the push record"
+elif grep -q "successor=" "$WORK/pushes.decoded"; then
+  bad "4k. retirement non-disclosure" "marker detail prefix reached the push record"
 else ok "4k. retirement detail stays local (verdict line only on the wire)"; fi
 
 # === 5. DELIVERY FAILURE + NON-DISCLOSURE =====================================

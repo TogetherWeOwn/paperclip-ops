@@ -87,7 +87,7 @@ def load_rows(path):
         try:
             entry = json.loads(line)
             moment = parse_instant(entry.get("at"))
-        except (ValueError, AttributeError, TypeError):
+        except (ValueError, AttributeError, TypeError, RecursionError):
             skipped += 1
             continue
         model = entry.get("model")
@@ -110,7 +110,7 @@ def read_state(path):
             state = json.load(handle)
     except FileNotFoundError:
         return "state: missing (context only; the log is the signal)"
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         return f"state: unreadable ({type(exc).__name__}; context only)"
     if not isinstance(state, dict):
         return "state: unreadable (not an object; context only)"
@@ -137,7 +137,7 @@ def read_retirement(path, producer, now):
             marker = json.load(handle)
     except FileNotFoundError:
         return False, "retirement file missing"
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         return False, f"retirement file unreadable ({type(exc).__name__})"
     if not isinstance(marker, dict):
         return False, "retirement file is not an object"

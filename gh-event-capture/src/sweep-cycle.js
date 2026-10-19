@@ -70,7 +70,7 @@ function summary(sweep, now) {
 export async function runSweepCycle({ github, consumer, state, allowedRepositories,
   maxItems = 50, maxAttempts = 5, reviewIntervalMs = 600000,
   beforeItem = () => {}, isStopped = () => false, now = () => Date.now(), save,
-  afterRepository = null, beforeRepository = async () => {}, closeoutReview = null }) {
+  afterRepository = null, beforeRepository = async () => {}, closeoutReview = null, beforeReconcile = null }) {
   const repos = repositories(allowedRepositories)
   requireValue(afterRepository === null || repos.includes(afterRepository), 'invalid repository scheduling cursor')
   const first = afterRepository === null ? 0 : (repos.indexOf(afterRepository) + 1) % repos.length
@@ -84,6 +84,8 @@ export async function runSweepCycle({ github, consumer, state, allowedRepositori
   // the review phase is exactly what it was: list, reconcile, finish.
   requireValue(closeoutReview === null || (closeoutReview && typeof closeoutReview.runReview === 'function'),
   'sweep cycle closeout review hook is invalid')
+  requireValue(beforeReconcile === null || typeof beforeReconcile === 'function',
+    'sweep cycle per-reference hook is invalid')
   const failures = []
   let processed = 0
   const poisonedNow = []
@@ -112,6 +114,12 @@ export async function runSweepCycle({ github, consumer, state, allowedRepositori
   async function reconcile(repository, sweep, phase, number) {
     // A whole-pass stop must escape, not become a retriable per-PR failure.
     await beforeItem()
+    // The per-reference hook precedes mapping for BOTH new and resumed drains.
+    // It owns its errors; keep them out of primary retry/poison accounting.
+    if (beforeReconcile !== null) {
+      await beforeReconcile({ repository, number })
+      await beforeItem()
+    }
     try {
       await consumer.backfill([{ repository, number }], { maxItems: limits.maxItems, beforeItem, isStopped })
     } catch {

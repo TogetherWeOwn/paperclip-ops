@@ -482,6 +482,23 @@ class RegistryGateTest(unittest.TestCase):
               "writes": ["fs:worktree-dep-caches"]}], "e")
         self.assertFalse(apply)
 
+    def test_malformed_writes_is_dry_run(self):
+        # A present-but-non-list writes shape must refuse apply, never
+        # crash (int) or authorize through substring/key matching
+        # (str/dict). A missing writes field declares nothing.
+        for bad_writes in (1, REGISTRY_WRITE_TARGET,
+                           "xx %s yy" % REGISTRY_WRITE_TARGET,
+                           {REGISTRY_WRITE_TARGET: True}):
+            with self.subTest(bad_writes=bad_writes):
+                apply, why = registry_apply_decision(
+                    [{"id": "e", "state": "active", "role": "writer",
+                      "writes": bad_writes}], "e")
+                self.assertFalse(apply, why)
+                self.assertEqual(why, "entry writes is not a list")
+        apply, _ = registry_apply_decision(
+            [{"id": "e", "state": "active", "role": "writer"}], "e")
+        self.assertFalse(apply)
+
     def test_missing_and_duplicate_are_dry_run(self):
         apply, _ = registry_apply_decision([], "e")
         self.assertFalse(apply)

@@ -11,6 +11,11 @@
 #   * a threshold softened from `>` to `>=` (freshness and gap alike)
 #   * a stale verdict reported as fresh (the 193-min silence scores green)
 #   * an unmeasurable log falling through instead of refusing
+#   * a retired verdict still alarming, or a bad retirement file excusing
+#     the silence (flag, producer, approval-date or branch inverted)
+#   * a retirement validation boundary softened (approval-at-now rejected,
+#     a required field dropped, blank values or non-boolean retired:true
+#     accepted)
 #
 # A mutation that does not change the file is a FAILED gate, not a passing
 # one: a sed that silently matched nothing would otherwise score as a kill.
@@ -119,6 +124,42 @@ mutate "stale exit code flattened to 0 (callers never see the alarm)" \
 mutate "unmeasurable refusal unhandled (missing log ends in a traceback)" \
   '    except Unmeasurable as exc:' \
   '    except ImpossibleError as exc:'
+
+mutate "retired verdict still exits 1 (approved stillness pages as an outage)" \
+  '                return 0  # retired-approved' \
+  '                return 1  # retired-approved'
+
+mutate "retired flag inverted (retired:false excuses the silence)" \
+  '    if marker.get("retired") is not True:' \
+  '    if marker.get("retired") is True:'
+
+mutate "producer check inverted (another writer's marker excuses the silence)" \
+  '    if marker["producer"] != producer:' \
+  '    if marker["producer"] == producer:'
+
+mutate "future approval accepted (an approval from tomorrow excuses today)" \
+  '    if approved_at > now:' \
+  '    if approved_at < now:'
+
+mutate "retirement branch inverted (bad files retire, valid files alarm)" \
+  '            if ok:' \
+  '            if not ok:'
+
+mutate "approval-at-now rejected (the boundary instant no longer retires)" \
+  '    if approved_at > now:' \
+  '    if approved_at >= now:'
+
+mutate "required retirement field dropped (a missing successor crashes)" \
+  'REQUIRED_RETIREMENT_FIELDS = ("producer", "successor", "approved_by", "approved_at")' \
+  'REQUIRED_RETIREMENT_FIELDS = ("producer", "approved_by", "approved_at")'
+
+mutate "blank retirement values accepted (whitespace retires the silence)" \
+  '        if not isinstance(value, str) or not value.strip():' \
+  '        if not isinstance(value, str) or not value:'
+
+mutate "non-boolean retired accepted (retired:1 excuses the silence)" \
+  '    if marker.get("retired") is not True:' \
+  '    if marker.get("retired") != True:'
 
 printf '\npassed %d, failed %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -604,7 +604,7 @@ jobs:
       # fails with `node: command not found` (case_2ef967e7; PR #667 job
       # 111515472918: 73 passed / 21 failed). Node 24 matches the sibling jobs
       # and the runtime the instance runs plugins on.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
       # case_23300ea2: hardened two-isolated runners (ci-node7b1ff338-iso) preinstall the
@@ -946,7 +946,7 @@ jobs:
       # '20' here skewed local (24) vs CI and produced "passes locally, fails
       # in CI" on node --test semantics. Change .nvmrc and this line together.
       #
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
 
@@ -1230,6 +1230,19 @@ jobs:
       # sanitized receipt only. Hermetic fixture suite (no network/creds).
       - name: bounded shadow-reader suite
         run: ./test_case_a38f4d21_shadow_reader_bounded.sh
+
+      # Deferred execution-image packet, ported with a resolved non-root
+      # startup contract (final USER 1000:1000; the inherited entrypoint
+      # execs the application directly without root-only remap or volume
+      # repair). Hermetic source-only checks: manifest consistency, the
+      # fail-closed negative controls, and the Stage-B attestation-policy
+      # suite. No network, no credentials, no image build.
+      - name: execution-image source-only carrier suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: |
+          python3 -B execution-image/test_manifest.py
+          python3 -B execution-image/validate.py execution-image/manifest.json
+          python3 -B execution-image/test_verify_result_policy.py
 
       # case_56fff4c6. Monitoring of the monitor (parent case_66436e78 item 7):
       # off-host Gatus heartbeat probe + staging-only round-trip harness.
@@ -5922,7 +5935,7 @@ jobs:
           clean: true
       - name: Restore toolkit-vendored files
         run: bash scripts/sync-toolkit.sh
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
       - name: Run private mutation gates

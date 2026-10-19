@@ -31,6 +31,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 command -v jq >/dev/null || { echo "ERROR: jq required" >&2; exit 1; }
 command -v timeout >/dev/null || { echo "ERROR: timeout required" >&2; exit 1; }
+command -v python3 >/dev/null || { echo "ERROR: python3 required" >&2; exit 1; }
 
 TOOL="${TOOL_UNDER_TEST:-$HERE/op_queue_reject.sh}"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -86,32 +87,44 @@ if [ -e "$LOG" ]; then
 else
   ok "verify-only writes no log line"
 fi
-[[ "$(jq -r '.packet_sha256' <<<"$OUT")" == "sha256:$SHA_HAPPY" ]] \
-  && ok "verify-only binds the payload hash" \
-  || bad "verify-only hash mismatch" "$OUT"
+if [[ "$(jq -r '.packet_sha256' <<<"$OUT")" == "sha256:$SHA_HAPPY" ]]; then
+  ok "verify-only binds the payload hash"
+else
+  bad "verify-only hash mismatch" "$OUT"
+fi
 
 BEFORE_SHA="$(sha256sum -- "$Q/req-20261019T120000Z-000001.json" | cut -d' ' -f1)"
 BEFORE_MTIME="$(stat -c %Y -- "$Q/req-20261019T120000Z-000001.json")"
 run_tool reject --packet "$Q/req-20261019T120000Z-000001.json" --reason schema-probe
 expect "reject writes a terminal receipt" 0 rejected ok
-jq -e '.outcome=="rejected" and .reason_code=="schema-probe"
+if jq -e '.outcome=="rejected" and .reason_code=="schema-probe"
        and .payload_preserved==true and .executed==false
        and .verb=="op-queue-reject" and .v==1' \
-    -- "$P/req-20261019T120000Z-000001.json.rejected.json" >/dev/null \
-  && ok "receipt records rejection + preserved + never-executed" \
-  || bad "receipt missing or wrong" "$(cat "$P/req-20261019T120000Z-000001.json.rejected.json" 2>/dev/null)"
-[[ "$(jq -r '.packet_sha256' -- "$P/req-20261019T120000Z-000001.json.rejected.json")" == "sha256:$SHA_HAPPY" ]] \
-  && ok "receipt binds the exact payload bytes" \
-  || bad "receipt hash does not bind the packet"
-[ -f "$LOG" ] && grep -q 'req-20261019T120000Z-000001.json' "$LOG" \
-  && ok "rejection log records the run" \
-  || bad "rejection log missing the run"
-[[ "$(sha256sum -- "$Q/req-20261019T120000Z-000001.json" | cut -d' ' -f1)" == "$BEFORE_SHA" ]] \
-  && ok "packet bytes preserved through reject" \
-  || bad "packet bytes CHANGED by reject"
-[[ "$(stat -c %Y -- "$Q/req-20261019T120000Z-000001.json")" == "$BEFORE_MTIME" ]] \
-  && ok "packet mtime untouched by reject" \
-  || bad "packet mtime changed by reject"
+    -- "$P/req-20261019T120000Z-000001.json.rejected.json" >/dev/null; then
+  ok "receipt records rejection + preserved + never-executed"
+else
+  bad "receipt missing or wrong" "$(cat "$P/req-20261019T120000Z-000001.json.rejected.json" 2>/dev/null)"
+fi
+if [[ "$(jq -r '.packet_sha256' -- "$P/req-20261019T120000Z-000001.json.rejected.json")" == "sha256:$SHA_HAPPY" ]]; then
+  ok "receipt binds the exact payload bytes"
+else
+  bad "receipt hash does not bind the packet"
+fi
+if [ -f "$LOG" ] && grep -q 'req-20261019T120000Z-000001.json' "$LOG"; then
+  ok "rejection log records the run"
+else
+  bad "rejection log missing the run"
+fi
+if [[ "$(sha256sum -- "$Q/req-20261019T120000Z-000001.json" | cut -d' ' -f1)" == "$BEFORE_SHA" ]]; then
+  ok "packet bytes preserved through reject"
+else
+  bad "packet bytes CHANGED by reject"
+fi
+if [[ "$(stat -c %Y -- "$Q/req-20261019T120000Z-000001.json")" == "$BEFORE_MTIME" ]]; then
+  ok "packet mtime untouched by reject"
+else
+  bad "packet mtime changed by reject"
+fi
 
 section "1b. every enum reason is accepted"
 for reason in schema-probe unknown-packet stale-packet; do
@@ -219,12 +232,16 @@ RECEIPT_SHA_BEFORE="$(sha256sum -- "$P/req-20261019T120000Z-000001.json.rejected
 LOG_LINES_BEFORE="$(wc -l < "$LOG")"
 run_tool reject --packet "$Q/req-20261019T120000Z-000001.json" --reason stale-packet
 expect "second reject is a replay (even with a new reason)" 6 refused replay_detected
-[[ "$(sha256sum -- "$P/req-20261019T120000Z-000001.json.rejected.json" | cut -d' ' -f1)" == "$RECEIPT_SHA_BEFORE" ]] \
-  && ok "replay leaves the receipt bytes untouched" \
-  || bad "replay MODIFIED the receipt"
-[[ "$(wc -l < "$LOG")" == "$LOG_LINES_BEFORE" ]] \
-  && ok "replay appends no log line" \
-  || bad "replay appended a log line"
+if [[ "$(sha256sum -- "$P/req-20261019T120000Z-000001.json.rejected.json" | cut -d' ' -f1)" == "$RECEIPT_SHA_BEFORE" ]]; then
+  ok "replay leaves the receipt bytes untouched"
+else
+  bad "replay MODIFIED the receipt"
+fi
+if [[ "$(wc -l < "$LOG")" == "$LOG_LINES_BEFORE" ]]; then
+  ok "replay appends no log line"
+else
+  bad "replay appended a log line"
+fi
 
 mk_packet "req-busy-000002.json" '{"probe":true}' >/dev/null
 mkdir -p "$P/req-busy-000002.json.claim"
@@ -243,6 +260,195 @@ if [ -e "$TMP/no-such-parent" ]; then
   bad "I/O failure must not create parents"
 else
   ok "I/O failure creates nothing"
+fi
+
+# ===========================================================================
+section "4b. delayed claims and receipt I/O faults"
+# Keep the harness initialization intact; inject fixture shims only AFTER its
+# BASH_ENV has run. Python bounds every wait and inspects actual bytes/JSON.
+if python3 - "$TOOL" "$TMP" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+
+source = str(Path(sys.argv[1]).resolve())
+root = Path(sys.argv[2]) / "faults"
+queue, processed, bin_dir = (root / name for name in ("queue", "processed", "bin"))
+for directory in (queue, processed, bin_dir):
+    directory.mkdir(parents=True, exist_ok=True)
+log = root / "audit.log"
+env = os.environ | {
+    "OP_REJECT_QUEUE_DIR": str(queue), "OP_REJECT_PROCESSED_DIR": str(processed),
+    "OP_REJECT_LOG": str(log), "FIXTURE_BIN": str(bin_dir),
+    "FIXTURE_SOURCE": source, "FIXTURE_ROOT": str(root),
+    "REAL_MKDIR": shutil.which("mkdir"), "REAL_LN": shutil.which("ln"),
+}
+command = ["bash", "-c", 'export PATH="$FIXTURE_BIN:$PATH"; source "$FIXTURE_SOURCE" "$@"', "fixture"]
+
+def packet(name):
+    path = queue / (name + ".json")
+    path.write_bytes(b'{"opaque":"$(touch never-execute)"}\n')
+    path.chmod(0o644)
+    return path
+
+def receipt(path):
+    return processed / (path.name + ".rejected.json")
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def run(path, reason="schema-probe", extra=None):
+    result = subprocess.run(command + ["reject", "--packet", str(path), "--reason", reason],
+                            env=env | (extra or {}), capture_output=True, text=True, timeout=10)
+    return result.returncode, json.loads(result.stdout)
+
+def shim(name, body):
+    path = bin_dir / name
+    path.write_text(body)
+    path.chmod(0o755)
+    return path
+
+def log_lines():
+    return log.read_text().splitlines() if log.exists() else []
+
+def no_partial(path):
+    assert not receipt(path).exists(), "invalid terminal receipt published"
+    assert not (processed / (path.name + ".claim")).exists(), "failed attempt stranded its claim"
+
+# B passes the early receipt test, then pauses just before acquiring its claim.
+# A commits and releases the claim before B proceeds. No sleeps order the race.
+mkdir_shim = shim("mkdir", '''#!/usr/bin/env python3
+import os, pathlib, subprocess, sys, time
+if os.environ.get("DELAY_CLAIM") == "1" and sys.argv[-1].endswith(".claim"):
+    root = pathlib.Path(os.environ["FIXTURE_ROOT"])
+    (root / "paused").touch()
+    deadline = time.monotonic() + 8
+    while not (root / "release").exists():
+        if time.monotonic() >= deadline:
+            sys.exit(90)
+        time.sleep(0.01)
+sys.exit(subprocess.run([os.environ["REAL_MKDIR"], *sys.argv[1:]]).returncode)
+''')
+path = packet("delayed")
+packet_before = (sha(path), path.stat().st_mtime_ns)
+delayed = subprocess.Popen(command + ["reject", "--packet", str(path), "--reason", "stale-packet"],
+                           env=env | {"DELAY_CLAIM": "1"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+try:
+    deadline = time.monotonic() + 8
+    while not (root / "paused").exists():
+        assert delayed.poll() is None and time.monotonic() < deadline, "claim barrier not reached"
+        time.sleep(0.01)
+    rc, result = run(path)
+    assert rc == 0 and result["outcome"] == "rejected"
+    original_receipt = sha(receipt(path))
+    original_log = log.read_bytes()
+    (root / "release").touch()
+    stdout, stderr = delayed.communicate(timeout=10)
+    assert delayed.returncode == 6 and json.loads(stdout)["reason_code"] == "replay_detected", (stdout, stderr)
+    assert sha(receipt(path)) == original_receipt
+    assert json.loads(receipt(path).read_text())["reason_code"] == "schema-probe"
+    assert log.read_bytes() == original_log
+    assert (sha(path), path.stat().st_mtime_ns) == packet_before
+finally:
+    if delayed.poll() is None:
+        delayed.kill()
+        delayed.communicate()
+    mkdir_shim.unlink()
+print("  delayed contender: one success, replay refusal, receipt/log/packet unchanged")
+
+path = packet("jsonl")
+assert run(path)[0] == 0
+lines = log_lines()
+assert len(lines) == 2 and all(json.loads(line)["outcome"] == "rejected" for line in lines)
+print("  JSONL: exactly two successes, two independently valid physical lines")
+
+# Failed scrub and corrupt-but-successful scrub must both fail closed.
+for name, body in (("scrub-failure", "#!/bin/sh\nexit 1\n"),
+                   ("invalid-scrub", "#!/bin/sh\nprintf 'not-json'\n"),
+                   ("empty-scrub", "#!/bin/sh\nexit 0\n")):
+    path = packet(name)
+    before = sha(path), log.read_bytes()
+    sed_shim = shim("sed", body)
+    try:
+        rc, result = run(path)
+        assert rc == 1 and result["reason_code"] == "receipt_unwritten", (rc, result)
+        no_partial(path)
+        assert (sha(path), log.read_bytes()) == before
+    finally:
+        sed_shim.unlink()
+    assert run(path)[0] == 0, "failed attempt prevents clean retry"
+print("  scrub faults: nonzero, invalid JSON, and empty output publish nothing; clean retry succeeds")
+
+# Bash printf is a builtin. Fault only its receipt-temp write, leaving machine
+# stdout intact. Preserve the original BASH_ENV rather than replacing its policy.
+fault_env = root / "write-fault-env.sh"
+fault_env.write_text('''if [[ -n "${ORIGINAL_BASH_ENV:-}" ]]; then source "$ORIGINAL_BASH_ENV"; fi
+printf() {
+  if [[ "$(readlink /proc/$$/fd/1)" == */receipt.tmp ]]; then return 1; fi
+  builtin printf "$@"
+}
+''')
+path = packet("write-failure")
+before_log = log.read_bytes()
+rc, result = run(path, extra={"BASH_ENV": str(fault_env), "ORIGINAL_BASH_ENV": env.get("BASH_ENV", "")})
+assert rc == 1 and result["reason_code"] == "receipt_unwritten", (rc, result)
+no_partial(path)
+assert log.read_bytes() == before_log
+assert run(path)[0] == 0
+print("  receipt write failure: no terminal record, no stranded claim, clean retry succeeds")
+
+# Publication fails after the temp file exists; cleanup must remove only that
+# owned temporary, never the packet or a committed terminal record.
+path = packet("publish-failure")
+ln_shim = shim("ln", "#!/bin/sh\nexit 1\n")
+try:
+    rc, result = run(path)
+    assert rc == 1 and result["reason_code"] == "receipt_unwritten", (rc, result)
+    no_partial(path)
+finally:
+    ln_shim.unlink()
+assert run(path)[0] == 0
+print("  publication failure: temporary and claim cleaned; clean retry succeeds")
+
+# A receipt that appears at publication time is never clobbered, even if a
+# writer outside the claim protocol creates it. The existing bytes win.
+path = packet("publication-collision")
+ln_shim = shim("ln", '''#!/usr/bin/env python3
+import os, pathlib, subprocess, sys
+pathlib.Path(sys.argv[-1]).write_bytes(b'{"existing":"terminal"}\\n')
+sys.exit(subprocess.run([os.environ["REAL_LN"], *sys.argv[1:]]).returncode)
+''')
+before_log = log.read_bytes()
+try:
+    rc, result = run(path)
+    assert rc == 6 and result["reason_code"] == "replay_detected", (rc, result)
+    assert receipt(path).read_bytes() == b'{"existing":"terminal"}\n'
+    assert log.read_bytes() == before_log
+    assert not (processed / (path.name + ".claim")).exists()
+finally:
+    ln_shim.unlink()
+print("  atomic publication collision: existing receipt preserved without second audit event")
+
+path = packet("log-failure")
+rc, result = run(path, extra={"OP_REJECT_LOG": str(root)})
+assert rc == 1 and result["reason_code"] == "log_unwritten", (rc, result)
+assert result["receipt"] == str(receipt(path))
+assert json.loads(receipt(path).read_text())["outcome"] == "rejected"
+terminal_sha = sha(receipt(path))
+rc, result = run(path)
+assert rc == 6 and result["reason_code"] == "replay_detected"
+assert sha(receipt(path)) == terminal_sha
+print("  log failure: I/O status reports committed receipt, which remains terminal on replay")
+PY
+then
+  ok "adversarial receipt preservation, fault cleanup, JSONL, and log-failure contracts"
+else
+  bad "adversarial receipt regressions"
 fi
 
 # ===========================================================================
@@ -301,7 +507,17 @@ structural "no exec builtin" '(^|[;&|])[[:space:]]*exec[[:space:]]'
 structural "no sourced scripts" '(^|[;&|])[[:space:]]*(source[[:space:]]|\.[[:space:]]+/)'
 structural "no timeout wrapper (nothing runs)" '\btimeout\b'
 structural "no permission mutation" '\b(chmod|chown|chgrp)\b'
-structural "no deletion" '\b(rm|unlink|shred)\b'
+# Only the acquired claim's fixed receipt.tmp may be removed. The payload and
+# terminal receipt still have no deletion path; pin the sole exception exactly.
+DELETIONS="$(grep -E '\b(rm|unlink|shred)\b' <<<"$CODE" || true)"
+# These are literal source patterns, not shell expansions.
+# shellcheck disable=SC2016
+if [[ "$DELETIONS" == '  rm -f -- "$RECEIPT_TMP" 2>/dev/null || true' ]] \
+   && grep -Fxq 'RECEIPT_TMP="$CLAIM/receipt.tmp"' <<<"$CODE"; then
+  ok "deletion limited to owned claim temporary"
+else
+  bad "unexpected deletion path" "$DELETIONS"
+fi
 structural "no network" '\b(curl|wget|ssh|scp|sftp|nc|telnet)\b'
 structural "no SHADOW coupling" 'SHADOW'
 structural "no allowlist coupling" 'ALLOWLIST_|allowlist\.|Allowlist'
@@ -312,9 +528,10 @@ structural "no sweep loop over the queue" 'for .* in .*QUEUE|find .*QUEUE|ls .*Q
 
 # The queue dir gains no files on any path: reject, verify-only, and every
 # refusal above must leave the drop dir exactly as the fixtures made it.
-QUEUE_COUNT="$(ls -1 "$Q" | wc -l)"
-if ls "$Q" | grep -qE '\.rejected\.json$|\.claim$|\.tmp$'; then
-  bad "queue dir gained receipt/claim files" "$(ls -1 "$Q")"
+QUEUE_COUNT="$(find "$Q" -mindepth 1 -maxdepth 1 -printf '.\n' | wc -l)"
+QUEUE_OUTPUTS="$(find "$Q" -mindepth 1 -maxdepth 1 \( -name '*.rejected.json' -o -name '*.claim' -o -name '*.tmp' \) -print)"
+if [[ -n "$QUEUE_OUTPUTS" ]]; then
+  bad "queue dir gained receipt/claim files" "$QUEUE_OUTPUTS"
 else
   ok "queue dir holds only packet fixtures ($QUEUE_COUNT files, no receipts)"
 fi

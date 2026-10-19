@@ -241,7 +241,7 @@ PACKET_MTIME="$(date -u -d "@$(stat -c %Y -- "$PACKET_REAL")" +%Y-%m-%dT%H:%M:%S
 # ---- step 5: replay + claim (atomic; nothing writes before this) ----------------------
 RECEIPT="$PROCESSED_DIR/$PACKET_BASE.rejected.json"
 CLAIM="$PROCESSED_DIR/$PACKET_BASE.claim"
-if [[ -e "$RECEIPT" ]]; then
+if [[ -e "$RECEIPT" || -L "$RECEIPT" ]]; then
   emit_result "$(result refused replay_detected "$PACKET_SHA" "$RECEIPT" true)"
   log_human "replay: receipt already exists; refusing"
   exit 6
@@ -267,28 +267,65 @@ if ! mkdir -- "$CLAIM" 2>/dev/null; then
   exit 1
 fi
 
-# ---- step 6: one receipt + one log line, secrets scrubbed -------------------------------
-TS="$(iso_now)"
-# shellcheck disable=SC2317  (unreachable-code warning is wrong: trap fires)
-cleanup_claim() { rmdir -- "$CLAIM" 2>/dev/null || true; }
-trap cleanup_claim EXIT
-
 RECEIPT_TMP="$CLAIM/receipt.tmp"
-jq -n --arg ts "$TS" --arg pkt "$PACKET_BASE" --arg sha "$PACKET_SHA" \
+# Clean only our owned temporary, never a packet or a terminal receipt.
+# ShellCheck does not trace EXIT trap callbacks.
+# shellcheck disable=SC2329
+cleanup_claim() {
+  rm -f -- "$RECEIPT_TMP" 2>/dev/null || true
+  rmdir -- "$CLAIM" 2>/dev/null || true
+}
+trap cleanup_claim EXIT
+# A contender may have completed after our early check but before this claim.
+if [[ -e "$RECEIPT" || -L "$RECEIPT" ]]; then
+  emit_result "$(result refused replay_detected "$PACKET_SHA" "$RECEIPT" true)"
+  log_human "replay: receipt appeared while claiming; refusing"
+  exit 6
+fi
+
+# ---- step 6: one receipt + one log line, secrets scrubbed -------------------------------
+TS="$(iso_now)" \
+  || { emit_result "$(result failed receipt_unwritten "$PACKET_SHA" "" true)"; log_human "could not timestamp receipt"; exit 1; }
+RAW_RECEIPT="$(jq -cn --arg ts "$TS" --arg pkt "$PACKET_BASE" --arg sha "$PACKET_SHA" \
       --argjson bytes "$PACKET_BYTES" --arg mtime "$PACKET_MTIME" \
       --arg reason "$REASON" \
   '{v:1, verb:"op-queue-reject", ts:$ts, packet:$pkt, packet_sha256:$sha,
     packet_bytes:$bytes, packet_mtime:$mtime, outcome:"rejected",
-    reason_code:$reason, payload_preserved:true, executed:false}' > "$RECEIPT_TMP" \
+    reason_code:$reason, payload_preserved:true, executed:false}')" \
   || { emit_result "$(result failed receipt_unwritten "$PACKET_SHA" "" true)"; log_human "could not build receipt"; exit 1; }
-# Scrub secret-shaped values out of the serialized receipt (defence in depth;
-# every field above is machine-derived, so this covers future free text).
-SCRUBBED="$(scrub_value "$(cat -- "$RECEIPT_TMP")")"
-printf '%s\n' "$SCRUBBED" > "$RECEIPT_TMP"
-mv -- "$RECEIPT_TMP" "$RECEIPT" || { emit_result "$(result failed receipt_unwritten "$PACKET_SHA" "" true)"; log_human "could not write receipt"; exit 1; }
-# Append-only log: best effort — a full disk must not fake success, but the
-# receipt is the record; the log is the trail.
-{ printf '%s\n' "$SCRUBBED" >> "$REJECT_LOG"; } 2>/dev/null || log_human "warning: rejection log append failed"
+# Check each transformation; never turn a failed scrub into a terminal record.
+SCRUBBED="$(scrub_value "$RAW_RECEIPT")" \
+  || { emit_result "$(result failed receipt_unwritten "$PACKET_SHA" "" true)"; log_human "could not scrub receipt"; exit 1; }
+# Slurp rejects empty/multiple values as well as invalid JSON. Re-serialize to
+# exactly one compact JSON object for the line-oriented audit consumer.
+SCRUBBED="$(jq -cse --arg pkt "$PACKET_BASE" --arg sha "$PACKET_SHA" --arg reason "$REASON" '
+  if length == 1 and (.[0] | type == "object" and .v == 1
+    and .verb == "op-queue-reject" and .packet == $pkt and .packet_sha256 == $sha
+    and .reason_code == $reason and .outcome == "rejected"
+    and .payload_preserved == true and .executed == false)
+  then .[0] else error("invalid receipt") end' <<< "$SCRUBBED")" \
+  || { emit_result "$(result failed receipt_unwritten "$PACKET_SHA" "" true)"; log_human "invalid scrubbed receipt"; exit 1; }
+printf '%s\n' "$SCRUBBED" > "$RECEIPT_TMP" \
+  || { emit_result "$(result failed receipt_unwritten "$PACKET_SHA" "" true)"; log_human "could not write receipt"; exit 1; }
+# Hard-link publication is atomic and cannot replace an existing terminal file,
+# including one created by a writer outside this claim protocol.
+if ! ln -T -- "$RECEIPT_TMP" "$RECEIPT"; then
+  if [[ -e "$RECEIPT" || -L "$RECEIPT" ]]; then
+    emit_result "$(result refused replay_detected "$PACKET_SHA" "$RECEIPT" true)"
+    log_human "replay: receipt already published; refusing"
+    exit 6
+  fi
+  emit_result "$(result failed receipt_unwritten "$PACKET_SHA" "" true)"
+  log_human "could not publish receipt"
+  exit 1
+fi
+# The receipt remains terminal even if the audit append fails. Report I/O
+# failure with its path, so operators verify the receipt rather than retrying.
+if ! { printf '%s\n' "$SCRUBBED" >> "$REJECT_LOG"; } 2>/dev/null; then
+  emit_result "$(result failed log_unwritten "$PACKET_SHA" "$RECEIPT" true)"
+  log_human "rejection log append failed; receipt remains terminal"
+  exit 1
+fi
 
 emit_result "$(result rejected ok "$PACKET_SHA" "$RECEIPT" true)"
 log_human "rejected $PACKET_BASE ($REASON); receipt $RECEIPT; payload preserved untouched"

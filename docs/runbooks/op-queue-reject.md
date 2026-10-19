@@ -21,15 +21,15 @@ outside this verb's contract and needs its own review.
 | File | Role |
 | --- | --- |
 | `op_queue_reject.sh` | The verb. Installed root-owned 755, run once as root. |
-| `test_op_queue_reject.sh` | Offline refusal/regression suite (61 cases). |
+| `test_op_queue_reject.sh` | Offline refusal/regression suite (62 cases). |
 | `docs/runbooks/op-queue-reject.md` | This file. |
 
 Hashes below pin the reviewed revision. The approving reviewer re-checks
 them at the exact head that merges; a re-push re-pins.
 
 ```
-18e5cdbcba161d8f07976d53f49e847593f9311c7e09883da43322733cbd65fb  op_queue_reject.sh
-26093fd8b66dc38593f7bf1cd1acfb2cf2da628a62d0017151bbffd471542b38  test_op_queue_reject.sh
+595388d1e8c77a08ceec1816b1dd1010e2f95a3c136cdcb35b029271962ee06e  op_queue_reject.sh
+cafb34346bed852abee809f44463542e2b951c14a4942727a0647fd4966d3342  test_op_queue_reject.sh
 ```
 
 Trust lineage: the queue-dir jail (`within_dir_strict`) and the root-owned
@@ -92,8 +92,23 @@ All paths are examples. Private host maps stay private.
    `packet_sha256` equals `sha256sum` of the queue file, and confirm
    the queue file's size and mtime are unchanged.
 
-Time bound: under 15 minutes. Blast radius: none — nothing is restarted,
-no service is reloaded, no packet executes, and the queue file is untouched.
+Time bound: under 15 minutes. Blast radius: the selected packet's terminal
+workflow state only. Its persistent receipt and audit entry remain in place
+if the command is uninstalled. Nothing is restarted, no service is reloaded,
+no packet executes, and the queue file is untouched.
+
+Publication uses an atomic, no-replace hard link from the acquired claim's
+temporary file into the same processed directory. A delayed contender rechecks
+the receipt under the claim and cannot overwrite it. Failed attempts remove
+only their own temporary file and empty claim directory, never packet bytes
+or a terminal receipt. The filesystem must support hard links; otherwise the
+verb fails closed with `receipt_unwritten`.
+
+A successful reject appends exactly one compact JSON object to the JSONL audit
+log. If that append fails after receipt publication, exit 1 / `failed/log_unwritten`
+includes the committed receipt path. The packet is already terminal: re-verify
+the receipt read-only and investigate the missing audit trail; do not retry
+the disposition or remove the receipt.
 
 ## Rollback (bounded)
 
@@ -109,11 +124,11 @@ or restarts a service.
 
 ```bash
 bash -n op_queue_reject.sh && bash -n test_op_queue_reject.sh
-./test_op_queue_reject.sh          # expect: 61 passed, 0 failed
+./test_op_queue_reject.sh          # expect: 62 passed, 0 failed
 sha256sum op_queue_reject.sh test_op_queue_reject.sh
 ```
 
-Expected: exit 0, `61 passed, 0 failed`, and hashes equal to the manifest
+Expected: exit 0, `62 passed, 0 failed`, and hashes equal to the manifest
 above. On the host (operator only, read-only after install):
 
 ```bash

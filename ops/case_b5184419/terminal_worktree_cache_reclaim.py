@@ -68,15 +68,21 @@ MODES.
       apply with no live re-read is worse than no apply).
 
   python3 ops/case_b5184419/terminal_worktree_cache_reclaim.py --registry-gate ID
-      Recurring-routine mode: reads the reviewed WS7 registry
-      (ops/case_30b51a0f/host-timer-registry.json) and applies only when entry ID
-      is an active writer of fs:worktree-dep-caches; a detector entry, a
-      missing/duplicate entry or an unreadable registry is a dry-run. Cannot be
-      combined with --apply. The first stderr line records the chosen mode.
+      Recurring-routine mode: reads the reviewed WS7 registry and applies
+      only when entry ID is an active writer of fs:worktree-dep-caches. The
+      default registry is the sibling ops/case_30b51a0f/host-timer-registry.json
+      next to this tool; in distributions where that private reviewed file
+      does not ship, pass its installed location explicitly via --registry.
+      A detector/paused/planned/retired entry is an intentional dry-run. A
+      missing/duplicate entry or an unreadable/malformed registry is also a
+      dry-run, but it is a gate ERROR: the summary records mode, mode_reason,
+      registry_gate and registry_gate_error, and n_errors counts it. Cannot
+      be combined with --apply. The first stderr line records the chosen mode.
 
-Exit codes: 0 success (dry-run report / apply complete), 1 safety refusal or
-abort (blind apply, API unreachable during fresh evaluation — LOUD on
-stderr), 2 usage error.
+Exit codes: 0 success (dry-run report / apply complete, even when the gate
+refused apply — check mode_reason and n_errors), 1 safety refusal or abort
+(blind apply, API unreachable during fresh evaluation — LOUD on stderr),
+2 usage error.
 
 No secrets in output: stdout carries only worktree paths, card identifiers,
 statuses, counts and byte totals. Env credentials are read, never printed.
@@ -116,9 +122,9 @@ CARGO_TARGET_NAMES = frozenset({"target"})
 SCAN_PRUNE_NAMES = DEP_CACHE_NAMES | CARGO_TARGET_NAMES
 TERMINAL_STATUSES = frozenset({"done", "cancelled"})
 REGISTRY_WRITE_TARGET = "fs:worktree-dep-caches"
-REGISTRY_DEFAULT = os.path.join(
+REGISTRY_DEFAULT = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), os.pardir, "case_30b51a0f",
-    "host-timer-registry.json")
+    "host-timer-registry.json"))
 RECENT_MINUTES_DEFAULT = 30
 EVAL_WORKERS_DEFAULT = 6
 # Execution-workspace rows in any other state are not understood: keep.
@@ -242,43 +248,80 @@ def cache_dir_ok(*, is_symlink, check_ignore_rc, ls_files_rc, ls_files_out):
     return (True, None)
 
 
-def registry_apply_decision(entries, entry_id):
-    """(apply, why) for a recurring firing, from the reviewed WS7 registry.
+def registry_apply_decision_ex(entries, entry_id):
+    """(apply, why, gate_error) for a recurring firing, from the WS7 registry.
 
-    Apply needs ALL of: the entry exists, its state is `active`, its role is
-    `writer`, and it declares the one write target this tool touches. A
-    detector entry (the dry-run-only phase), a paused/planned/retired entry,
-    a missing entry or a malformed one all read as dry-run: flipping a routine
-    from reporting to deleting is therefore a registry change that goes
-    through exact-head review and CI, not a routine-text edit.
+    Apply needs ALL of: the entry exists exactly once, its state is `active`,
+    its role is `writer`, and it declares the one write target this tool
+    touches. A detector/paused/planned/retired entry or a writer for another
+    target is an intentional dry-run (gate_error False). A missing/duplicate
+    entry, a malformed entries list, or a present-but-non-list `writes`
+    shape is a gate ERROR (gate_error True): the firing still dry-runs,
+    but the summary counts it. A missing `writes` field declares nothing,
+    like an empty list (intentional dry-run). Flipping a routine from
+    reporting to deleting is a registry change through exact-head review and
+    CI, not a routine-text edit.
     """
     if not isinstance(entries, list):
-        return (False, "registry has no entries list")
+        return (False, "registry has no entries list", True)
     matches = [e for e in entries
                if isinstance(e, dict) and e.get("id") == entry_id]
     if len(matches) != 1:
         return (False, "registry entry %r found %d times" % (entry_id,
-                                                             len(matches)))
+                                                             len(matches)),
+                True)
     entry = matches[0]
     if entry.get("state") != "active":
-        return (False, "entry state is %r, not active" % entry.get("state"))
+        return (False, "entry state is %r, not active" % entry.get("state"),
+                False)
     if entry.get("role") != "writer":
-        return (False, "entry role is %r, not writer" % entry.get("role"))
-    if REGISTRY_WRITE_TARGET not in (entry.get("writes") or []):
-        return (False, "entry does not declare %s" % REGISTRY_WRITE_TARGET)
-    return (True, "registry entry %r is an active writer" % entry_id)
+        return (False, "entry role is %r, not writer" % entry.get("role"),
+                False)
+    writes = entry.get("writes")
+    if writes is None:
+        writes = []
+    if not isinstance(writes, list):
+        return (False, "entry writes is not a list", True)
+    if REGISTRY_WRITE_TARGET not in writes:
+        return (False, "entry does not declare %s" % REGISTRY_WRITE_TARGET,
+                False)
+    return (True, "registry entry %r is an active writer" % entry_id, False)
 
 
-def resolve_mode(opts):
-    """(apply, why). Fail-closed: a registry that cannot be read is dry-run."""
+def registry_apply_decision(entries, entry_id):
+    """(apply, why) for a recurring firing, from the reviewed WS7 registry.
+
+    Backward-compatible wrapper: see registry_apply_decision_ex for the
+    gate-error classification. Apply needs ALL of: the entry exists, its
+    state is `active`, its role is `writer`, and it declares the one write
+    target this tool touches.
+    """
+    apply, why, _ = registry_apply_decision_ex(entries, entry_id)
+    return (apply, why)
+
+
+def resolve_mode_ex(opts):
+    """(apply, why, gate_error). Fail-closed: an unreadable registry is dry-run.
+
+    gate_error is True only when --registry-gate was requested and the
+    registry itself could not be used (unreadable file, malformed JSON, or a
+    missing/duplicate entry). An intentional dry-run (no gate, --apply, or a
+    detector/paused entry) reports gate_error False.
+    """
     if not opts.registry_gate:
-        return (opts.apply, "--apply" if opts.apply else "default")
+        return (opts.apply, "--apply" if opts.apply else "default", False)
     try:
         with open(opts.registry, encoding="utf-8") as handle:
             entries = json.load(handle).get("entries")
     except (OSError, ValueError, AttributeError) as exc:
-        return (False, "registry unreadable: %s" % exc)
-    return registry_apply_decision(entries, opts.registry_gate)
+        return (False, "registry unreadable: %s" % exc, True)
+    return registry_apply_decision_ex(entries, opts.registry_gate)
+
+
+def resolve_mode(opts):
+    """(apply, why). Fail-closed: a registry that cannot be read is dry-run."""
+    apply, why, _ = resolve_mode_ex(opts)
+    return (apply, why)
 
 
 def parse_argv(argv):
@@ -292,10 +335,15 @@ def parse_argv(argv):
     mode.add_argument("--registry-gate", metavar="ENTRY_ID", default=None,
                       help="Recurring-routine mode: apply only when the WS7 "
                            "registry entry ENTRY_ID is an active writer of "
-                           "%s; otherwise (or on ANY registry error) "
-                           "dry-run." % REGISTRY_WRITE_TARGET)
+                           "%s; otherwise dry-run (a registry ERROR still "
+                           "dry-runs but counts in n_errors)."
+                           % REGISTRY_WRITE_TARGET)
     parser.add_argument("--registry", default=REGISTRY_DEFAULT,
-                        help="WS7 registry JSON for --registry-gate.")
+                        help="WS7 registry JSON for --registry-gate "
+                             "(default: sibling ops/case_30b51a0f/ "
+                             "host-timer-registry.json; in distributions "
+                             "where that private file does not ship, pass "
+                             "its reviewed installed location explicitly).")
     parser.add_argument("--root", default="/paperclip/instances/default",
                         help="Paperclip home/container view to scan.")
     parser.add_argument("--recent-minutes", type=int,
@@ -969,8 +1017,16 @@ def apply_deletes(run, api, candidates, minutes=RECENT_MINUTES_DEFAULT,
             "alloc_bytes_total": sum(freed.values())}
 
 
-def run_tool(apply, run, api, out_dir, root, minutes, workers):
-    """One full pass: fresh evaluation, sizing, report; delete only on apply."""
+def run_tool(apply, run, api, out_dir, root, minutes, workers,
+             mode_why=None, registry_gate=None, gate_error=False):
+    """One full pass: fresh evaluation, sizing, report; delete only on apply.
+
+    mode_why/registry_gate/gate_error record the --registry-gate decision in
+    the machine-readable summary (the first stderr line is human-readable
+    only). A gate ERROR (unreadable/malformed/missing registry entry) counts
+    in n_errors so a misconfigured firing cannot report n_errors 0; an
+    intentional dry-run (detector/paused/etc.) leaves n_errors unchanged.
+    """
     started = time.time()
     ctx = build_context(api)
     dirs = enumerate_worktrees(root)
@@ -993,6 +1049,14 @@ def run_tool(apply, run, api, out_dir, root, minutes, workers):
             cand["size_error"] = True
     summary = summarize(results)
     summary["took_s"] = round(time.time() - started)
+    summary["mode"] = "apply" if apply else "dry-run"
+    if mode_why is not None:
+        summary["mode_reason"] = mode_why
+    if registry_gate is not None:
+        summary["registry_gate"] = registry_gate
+        summary["registry_gate_error"] = bool(gate_error)
+        if gate_error:
+            summary["n_errors"] += 1
     os.makedirs(out_dir, exist_ok=True)
     dryrun_path = os.path.join(out_dir, "dryrun.json")
     try:
@@ -1026,7 +1090,7 @@ def main(argv=None, run=None, api=None):
     if not out_dir:
         raise ReclaimError("no --out-dir and $PAPERCLIP_SCRATCH_DIR is unset")
     run = run or live_run
-    apply, why = resolve_mode(opts)
+    apply, why, gate_error = resolve_mode_ex(opts)
     print("mode: %s (%s)" % ("apply" if apply else "dry-run", why),
           file=sys.stderr)
     if api is None:
@@ -1042,7 +1106,9 @@ def main(argv=None, run=None, api=None):
                                "(card join reads the live board)")
         api = ApiClient(base, company, key)
     return run_tool(apply, run, api, out_dir, opts.root,
-                    opts.recent_minutes, opts.workers)
+                    opts.recent_minutes, opts.workers,
+                    mode_why=why, registry_gate=opts.registry_gate,
+                    gate_error=gate_error)
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@
 #     Every hop of a chain is remapped the same way (file or directory
 #     component), so a container-absolute chain is judged by its real
 #     container-visible target instead of resolving host-side. Each
-#     container-absolute hop is normalized first (.. clamped at /, as the
+#     container-absolute or mount-relative hop is normalized first (.. clamped at /, as the
 #     container kernel resolves it, and only cancelled across plain
 #     directories) before the mount-prefix test; a hop escaping the mount,
 #     a .. after a symlink or non-directory, or a target containing a
@@ -76,6 +76,10 @@ DOCKER="${DOCKER:-docker}"
   || { printf 'REFUSED: %s: PAPERCLIP_UPGRADE_AGENT_UID must be numeric\n' "$ME" >&2; exit 2; }
 [[ -d "$DATA_DIR" && ! -L "$DATA_DIR" ]] \
   || { printf 'REFUSED: %s: data dir missing or a symlink: %s\n' "$ME" "$DATA_DIR" >&2; exit 2; }
+# Use one physical, absolute spelling for the component walk and mount-prefix
+# comparison, including relative paths, trailing slashes and aliased ancestors.
+DATA_DIR="$(cd -P -- "$DATA_DIR" >/dev/null && pwd -P)" \
+  || { printf 'REFUSED: %s: cannot resolve data dir\n' "$ME" >&2; exit 2; }
 command -v "$DOCKER" >/dev/null \
   || { printf 'REFUSED: %s: docker runtime is missing\n' "$ME" >&2; exit 2; }
 command -v mountpoint >/dev/null \
@@ -103,7 +107,7 @@ check_path() { # PATH -- owned by EXPECT_OWNER, no group/other write, no symlink
 }
 
 check_tree() { # ROOT -- every descendant judged, verify-only (see header)
-  local root="$1" euid="${EXPECT_OWNER%%:*}" egid="${EXPECT_OWNER##*:}" hits links link raw cand mapped target tst tuid tgid tmode found prefix rest comp hops norm norm_rest norm_comp host_cur chk_rest chk_comp
+  local root="$1" euid="${EXPECT_OWNER%%:*}" egid="${EXPECT_OWNER##*:}" hits links link raw cand mapped target tst tuid tgid tmode found prefix rest comp hops norm norm_rest norm_comp host_cur chk_rest chk_comp link_dir
   if ! hits="$(find "$root" -xdev ! -type l \( ! -user "$euid" -o ! -group "$egid" -o -perm /022 \) -print 2>/dev/null)"; then
     printf 'FAIL: cannot scan protected tree for baseline violations: %s\n' "$root"
     return 1
@@ -122,8 +126,9 @@ check_tree() { # ROOT -- every descendant judged, verify-only (see header)
     # Resolve through the container mount (see header): /paperclip is
     # $DATA inside the container (the probes below address it the same
     # way), so remap that prefix before resolving on the host. Relative
-    # targets resolve via the link itself; other absolute targets keep
-    # host semantics. The mapped target is then judged exactly like any
+    # targets under $DATA_DIR first become container-absolute paths and
+    # pass the same normalizer; other targets keep host semantics.
+    # The mapped target is then judged exactly like any
     # other resolved target — remapping never exempts it. Every hop is
     # remapped, file or directory component alike: a later
     # container-absolute hop resolved host-side could pass owner/mode on
@@ -160,6 +165,16 @@ check_tree() { # ROOT -- every descendant judged, verify-only (see header)
       fi
       if [[ "$raw" == *$'\n'* ]]; then
         printf 'FAIL: protected symlink target contains a newline: %s\n' "$link"; return 1
+      fi
+      # A relative hop inside the mount belongs to the container namespace
+      # too: joining it to the host path would apply .. against the host
+      # parent of $DATA_DIR instead of /paperclip's container parent.
+      if [[ "$raw" != /* ]]; then
+        link_dir="${found%/*}"
+        case "$link_dir" in
+          "$DATA_DIR") raw="/paperclip/$raw" ;;
+          "$DATA_DIR"/*) raw="/paperclip/${link_dir#"$DATA_DIR"/}/$raw" ;;
+        esac
       fi
       case "$raw" in
         /paperclip|/paperclip/*)

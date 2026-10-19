@@ -675,6 +675,29 @@ else
 fi
 rm -f "$LOCKF"
 
+# a same-uid attacker who opens the lock file themselves (a distinct open
+# file description) while the holder holds it passes the token, identity
+# and not-held checks but must fail the inheritance proof
+LOCKF="$ROOT/lockdir/service.deploy.lock"; rm -f "$LOCKF"; : > "$LOCKF"; chmod 0600 "$LOCKF"
+forged_out="$(
+  exec 8>>"$LOCKF"
+  flock -n 8 || exit 97
+  printf 'token=testtoken789\n' > "$LOCKF"
+  (
+    exec 9>>"$LOCKF"
+    PAPERCLIP_ACTIVATION_LOCK_PATH="$LOCKF" PAPERCLIP_ACTIVATION_LOCK_TOKEN="testtoken789" \
+    PAPERCLIP_ACTIVATION_LOCK_FD=9 PAPERCLIP_UPGRADE_API_AUTH_FILE="$ROOT/board.curl" \
+    DOCKER="$ROOT/bin/docker" bash "$DRAIN" wait --state-dir "$ROOT/state-forged" --live 2>&1
+  )
+)"; forged_rc=$?
+if ((forged_rc == 2)) && grep -qF "not the holder's inherited fd" <<<"$forged_out"; then
+  pass "drain.sh refuses a self-opened lock fd while the holder holds the lock"
+else
+  oops "drain.sh lock-proof inheritance wrong (rc=$forged_rc: $(head -c 200 <<<"$forged_out"))"
+fi
+[[ ! -e "$ROOT/state-forged" ]] && pass "forged-fd drain.sh created no state" || oops "forged-fd drain.sh created state"
+rm -f "$LOCKF"
+
 # the same proof through a symlinked ancestor must also be accepted:
 # identity (-ef), not the canonical path string, is what is compared
 mkdir -p -m 0700 "$ROOT/real-locks"
@@ -741,8 +764,8 @@ expect_refused "restart gate: a malformed declared prefix is refused" "4-digit" 
 printf '%s\n%s\n' "$MGH1" "$MGH2" > "$ROOT/migstate/ledger-backup"
 expect_ok "restart gate: declared 'none' passes when every image migration is applied" -- pmig_gate none
 expect_refused "restart gate: declared 0294 refuses when nothing is pending" "do not match" -- pmig_gate 0294
-gate_line="$(awk '/^cmd_restart\(\) \{/{on=1} on && /pending_migrations_gate/{print NR; exit}' "$DRAIN")"
-up_line="$(awk '/^cmd_restart\(\) \{/{on=1} on && /compose_up/{print NR; exit}' "$DRAIN")"
+gate_line="$(awk '/^cmd_restart\(\) \{/{on=1} on{line=$0; sub(/#.*/,"",line)} on && line ~ /pending_migrations_gate/{print NR; exit}' "$DRAIN")"
+up_line="$(awk '/^cmd_restart\(\) \{/{on=1} on{line=$0; sub(/#.*/,"",line)} on && line ~ /compose_up/{print NR; exit}' "$DRAIN")"
 if [[ -n "$gate_line" && -n "$up_line" ]] && ((gate_line < up_line)); then
   pass "restart gate: pending_migrations_gate runs in cmd_restart before any compose_up"
 else

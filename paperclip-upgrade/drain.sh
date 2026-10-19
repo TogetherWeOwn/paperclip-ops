@@ -282,6 +282,13 @@ require_activation_lock() {
   if ( exec 7>>"$lock_path"; flock -n 7 ) 2>/dev/null; then
     refuse "activation lock is not held (re-lock succeeded): run through activation.sh"
   fi
+  # ...and this fd is the holder's: flock on an fd whose open file
+  # description already holds the lock succeeds, while a same-uid
+  # attacker who opened the file themselves holds a distinct OFD that
+  # conflicts. This must run after the not-held check above: on an
+  # unheld lock it would take the lock itself and mask the refusal.
+  flock -n "$lock_fd" 2>/dev/null \
+    || refuse "activation lock fd $lock_fd is not the holder's inherited fd (a self-opened fd conflicts with the holder's lock)"
 }
 
 open_state() { # NEW=1: must not exist yet (fresh maintenance state, never reused)

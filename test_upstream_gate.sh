@@ -1793,7 +1793,7 @@ if [ "$(jq -j '.body // ""' "$WORK/nl_pr.json" | od -An -tx1 | tr -d ' \n')" = "
 else bad "jq -j preserves a trailing newline without adding one" "jq -j added or dropped a byte"; fi
 
 # ===========================================================================
-hdr "compat profiles: reviewed repo-specific CI profiles fail closed (G0-G23)"
+hdr "compat profiles: reviewed repo-specific CI profiles fail closed (G0-G28)"
 
 # The profile registry is co-located with the gate, so these cases run a copy
 # of the tool from a temp dir whose upstream_ci_profiles.json the suite owns.
@@ -1852,7 +1852,8 @@ import sys
 here, out = sys.argv[1], sys.argv[2]
 sys.path.insert(0, here)
 import upstream_lint as ul
-for repo in ("router-for-me/CLIProxyAPI", "TogetherWeOwn/CLIProxyAPI"):
+for repo in ("router-for-me/CLIProxyAPI", "TogetherWeOwn/CLIProxyAPI",
+               "TogetherWeOwn/paperclip"):
     mem = ul.load_memory("paperclipai/paperclip", out)
     mem["repo"] = repo
     ul.save_memory(repo, mem, out)
@@ -1911,6 +1912,8 @@ elif mut == "run-no-headsha":
 elif mut == "review-no-score":
     runs[3] = r("Paperclip Review", "completed", "success", 14,
                 out={"title": "reviewed", "summary": "looks fine"})
+elif mut == "bad-extra":
+    runs.append(r("docs-link-check", "completed", "failure", 31, ts="2026-10-06T04:00:00Z"))
 json.dump({"total_count": len(runs), "check_runs": runs}, open(path, "w"))
 PYRUNS
   if [ "$mut" = "pr-no-headsha" ]; then
@@ -2102,6 +2105,62 @@ expect "G23 skipped required upstream check fails upstream-ci" 1 "FAIL.*upstream
 
 F="$WORK/c_g23d"; mk_compat_ready_world "$F" "" stale-head; run_compat_ready "$F"
 expect "G23 upstream success on a stale head fails upstream-ci stale [pending]" 1 "FAIL.*upstream-ci" "stale" "\[pending\]"
+
+# Keeper-repo mirror: the preserved TogetherWeOwn/paperclip profile keeps
+# the legacy any-run strictness for extras (strict_extra). Args: dir [mutation]
+mk_keeper_mirror() {
+  local dir="$1" mut="${2:-good}"
+  mk_mirror "$dir"
+  python3 - "$dir/check_runs.json" "$SHA" "$mut" <<'PYRUNS'
+import json, sys
+path, sha, mut = sys.argv[1], sys.argv[2], sys.argv[3]
+def r(name, status, concl, i, hs="HEAD", app="github-actions", out=None, ts="2026-10-06T03:00:00Z"):
+    d = {"name": name, "status": status, "conclusion": concl,
+         "completed_at": ts, "started_at": ts, "id": i,
+         "app": {"slug": app}, "output": out or {"title": "", "summary": ""}}
+    if hs == "HEAD":
+        d["head_sha"] = sha
+    elif hs is not None:
+        d["head_sha"] = hs
+    return d
+runs = [r("ci / verify", "completed", "success", 11),
+        r("ci / e2e", "completed", "success", 12),
+        r("Paperclip Review", "completed", "success", 13,
+          out={"title": "5/5", "summary": "## Paperclip Review — 5/5"})]
+if mut == "bad-extra":
+    runs.append(r("docs-link-check", "completed", "failure", 31, ts="2026-10-06T04:00:00Z"))
+elif mut == "pending-extra":
+    runs.append(r("docs-link-check", "queued", None, 31, ts="2026-10-06T04:00:00Z"))
+elif mut == "skipped-extra":
+    runs.append(r("docs-link-check", "completed", "skipped", 31, ts="2026-10-06T04:00:00Z"))
+json.dump({"total_count": len(runs), "check_runs": runs}, open(path, "w"))
+PYRUNS
+  # Same pinned workflow manifest the keeper evidence carries (fixture form).
+  cat > "$dir/workflows.json" <<'JSONWF'
+[{"file": "pr-test-build.yml", "blob_sha": "blob-pr-test-build.yml"},
+ {"file": "pr-path-guard.yml", "blob_sha": "blob-pr-path-guard.yml"},
+ {"file": "agents-md-guard.yml", "blob_sha": "blob-agents-md-guard.yml"}]
+JSONWF
+}
+run_keeper_check() { OUT="$("$CTOOL" check --mirror-pr 52 --fork-repo TogetherWeOwn/paperclip --fixtures "$1" 2>&1)"; RC=$?; }
+
+# G24-G28 preserved keepers: a failed extra fails, an unfinished extra
+# pends, a skipped extra passes, and a non-keeper ignores the same extra.
+write_compat_profiles good
+K="$WORK/c_k24"; mk_keeper_mirror "$K" good; run_keeper_check "$K"
+expect "G24 keeper mirror passes Gate A with no extras" 0 "GATE A: PASS"
+
+K="$WORK/c_k25"; mk_keeper_mirror "$K" bad-extra; run_keeper_check "$K"
+expect "G25 keeper fails fork-ci on a failed extra run" 1 "FAIL.*fork-ci" "docs-link-check"
+
+K="$WORK/c_k26"; mk_keeper_mirror "$K" pending-extra; run_keeper_check "$K"
+expect "G26 keeper fails fork-ci [pending] on an unfinished extra run" 1 "FAIL.*fork-ci" "\[pending\]"
+
+K="$WORK/c_k27"; mk_keeper_mirror "$K" skipped-extra; run_keeper_check "$K"
+expect "G27 keeper passes Gate A with a skipped extra" 0 "GATE A: PASS"
+
+M="$WORK/c_k28"; mk_cli_mirror "$M" bad-extra; run_compat_check "$M"
+expect "G28 non-keeper ignores the same failed extra" 0 "GATE A: PASS"
 
 # ===========================================================================
 hdr "dispatch: unmeasured runs never pass"

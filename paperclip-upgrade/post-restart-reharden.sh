@@ -23,7 +23,9 @@
 #     container-absolute target (/paperclip/..., the in-container mount
 #     of $DATA) is remapped onto $DATA before resolving, so a link
 #     created inside the container is judged by its real target instead
-#     of failing forever on the host, where the data lives elsewhere;
+#     of failing forever on the host, where the data lives elsewhere.
+#     Only the first hop is remapped: a container-absolute symlink chain
+#     fails closed here, so keep protected trees chain-free;
 #   - when the bounded Cargo pool is required (or present as a
 #     mountpoint), its ROOT and policy.json are judged the same way,
 #     NON-recursively: slot directories beneath the root stay
@@ -116,7 +118,9 @@ check_tree() { # ROOT -- every descendant judged, verify-only (see header)
     # way), so remap that prefix before resolving on the host. Relative
     # targets resolve via the link itself; other absolute targets keep
     # host semantics. The mapped target is then judged exactly like any
-    # other resolved target — remapping never exempts it.
+    # other resolved target — remapping never exempts it. Single hop
+    # only: a second container-absolute hop still resolves on the host
+    # and fails closed (see header).
     raw="$(readlink -- "$link" 2>/dev/null)" \
       || { printf 'FAIL: protected symlink cannot be read: %s\n' "$link"; return 1; }
     case "$raw" in

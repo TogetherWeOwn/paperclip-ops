@@ -264,7 +264,7 @@ mutant() {  # <label> <sed-expr>
 }
 mutant anchor 's/"expiration"/"expiry"/'
 mutant httpgate 's/\[\[ "$http" == "200" \]\]/[[ "$http" == "500" ]]/'
-mutant warndefault 's/DOMAIN_WARN_DAYS:-21/DOMAIN_WARN_DAYS:-1/'
+mutant warndefault 's/DOMAIN_WARN_DAYS:-21/DOMAIN_WARN_DAYS:-200/'
 
 echo "RESULT: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

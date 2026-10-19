@@ -189,7 +189,9 @@ class CardAndInternalRefs(unittest.TestCase):
         # A filename alone is not a card reference, same as internal_hits:
         # private bodies naming only a tracked file must still fail.
         for filename in ("verification/case_c89b5362-drift-pin-mutation-gate.sh",
-                         "case_c89b5362-drift-pin-mutation-gate.sh"):
+                         "case_c89b5362-drift-pin-mutation-gate.sh",
+                         # Leading `/` guard only (no trailing `-`).
+                         "ops/case_1ccef1dc/collect.py"):
             body = GOOD_BODY.replace("Refs: case_1cab5f7f", "See " + filename)
             self.assertIn(("error", "Card reference"),
                           levels(ps.evaluate(env(BODY=body))), filename)

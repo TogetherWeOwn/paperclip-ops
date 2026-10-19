@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Self-hosted GitHub webhook capture for TogetherWeOwn. A monitoring aid, not forensic evidence \u2014 read the README before relying on it.",
+  "description": "Self-hosted GitHub webhook capture for TogetherWeOwn. A monitoring aid, not forensic evidence — read the README before relying on it.",
   "engines": {
     "node": ">=22"
   },

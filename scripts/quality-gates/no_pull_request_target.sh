@@ -59,13 +59,19 @@
 # block-scalar content is opaque text: `on:`-looking lines there never win the
 # trigger block and quotes/brackets/aliases inside are not structure (the
 # token itself is still scanned). Quoted `*` globs (e.g. '**/*-lock.json')
-# pass because the alias check ignores quoted text.
+# pass because the alias check ignores quoted text. Scan time stays
+# near-linear in the line length: every backward walk is iterative and
+# served from per-line lookup tables, so a hostile line (thousands of
+# chained properties, a verbatim URI full of inner `!<`) can neither hang
+# the gate nor overflow the recursion limit (a traceback would read as a
+# ban hit).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 hits="$(python3 - <<'PY'
+import bisect
 import re
 import subprocess
 import sys
@@ -77,9 +83,13 @@ INDENT = re.compile(r"^[ \t]*")
 # An alias name runs to whitespace or `,[]{}`: a YAML anchor may hold any
 # other character (e.g. `&~t`, `&+t`, `&:t`), so the tail admits punctuation.
 # Used only by the quote-aware, value-position scanner below, never as a
-# raw-text search, so quoted globs still pass.
+# raw-text search, so quoted globs still pass. Callers only test that a name
+# starts, so they match one character deep (a long `****` run stays linear).
 ALIAS_NAME = re.compile(r"[^\s,\[\]{}]+")
 BLOCK_SCALAR_HEADER = re.compile(r":\s*[|>](?:[1-9])?[+-]?\s*$")
+LEADING_PROP = re.compile(r"[&!]\S*")
+# Characters that end a token for the backward walks below.
+TOKEN_DELIMS = " \t,[]{}"
 
 
 def _odd_backslashes(line, idx):
@@ -91,6 +101,77 @@ def _odd_backslashes(line, idx):
     return bs % 2 == 1
 
 
+class _LineTables:
+    """Per-line lookups that keep every backward walk O(1) per step.
+
+    The scan only ever reads a line, so these are built on first use and
+    shared by every helper scanning the same line object. A hostile line
+    (thousands of chained properties or `-` indicators, a verbatim URI
+    holding many inner `!<`, many quotes after one long chain) must not
+    make a walk recurse once per token, re-walk a prefix once per verbatim
+    candidate, or rescan a token once per quote. prev_delim, prev_ws and
+    prev_nonws[i] are the last token delimiter, space-or-tab and
+    non-space-or-tab at or before i (-1 when none); next_nonws[i] is the
+    first non-space-or-tab at or after i (len when none); vopen lists the
+    `!<` openings at a token boundary (line start or after whitespace /
+    `,[]{}` / `:`); lead and lead_u are the lengths of the leading
+    space/tab and Unicode-whitespace runs; memo caches node-start verdicts
+    per (position, context) and vor the running ORs over verbatim openings
+    (see `_verbatim_at_node_start`).
+    """
+
+    __slots__ = ("prev_delim", "prev_ws", "prev_nonws", "next_nonws",
+                 "vopen", "lead", "lead_u", "memo", "vor")
+
+    def __init__(self, line):
+        n = len(line)
+        self.prev_delim = [-1] * n
+        self.prev_ws = [-1] * n
+        self.prev_nonws = [-1] * n
+        delim = blank = solid = -1
+        for idx, ch in enumerate(line):
+            if ch in TOKEN_DELIMS:
+                delim = idx
+            if ch in " \t":
+                blank = idx
+            else:
+                solid = idx
+            self.prev_delim[idx] = delim
+            self.prev_ws[idx] = blank
+            self.prev_nonws[idx] = solid
+        self.next_nonws = [n] * (n + 1)
+        for idx in range(n - 1, -1, -1):
+            self.next_nonws[idx] = (idx if line[idx] not in " \t"
+                                    else self.next_nonws[idx + 1])
+        self.vopen = []
+        idx = line.find("!<")
+        while idx != -1:
+            if idx == 0 or line[idx - 1] in " \t,[]{}:":
+                self.vopen.append(idx)
+            idx = line.find("!<", idx + 1)
+        self.lead = self.next_nonws[0]
+        self.lead_u = n - len(line.lstrip())
+        self.memo = {}
+        self.vor = {}
+
+
+_TABLES = []
+
+
+def _line_tables(line):
+    # Keyed by identity: every helper scanning a line receives the same str
+    # object, while each pass re-splits the text into new, equal objects; an
+    # equality-keyed cache would compare those character by character on
+    # every lookup (quadratic on a long line). Most recent first, 4 slots.
+    for text, tabs in _TABLES:
+        if text is line:
+            return tabs
+    tabs = _LineTables(line)
+    _TABLES.insert(0, (line, tabs))
+    del _TABLES[4:]
+    return tabs
+
+
 def _verbatim_opens(s, end):
     # Candidate `!<` openings for the `>` at index `end`, nearest first. A
     # candidate must sit at a token boundary (line start or after whitespace
@@ -99,15 +180,44 @@ def _verbatim_opens(s, end):
     # earliest-first): a second `!<` inside the URI (`!<a!<b,c>`) fails the
     # boundary test so the outer opening wins, while an earlier unrelated
     # `!<` (`!<a>,!<b>`) loses to the nearer real opening instead of
-    # spanning the comma. Callers validate the node's own position.
-    idx = s.rfind("!<", 0, end)
-    while idx != -1:
-        if (idx == 0 or s[idx - 1] in " \t,[]{}:") and not any(
-                c in " \t" for c in s[idx:end + 1]):
-            yield idx
-        if idx == 0:
-            break
-        idx = s.rfind("!<", 0, idx)
+    # spanning the comma. Callers validate the node's own position. The
+    # openings come pre-indexed from the line tables and the whitespace
+    # bound is one lookup, so a call never rescans the line.
+    tabs = _line_tables(s)
+    lo = bisect.bisect_left(tabs.vopen, tabs.prev_ws[end] + 1)
+    hi = bisect.bisect_right(tabs.vopen, end - 2)
+    for pos in range(hi - 1, lo - 1, -1):
+        yield tabs.vopen[pos]
+
+
+def _key_colons(line, closed_quote, pending_key=False):
+    # The colons `_quoted_key_colon` accepts, found in O(1): only the first
+    # non-blank after the actual closing quote (blanks may sit between a
+    # JSON-style key and its colon), and with a pending quoted key from the
+    # previous line, the line's first non-blank.
+    tabs = _line_tables(line)
+    found = []
+    if closed_quote is not None:
+        c = tabs.next_nonws[closed_quote + 1]
+        if c < len(line) and line[c] == ":":
+            found.append(c)
+    if pending_key:
+        c = tabs.lead
+        if c < len(line) and line[c] == ":":
+            found.append(c)
+    return found
+
+
+def _token_stop(line, k, closed_quote, pending_key=False):
+    # Where a backward token walk from k (k >= 0) stops: the last token
+    # delimiter at or before k, or a later real quoted-key colon (the key
+    # boundary, so `"k":&a` splits at its colon, never at a quote inside a
+    # property name). Same stop as stepping back one character at a time.
+    m = _line_tables(line).prev_delim[k]
+    for c in _key_colons(line, closed_quote, pending_key):
+        if m < c <= k:
+            m = c
+    return m
 
 
 def _before_is_node_start(line, s, closed_quote, pending_key=False,
@@ -121,62 +231,113 @@ def _before_is_node_start(line, s, closed_quote, pending_key=False,
     # not a property, so a quote after it must not open. When the previous
     # line ended inside a flow plain scalar (`in_plain_cur`), a token at the
     # start of this line is a continuation of that scalar, not a fresh node.
-    if in_plain_cur:
-        k2 = s - 1
-        while k2 >= 0 and line[k2] in (" ", "\t"):
-            k2 -= 1
-        if k2 < 0:
-            return False
-    if s <= 0:
-        return True
-    if line[s - 1] in "[{,":
-        return True
-    k = s - 1
-    while k >= 0 and line[k] in (" ", "\t"):
-        k -= 1
-    if k < 0:
-        return True
-    m = k
-    prev = None
-    if line[k] == ">":
-        # A trailing verbatim tag (`!<a,b>`) is one token even though its
-        # URI may hold commas: consume the `!<...>` span whole (opening at
-        # a token boundary, nearest first) instead of splitting it at its
-        # comma. A `>` that is not a verbatim tag (e.g. `&<>`, `a>b`)
-        # yields no candidate and falls through to the token walk below.
-        for idx in _verbatim_opens(line, k):
-            prev = line[idx:k + 1]
-            m = idx - 1
+    # Iterative: a chain of properties or indicators steps back one token
+    # per loop (no recursion per token, so a long chain cannot overflow the
+    # stack); every position on the way shares the chain's verdict, which
+    # is memoized per context in the line tables, so a later walk that
+    # reaches a resolved position stops there.
+    tabs = _line_tables(line)
+    path = []
+    while True:
+        key = (s, closed_quote, pending_key, in_plain_cur)
+        if key in tabs.memo:
+            verdict = tabs.memo[key]
             break
-    if prev is None:
-        while m >= 0 and line[m] not in " \t,[]{}":
-            if line[m] == ":" and _quoted_key_colon(line, m, closed_quote,
-                                                    pending_key):
-                # Stop at the real key colon, not at a quote in a property
-                # name.
+        path.append(key)
+        if in_plain_cur and s <= tabs.lead:
+            # Only blanks before s: a token leading a continuation line.
+            verdict = False
+            break
+        if s <= 0 or line[s - 1] in "[{,":
+            verdict = True
+            break
+        k = tabs.prev_nonws[s - 1]
+        if k < 0:
+            verdict = True
+            break
+        if line[k] == ">":
+            # A trailing verbatim tag (`!<a,b>`) is one token even though
+            # its URI may hold commas: consume the `!<...>` span whole
+            # (opening at a token boundary, nearest first) instead of
+            # splitting it at its comma; it is a property, so the walk
+            # continues at its opening. A `>` that is not a verbatim tag
+            # (e.g. `&<>`, `a>b`) yields no candidate and falls through to
+            # the token walk below.
+            opening = next(_verbatim_opens(line, k), None)
+            if opening is not None:
+                s = opening
+                continue
+        # The token ends at k and starts after m: the last delimiter, or
+        # the real key colon (not a quote in a property name).
+        m = _token_stop(line, k, closed_quote, pending_key)
+        if m == k:
+            verdict = True
+            break
+        if line[m + 1] in "&!":
+            s = m + 1
+            continue
+        if m + 1 == k and line[k] in "-?":
+            if in_plain_cur and (m < 0 or m <= tabs.lead_u):
+                # The `-`/`?` leads a token chain at the start of a
+                # continuation line (`- &a "p`, `? !!str "p`): YAML reads
+                # the whole line as plain text, not a fresh node.
+                verdict = False
                 break
-            m -= 1
-        prev = line[m + 1:k + 1]
-    if prev == "":
-        return True
-    if prev[0] in "&!":
-        return _before_is_node_start(line, m + 1, closed_quote, pending_key,
-                                     in_plain_cur)
-    if prev in ("-", "?"):
-        if in_plain_cur and (m < 0 or line[:m].strip() == ""):
-            # The `-`/`?` leads a token chain at the start of a
-            # continuation line (`- &a "p`, `? !!str "p`): YAML reads the
-            # whole line as plain text, not a fresh node.
-            return False
-        # The indicator itself must sit at a node start (recurse, as the
-        # `&`/`!` branch does): after a plain-scalar word (`foo - &a "p`)
-        # or a mid-scalar property (`foo &a ? !t "p`) it is scalar text,
-        # not an indicator, so a quote after the chain must not open.
-        return _before_is_node_start(line, m + 1, closed_quote, pending_key,
-                                     in_plain_cur)
-    if prev.endswith(":"):
-        return True
-    return False
+            # The indicator itself must sit at a node start (keep walking,
+            # as the `&`/`!` branch does): after a plain-scalar word
+            # (`foo - &a "p`) or a mid-scalar property (`foo &a ? !t "p`)
+            # it is scalar text, not an indicator, so a quote after the
+            # chain must not open.
+            s = m + 1
+            continue
+        verdict = line[k] == ":"
+        break
+    for key in path:
+        tabs.memo[key] = verdict
+    return verdict
+
+
+def _verbatim_at_node_start(line, end, closed_quote, pending_key=False,
+                            in_plain_cur=False):
+    # True when any `_verbatim_opens` candidate for the `>` at `end` sits at
+    # a node start. Every `>` of one blank-free run sees a prefix of the
+    # same pre-indexed openings, so a running OR per (first opening,
+    # context) answers each `>` from the openings it adds instead of
+    # revisiting all of them per quote (many quotes after one long URI
+    # stay linear). The closing quote matters only through its key colon
+    # (see `_key_colons`) and only to openings after that colon (a walk
+    # from s reads positions before s), so earlier openings share the
+    # context without it and a string closing between quotes does not
+    # restart the work.
+    tabs = _line_tables(line)
+    lo = bisect.bisect_left(tabs.vopen, tabs.prev_ws[end] + 1)
+    hi = bisect.bisect_right(tabs.vopen, end - 2)
+    split = hi
+    if closed_quote is not None:
+        c = tabs.next_nonws[closed_quote + 1]
+        if c < len(line) and line[c] == ":":
+            split = min(hi, max(lo, bisect.bisect_right(tabs.vopen, c)))
+    return (_openings_or(line, lo, split, None, pending_key, in_plain_cur)
+            or _openings_or(line, split, hi, closed_quote, pending_key,
+                            in_plain_cur))
+
+
+def _openings_or(line, lo, hi, closed_quote, pending_key, in_plain_cur):
+    # OR of the node-start test over the openings vopen[lo:hi], kept as a
+    # prefix-OR list per (lo, context) and extended only as far as asked.
+    if hi <= lo:
+        return False
+    tabs = _line_tables(line)
+    run = tabs.vor.setdefault((lo, closed_quote, pending_key, in_plain_cur),
+                              [])
+    while len(run) < hi - lo:
+        hit = bool(run) and run[-1]
+        if not hit:
+            hit = _before_is_node_start(line, tabs.vopen[lo + len(run)],
+                                        closed_quote, pending_key,
+                                        in_plain_cur)
+        run.append(hit)
+    return run[hi - lo - 1]
 
 
 def _quoted_key_colon(line, colon, closed_quote, pending_key=False):
@@ -255,11 +416,9 @@ def _at_scalar_start(line, i, closed_quote, pending_key=False,
     # `foo!<x> "p` or `foo !<x> "p`) is scalar text, not a tag. A `>` that
     # is not a verbatim tag falls through to the anchor/tag token scan
     # below (e.g. `&<> "..."` is an anchor named `<>`, not a verbatim tag).
-    if line[j] == ">":
-        for idx in _verbatim_opens(line, j):
-            if _before_is_node_start(line, idx, closed_quote,
-                                      pending_key, in_plain_cur):
-                return True
+    if line[j] == ">" and _verbatim_at_node_start(line, j, closed_quote,
+                                                  pending_key, in_plain_cur):
+        return True
     # Anchor/tag name directly before the quote: take the whitespace- and
     # flow-delimited token ending at j (an anchor/tag name admits any other
     # character, including `&`, `!`, quotes, `~:+@%` and `<>`, e.g. `&a!`,
@@ -270,20 +429,14 @@ def _at_scalar_start(line, i, closed_quote, pending_key=False,
     # only a quote separated from the token by whitespace opens, so `&" "a`
     # keeps the first quote inside the name and opens at the real scalar.
     # Fail closed on an empty token (a quote right after a flow bracket in
-    # an odd position).
+    # an odd position). The token stops at the same key boundary as the
+    # node-start walk, so chains of properties after `"k":` resolve alike.
     if line[i - 1] not in (" ", "\t"):
         return False
-    k = j
-    while k >= 0 and line[k] not in " \t,[]{}":
-        if line[k] == ":" and _quoted_key_colon(line, k, closed_quote,
-                                                pending_key):
-            # Preserve the same key boundary through chains of properties.
-            break
-        k -= 1
-    token = line[k + 1:j + 1]
-    if token == "":
+    k = _token_stop(line, j, closed_quote, pending_key)
+    if k == j:
         return True
-    if token[0] in "&!":
+    if line[k + 1] in "&!":
         return _before_is_node_start(line, k + 1, closed_quote, pending_key,
                                      in_plain_cur)
     return False
@@ -300,6 +453,82 @@ def _pending_next_for(code, closed_quote, in_single_end, in_double_end):
     if not stripped or stripped[-1] not in "\"'":
         return False
     return closed_quote == len(stripped) - 1
+
+
+def _trailing_prop_start(s):
+    # Start of the leftmost trailing property or alias: a verbatim tag
+    # (`!<` with no space/tab from there to a final `>`) or an
+    # anchor/tag/alias sigil (`&`, `*`, `!`) whose name runs to the line end
+    # (no whitespace or `,[]{}`); None when the line ends in neither. The
+    # same start as searching `!<[^ \t]*>$|[&*!][^\s,\[\]{}]+$`, computed
+    # from the line end in linear time: that search backtracks over the
+    # whole final token from every sigil in it, which is quadratic on a
+    # long run of `!<`/`&`/`*` that does not end the line in a property.
+    n = len(s)
+    best = None
+    if n >= 3 and s[-1] == ">":
+        p = s.find("!<", max(s.rfind(" "), s.rfind("\t")) + 1, n - 1)
+        if p != -1:
+            best = p
+    r = n
+    while r > 0 and not (s[r - 1].isspace() or s[r - 1] in ",[]{}"):
+        r -= 1
+    for p in range(r, n - 1):
+        if s[p] in "&*!":
+            if best is None or p < best:
+                best = p
+            break
+    return best
+
+
+def _chain_reaches_value(s, j, closed_quote, pending_key=False):
+    # Walk back from j over the trailing property chain of line s: True
+    # when some reading reaches a value boundary (the chain is complete
+    # properties, so the next line is fresh), False when every reading
+    # dead-ends mid-scalar (the line pends). A token starting with `&`/`!`
+    # is a property regardless of colons inside it (anchor names may hold
+    # `:`, e.g. `&a:b`); only a token that is not a property can be a key
+    # boundary. A verbatim `!<...>` span is consumed to its closing `>`
+    # before tokenizing, never split on a comma inside its URI. The first
+    # property may be glued to its quoted key's colon (`"k":&a !!str`, or a
+    # pending quoted key whose colon starts this line): a real quoted-key
+    # colon inside the fused token still marks the value boundary. A `>`
+    # may close several verbatim openings (an inner `!<` inside the URI);
+    # each opening is a separate reading, tried nearest first, and an inner
+    # one dead-ends (empty token at its `]`/`}`) so an outer one still
+    # resolves instead of the line over-pending. Readings share their
+    # prefix, so the walk is iterative with a visited set: each position
+    # resolves once (no re-walk of the prefix per opening, which was
+    # exponential on `!<a:!<b>` chains, and no recursion per `>`).
+    tabs = _line_tables(s)
+    glued = [c for c in _key_colons(s, closed_quote, pending_key)
+             if c + 1 < len(s) and s[c + 1] in "&!"]
+    seen = set()
+    todo = [j]
+    while todo:
+        j = todo.pop()
+        while True:
+            j = tabs.prev_nonws[j] if j >= 0 else -1
+            if j < 0:
+                return True
+            if j in seen:
+                break
+            seen.add(j)
+            if s[j] == ">":
+                opens = list(_verbatim_opens(s, j))
+                if opens:
+                    todo.extend(idx - 1 for idx in reversed(opens))
+                    break
+                # No opening: not a verbatim tag; fall through to the token
+                # walk below (e.g. `&<>` names an anchor).
+            k = tabs.prev_delim[j]
+            if k < j and s[k + 1] in "&!":
+                j = k
+                continue
+            if any(k < c < j for c in glued) or s[j] in ",{[:?-":
+                return True
+            break
+    return False
 
 
 def _plain_next_for(code, in_single_end, in_double_end, depth_end,
@@ -331,8 +560,8 @@ def _plain_next_for(code, in_single_end, in_double_end, depth_end,
         # inside an anchor/tag name such as `&a"`) falls through to the
         # token test below.
         return False
-    m = re.search(r"!<[^ \t]*>$|[&*!][^\s,\[\]{}]+$", stripped)
-    if m:
+    start = _trailing_prop_start(stripped)
+    if start is not None:
         # A complete anchor/tag/alias at value position (`key: &a`, `[!t`,
         # `- *t`) is a complete node or a property awaiting its node: the
         # next line is fresh, so its quotes must open. The property name
@@ -341,54 +570,10 @@ def _plain_next_for(code, in_single_end, in_double_end, depth_end,
         # branches below. After scalar text (`foo &a`) the line may still
         # continue as plain text. A value may also carry an anchor and a
         # tag as a pair (`&a !!str`): walk back over the whole trailing
-        # property chain before applying the value-position test. A token
-        # starting with `&`/`!` is a property regardless of colons inside
-        # it (anchor names may hold `:`, e.g. `&a:b`); only a token that
-        # is not a property can be a key boundary. A verbatim `!<...>`
-        # span is consumed to its closing `>` before tokenizing, never
-        # split on a comma inside its URI; the opening comes from the
-        # nearest-first boundary candidates, so an inner `!<` inside the
-        # URI cannot win over the real opening. The first property may be
-        # glued to its quoted key's colon (`"k":&a !!str`, or a pending
-        # quoted key whose colon starts this line): a real quoted-key
-        # colon inside the fused token still marks the value boundary.
-        # Every verbatim candidate is tried, nearest first: an inner `!<`
-        # inside the URI dead-ends (empty token at its `]`/`}`), so the
-        # walk falls through to the next (outer) candidate instead of
-        # over-pending; the walk resumes at the first candidate that
-        # reaches a value boundary (mirroring `_at_scalar_start`).
-        def _walk_back(j):
-            # True when the walk from j reaches a value boundary (the
-            # trailing chain is complete properties: fresh line); False
-            # when it dead-ends mid-scalar (the line pends).
-            while j >= 0 and stripped[j] in " \t":
-                j -= 1
-            while j >= 0:
-                if stripped[j] == ">":
-                    cands = list(_verbatim_opens(stripped, j))
-                    if cands:
-                        return any(_walk_back(idx - 1) for idx in cands)
-                    # No candidate: not a verbatim tag; fall through to
-                    # the token walk below (e.g. `&<>` names an anchor).
-                k = j
-                while k >= 0 and stripped[k] not in " \t,[]{}":
-                    k -= 1
-                tok = stripped[k + 1:j + 1]
-                if not tok or tok[0] not in "&!":
-                    for c_idx in range(k + 1, j + 1):
-                        if stripped[c_idx] != ":":
-                            continue
-                        if c_idx + 1 > j or stripped[c_idx + 1] not in "&!":
-                            continue
-                        if _quoted_key_colon(stripped, c_idx, closed_quote,
-                                                pending_key):
-                            return True
-                    return j < 0 or stripped[j] in ",{[:?-"
-                j = k
-                while j >= 0 and stripped[j] in " \t":
-                    j -= 1
-            return True
-        if _walk_back(m.start() - 1):
+        # property chain before applying the value-position test (see
+        # `_chain_reaches_value`).
+        if _chain_reaches_value(stripped, start - 1, closed_quote,
+                                pending_key):
             return False
         return True
     if c in "\"'":
@@ -433,6 +618,7 @@ def _scan_line(line, in_single=False, in_double=False, pending_key=False,
     mask = list(line)
     closed_quote = None
     in_plain_cur = bool(in_plain and depth > 0)
+    next_gt = None
     i = 0
     while i < len(line):
         ch = line[i]
@@ -445,10 +631,14 @@ def _scan_line(line, in_single=False, in_double=False, pending_key=False,
             # scanner's quote state, and URI brackets must not skew flow
             # depth). The span ends at the first `>` on this line and
             # holds no whitespace (verbatim URIs cannot); anything else
-            # is not a tag and falls through to normal handling.
-            end = line.find(">", i + 2)
-            if end != -1 and not any(c in " \t"
-                                     for c in line[i:end + 1]):
+            # is not a tag and falls through to normal handling. The
+            # cursor only moves forward, so the next `>` is cached and the
+            # blank test is one table lookup (many `!<` before one far `>`
+            # stay linear).
+            if next_gt is None or 0 <= next_gt < i + 2:
+                next_gt = line.find(">", i + 2)
+            end = next_gt
+            if end != -1 and _line_tables(line).prev_ws[end] < i:
                 for k in range(i, end + 1):
                     mask[k] = " "
                 i = end + 1
@@ -595,22 +785,25 @@ def _literal_flags(lines):
 def _strip_leading_props(s):
     # Consume leading YAML node properties (`&anchor`, `!tag`, `!!tag`,
     # `!h!suffix`, `!<verbatim>`) plus whitespace, returning the remainder.
-    # Verbatim URIs hold no whitespace, so a whitespace split is exact.
-    rest = s
+    # Verbatim URIs hold no whitespace, so a whitespace split is exact. A
+    # cursor walks the line (no re-slice per property, which is quadratic on
+    # a long property run).
+    pos = 0
     while True:
-        rest = rest.lstrip(" \t")
-        if rest.startswith("!<"):
-            end = rest.find(">")
+        while pos < len(s) and s[pos] in " \t":
+            pos += 1
+        if s.startswith("!<", pos):
+            end = s.find(">", pos)
             if end == -1:
                 break
-            rest = rest[end + 1:]
+            pos = end + 1
             continue
-        m = re.match(r"[&!]\S*", rest)
+        m = LEADING_PROP.match(s, pos)
         if m:
-            rest = rest[m.end():]
+            pos = m.end()
             continue
         break
-    return rest.lstrip(" \t")
+    return s[pos:].lstrip(" \t")
 
 
 def find_on_candidates(text):
@@ -790,7 +983,7 @@ def _suspicious_top_key(code_lines, literal):
             if ch == "*" and not key_quoted[k]:
                 if k > 0 and re.match(r"[A-Za-z0-9_]", key[k - 1]):
                     continue
-                m = ALIAS_NAME.match(key, k + 1)
+                m = ALIAS_NAME.match(key, k + 1, k + 2)
                 if not m:
                     continue
                 # No `**` glob skip: a value-position `*` always starts an
@@ -837,7 +1030,7 @@ def _unquoted_alias_hit(pairs):
                 if i > 0 and re.match(r"[A-Za-z0-9_]", code[i - 1]):
                     i += 1
                     continue
-                m = ALIAS_NAME.match(code, i + 1)
+                m = ALIAS_NAME.match(code, i + 1, i + 2)
                 if not m:
                     i += 1
                     continue

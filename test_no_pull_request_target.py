@@ -1073,6 +1073,57 @@ FAIL = {
 }
 
 
+def _flow_input(description, trigger, next_line=None):
+    # A flow-mapping workflow_dispatch input whose description holds the
+    # probe (optionally continued on a second line), plus `trigger`.
+    text = "on: {workflow_dispatch: {inputs: {x: {description: " + description
+    if next_line is not None:
+        text += "\n  " + next_line
+    return text + ", type: string}}}, " + trigger + ": {}}\n" + JOB
+
+
+# Paperclip Review round 19: parser-valid lines that made the scan
+# exponential (verbatim colon chain), quadratic (nested verbatim URI, many
+# quotes after one, long sigil or star run) or overflow the recursion limit
+# (long property, indicator or glued-quote chains; a RecursionError on a
+# clean push workflow exits 1 like a ban hit). Each must finish inside
+# run_gate's 10s deadline with the right exit code: label -> (workflow
+# text, exit code).
+BOUNDED = {
+    "verbatim colon chain hides trigger": (
+        _flow_input("foo " + " ".join(["!<a:!<b>"] * 60) + " &a",
+                    "pull_request_target", '"v"'), 1),
+    "verbatim colon chain push": (
+        _flow_input("foo " + " ".join(["!<a:!<b>"] * 60) + " &a", "push",
+                    '"v"'), 0),
+    "long verbatim chain before next-line value push": (
+        _flow_input("foo " + " ".join(["!<a>"] * 1500) + " &a", "push",
+                    '"v"'), 0),
+    "long verbatim chain before same-line quote push": (
+        _flow_input("foo " + " ".join(["!<a>"] * 1500) + ' "v"', "push"), 0),
+    "long anchor chain before same-line quote push": (
+        _flow_input("foo " + " ".join(["&a"] * 1500) + ' "v"', "push"), 0),
+    "glued quotes after verbatim tags push": (
+        _flow_input("x " + "!<b>' " * 1500, "push"), 0),
+    "long dash chain in run step push": (
+        "on:\n  push:\n"
+        + JOB.replace("echo hi", "x " + "- " * 1500 + '"v"'), 0),
+    "nested verbatim URI push": (
+        _flow_input("x !<" + "a:!<" * 4000 + 'b> "v"', "push"), 0),
+    "many quotes after nested verbatim URI push": (
+        _flow_input("x !<" + "a:!<" * 3000 + "b" + '>"' * 3000, "push"), 0),
+    "many quotes after nested verbatim URI hides trigger": (
+        _flow_input("x !<" + "a:!<" * 3000 + "b" + '>"' * 3000,
+                    "pull_request_target"), 1),
+    "long sigil run push": (
+        _flow_input("&" * 30000 + "a b", "push", '"v"'), 0),
+    "long sigil run hides trigger": (
+        _flow_input("&" * 30000 + "a b", "pull_request_target", '"v"'), 1),
+    "long star run push": (
+        "on: {push: {branches: [a " + "*" * 100000 + "]}}\n" + JOB, 0),
+}
+
+
 def run_gate(workflow_text):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -1131,6 +1182,21 @@ class TestNoPullRequestTarget(unittest.TestCase):
             self.fail("trigger 30-pair gate run exceeded its 10s bound")
         self.assertLess(time.time() - t0, 10, out)
         self.assertEqual(code, 1, out)
+
+    def test_pathological_lines_bounded(self):
+        # Paperclip Review round 19 (see BOUNDED): a hang, a traceback or a
+        # wrong verdict on any shape fails here naming the shape.
+        import time
+        for label, (text, want) in BOUNDED.items():
+            with self.subTest(label):
+                t0 = time.time()
+                try:
+                    code, out = run_gate(text)
+                except subprocess.TimeoutExpired:
+                    self.fail(f"{label}: gate run exceeded its 10s bound")
+                self.assertLess(time.time() - t0, 10, out)
+                self.assertNotIn("Traceback", out)
+                self.assertEqual(code, want, out)
 
 
 if __name__ == "__main__":

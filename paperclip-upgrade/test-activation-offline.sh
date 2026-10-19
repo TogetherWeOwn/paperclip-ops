@@ -369,6 +369,29 @@ rm -f "$ROOT/data/.local/bin/tool-dotdot" "$ROOT/data/data/.gitconfig"
 ln -s /paperclip/.local/../.gitconfig "$ROOT/data/.local/bin/tool-dotdot-ok"
 expect_ok "reharden still passes a dotdot spelling staying inside the mount" -- reharden_env
 rm -f "$ROOT/data/.local/bin/tool-dotdot-ok"
+# .. after a symlinked component resolves physically: the kernel substitutes
+# the link before applying .., so /paperclip/alias/../evil with alias ->
+# sub/deep is really /paperclip/sub/evil (agent-writable here), not the
+# lexical /paperclip/evil twin (in-baseline here). Cancelling lexically
+# would judge the twin and pass; fail closed instead. Both alias spellings
+# (relative and container-absolute) and a second-hop occurrence are pinned.
+mkdir -p "$ROOT/data/sub/deep"
+printf 'x\n' > "$ROOT/data/sub/evil"; chmod 0666 "$ROOT/data/sub/evil"
+printf 'x\n' > "$ROOT/data/evil"; chmod 0644 "$ROOT/data/evil"
+ln -s sub/deep "$ROOT/data/alias"
+ln -s /paperclip/alias/../evil "$ROOT/data/.local/bin/tool-alias-dotdot"
+expect_refused "reharden fails closed on .. after a relative symlinked component" "after a non-directory" -- reharden_env
+rm -f "$ROOT/data/.local/bin/tool-alias-dotdot" "$ROOT/data/alias"
+ln -s /paperclip/sub/deep "$ROOT/data/alias"
+ln -s /paperclip/alias/../evil "$ROOT/data/.local/bin/tool-alias-dotdot"
+expect_refused "reharden fails closed on .. after a container-absolute symlinked component" "after a non-directory" -- reharden_env
+rm -f "$ROOT/data/.local/bin/tool-alias-dotdot"
+ln -s /paperclip/alias/../evil "$ROOT/data/mid-alias"
+ln -s /paperclip/mid-alias "$ROOT/data/.local/bin/tool-alias-chain"
+expect_refused "reharden fails closed on .. after a symlink in a second hop" "after a non-directory" -- reharden_env
+rm -f "$ROOT/data/.local/bin/tool-alias-chain" "$ROOT/data/mid-alias" "$ROOT/data/alias" \
+  "$ROOT/data/evil" "$ROOT/data/sub/evil"
+rmdir "$ROOT/data/sub/deep" "$ROOT/data/sub"
 # a target ending in a newline is a different file than its stripped twin
 printf 'x\n' > "$ROOT/data/.gitconfig"$'\n'; chmod 0666 "$ROOT/data/.gitconfig"$'\n'
 ln -s $'/paperclip/.gitconfig\n' "$ROOT/data/.local/bin/tool-newline"

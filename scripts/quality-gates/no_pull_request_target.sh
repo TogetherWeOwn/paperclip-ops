@@ -32,7 +32,8 @@
 # across lines but a quote only opens at a scalar start (anchors/tags admit
 # punctuation, verbatim `!<...>` included even when glued to a flow bracket
 # (its opening is the nearest `!<` at a token boundary, so an inner `!<`
-# inside the URI never wins),
+# inside the URI never wins; the end-of-line chain walk tries every
+# candidate and resumes at the first that reaches a value boundary),
 # but only when whitespace-separated from the token and at a node start: a
 # quote glued to an anchor/tag name is part of the name, and a property
 # glued to, or spaced after, a plain-scalar word (`foo &b`, `foo!<x>`) is
@@ -52,7 +53,9 @@
 # and lines split on "\n" only (U+2028/U+0085 are scalar content, not
 # line breaks), so neither a
 # multi-line quoted scalar nor an apostrophe in a plain scalar (e.g.
-# `description: it's`) can desync the comment/bracket scan. Literal `|`/`>`
+# `description: it's`) can desync the comment/bracket scan. Verbatim
+# `!<...>` spans are opaque to the shared scan: quotes, brackets and `#`
+# inside the URI are tag content, never structure. Literal `|`/`>`
 # block-scalar content is opaque text: `on:`-looking lines there never win the
 # trigger block and quotes/brackets/aliases inside are not structure (the
 # token itself is still scanned). Quoted `*` globs (e.g. '**/*-lock.json')
@@ -349,35 +352,43 @@ def _plain_next_for(code, in_single_end, in_double_end, depth_end,
         # glued to its quoted key's colon (`"k":&a !!str`, or a pending
         # quoted key whose colon starts this line): a real quoted-key
         # colon inside the fused token still marks the value boundary.
-        j = m.start() - 1
-        while j >= 0 and stripped[j] in " \t":
-            j -= 1
-        while j >= 0:
-            if stripped[j] == ">":
-                idx = next(_verbatim_opens(stripped, j), None)
-                if idx is not None:
-                    j = idx - 1
-                    while j >= 0 and stripped[j] in " \t":
-                        j -= 1
-                    continue
-            k = j
-            while k >= 0 and stripped[k] not in " \t,[]{}":
-                k -= 1
-            tok = stripped[k + 1:j + 1]
-            if not tok or tok[0] not in "&!":
-                for c_idx in range(k + 1, j + 1):
-                    if stripped[c_idx] != ":":
-                        continue
-                    if c_idx + 1 > j or stripped[c_idx + 1] not in "&!":
-                        continue
-                    if _quoted_key_colon(stripped, c_idx, closed_quote,
-                                            pending_key):
-                        return False
-                break
-            j = k
+        # Every verbatim candidate is tried, nearest first: an inner `!<`
+        # inside the URI dead-ends (empty token at its `]`/`}`), so the
+        # walk falls through to the next (outer) candidate instead of
+        # over-pending; the walk resumes at the first candidate that
+        # reaches a value boundary (mirroring `_at_scalar_start`).
+        def _walk_back(j):
+            # True when the walk from j reaches a value boundary (the
+            # trailing chain is complete properties: fresh line); False
+            # when it dead-ends mid-scalar (the line pends).
             while j >= 0 and stripped[j] in " \t":
                 j -= 1
-        if j < 0 or stripped[j] in ",{[:?-":
+            while j >= 0:
+                if stripped[j] == ">":
+                    cands = list(_verbatim_opens(stripped, j))
+                    if cands:
+                        return any(_walk_back(idx - 1) for idx in cands)
+                    # No candidate: not a verbatim tag; fall through to
+                    # the token walk below (e.g. `&<>` names an anchor).
+                k = j
+                while k >= 0 and stripped[k] not in " \t,[]{}":
+                    k -= 1
+                tok = stripped[k + 1:j + 1]
+                if not tok or tok[0] not in "&!":
+                    for c_idx in range(k + 1, j + 1):
+                        if stripped[c_idx] != ":":
+                            continue
+                        if c_idx + 1 > j or stripped[c_idx + 1] not in "&!":
+                            continue
+                        if _quoted_key_colon(stripped, c_idx, closed_quote,
+                                                pending_key):
+                            return True
+                    return j < 0 or stripped[j] in ",{[:?-"
+                j = k
+                while j >= 0 and stripped[j] in " \t":
+                    j -= 1
+            return True
+        if _walk_back(m.start() - 1):
             return False
         return True
     if c in "\"'":
@@ -426,6 +437,22 @@ def _scan_line(line, in_single=False, in_double=False, pending_key=False,
     while i < len(line):
         ch = line[i]
         was_quoted = in_single or in_double
+        if (ch == "!" and not was_quoted and i + 1 < len(line)
+                and line[i + 1] == "<"):
+            # A verbatim tag span is opaque: quotes, brackets and `#`
+            # inside the URI are tag content, never structure (a quote
+            # after a flow opener inside the URI must not toggle the
+            # scanner's quote state, and URI brackets must not skew flow
+            # depth). The span ends at the first `>` on this line and
+            # holds no whitespace (verbatim URIs cannot); anything else
+            # is not a tag and falls through to normal handling.
+            end = line.find(">", i + 2)
+            if end != -1 and not any(c in " \t"
+                                     for c in line[i:end + 1]):
+                for k in range(i, end + 1):
+                    mask[k] = " "
+                i = end + 1
+                continue
         if ch == "'" and not in_double:
             if in_single and i + 1 < len(line) and line[i + 1] == "'":
                 mask[i] = mask[i + 1] = " "

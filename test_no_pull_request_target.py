@@ -130,6 +130,14 @@ PASS = {
         'on: {push: {}, x: {description: !<a,b> &a "v # c"}}\n' + JOB),
     "push inner-verbatim quoted scalar passes": (
         'on: {push: {}, x: {description: !<x,y!<z> "v # c"}}\n' + JOB),
+    # Paperclip Review round 18: push controls in the brace-verbatim and
+    # verbatim-quote shapes (the old gate over-pended / flipped quote
+    # parity, so these flagged as unclosed brackets; both flip rc=1->0).
+    "push brace-verbatim next-line value passes": (
+        'on: {push: {}, x: {description: !<a}!<b> &a\n'
+        ' "v"}}\n' + JOB),
+    "push verbatim-quote scalar passes": (
+        'on: {push: {}, x: {description: !<,"> "v # c"}}\n' + JOB),
 }
 
 FAIL = {
@@ -1012,6 +1020,56 @@ FAIL = {
     "anchor inner-verbatim same-line value hides trigger": (
         'on: {workflow_dispatch: {inputs: {x: {description: &a !<x,y!<z> '
         '"a }}}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    # Paperclip Review round 18, finding 1: the end-of-line chain walk took
+    # only the first verbatim candidate, so an inner `!<` preceded by `]` or
+    # `}` (in the boundary set) dead-ended the walk and the line
+    # over-pended; the next line's value quote never opened. The value
+    # string holds three braces here: the URI's `]`/`}` is the fourth
+    # gate-visible close. All read clean before. Reviewer-oracle shapes
+    # (@actions/workflow-parser 0.3.61 accepts; PyYAML's strict verbatim
+    # charset rejects `}`/`]`/`<` in URIs).
+    "brace-verbatim next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<a}!<b> &a\n'
+        '  "a }}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    "bracket-verbatim next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<a]!<b> &a\n'
+        '  "a }}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    "pending brace-verbatim next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description"\n'
+        '  :!<a}!<b> &a\n'
+        '  "a }}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    "pending bracket-verbatim next-line value hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {"description"\n'
+        '  :!<a]!<b> &a\n'
+        '  "a }}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    # Paperclip Review round 18, finding 2: the shared scan had no
+    # verbatim-span awareness, so a quote inside the URI right after a flow
+    # opener (`,`, `[`, `{`) opened a spurious string that the value quote
+    # closed, flipping parity so the string braces balanced depth and `#`
+    # stripped the trigger. The `[`/`{` URIs hold a gate-visible bracket,
+    # so those value strings hold five braces. All read clean before.
+    # Reviewer-oracle shapes (workflow-parser accepts; PyYAML rejects).
+    "quote-in-verbatim comma same-line hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<,"> '
+        '"a }}}} # b", type: string}}}}, pull_request_target: {}}}' + "\n" + JOB),
+    "quote-in-verbatim comma next-line hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<,">\n'
+        '  "a }}}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    "quote-in-verbatim bracket same-line hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<["> '
+        '"a }}}}} # b", type: string}}}}, pull_request_target: {}}}' + "\n" + JOB),
+    "quote-in-verbatim bracket next-line hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<[">\n'
+        '  "a }}}}} # b", type: string}}}, pull_request_target: {}}}\n' + JOB),
+    "quote-in-verbatim brace same-line hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<{"> '
+        '"a }}}}} # b", type: string}}}}, pull_request_target: {}}}' + "\n" + JOB),
+    "quote-in-verbatim squote hides trigger": (
+        "on: {workflow_dispatch: {inputs: {x: {description: !<,'> "
+        "'a }}}} # b', type: string}}}}, pull_request_target: {}}}\n" + JOB),
+    "quote-in-verbatim anchor chain hides trigger": (
+        'on: {workflow_dispatch: {inputs: {x: {description: !<,"> &a '
+        '"a }}}} # b", type: string}}}}, pull_request_target: {}}}\n' + JOB),
 }
 
 

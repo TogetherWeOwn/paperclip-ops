@@ -31,6 +31,12 @@ REVIEW_RULES_GUARD = (
 REVIEW_RULES_PACKS = frozenset({"rust", "ts", "python-shell-ci", "php", "security"})
 # Input keys accepted by the pinned review-rules reusable at REVIEW_RULES_GUARD.
 REVIEW_RULES_INPUTS = frozenset({"packs", "mode", "runs-on-json"})
+# Exact audited minimum for the test-guard reusable caller. Matches the
+# pre-existing workflow-level permissions (public base 8cdd97b:
+# test-guard.yml lines 19-21, marker-label actor audit comment). A
+# job-level declaration replaces the floor, so dropping pull-requests
+# read would regress the reusable gate; anything broader needs inspection.
+TEST_GUARD_CALLER_PERMISSIONS = {"contents": "read", "pull-requests": "read"}
 
 
 class PublicCI(unittest.TestCase):
@@ -72,15 +78,14 @@ class PublicCI(unittest.TestCase):
                                          {"contents": "read"}, label)
                         self.assert_review_rules_inputs(inputs, label)
                     else:
-                        # Test-guard callers carry no job permissions today
-                        # (workflow-level only); pin that to absent-or-read so
-                        # a later `permissions: write-all` edit fails closed.
-                        # The callee caps its own permissions, so impact is low,
-                        # but the guard should prove the bound it claims.
-                        perms = job.get("permissions")
-                        self.assertTrue(
-                            perms is None or perms == {"contents": "read"},
-                            label)
+                        # Test-guard callers carry the exact audited minimum:
+                        # workflow-level {contents, pull-requests} read is the
+                        # pre-existing floor (public base 8cdd97b), and the
+                        # job-level declaration replaces it. Pin exact so both
+                        # widening and narrowing (dropping pull-requests read
+                        # regresses the marker-label audit gate) fail closed.
+                        self.assertEqual(job.get("permissions"),
+                                         TEST_GUARD_CALLER_PERMISSIONS, label)
                         try:
                             route = json.loads(inputs.get("runs-on-json", "null"))
                         except (TypeError, ValueError):
@@ -124,7 +129,9 @@ class PublicCI(unittest.TestCase):
             (directory / "direct.yaml").write_text(
                 "on: pull_request\njobs:\n  direct:\n    runs-on: ubuntu-latest\n")
             (directory / "reusable.yml").write_text(
-                "on: pull_request\njobs:\n  guard:\n    uses: " + HOSTED_TEST_GUARD
+                "on: pull_request\njobs:\n  guard:\n    permissions:\n"
+                "      contents: read\n      pull-requests: read\n"
+                "    uses: " + HOSTED_TEST_GUARD
                 + "\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n")
             (directory / "review.yml").write_text(
                 "on: pull_request\njobs:\n  review-rules:\n    name: review-rules\n    permissions:\n      contents: read\n    uses: " + REVIEW_RULES_GUARD
@@ -141,10 +148,10 @@ class PublicCI(unittest.TestCase):
             "missing-route": "    steps: []\n",
             "unknown-reusable": "    uses: example/workflows/.github/workflows/check.yml@" + "a" * 40
                 + "\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
-            "reusable-private-default": "    uses: " + HOSTED_TEST_GUARD + "\n",
-            "reusable-private-input": "    uses: " + HOSTED_TEST_GUARD
+            "reusable-private-default": "    permissions:\n      contents: read\n      pull-requests: read\n    uses: " + HOSTED_TEST_GUARD + "\n",
+            "reusable-private-input": "    permissions:\n      contents: read\n      pull-requests: read\n    uses: " + HOSTED_TEST_GUARD
                 + "\n    with:\n      runs-on-json: '[\"self-hosted\", \"two-ephemeral\"]'\n",
-            "reusable-expression": "    uses: " + HOSTED_TEST_GUARD
+            "reusable-expression": "    permissions:\n      contents: read\n      pull-requests: read\n    uses: " + HOSTED_TEST_GUARD
                 + "\n    with:\n      runs-on-json: ${{ inputs.runner }}\n",
             "review-rules-enforce": "    uses: " + REVIEW_RULES_GUARD
                 + "\n    permissions:\n      contents: read\n    with:\n      packs: ts\n      mode: enforce\n",
@@ -172,14 +179,24 @@ class PublicCI(unittest.TestCase):
                 + "\n    permissions:\n      contents: write\n    with:\n      packs: ts\n      mode: warn\n",
             "review-rules-missing-permissions": "    uses: " + REVIEW_RULES_GUARD
                 + "\n    with:\n      packs: ts\n      mode: warn\n",
-            "test-guard-secrets-inherit": "    uses: " + HOSTED_TEST_GUARD
+            "test-guard-secrets-inherit": "    permissions:\n      contents: read\n      pull-requests: read\n    uses: " + HOSTED_TEST_GUARD
                 + "\n    secrets: inherit\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
-            "test-guard-if": "    uses: " + HOSTED_TEST_GUARD
+            "test-guard-if": "    permissions:\n      contents: read\n      pull-requests: read\n    uses: " + HOSTED_TEST_GUARD
                 + "\n    if: github.event_name == 'pull_request'\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
             "test-guard-permissions-write": "    uses: " + HOSTED_TEST_GUARD
                 + "\n    permissions: write-all\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
             "test-guard-permissions-contents-write": "    uses: " + HOSTED_TEST_GUARD
                 + "\n    permissions:\n      contents: write\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-missing-permissions": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-permissions-contents-read-only": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    permissions:\n      contents: read\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-permissions-empty": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    permissions: {}\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-permissions-extra-scope": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    permissions:\n      contents: read\n      pull-requests: read\n      issues: read\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-permissions-pull-requests-write": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    permissions:\n      contents: read\n      pull-requests: write\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
         }
         for name, job in bad_jobs.items():
             for suffix in (".yml", ".yaml"):

@@ -8,13 +8,21 @@ from pathlib import Path
 
 MIN_RUNS = 5
 FLIP_RATE_THRESHOLD = 0.2
-LEDGER_PATH = Path(os.environ.get(
-    'FLAKE_LEDGER_PATH', str(Path.home() / '.local/share/flake-ledger.json')
-))
 
 
 class LedgerUnavailable(Exception):
     """The evidence cannot support a safe flaky/non-flaky decision."""
+
+
+def resolve_ledger_path():
+    """Return the configured ledger path without touching HOME when overridden."""
+    override = os.environ.get('FLAKE_LEDGER_PATH')
+    if override is not None:
+        return Path(override)
+    try:
+        return Path.home() / '.local/share/flake-ledger.json'
+    except RuntimeError as exc:
+        raise LedgerUnavailable(f'cannot determine default ledger path: {exc}') from exc
 
 
 def read_ledger(path):
@@ -70,17 +78,40 @@ def eligibility(rows, repo, job_or_test):
     test_matches = [row for row in repo_rows if row['test'] == job_or_test]
     job_matches = [row for row in repo_rows if row['job'] == job_or_test]
     job_summaries = [row for row in job_matches if row['test'] == f'job {job_or_test}']
-    matches = test_matches or job_summaries or job_matches
-    if not matches:
+
+    candidates = []
+    if test_matches:
+        if len(test_matches) != 1:
+            raise LedgerUnavailable(
+                f'ambiguous ledger evidence for {repo} / {job_or_test}: '
+                f'{len(test_matches)} matching test rows'
+            )
+        candidates.append(test_matches[0])
+    if job_matches:
+        if job_summaries:
+            if len(job_summaries) != 1:
+                raise LedgerUnavailable(
+                    f'ambiguous ledger evidence for {repo} / {job_or_test}: '
+                    f'{len(job_summaries)} matching job summary rows'
+                )
+            candidates.append(job_summaries[0])
+        else:
+            if len(job_matches) != 1:
+                raise LedgerUnavailable(
+                    f'ambiguous ledger evidence for {repo} / {job_or_test}: '
+                    f'{len(job_matches)} matching job rows'
+                )
+            candidates.append(job_matches[0])
+    if not candidates:
         raise LedgerUnavailable(f'no ledger evidence for {repo} / {job_or_test}')
-    if len(matches) != 1:
+    if len(candidates) == 2 and candidates[0] is not candidates[1]:
         raise LedgerUnavailable(
             f'ambiguous ledger evidence for {repo} / {job_or_test}: '
-            f'{len(matches)} matching rows'
+            'test and job matches identify different rows'
         )
 
-    flips = matches[0]['flips']
-    observations = matches[0]['observations']
+    flips = candidates[0]['flips']
+    observations = candidates[0]['observations']
     if observations < MIN_RUNS:
         raise LedgerUnavailable(
             f'insufficient evidence for {repo} / {job_or_test}: '
@@ -96,7 +127,7 @@ def main(argv=None):
         return 2
     _, repo, job_or_test = args
     try:
-        result = eligibility(read_ledger(LEDGER_PATH), repo, job_or_test)
+        result = eligibility(read_ledger(resolve_ledger_path()), repo, job_or_test)
     except LedgerUnavailable as exc:
         print(f'unavailable: {exc}')
         return 2

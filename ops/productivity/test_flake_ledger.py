@@ -95,6 +95,56 @@ class EligibilityQuery(unittest.TestCase):
         result = self.query(content, 'two-bot-next', 'rust tests')
         self.assertEqual((result.returncode, result.stdout.strip()), (0, 'yes'))
 
+    def test_test_and_job_collision_is_unavailable(self):
+        content = self.content(
+            ledger_row(job='other', test='nightly', flips=5, observations=5),
+            ledger_row(job='nightly', test='job nightly', flips=0, observations=5),
+        )
+        result = self.query(content, 'two-bot-next', 'nightly')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unavailable', result.stdout.lower())
+        self.assertNotEqual(result.stdout.strip(), 'yes')
+        self.assertNotEqual(result.stdout.strip(), 'no')
+
+    def test_job_summary_takes_precedence_over_same_job_details(self):
+        content = self.content(
+            ledger_row(job='nightly', test='job nightly', flips=2, observations=5),
+            ledger_row(job='nightly', test='a_detail_test', flips=0, observations=5),
+        )
+        result = self.query(content, 'two-bot-next', 'nightly')
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, 'yes'))
+
+    def test_duplicate_job_summaries_are_unavailable(self):
+        content = self.content(
+            ledger_row(job='nightly', test='job nightly', flips=2, observations=5),
+            ledger_row(job='nightly', test='job nightly', flips=0, observations=5),
+        )
+        result = self.query(content, 'two-bot-next', 'nightly')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unavailable', result.stdout.lower())
+        self.assertNotEqual(result.stdout.strip(), 'no')
+
+    def test_override_path_works_without_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp, 'ledger.jsonl')
+            ledger.write_text(self.content(ledger_row(flips=2, observations=5)), encoding='utf-8')
+            env = dict(os.environ, FLAKE_LEDGER_PATH=str(ledger))
+            env.pop('HOME', None)
+            result = subprocess.run([sys.executable, str(SCRIPT), 'is_flaky', 'two-bot-next', 'rust tests'],
+                                    capture_output=True, text=True, env=env, check=False)
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, 'yes'))
+
+    def test_missing_home_without_override_is_unavailable(self):
+        import importlib.util
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location('flake_ledger_under_test', SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(module.Path, 'home', side_effect=RuntimeError('no home')):
+                with self.assertRaises(module.LedgerUnavailable):
+                    module.resolve_ledger_path()
+
 
 if __name__ == '__main__':
     unittest.main()

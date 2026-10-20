@@ -19,9 +19,10 @@ record must contain these fields:
 `observations` is the number of observed runs and `flips` is the number of
 outcome changes in that evidence. All records must be valid, including records
 that do not match the query. Rows match when `repo` is exact and the requested
-value is an exact `test` or `job`. An exact test match takes precedence over a
-job match. For a job query, a summary row named `job <job>` takes precedence;
-otherwise the query must identify exactly one row. Duplicate or ambiguous rows
+value is an exact `test` or `job`. When the value matches different rows as a
+test name and as a job name, the query is ambiguous and unavailable. Among job
+matches, a summary row named `job <job>` takes precedence; otherwise the query
+must identify exactly one row. Duplicate or ambiguous rows
 are unavailable rather than combined, because separate test rows may describe
 the same CI runs.
 

@@ -21,15 +21,15 @@ outside this verb's contract and needs its own review.
 | File | Role |
 | --- | --- |
 | `op_queue_reject.sh` | The verb. Installed root-owned 755, run once as root. |
-| `test_op_queue_reject.sh` | Offline refusal/regression suite (65 cases). |
+| `test_op_queue_reject.sh` | Offline refusal/regression suite (67 cases). |
 | `docs/runbooks/op-queue-reject.md` | This file. |
 
 Hashes below pin the reviewed revision. The approving reviewer re-checks
 them at the exact head that merges; a re-push re-pins.
 
 ```
-341595f76f1fade8b85ae059a24b4f26d9aeb648a38778efca2d1a77aa22c2f6  op_queue_reject.sh
-5e22feb80d6abef15cfdfd2e30567606c4f0f5939b4a33087938b5aa452281e2  test_op_queue_reject.sh
+206622cd400284ce478344e51e34385f01f3b65bba497f2f7fefb4332e39792b  op_queue_reject.sh
+f86e982f5ac60d0aaf0ba805d8112254ee25fc3f183355eaf3593dd926eeafe1  test_op_queue_reject.sh
 ```
 
 Trust lineage: the queue-dir jail (`within_dir_strict`) and the root-owned
@@ -125,14 +125,23 @@ only their own temporary file and empty claim directory, never packet bytes
 or a terminal receipt. The filesystem must support hard links; otherwise the
 verb fails closed with `receipt_unwritten`.
 
-The packet's jail and file trust, SHA-256, size, full-resolution mtime and
-inode identity are rechecked under the acquired claim before receipt
-construction and again immediately before publication. A mismatch or failed
+Receipt size and mtime come from the same initial composite metadata snapshot
+used for change detection, never from independent size/timestamp reads. A
+transient change restored before claiming cannot mix unrelated metadata into
+the terminal receipt. The packet's jail and file trust, SHA-256, size,
+full-resolution mtime and inode identity are rechecked under the acquired
+claim before receipt construction and again immediately before publication. A mismatch or failed
 recheck returns exit 3 / `packet_changed`, publishes no receipt or audit event,
 and cleans the owned claim so a clean retry can bind the current bytes. This
 is change detection, not a producer lock: host custody must still prevent
 writers mutating or replacing the selected packet during the final
 check-to-publication window. The verb never locks or modifies packet bytes.
+
+Each packet hash read uses GNU coreutils `timeout 30 sha256sum`: the initial
+read and both rechecks are bounded even if a producer substitutes a FIFO after
+file validation. Initial read failure returns exit 3 / `packet_unreadable`;
+recheck failure returns exit 3 / `packet_changed` with owned claim cleanup.
+These bounds wrap only read-only hashing, never packet execution.
 
 A successful reject appends exactly one compact JSON object to the JSONL audit
 log. If that append fails after receipt publication, exit 1 / `failed/log_unwritten`
@@ -154,11 +163,11 @@ or restarts a service.
 
 ```bash
 bash -n op_queue_reject.sh && bash -n test_op_queue_reject.sh
-./test_op_queue_reject.sh          # expect: 65 passed, 0 failed
+./test_op_queue_reject.sh          # expect: 67 passed, 0 failed
 sha256sum op_queue_reject.sh test_op_queue_reject.sh
 ```
 
-Expected: exit 0, `65 passed, 0 failed`, and hashes equal to the manifest
+Expected: exit 0, `67 passed, 0 failed`, and hashes equal to the manifest
 above. On the host (operator only, read-only after install):
 
 ```bash

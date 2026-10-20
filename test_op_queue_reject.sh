@@ -822,6 +822,203 @@ else
 fi
 
 # ===========================================================================
+section "4f. initial metadata is one validated snapshot"
+if python3 - "$TOOL" "$TMP" <<'PY'
+import datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+source = str(Path(sys.argv[1]).resolve())
+root = Path(sys.argv[2]) / "initial-metadata"
+queue, processed, bin_dir = (root / name for name in ("queue", "processed", "bin"))
+for directory in (queue, processed, bin_dir):
+    directory.mkdir(parents=True)
+log = root / "audit.log"
+trace = root / "stat-trace"
+env = os.environ | {
+    "OP_REJECT_QUEUE_DIR": str(queue), "OP_REJECT_PROCESSED_DIR": str(processed),
+    "OP_REJECT_LOG": str(log), "FIXTURE_BIN": str(bin_dir), "FIXTURE_SOURCE": source,
+    "REAL_STAT": shutil.which("stat"), "STAT_TRACE": str(trace),
+}
+command = ["bash", "-c", 'export PATH="$FIXTURE_BIN:$PATH"; source "$FIXTURE_SOURCE" "$@"', "fixture"]
+shim = bin_dir / "stat"
+shim.write_text('''#!/usr/bin/env python3
+import os, pathlib, subprocess, sys
+packet = pathlib.Path(os.environ["FIXTURE_PACKET"])
+fmt = sys.argv[2] if sys.argv[1:2] == ["-c"] else ""
+trace = pathlib.Path(os.environ["STAT_TRACE"])
+kind = os.environ["SAMPLE_KIND"]
+if sys.argv[-1] == str(packet):
+    previous = trace.read_text().splitlines() if trace.exists() else []
+    with trace.open("a") as out:
+        out.write(fmt + "\\n")
+    composite = fmt == "%d:%i:%s:%y"
+    trigger = ((kind == "size" and fmt == "%s") or (kind == "mtime" and fmt == "%Y")
+               or (kind.startswith("stamp-") and composite and fmt not in previous))
+    if trigger:
+        original, before = packet.read_bytes(), packet.stat()
+        if kind.endswith("size"):
+            packet.write_bytes(b"transient producer content with a different size\\n")
+        else:
+            os.utime(packet, ns=(before.st_atime_ns, before.st_mtime_ns + 5000000000))
+        # Real filesystem mutation and real stat output, never fabricated metadata.
+        result = subprocess.run([os.environ["REAL_STAT"], *sys.argv[1:]], capture_output=True)
+        packet.write_bytes(original)
+        os.utime(packet, ns=(before.st_atime_ns, before.st_mtime_ns))
+        sys.stdout.buffer.write(result.stdout)
+        sys.exit(result.returncode)
+sys.exit(subprocess.run([os.environ["REAL_STAT"], *sys.argv[1:]]).returncode)
+''')
+shim.chmod(0o755)
+failures = []
+for kind in ("size", "mtime", "stamp-size", "stamp-mtime"):
+    packet = queue / (kind + ".json")
+    packet.write_bytes(b"original bytes\n")
+    packet.chmod(0o644)
+    os.utime(packet, ns=(1792436400000000100, 1792436400000000100))
+    before = packet.read_bytes(), packet.stat()
+    receipt = processed / (packet.name + ".rejected.json")
+    claim = processed / (packet.name + ".claim")
+    log_before = log.read_bytes() if log.exists() else b""
+    trace.unlink(missing_ok=True)
+    args = command + ["reject", "--packet", str(packet), "--reason", "stale-packet"]
+    case_env = env | {"FIXTURE_PACKET": str(packet), "SAMPLE_KIND": kind}
+    try:
+        result = subprocess.run(args, env=case_env, capture_output=True, text=True, timeout=10)
+        output = json.loads(result.stdout)
+        formats = trace.read_text().splitlines()
+        assert "%d:%i:%s:%y" in formats, "composite snapshot was not sampled"
+        if kind.startswith("stamp-"):
+            assert (result.returncode, output["reason_code"]) == (3, "packet_changed"), (kind, result.stdout)
+            assert not receipt.exists() and not claim.exists()
+            assert (log.read_bytes() if log.exists() else b"") == log_before
+            # Stable retry must be accurate and must not inherit partial evidence.
+            result = subprocess.run(args, env=case_env | {"PATH": os.environ["PATH"], "FIXTURE_BIN": str(root)},
+                                    capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stdout
+        record = json.loads(receipt.read_text())
+        audit = json.loads(log.read_text().splitlines()[-1])
+        assert record == audit and not claim.exists()
+        terminal, audit_bytes = receipt.read_bytes(), log.read_bytes()
+        retry = subprocess.run(args, env=case_env, capture_output=True, text=True, timeout=10)
+        assert (retry.returncode, json.loads(retry.stdout)["reason_code"]) == (6, "replay_detected")
+        assert receipt.read_bytes() == terminal and log.read_bytes() == audit_bytes
+        assert packet.read_bytes() == before[0]
+        assert (packet.stat().st_ino, packet.stat().st_mtime_ns) == (before[1].st_ino, before[1].st_mtime_ns)
+        assert record["packet_sha256"] == "sha256:" + hashlib.sha256(before[0]).hexdigest()
+        assert record["packet_bytes"] == before[1].st_size, (kind, record["packet_bytes"], before[1].st_size)
+        expected_mtime = datetime.datetime.fromtimestamp(before[1].st_mtime_ns // 1000000000,
+                                                        datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        assert record["packet_mtime"] == expected_mtime, (kind, record["packet_mtime"], expected_mtime)
+        assert "%s" not in formats and "%Y" not in formats, "receipt metadata sampled separately"
+        print("  " + kind + ": accurate receipt/audit snapshot, preserved packet and immutable replay")
+    except AssertionError as error:
+        failures.append((kind, str(error)))
+assert not failures, failures
+PY
+then
+  ok "changed-and-restored size/mtime cannot corrupt terminal snapshot; refusal retries cleanly"
+else
+  bad "initial metadata snapshot regressions"
+fi
+
+# ===========================================================================
+section "4g. FIFO replacement at every hash is bounded"
+if python3 - "$TOOL" "$TMP" <<'PY'
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import sys
+
+source = str(Path(sys.argv[1]).resolve())
+root = Path(sys.argv[2]) / "bounded-hashes"
+queue, processed, bin_dir = (root / name for name in ("queue", "processed", "bin"))
+for directory in (queue, processed, bin_dir):
+    directory.mkdir(parents=True)
+log, counter, bounds = (root / name for name in ("audit.log", "count", "bounds"))
+env = os.environ | {
+    "OP_REJECT_QUEUE_DIR": str(queue), "OP_REJECT_PROCESSED_DIR": str(processed),
+    "OP_REJECT_LOG": str(log), "FIXTURE_BIN": str(bin_dir), "FIXTURE_SOURCE": source,
+    "REAL_SHA": shutil.which("sha256sum"), "REAL_TIMEOUT": shutil.which("timeout"),
+    "HASH_COUNT": str(counter), "HASH_BOUNDS": str(bounds),
+}
+command = ["bash", "-c", 'export PATH="$FIXTURE_BIN:$PATH"; source "$FIXTURE_SOURCE" "$@"', "fixture"]
+(bin_dir / "sha256sum").write_text('''#!/usr/bin/env python3
+import os, pathlib, sys
+counter = pathlib.Path(os.environ["HASH_COUNT"])
+count = int(counter.read_text()) + 1 if counter.exists() else 1
+counter.write_text(str(count))
+if count == int(os.environ["BLOCK_HASH"]):
+    packet = pathlib.Path(os.environ["FIXTURE_PACKET"])
+    packet.unlink()
+    os.mkfifo(packet)
+os.execv(os.environ["REAL_SHA"], [os.environ["REAL_SHA"], *sys.argv[1:]])
+''')
+(bin_dir / "timeout").write_text('''#!/usr/bin/env python3
+import os, pathlib, sys
+assert sys.argv[1:3] == ["30", "sha256sum"], sys.argv
+with pathlib.Path(os.environ["HASH_BOUNDS"]).open("a") as out:
+    out.write("30 sha256sum\\n")
+# Exercise real timeout termination without adding 90 seconds to the offline tier.
+os.execv(os.environ["REAL_TIMEOUT"], [os.environ["REAL_TIMEOUT"], "0.2", *sys.argv[2:]])
+''')
+for shim in bin_dir.iterdir():
+    shim.chmod(0o755)
+failures = []
+for index in (1, 2, 3):
+    packet = queue / ("hash-" + str(index) + ".json")
+    packet.write_bytes(b"opaque bytes")
+    packet.chmod(0o644)
+    receipt = processed / (packet.name + ".rejected.json")
+    claim = processed / (packet.name + ".claim")
+    counter.unlink(missing_ok=True)
+    bounds.unlink(missing_ok=True)
+    log_before = log.read_bytes() if log.exists() else b""
+    args = command + ["reject", "--packet", str(packet), "--reason", "schema-probe"]
+    process = subprocess.Popen(args, env=env | {"BLOCK_HASH": str(index), "FIXTURE_PACKET": str(packet)},
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=5)
+        result = json.loads(stdout)
+        assert (process.returncode, result["reason_code"]) == (3, "packet_unreadable" if index == 1 else "packet_changed"), (index, stdout, stderr)
+        assert int(counter.read_text()) == index and len(bounds.read_text().splitlines()) == index
+        assert not receipt.exists() and not claim.exists()
+        assert (log.read_bytes() if log.exists() else b"") == log_before
+        # Only the test repairs its malicious FIFO; the helper has no packet write.
+        packet.unlink()
+        packet.write_bytes(b"opaque bytes")
+        packet.chmod(0o644)
+        retry = subprocess.run(args, env=env | {"FIXTURE_BIN": str(root)},
+                               capture_output=True, text=True, timeout=10)
+        assert retry.returncode == 0, retry.stdout
+        assert json.loads(receipt.read_text())["packet_bytes"] == packet.stat().st_size
+        print("  hash " + str(index) + ": FIFO read timed out, no terminal state, clean retry succeeds")
+    except (AssertionError, subprocess.TimeoutExpired) as error:
+        failures.append((index, str(error)))
+    finally:
+        # An unbounded older helper must not leave a blocked hash child behind.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()
+assert not failures, failures
+PY
+then
+  ok "initial, under-claim and final packet hashes bound FIFO reads and clean owned state"
+else
+  bad "bounded packet hash regressions"
+fi
+
+# ===========================================================================
 section "5. filesystem boundary"
 OUTSIDE="$TMP/outside.json"; printf '{"outside":true}' > "$OUTSIDE"
 run_tool reject --packet "$OUTSIDE" --reason schema-probe
@@ -875,7 +1072,18 @@ structural "no shell passthrough" 'bash +-c'
 structural "no backticks" '`'
 structural "no exec builtin" '(^|[;&|])[[:space:]]*exec[[:space:]]'
 structural "no sourced scripts" '(^|[;&|])[[:space:]]*(source[[:space:]]|\.[[:space:]]+/)'
-structural "no timeout wrapper (nothing runs)" '\btimeout\b'
+# Permit only the two fixed packet-read bounds, never a packet execution wrapper.
+TIMEOUTS="$(grep -E '\btimeout\b' <<<"$CODE" || true)"
+EXPECTED_TIMEOUTS="$(cat <<'EOF'
+PACKET_SHA="$(timeout 30 sha256sum -- "$PACKET_REAL" | cut -d' ' -f1)" || PACKET_SHA=""
+  sha="$(timeout 30 sha256sum -- "$PACKET_REAL" | cut -d' ' -f1)" || return 1
+EOF
+)"
+if [[ "$TIMEOUTS" == "$EXPECTED_TIMEOUTS" ]]; then
+  ok "timeouts limited to fixed packet hash reads"
+else
+  bad "unexpected or missing packet hash timeout" "$TIMEOUTS"
+fi
 structural "no permission mutation" '\b(chmod|chown|chgrp)\b'
 # Only the acquired claim's fixed receipt.tmp may be removed. The payload and
 # terminal receipt still have no deletion path; pin the sole exception exactly.

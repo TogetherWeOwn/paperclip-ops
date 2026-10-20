@@ -9,8 +9,8 @@
 # original payload stays exactly where it was. There is no execution path in
 # this file — no exec of packet data, no allowlisted script, no eval, no
 # `bash -c`, no `$($`, no backticks, no approval handling. Grep for `eval`,
-# `bash -c`, `exec `, `timeout`, `chmod`, `chown`, `curl`, and `ssh` over the
-# non-comment lines returns nothing.
+# `bash -c`, `exec `, `chmod`, `chown`, `curl`, and `ssh` over non-comment
+# lines returns nothing. Fixed timeouts bound only packet hashing, not execution.
 #
 # WHAT THIS IS NOT. Not an executor, not an installer, not a migration, not
 # a credential minter, not a network client, not a queue sweeper. It takes
@@ -261,15 +261,16 @@ check_root_owned_file "$PACKET_REAL" "packet" \
 # human timestamp is second-resolution. Include inode identity to catch swaps.
 PACKET_STAMP="$(stat -c '%d:%i:%s:%y' -- "$PACKET_REAL")" \
   || { emit_result "$(result refused packet_unreadable "" "" false)"; exit 3; }
-PACKET_SHA="$(sha256sum -- "$PACKET_REAL" | cut -d' ' -f1)" || PACKET_SHA=""
+PACKET_SHA="$(timeout 30 sha256sum -- "$PACKET_REAL" | cut -d' ' -f1)" || PACKET_SHA=""
 [[ "$PACKET_SHA" =~ ^[a-f0-9]{64}$ ]] \
   || { emit_result "$(result refused packet_unreadable "" "" false)"; log_human "packet unreadable"; exit 3; }
 PACKET_SHA="sha256:$PACKET_SHA"
-PACKET_BYTES="$(stat -c %s -- "$PACKET_REAL")" \
-  || { emit_result "$(result refused packet_unreadable "" "" false)"; exit 3; }
-PACKET_EPOCH="$(stat -c %Y -- "$PACKET_REAL")" \
-  || { emit_result "$(result refused packet_unreadable "" "" false)"; exit 3; }
-PACKET_MTIME="$(date -u -d "@$PACKET_EPOCH" +%Y-%m-%dT%H:%M:%SZ)" \
+# Serialize metadata only from the composite stamp that both rechecks validate.
+# Separate size/mtime reads can capture a transient producer state restored
+# before claiming, even when the stamp and hash themselves still match.
+PACKET_METADATA="${PACKET_STAMP#*:*:}"
+PACKET_BYTES="${PACKET_METADATA%%:*}"
+PACKET_MTIME="$(date -u -d "${PACKET_METADATA#*:}" +%Y-%m-%dT%H:%M:%SZ)" \
   || { emit_result "$(result refused packet_unreadable "" "" false)"; exit 3; }
 
 # Revalidate trust before reading again; a replacement symlink or FIFO must not
@@ -282,7 +283,7 @@ packet_unchanged() {
   check_root_owned_file "$PACKET_REAL" "packet" || return 1
   stamp="$(stat -c '%d:%i:%s:%y' -- "$PACKET_REAL")" || return 1
   [[ "$stamp" == "$PACKET_STAMP" ]] || return 1
-  sha="$(sha256sum -- "$PACKET_REAL" | cut -d' ' -f1)" || return 1
+  sha="$(timeout 30 sha256sum -- "$PACKET_REAL" | cut -d' ' -f1)" || return 1
   [[ "sha256:$sha" == "$PACKET_SHA" ]] || return 1
   stamp="$(stat -c '%d:%i:%s:%y' -- "$PACKET_REAL")" || return 1
   [[ "$stamp" == "$PACKET_STAMP" ]]

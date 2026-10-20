@@ -118,7 +118,7 @@ SHIM
 chmod +x "$WORK/bin/curl"
 : > "$WORK/argv.log"
 
-T="PATH=$WORK/bin:/usr/bin:/bin HOME=$HOME TMPDIR=$WORK GATUS_URL=http://127.0.0.1:$PORT GATUS_EXTERNAL_TOKEN=T RDAP_BASE_URL=http://127.0.0.1:$PORT/domain/"
+T="PATH=$WORK/bin:/usr/bin:/bin HOME=$HOME TMPDIR=$WORK GATUS_URL=http://127.0.0.1:$PORT GATUS_EXTERNAL_TOKEN=T RDAP_BASE_URL=http://127.0.0.1:$PORT/domain/ DOMAIN_WARN_DAYS= DOMAIN_CRIT_DAYS= RDAP_DOMAINS= CURL_BIN="
 fresh() { : > "$PUSH_FILE"; : > "$RDAP_FILE"; : > "$WORK/argv.log"; }
 last_push() {
   [[ -s "$PUSH_FILE" ]] || { echo "EMPTY"; return; }
@@ -264,7 +264,7 @@ mutant() {  # <label> <sed-expr>
 }
 mutant anchor 's/"expiration"/"expiry"/'
 mutant httpgate 's/\[\[ "$http" == "200" \]\]/[[ "$http" == "500" ]]/'
-mutant warndefault 's/DOMAIN_WARN_DAYS:-21/DOMAIN_WARN_DAYS:-1/'
+mutant warndefault 's/DOMAIN_WARN_DAYS:-21/DOMAIN_WARN_DAYS:-200/'
 
 echo "RESULT: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

@@ -440,7 +440,9 @@ def dispatch(request_path, install, now=None, expected_uid=0,
     if request["principal"] != manifest["principal"]["user"]:
         raise Refusal("principal_mismatch")
     approval = request["approval_id"]
-    if (not isinstance(approval, str)
+    # compare_digest on str needs ASCII; refuse anything else first so a
+    # non-ASCII token still yields the single fixed code, never a TypeError.
+    if (not isinstance(approval, str) or not approval.isascii()
             or not hmac.compare_digest(approval, manifest["approval"]["id"])):
         raise Refusal("authorization_refused")
     if request["expires_at"] <= moment:

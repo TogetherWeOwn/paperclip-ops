@@ -431,8 +431,9 @@ class CarrierTests(unittest.TestCase):
     # Authorization: absent/expired/over-broad approval and wrong principal.
 
     def test_unknown_or_absent_approval_refused(self):
-        for approval_id in (None, "", 1, "other-approval", "A" * 129,
-                            "../escape", "with space"):
+        for approval_id in (None, "", 1, True, "other-approval", "A" * 129,
+                            "../escape", "with space", "café",
+                            "emoji-\U0001f6a8", "null-\u0000-byte"):
             request = valid_request()
             request["approval_id"] = approval_id
             self.write_request(request)

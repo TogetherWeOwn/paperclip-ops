@@ -177,5 +177,30 @@ class BackstopTest(unittest.TestCase):
         self.api.assert_not_called()
 
 
+class PacketImportTest(unittest.TestCase):
+    def test_wake_import_hunk_applies_without_fuzz(self):
+        patch = (HERE / 'patches/pr-controller-wakes.patch').read_text()
+        # Exercise this integration boundary too: a hunk with no trailing context
+        # can be interpreted as EOF and fail on the real, nonempty controller.
+        lines = patch.splitlines(keepends=True)
+        starts = [i for i, line in enumerate(lines) if line.startswith('@@')]
+        import_hunk = ''.join(lines[:starts[1]])
+        before = ("sys.path.insert(0, str(Path(__file__).resolve().parent))\n"
+                  "import review_error_rerequest as rr  # noqa: E402  (psql, gh_env, comment, card_hold, pr_url_patterns, live_run_guard)\n"
+                  "from pr_supply import REPOS as SUPPLY_REPOS  # noqa: E402\n"
+                  "\nROOT = rr.ROOT\nCID = rr.CID\n")
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'ops/productivity/pr_controller.py'
+            target.parent.mkdir(parents=True)
+            target.write_text(before)
+            result = subprocess.run(['patch', '--batch', '--fuzz=0', '-p1'],
+                                    input=import_hunk, cwd=directory,
+                                    capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            tree = ast.parse(target.read_text())
+            imports = [n.module for n in tree.body if isinstance(n, ast.ImportFrom)]
+            self.assertIn('pr_controller_wakes', imports)
+
+
 if __name__ == '__main__':
     unittest.main()

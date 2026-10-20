@@ -2,8 +2,8 @@
 +++ b/ops/productivity/pr_controller.py
 @@ -39,2 +39,3 @@
  import review_error_rerequest as rr  # noqa: E402  (psql, gh_env, comment, card_hold, pr_url_patterns, live_run_guard)
- from pr_supply import REPOS as SUPPLY_REPOS  # noqa: E402
 +from pr_controller_wakes import post_wake, reconcile_wake  # noqa: E402
+ from pr_supply import REPOS as SUPPLY_REPOS  # noqa: E402
 @@ -500,11 +501,10 @@
              continue
          text = (f"**Reminder: still {cur.replace('_', ' ')} after {since_h}h on the same head.** "

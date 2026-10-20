@@ -709,6 +709,39 @@ class CarrierTests(unittest.TestCase):
         self.assertEqual(receipt["outcome"], "fail")
         self.assertEqual(receipt["failure"], "adapter_output_over_cap")
 
+    def test_unstorable_receipt_is_an_error_not_a_refusal(self):
+        # A planted receipt blocks the attested write after the adapter ran:
+        # the adapter executed, the claim is consumed, and the caller gets a
+        # distinct error (never exit 2, which means the adapter never ran).
+        (self.state_dir / (REQUEST_ID + ".receipt.json")).write_text("planted")
+        with self.assertRaises(carrier.DispatchError) as caught:
+            self.dispatch()
+        self.assertEqual(caught.exception.code, "receipt_unwritable")
+        self.assertTrue(self.marker().exists())
+        self.assertEqual(self.claims(), [REQUEST_ID + ".claim"])
+        import io
+        from contextlib import redirect_stdout, redirect_stderr
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = carrier.main(["--request", str(self.request_path)],
+                                _install=self.install, _now=NOW, _uid=self.uid)
+        # Second attempt replays (the claim stands); a fresh id is required.
+        self.assertEqual(code, 2)
+        self.assertEqual(out.getvalue(), "")
+        self.assertEqual(err.getvalue(), "REFUSED: request_replayed\n")
+
+    def test_unstorable_receipt_cli_exit_code(self):
+        (self.state_dir / (REQUEST_ID + ".receipt.json")).write_text("planted")
+        import io
+        from contextlib import redirect_stdout, redirect_stderr
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = carrier.main(["--request", str(self.request_path)],
+                                _install=self.install, _now=NOW, _uid=self.uid)
+        self.assertEqual(code, 3)
+        self.assertEqual(out.getvalue(), "")
+        self.assertEqual(err.getvalue(), "ERROR: receipt_unwritable\n")
+
     # Two-GET ceiling: order, early stop, identity recheck on observations.
 
     def test_three_observations_violate_the_ceiling(self):

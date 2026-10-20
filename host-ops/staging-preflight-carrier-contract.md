@@ -116,8 +116,10 @@ environment refuses before dispatch. Stdout is capped at 64 KiB + 1,
 stderr at 16 KiB + 1; the whole dispatch is bounded at 180 seconds.
 
 Exit codes: `0` dispatched and passed; `1` dispatched and failed (receipt
-written, one-shot consumed); `2` refused before any adapter I/O
-(`REFUSED: <code>` on stderr, empty stdout).
+written, one-shot consumed); `2` refused before the adapter ran
+(`REFUSED: <code>` on stderr, empty stdout); `3` the adapter ran but its
+receipt could not be stored (`ERROR: receipt_unwritable`, one-shot
+consumed, the claim file remains as evidence of the attempt).
 
 ## Validation order
 
@@ -136,7 +138,8 @@ Refusal codes are fixed vocabulary: `request_unreadable`,
 `request_replayed`. Post-dispatch failure codes: `dispatch_failed`,
 `dispatch_timeout`, `adapter_output_over_cap`, `adapter_receipt_refused`,
 `observed_worker_mismatch`, `control_plane_mismatch`, or the adapter's
-own shape-checked fixed code.
+own shape-checked fixed code. A receipt that cannot be stored after the
+adapter ran raises `receipt_unwritable` (exit 3), never a refusal.
 
 ## One-shot and concurrency
 
@@ -194,7 +197,8 @@ python3 -B ./test_host_ops_staging_preflight_carrier.py
 The suite stages fixture install roots under mktemp with a synthetic
 test-only adapter, a fake clock and a fake authority environment, and
 traverses the same dispatch function the installed entrypoint uses. It
-covers zero-I/O refusals, the one positive fixed-path dispatch, one-shot
+covers refusals with no adapter execution or state mutation, the one
+positive fixed-path dispatch, one-shot
 concurrent replay, expiry, stale hashes/identity, the two-GET
 ceiling/order/early-stop recheck, bounds, the metadata allowlist, receipt
 minimization/redaction and queue-ack-vs-dispatch distinction. A passing

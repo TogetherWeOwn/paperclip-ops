@@ -6,7 +6,8 @@ manifest and, only when every check passes, execs the fixed installed adapter
 as `[interpreter, "-I", <adapter>]` with fixed argv, a scrubbed environment
 and no stdin. It performs no network I/O itself and it never searches for an
 alternate script, action or entrypoint: any failure refuses, loudly, with a
-fixed-vocabulary code. A refused request performs zero I/O.
+fixed-vocabulary code. A refused request runs no adapter and mutates no
+state (it still reads the request, manifest and adapter files it validates).
 
 There is no install, enable or activate mode. Without an installed manifest
 that explicitly enables execution, every dispatch refuses. Shipping this file
@@ -21,6 +22,7 @@ from dataclasses import dataclass
 import errno
 import fcntl
 import hashlib
+import hmac
 import json
 import os
 import pwd
@@ -101,7 +103,15 @@ OBSERVATION_ORDER = ("health", "readyz")
 
 
 class Refusal(Exception):
-    """A dispatch refused before any adapter I/O. Carries a fixed code."""
+    """A dispatch refused before the adapter runs. Carries a fixed code."""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+class DispatchError(Exception):
+    """The adapter ran but its receipt could not be stored. Fixed code."""
 
     def __init__(self, code):
         super().__init__(code)
@@ -307,14 +317,16 @@ def write_receipt(dirfd, request_id, receipt):
                      os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                      0o600, dir_fd=dirfd)
     except OSError:
-        raise Refusal("state_refused") from None
+        # Post-dispatch: the claim is consumed and the adapter has run, so
+        # this is never a Refusal (exit 2 means the adapter never ran).
+        raise DispatchError("receipt_unwritable") from None
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(body)
             stream.flush()
             os.fsync(stream.fileno())
     except OSError:
-        raise Refusal("state_refused") from None
+        raise DispatchError("receipt_unwritable") from None
 
 
 def child_environment():
@@ -427,7 +439,9 @@ def dispatch(request_path, install, now=None, expected_uid=0,
         raise Refusal("principal_mismatch")
     if request["principal"] != manifest["principal"]["user"]:
         raise Refusal("principal_mismatch")
-    if request["approval_id"] != manifest["approval"]["id"]:
+    approval = request["approval_id"]
+    if (not isinstance(approval, str)
+            or not hmac.compare_digest(approval, manifest["approval"]["id"])):
         raise Refusal("authorization_refused")
     if request["expires_at"] <= moment:
         raise Refusal("request_expired")
@@ -503,6 +517,9 @@ def main(argv=None, _install=None, _now=None, _uid=None):
     except Refusal as refused:
         print(f"REFUSED: {refused.code}", file=sys.stderr)
         return 2
+    except DispatchError as failed:
+        print(f"ERROR: {failed.code}", file=sys.stderr)
+        return 3
     print(json.dumps(receipt, indent=2, sort_keys=True))
     return 0 if receipt["outcome"] == "pass" else 1
 

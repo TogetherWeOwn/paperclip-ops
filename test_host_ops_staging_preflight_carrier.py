@@ -22,6 +22,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parent
@@ -272,6 +273,16 @@ class CarrierTests(unittest.TestCase):
             "failure", "interval", "kind", "observations", "outcome",
             "principal", "request_id", "schema", "targets",
         ])
+
+    def test_finished_at_spans_the_adapter_run(self):
+        # Under the real clock the interval must span the run: finished_at
+        # is read after the adapter returns, not copied from claimed_at.
+        # (A 1.2 s sleep always crosses an integer-second boundary.)
+        (self.root / "adapter" / "adapter-sleep-seconds").write_text("1.2")
+        receipt = self.dispatch(now=None)
+        self.assertEqual(receipt["outcome"], "pass")
+        interval = receipt["interval"]
+        self.assertGreater(interval["finished_at"], interval["claimed_at"])
 
     def test_dispatch_argv_env_and_stdin_are_fixed(self):
         self.dispatch()
@@ -655,6 +666,38 @@ class CarrierTests(unittest.TestCase):
         self.assertEqual(receipt["outcome"], "pass")
         self.assertFalse((self.state_dir / "ancient.claim").exists())
 
+    def test_consumed_request_id_survives_the_prune_window(self):
+        manifest = valid_manifest(self.adapter_sha256())
+        manifest["approval"]["expires_at"] = NOW + 200000
+        self.write_manifest(manifest)
+        first = self.dispatch()
+        self.assertEqual(first["outcome"], "pass")
+        # The first run consumed the id; drop the marker so any second
+        # execution is unmistakable.
+        self.marker().unlink()
+        # Past the prune window for the first claim; same id, fresh expiry.
+        later = NOW + 90000
+        request = valid_request()
+        request["expires_at"] = later + 300
+        self.write_request(request)
+        with self.assertRaises(carrier.Refusal) as caught:
+            self.dispatch(now=later)
+        self.assertEqual(caught.exception.code, "request_replayed")
+        # No second execution: the adapter never re-ran, the attested
+        # claim was not pruned, and the first receipt still stands.
+        self.assertFalse(self.marker().exists())
+        self.assertEqual(self.claims(), [REQUEST_ID + ".claim"])
+        self.assertEqual(self.receipts(), [REQUEST_ID + ".receipt.json"])
+
+    def test_fifo_claim_file_does_not_hang_dispatch(self):
+        os.mkfifo(self.state_dir / "planted.claim")
+        receipt = self.dispatch()
+        self.assertEqual(receipt["outcome"], "pass")
+        # Non-regular entries are counted live, never opened or pruned.
+        self.assertTrue((self.state_dir / "planted.claim").exists())
+        self.assertTrue(stat.S_ISFIFO(
+            (self.state_dir / "planted.claim").stat().st_mode))
+
     # Dispatch outcome: adapter ran; queue ack is never dispatch proof.
 
     def test_queue_acknowledgement_is_not_dispatch_proof(self):
@@ -709,6 +752,55 @@ class CarrierTests(unittest.TestCase):
         receipt = self.dispatch()
         self.assertEqual(receipt["outcome"], "fail")
         self.assertEqual(receipt["failure"], "adapter_output_over_cap")
+
+    def test_adapter_output_over_cap_kills_a_spewing_adapter(self):
+        # An adapter that crosses the cap and then sleeps must be
+        # terminated promptly: the failure is detected on the stream,
+        # not after the child exits on its own (30 s) or the timeout.
+        spewing = ("import sys, time\n"
+                   "sys.stdout.write('x' * %d)\n"
+                   "sys.stdout.flush()\n"
+                   "time.sleep(30)\n" % (carrier.MAX_STDOUT_BYTES + 2))
+        self.adapter_path.write_text(spewing)
+        self.write_manifest(valid_manifest(self.adapter_sha256()))
+        before = time.monotonic()
+        receipt = self.dispatch(dispatch_timeout=60)
+        elapsed = time.monotonic() - before
+        self.assertEqual(receipt["outcome"], "fail")
+        self.assertEqual(receipt["failure"], "adapter_output_over_cap")
+        self.assertLess(elapsed, 20)
+
+    def test_stdout_cap_boundary_is_exact(self):
+        # MAX and MAX+1 bytes reach the JSON parser (invalid JSON here,
+        # so the receipt is refused, not the output); MAX+2 trips the cap.
+        for size, failure in (
+                (carrier.MAX_STDOUT_BYTES, "adapter_receipt_refused"),
+                (carrier.MAX_STDOUT_BYTES + 1, "adapter_receipt_refused"),
+                (carrier.MAX_STDOUT_BYTES + 2, "adapter_output_over_cap")):
+            self.write_stdout(" " + "x" * (size - 1))
+            with self.subTest(size=size):
+                receipt = self.dispatch()
+                self.assertEqual(receipt["outcome"], "fail")
+                self.assertEqual(receipt["failure"], failure)
+            request = valid_request()
+            request["request_id"] = f"fixture-request-stdout-{size}"
+            self.write_request(request)
+
+    def test_stderr_cap_boundary_is_exact(self):
+        # stderr is discarded: within-cap noise still passes; MAX+2 trips it.
+        for size, outcome, failure in (
+                (carrier.MAX_STDERR_BYTES, "pass", None),
+                (carrier.MAX_STDERR_BYTES + 1, "pass", None),
+                (carrier.MAX_STDERR_BYTES + 2, "fail",
+                 "adapter_output_over_cap")):
+            (self.root / "adapter" / "adapter-stderr.txt").write_text("e" * size)
+            with self.subTest(size=size):
+                receipt = self.dispatch()
+                self.assertEqual(receipt["outcome"], outcome)
+                self.assertEqual(receipt["failure"], failure)
+            request = valid_request()
+            request["request_id"] = f"fixture-request-stderr-{size}"
+            self.write_request(request)
 
     def test_unstorable_receipt_is_an_error_not_a_refusal(self):
         # A planted receipt blocks the attested write after the adapter ran:
@@ -780,6 +872,26 @@ class CarrierTests(unittest.TestCase):
         self.assertEqual(receipt["failure"], "runtime_http_refused")
         self.assertEqual(receipt["observations"], [
             {"surface": "health", "status": 500, "worker_version_matched": True}])
+
+    def test_pass_requires_complete_all_200_observations(self):
+        base = valid_adapter_receipt()["runtime_observations"]
+        cases = {
+            "readyz_503": [base[0], {**base[1], "status": 503}],
+            "health_500_only": [{**base[0], "status": 500}],
+            "health_200_only": [base[0]],
+        }
+        for index, (label, observations) in enumerate(cases.items()):
+            payload = valid_adapter_receipt()
+            payload["runtime_observations"] = observations
+            self.write_stdout(payload)
+            with self.subTest(label=label):
+                receipt = self.dispatch()
+                self.assertEqual(receipt["outcome"], "fail")
+                self.assertEqual(receipt["failure"], "adapter_receipt_refused")
+                self.assertEqual(receipt["observations"], [])
+            request = valid_request()
+            request["request_id"] = f"fixture-request-passshape-{index:02d}"
+            self.write_request(request)
 
     def test_observation_worker_identity_mismatch_refused(self):
         payload = valid_adapter_receipt()

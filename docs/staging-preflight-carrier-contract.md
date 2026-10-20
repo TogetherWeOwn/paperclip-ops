@@ -112,9 +112,10 @@ closed, working directory `/`, environment exactly the present subset of
 `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`,
 `PAPERCLIP_RUN_SCRATCH_DIR`, `HOME` plus fixed `PATH=/usr/bin:/bin` and a
 fixed `C.UTF-8` locale. Any proxy variable in the carrier's own
-environment refuses before dispatch. Stdout and stderr are collected
-while the adapter runs and checked after it exits: more than 64 KiB + 1
-of stdout or 16 KiB + 1 of stderr produces `adapter_output_over_cap`;
+environment refuses before dispatch. Stdout and stderr are streamed
+with a hard byte ceiling while the adapter runs: the first chunk past
+64 KiB + 1 of stdout or 16 KiB + 1 of stderr terminates the whole
+adapter process group at once and produces `adapter_output_over_cap`;
 the whole dispatch is bounded at 180 seconds.
 
 Exit codes: `0` dispatched and passed; `1` dispatched and failed (receipt
@@ -149,7 +150,12 @@ Each `request_id` dispatches at most once across concurrent processes
 (`O_CREAT|O_EXCL` claim under an exclusive state-dir lock). A replay, a
 dispatch crash, a timeout and an invalid receipt all leave the claim
 consumed; a new approved request id is required. At most 128 live claims;
-claims expired more than a day are pruned, anything else refuses with
+claims expired more than a day are pruned unless a receipt already
+attests their id (an attested id stays claimed, so a replay after the
+prune window still refuses instead of executing twice). Non-regular
+entries under a claim name (FIFO, directory, ...) are never opened for
+reading or pruned; they count toward the live cap so a stuffed store
+refuses loudly instead of hanging. Anything else refuses with
 `state_exhausted`.
 
 ## Receipt-side rechecks
@@ -157,7 +163,8 @@ claims expired more than a day are pruned, anything else refuses with
 The carrier independently rechecks the adapter's report before attesting
 it: at most two `runtime_observations` in the fixed `health`-then-`readyz`
 order with early stop after a non-200 first surface; each observed worker
-version must equal the manifest target; a passing report must carry a
+version must equal the manifest target; a passing report must present
+exactly the health+readyz pair with both statuses 200 and carry a
 `control_plane` binding exactly equal to the manifest targets. Only
 allowlisted metadata bindings (the eight control-plane identity keys and
 per-surface status) reach the dispatch receipt; every other adapter-emitted

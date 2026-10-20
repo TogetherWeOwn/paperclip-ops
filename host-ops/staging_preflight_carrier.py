@@ -27,6 +27,8 @@ import json
 import os
 import pwd
 import re
+import selectors
+import signal
 import stat
 import subprocess
 import sys
@@ -255,6 +257,15 @@ def open_state_dir(path):
         raise Refusal("state_refused") from None
 
 
+def receipt_exists(dirfd, request_id):
+    """True when any entry already attests this id (never pruned, never reused)."""
+    try:
+        os.lstat(request_id + ".receipt.json", dir_fd=dirfd)
+    except OSError:
+        return False
+    return True
+
+
 def prune_and_count(dirfd, now):
     """Drop long-expired claims under the caller's lock; count the rest."""
     try:
@@ -267,8 +278,21 @@ def prune_and_count(dirfd, now):
             continue
         expired = False
         try:
-            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dirfd)
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         dir_fd=dirfd)
         except OSError:
+            live += 1
+            continue
+        try:
+            regular = stat.S_ISREG(os.fstat(fd).st_mode)
+        except OSError:
+            regular = False
+        if not regular:
+            # FIFO, directory, socket or device under a claim name: never
+            # block on it and never prune it. Counted live so a stuffed
+            # store refuses loudly at the cap instead of hanging every
+            # dispatch under the state lock.
+            os.close(fd)
             live += 1
             continue
         try:
@@ -280,6 +304,11 @@ def prune_and_count(dirfd, now):
                 expired = (type(expires) is int
                            and expires < now - PRUNE_AFTER_SECONDS)
         except (OSError, ValueError, UnicodeDecodeError):
+            expired = False
+        if expired and receipt_exists(dirfd, name[:-len(".claim")]):
+            # An attested id stays claimed: pruning it would resurrect the
+            # request id into a second adapter execution whose receipt
+            # write then fails. The standing claim keeps the replay guard.
             expired = False
         if expired:
             try:
@@ -381,6 +410,14 @@ def minimize_receipt(report, manifest):
         report["runtime_observations"], manifest["targets"]["worker_version"])
     if fatal == "adapter_receipt_refused":
         return "fail", fatal, []
+    if result == "pass" and (
+            len(observations) != 2
+            or any(item["status"] != 200 for item in observations)):
+        # A pass attests a fully healthy staging pair: exactly the
+        # health+readyz observations, both 200. A lone health check or a
+        # 500/503 anywhere contradicts the verdict, so the report is
+        # refused, never narrowed into a pass.
+        return "fail", "adapter_receipt_refused", []
     control = report.get("control_plane")
     bound = {key: manifest["targets"][key] for key in TARGET_KEYS
              if key != "origin_sha256"}
@@ -396,20 +433,79 @@ def minimize_receipt(report, manifest):
 
 
 def run_adapter(adapter_path, timeout):
+    """Run the fixed adapter with streamed hard byte ceilings on both pipes.
+
+    Both streams are read as they arrive (same shape as broker read_log_bytes):
+    the first chunk past a cap terminates the whole child process group at
+    once, so a spewing adapter is killed instead of buffered. The boundary is
+    unchanged: more than MAX+1 bytes on either stream is adapter_output_over_cap.
+    """
+    deadline = time.monotonic() + timeout
+    process = subprocess.Popen(
+        [sys.executable, "-I", os.fspath(adapter_path)],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, env=child_environment(), cwd="/",
+        start_new_session=True)
+    assert process.stdout is not None and process.stderr is not None
+    streams = ((process.stdout, bytearray(), MAX_STDOUT_BYTES),
+               (process.stderr, bytearray(), MAX_STDERR_BYTES))
+    failure = None
     try:
-        done = subprocess.run(
-            [sys.executable, "-I", os.fspath(adapter_path)],
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, timeout=timeout, env=child_environment(),
-            cwd="/")
-    except subprocess.TimeoutExpired:
-        return None, b"", "dispatch_timeout"
+        with selectors.DefaultSelector() as selector:
+            for stream, _buffer, _cap in streams:
+                selector.register(stream, selectors.EVENT_READ)
+            while selector.get_map() and failure is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    failure = "dispatch_timeout"
+                    break
+                ready = selector.select(remaining)
+                if not ready:
+                    failure = "dispatch_timeout"
+                    break
+                for key, _mask in ready:
+                    try:
+                        chunk = os.read(key.fd, 65536)
+                    except OSError:
+                        chunk = b""
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    for stream, buffer, cap in streams:
+                        if stream.fileno() == key.fd:
+                            buffer.extend(chunk)
+                            if len(buffer) > cap + 1:
+                                failure = "adapter_output_over_cap"
+                            break
+        if failure is None:
+            try:
+                status = process.wait(
+                    timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                # Both pipes at EOF but the child lingers: still a timeout.
+                failure = "dispatch_timeout"
+        if failure is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            status = process.wait()
+            if failure == "dispatch_timeout":
+                status = None
+            return status, b"", failure
+    finally:
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            process.wait()
+        for stream, _buffer, _cap in streams:
+            stream.close()
     # stderr is drained and discarded: remote text never reaches a receipt.
-    if len(done.stderr) > MAX_STDERR_BYTES + 1 or len(done.stdout) > MAX_STDOUT_BYTES + 1:
-        return done.returncode, b"", "adapter_output_over_cap"
-    if done.returncode != 0:
-        return done.returncode, b"", "dispatch_failed"
-    return done.returncode, done.stdout, None
+    if status != 0:
+        return status, b"", "dispatch_failed"
+    return status, bytes(streams[0][1]), None
 
 
 def dispatch(request_path, install, now=None, expected_uid=0,

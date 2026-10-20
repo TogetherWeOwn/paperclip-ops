@@ -998,6 +998,19 @@ jobs:
       - name: review routing contract holds
         run: ./test_review_route.sh
 
+      # Shell-substitution guard contract: the offline gate that refuses an
+      # unbounded `yes` inside `$(...)`/backticks before execution (the
+      # memcg OOM mechanism: substitution collects stdout until EOF and
+      # `yes` never sends EOF). A neutered always-clean stub fails the
+      # suite, so a vacuous gate cannot hide. Hermetic (argv/file/stdin
+      # fixtures only, never executes an unbounded producer), so it runs in
+      # the core area next to the other contract gates. Without this step
+      # the suite runs only in the full local verify-fast tier while CI runs
+      # --parse-only, so a gate regression would merge green.
+      - name: shell-subst guard suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_shell_subst_guard.sh
+
       - name: deploy-window wrapper and pin mutation suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: |

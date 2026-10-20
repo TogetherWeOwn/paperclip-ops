@@ -69,6 +69,24 @@ class EligibilityQuery(unittest.TestCase):
         self.assertIn('unavailable', result.stdout.lower())
         self.assertNotEqual(result.stdout.strip(), 'no')
 
+    def test_corrupt_unmatched_row_makes_valid_matching_evidence_unavailable(self):
+        matched = ledger_row(flips=2, observations=5)
+        invalid_rows = (
+            None,
+            {'repo': 'other-repo', 'job': 'other job'},
+            ledger_row(repo='other-repo', flips=9, observations=5),
+        )
+        for invalid in invalid_rows:
+            for rows in ([matched, invalid], [invalid, matched]):
+                for envelope in (False, True):
+                    with self.subTest(invalid=invalid, rows=rows, envelope=envelope):
+                        content = json.dumps({'tests': rows}) if envelope else self.content(*rows)
+                        result = self.query(content, 'two-bot-next', 'rust tests')
+                        self.assertEqual(result.returncode, 2)
+                        self.assertTrue(result.stdout.startswith('unavailable:'))
+                        self.assertNotEqual(result.stdout.strip(), 'yes')
+                        self.assertNotEqual(result.stdout.strip(), 'no')
+
     def test_query_matches_test_name_as_well_as_job_name(self):
         result = self.query(self.content(ledger_row(job='rust tests', test='sample_test', flips=2)),
                             'two-bot-next', 'sample_test')

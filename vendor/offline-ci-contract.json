@@ -309,6 +309,8 @@
     "migration safety gates suites:1",
     "queue age depth contract suite:1",
     "pr6 acceptance suite:1",
+    "quality-gate helper suites:1",
+    "mutmut budget-kill fixture suite:1",
     "registrar domain-expiry probe suite:1",
     "Beszel adapter and Discord forwarder suites:1",
     "activation contract suite:1",
@@ -1749,6 +1751,16 @@
       "name": "sibling-run guard suite",
       "definition_sha256": "cc22f4f858562b90e61f70a77b2a11d6fc1d0e2adae556d6c569a5515a148beb",
       "id": "sibling-run guard suite:1"
+    },
+    {
+      "name": "quality-gate helper suites",
+      "definition_sha256": "68b4abdbd85871ca024089f0ce025a71292090ad4ee86f0f4389a1fa4e8d5d80",
+      "id": "quality-gate helper suites:1"
+    },
+    {
+      "name": "mutmut budget-kill fixture suite",
+      "definition_sha256": "f1490420e91646453b29b63d75c62ef6939cb9eee789bf6fb0bf9f1b93c55edd",
+      "id": "mutmut budget-kill fixture suite:1"
     },
     {
       "name": "execution-image source-only carrier suite",

@@ -1180,6 +1180,19 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 -m unittest -v test_flap_guard
 
+      # Quality-gate helper suites: floor guard (diff-scoped quality floor),
+      # pull_request_target refusal, subprocess-timeout backlog and
+      # mutmut-on-changed-lines gates. Hermetic unit/fixture suites: stdlib
+      # unittest plus fixture git repos under mktemp only; no network, no
+      # credentials, no writes outside the fixtures. Always run: they are
+      # fast and they pin the gates this repo inherits. Gate enforcement
+      # inside CI (a gates workflow) is a separate follow-up batch.
+      - name: quality-gate helper suites
+        run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target
+
+      - name: mutmut budget-kill fixture suite
+        run: bash ./test_mutmut_changed.sh
+
       # case_658bf6b9. Status-page pilot bundle: config shape, secret sweep,
       # fail-closed pushes, hermetic offline suite (no network/creds).
       - name: status-page pilot suite

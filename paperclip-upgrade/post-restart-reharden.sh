@@ -23,7 +23,15 @@
 #     container-absolute target (/paperclip/..., the in-container mount
 #     of $DATA) is remapped onto $DATA before resolving, so a link
 #     created inside the container is judged by its real target instead
-#     of failing forever on the host, where the data lives elsewhere;
+#     of failing forever on the host, where the data lives elsewhere.
+#     Every hop of a chain is remapped the same way (file or directory
+#     component), so a container-absolute chain is judged by its real
+#     container-visible target instead of resolving host-side. Each
+#     container-absolute or mount-relative hop is normalized first (.. clamped at /, as the
+#     container kernel resolves it, and only cancelled across plain
+#     directories) before the mount-prefix test; a hop escaping the mount,
+#     a .. after a symlink or non-directory, or a target containing a
+#     newline, fails closed;
 #   - when the bounded Cargo pool is required (or present as a
 #     mountpoint), its ROOT and policy.json are judged the same way,
 #     NON-recursively: slot directories beneath the root stay
@@ -68,6 +76,10 @@ DOCKER="${DOCKER:-docker}"
   || { printf 'REFUSED: %s: PAPERCLIP_UPGRADE_AGENT_UID must be numeric\n' "$ME" >&2; exit 2; }
 [[ -d "$DATA_DIR" && ! -L "$DATA_DIR" ]] \
   || { printf 'REFUSED: %s: data dir missing or a symlink: %s\n' "$ME" "$DATA_DIR" >&2; exit 2; }
+# Use one physical, absolute spelling for the component walk and mount-prefix
+# comparison, including relative paths, trailing slashes and aliased ancestors.
+DATA_DIR="$(cd -P -- "$DATA_DIR" >/dev/null && pwd -P)" \
+  || { printf 'REFUSED: %s: cannot resolve data dir\n' "$ME" >&2; exit 2; }
 command -v "$DOCKER" >/dev/null \
   || { printf 'REFUSED: %s: docker runtime is missing\n' "$ME" >&2; exit 2; }
 command -v mountpoint >/dev/null \
@@ -95,7 +107,7 @@ check_path() { # PATH -- owned by EXPECT_OWNER, no group/other write, no symlink
 }
 
 check_tree() { # ROOT -- every descendant judged, verify-only (see header)
-  local root="$1" euid="${EXPECT_OWNER%%:*}" egid="${EXPECT_OWNER##*:}" hits links link raw cand target tst tuid tgid tmode
+  local root="$1" euid="${EXPECT_OWNER%%:*}" egid="${EXPECT_OWNER##*:}" hits links link raw cand mapped target tst tuid tgid tmode found prefix rest comp hops norm norm_rest norm_comp host_cur chk_rest chk_comp link_dir
   if ! hits="$(find "$root" -xdev ! -type l \( ! -user "$euid" -o ! -group "$egid" -o -perm /022 \) -print 2>/dev/null)"; then
     printf 'FAIL: cannot scan protected tree for baseline violations: %s\n' "$root"
     return 1
@@ -114,17 +126,143 @@ check_tree() { # ROOT -- every descendant judged, verify-only (see header)
     # Resolve through the container mount (see header): /paperclip is
     # $DATA inside the container (the probes below address it the same
     # way), so remap that prefix before resolving on the host. Relative
-    # targets resolve via the link itself; other absolute targets keep
-    # host semantics. The mapped target is then judged exactly like any
-    # other resolved target — remapping never exempts it.
-    raw="$(readlink -- "$link" 2>/dev/null)" \
-      || { printf 'FAIL: protected symlink cannot be read: %s\n' "$link"; return 1; }
-    case "$raw" in
-      /paperclip) cand="$DATA_DIR" ;;
-      /paperclip/*) cand="$DATA_DIR/${raw#/paperclip/}" ;;
-      /*) cand="$raw" ;;
-      *) cand="$link" ;;
-    esac
+    # targets under $DATA_DIR first become container-absolute paths and
+    # pass the same normalizer; other targets keep host semantics.
+    # The mapped target is then judged exactly like any
+    # other resolved target — remapping never exempts it. Every hop is
+    # remapped, file or directory component alike: a later
+    # container-absolute hop resolved host-side could pass owner/mode on
+    # a host /paperclip path while the container-visible $DATA target
+    # stays agent-writable, so the chain is walked hop by hop and each
+    # /paperclip raw target is normalized (.. clamped at /, only across
+    # plain directories) and remapped before resolving further; mount
+    # escapes, .. after a symlink, and newline targets fail.
+    cand="$link" hops=0
+    # The component walk below tests absolute prefixes; anchor a relative
+    # root (find prints paths as given) to the scan's working directory.
+    [[ "$cand" == /* ]] || cand="$PWD/$cand"
+    while :; do
+      # Leftmost symlink component of $cand, if any: the link itself on
+      # the first pass, then each intermediate in turn.
+      prefix=""; found=""; rest="${cand#/}"
+      while [[ -n "$rest" ]]; do
+        comp="${rest%%/*}"
+        prefix="$prefix/$comp"
+        if [[ -L "$prefix" ]]; then found="$prefix"; break; fi
+        [[ "$rest" == */* ]] || break
+        rest="${rest#*/}"
+      done
+      [[ -n "$found" ]] || break
+      (( ++hops > 40 )) \
+        && { printf 'FAIL: protected symlink chain too deep: %s\n' "$link"; return 1; }
+      # NUL-delimited: command substitution strips trailing newlines, so a
+      # target ending in LF would be judged as its stripped twin (a
+      # distinct, agent-creatable file). Newlines never occur in
+      # legitimate protected-tree targets, so any newline fails closed.
+      raw=""
+      if ! IFS= read -r -d '' raw < <(readlink -z -- "$found" 2>/dev/null); then
+        printf 'FAIL: protected symlink cannot be read: %s\n' "$link"; return 1
+      fi
+      if [[ "$raw" == *$'\n'* ]]; then
+        printf 'FAIL: protected symlink target contains a newline: %s\n' "$link"; return 1
+      fi
+      # A relative hop inside the mount belongs to the container namespace
+      # too: joining it to the host path would apply .. against the host
+      # parent of $DATA_DIR instead of /paperclip's container parent.
+      if [[ "$raw" != /* ]]; then
+        link_dir="${found%/*}"
+        case "$link_dir" in
+          "$DATA_DIR") raw="/paperclip/$raw" ;;
+          "$DATA_DIR"/*) raw="/paperclip/${link_dir#"$DATA_DIR"/}/$raw" ;;
+        esac
+      fi
+      case "$raw" in
+        /paperclip|/paperclip/*)
+          # Normalize the container path lexically, clamping .. at /,
+          # before the mount-prefix test: the container kernel clamps ..
+          # at /, so /paperclip/../../paperclip/X is /paperclip/X in the
+          # container while a textual prefix strip would judge
+          # $DATA_DIR/../../paperclip/X on the host — a different file.
+          # A normalized target outside the mount fails closed: host
+          # stat cannot judge the container-visible file. A .. is only
+          # cancelled across plain directories: the kernel substitutes a
+          # symlink before applying a following .., so /paperclip/alias/
+          # ../evil with alias -> sub/deep is really /paperclip/sub/evil,
+          # not the lexical /paperclip/evil — cancelling across the link
+          # would judge the wrong file, so it fails closed instead.
+          norm=""; norm_rest="${raw#/}"
+          while [[ -n "$norm_rest" ]]; do
+            norm_comp="${norm_rest%%/*}"
+            if [[ "$norm_rest" == */* ]]; then
+              norm_rest="${norm_rest#*/}"
+            else
+              norm_rest=""
+            fi
+            case "$norm_comp" in
+              ""|.) ;;
+              ..)
+                # Clamped at / (container kernel): .. at the filesystem
+                # root stays at the root; nothing to pop or verify.
+                if [[ -z "$norm" || "$norm" == "/" ]]; then
+                  norm=""
+                  continue
+                fi
+                # .. outside the mount cannot be verified host-side:
+                # container-only paths like /tmp are invisible here, so a
+                # symlinked component there would be missed. Fail closed.
+                # Re-entering spellings that pass through / (clamped above)
+                # stay allowed.
+                case "$norm" in
+                  /paperclip|/paperclip/*) ;;
+                  *)
+                    printf 'FAIL: protected symlink target contains .. outside the container mount: %s\n' "$link"
+                    return 1
+                    ;;
+                esac
+                # Only cancel .. when every preceding component is a plain
+                # directory on the host-mapped path; a symlink, file, or
+                # missing component means the lexical parent is not the
+                # kernel parent.
+                host_cur="$DATA_DIR"
+                if [[ -L "$host_cur" || ! -d "$host_cur" ]]; then
+                  printf 'FAIL: protected symlink target contains .. after a non-directory component: %s\n' "$link"
+                  return 1
+                fi
+                chk_rest="${norm#/paperclip}"
+                chk_rest="${chk_rest#/}"
+                while [[ -n "$chk_rest" ]]; do
+                  chk_comp="${chk_rest%%/*}"
+                  host_cur="$host_cur/$chk_comp"
+                  if [[ -L "$host_cur" || ! -d "$host_cur" ]]; then
+                    printf 'FAIL: protected symlink target contains .. after a non-directory component: %s\n' "$link"
+                    return 1
+                  fi
+                  if [[ "$chk_rest" == */* ]]; then
+                    chk_rest="${chk_rest#*/}"
+                  else
+                    chk_rest=""
+                  fi
+                done
+                norm="${norm%/*}"
+                ;;
+              *) norm="$norm/$norm_comp" ;;
+            esac
+          done
+          [[ -z "$norm" ]] && norm="/"
+          case "$norm" in
+            /paperclip) mapped="$DATA_DIR" ;;
+            /paperclip/*) mapped="$DATA_DIR/${norm#/paperclip/}" ;;
+            *)
+              printf 'FAIL: protected symlink escapes the container mount: %s\n' "$link"
+              return 1
+              ;;
+          esac
+          ;;
+        /*) mapped="$raw" ;;
+        *) mapped="$(dirname -- "$found")/$raw" ;;
+      esac
+      cand="$mapped${cand#$found}"
+    done
     # readlink -f tolerates a missing final component, so existence is
     # judged explicitly: a dangling (mapped) target does not resolve.
     target="$(readlink -f -- "$cand" 2>/dev/null)" \

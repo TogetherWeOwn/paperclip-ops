@@ -304,21 +304,23 @@ class PublicCI(unittest.TestCase):
         group = concurrency["group"]
         self.assertIn("${{ github.event_name }}", group)
         self.assertIn("github.event.pull_request.number", group)
-        self.assertIn("github.sha", group)
+        self.assertRegex(group, r"\bgithub\.sha\b")
         self.assertEqual(concurrency["cancel-in-progress"],
                          "${{ github.event_name == 'pull_request' }}")
 
     def test_gitleaks_digest_allowlist_is_narrowly_scoped(self):
         config = tomllib.loads((ROOT / ".gitleaks.toml").read_text())
-        rules = [rule for rule in config["allowlists"]
-                 if rule.get("description", "").startswith(
-                     "Exact reviewed historical SHA-256 entries")]
-        self.assertEqual(len(rules), 1)
-        rule = rules[0]
+        contract_path = r"(^|/)vendor/offline\-ci\-contract\.json$"
+        scoped = [rule for rule in config["allowlists"]
+                  if rule.get("paths") == [contract_path]]
+        # One broad keyed-digest pattern covers the contract; the old
+        # exact-digest entries were subsumed by it and deleted.
+        self.assertEqual(len(scoped), 1)
+        rule = scoped[0]
+        self.assertTrue(rule.get("description", "").startswith(
+            "SHA-256 file-integrity digests in the offline CI contract"))
         self.assertEqual(set(rule["targetRules"]),
                          {"generic-api-key", "discord-api-token"})
-        self.assertEqual(rule["paths"], [
-            r"(^|/)vendor/offline\-ci\-contract\.json$"])
         self.assertEqual(rule["regexTarget"], "line")
         # gitleaks defaults to OR when `condition` is absent, so paths-alone
         # would suppress unrelated findings. Pin AND on the target rule and
@@ -327,6 +329,8 @@ class PublicCI(unittest.TestCase):
         for allow in config["allowlists"]:
             self.assertEqual(allow.get("condition"), "AND",
                              allow.get("description"))
+        # The broad pattern still suppresses digest lines for the legacy
+        # names (without pinning stale digests) and nothing else.
         expected_files = {
             "gh_embedded_token_remediate.py",
             "git_remote_credential_scan.sh",
@@ -338,19 +342,17 @@ class PublicCI(unittest.TestCase):
             "test_gh_token_api_body.sh",
             "test_gh_token_dispatch.sh",
         }
-        self.assertEqual(len(rule["regexes"]), len(expected_files))
-        matched_files = set()
-        for pattern in rule["regexes"]:
-            self.assertTrue(pattern.startswith("(?m)^"), pattern)
-            self.assertTrue(pattern.endswith("$"), pattern)
-            parts = pattern.split('"')
-            self.assertEqual(len(parts), 5, pattern)
-            self.assertEqual(parts[0], r"(?m)^\s*", pattern)
-            self.assertEqual(parts[2], r":\s*", pattern)
-            self.assertRegex(parts[3], r"^[0-9a-f]{64}$")
-            self.assertEqual(parts[4], ",?$", pattern)
-            matched_files.add(parts[1].replace(r"\.", "."))
-        self.assertEqual(matched_files, expected_files)
+        self.assertEqual(len(rule["regexes"]), 1)
+        pattern = rule["regexes"][0]
+        for name in expected_files:
+            self.assertIn(name.replace(".", r"\."), pattern, name)
+        line_re = re.compile(pattern)
+        digest = "a" * 64
+        for name in expected_files:
+            line = '    "%s": "%s",' % (name, digest)
+            self.assertTrue(line_re.search(line), line)
+        foreign = '    "some_other_file.py": "%s",' % digest
+        self.assertIsNone(line_re.search(foreign), foreign)
 
     def test_lint_attests_hosted_environment_not_runner_name(self):
         text = (ROOT / ".github/workflows/pr-lint.yml").read_text()
@@ -700,6 +702,14 @@ class PublicCI(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertNotIn("no new commits", r.stdout)
             self._assert_scanned_range(tmp, "HEAD")
+
+            # 10. A push at the main tip with a real before takes the push
+            # arm (BEFORE..HEAD), not the merge-base arm (which is empty
+            # here and would print "no new commits").
+            r = self._run_history_scan(tmp, env, "push", main1)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("no new commits", r.stdout)
+            self._assert_scanned_range(tmp, main1 + "..HEAD")
 
     def test_metadata_protocol_constant_does_not_exempt_private_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:

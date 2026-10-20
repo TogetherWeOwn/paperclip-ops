@@ -134,6 +134,7 @@ node --test hooks/disposition-stop-guard/disposition-stop-guard.test.mjs hooks/d
 # Activation contract: exclusive lock, verify-only hardening, pinned
 # bindings. Hermetic: stub docker and stub drain.sh, temp fixtures only.
 ./paperclip-upgrade/test-activation-offline.sh || fail "activation contract suite failed"
+python3 -m unittest test_reharden_relative_targets || fail "reharden relative-target suite failed"
 python3 -m unittest test_deploy_window_manifest || fail "deploy-window manifest gate suite failed"
 ./test_credential_chain_lockdown.sh || fail "credential-chain lockdown fixture suite failed"
 python3 -m unittest test_ci_required_checks_audit || fail "required-checks audit failed"

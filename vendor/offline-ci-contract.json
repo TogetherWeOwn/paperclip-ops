@@ -315,7 +315,8 @@
     "Beszel adapter and Discord forwarder suites:1",
     "activation contract suite:1",
     "execution-image source-only carrier suite:1",
-    "shell-subst guard suite:1"
+    "shell-subst guard suite:1",
+    "staging-preflight carrier suite:1"
   ],
   "retained": [
     {
@@ -1772,6 +1773,11 @@
       "name": "shell-subst guard suite",
       "definition_sha256": "86e903744e363c48addcac51ee9cad3caf5828eb818261ace6bf25550632419a",
       "id": "shell-subst guard suite:1"
+    },
+    {
+      "name": "staging-preflight carrier suite",
+      "definition_sha256": "ff33fab7ad096ca46d69786740c6873b40c8bdeb8ec59e2370a3d660f563dd12",
+      "id": "staging-preflight carrier suite:1"
     }
   ],
   "removed": [

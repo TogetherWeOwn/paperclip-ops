@@ -70,6 +70,11 @@ name: CI
 #                                       and the disabled write gate — case_0d1b8a91
 #     test_host_ops_install.sh          the installer's service-identity, key and
 #                                       sudoers contracts — case_0d1b8a91
+#     test_host_ops_staging_preflight_carrier.py
+#                                       the disabled fixed-purpose staging-preflight
+#                                       carrier: request/manifest/artifact gates,
+#                                       one-shot replay refusal, fixed dispatch,
+#                                       and minimized receipts
 #     test_operator_runbook.sh          whether a capability-bound ask was
 #                                       filed as a decision, and whether the
 #                                       runbook still matches the live owner
@@ -1174,6 +1179,16 @@ jobs:
       - name: host operations installer contract suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_host_ops_install.sh
+
+      # Disabled fixed-purpose staging-preflight carrier: request, manifest
+      # and artifact gates, one-shot replay refusal across processes, fixed
+      # argv/scrubbed-env dispatch, and minimized dispatch receipts. Offline:
+      # the suite stages fixture install roots under mktemp with a synthetic
+      # test-only adapter, a fake clock and a fake authority environment, so
+      # it never needs the host paths, network, or credentials.
+      - name: staging-preflight carrier suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 ./test_host_ops_staging_preflight_carrier.py
 
       # case_e8e49a02. Flap-guard offline proof (case_437d0846 spec
       # ops/case_658bf6b9/flap-guard.md, impl ops/case_658bf6b9/flap_guard.py):

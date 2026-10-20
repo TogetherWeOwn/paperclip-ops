@@ -173,7 +173,8 @@ The same shard torn-tail rule prevents combining inconsistent evidence.
 
 `platform/balancer-silence`: `gatus-balancer-silence.yaml`,
 `push-balancer-silence.sh`, `_gatus_push.sh`,
-`test_case_60330d6f_balancer_silence.sh`.
+`test_case_60330d6f_balancer_silence.sh`,
+`balancer-retirement-PROCEDURE.md` (host retirement application + rollback).
 Registry checker: `ops/case_658bf6b9/check_module_wiring.py`.
 
 ## Neon staging

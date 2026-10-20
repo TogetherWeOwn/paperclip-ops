@@ -998,6 +998,19 @@ jobs:
       - name: review routing contract holds
         run: ./test_review_route.sh
 
+      # Shell-substitution guard contract: the offline gate that refuses an
+      # unbounded `yes` inside `$(...)`/backticks before execution (the
+      # memcg OOM mechanism: substitution collects stdout until EOF and
+      # `yes` never sends EOF). A neutered always-clean stub fails the
+      # suite, so a vacuous gate cannot hide. Hermetic (argv/file/stdin
+      # fixtures only, never executes an unbounded producer), so it runs in
+      # the core area next to the other contract gates. Without this step
+      # the suite runs only in the full local verify-fast tier while CI runs
+      # --parse-only, so a gate regression would merge green.
+      - name: shell-subst guard suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_shell_subst_guard.sh
+
       - name: deploy-window wrapper and pin mutation suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: |
@@ -1180,6 +1193,19 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 -m unittest -v test_flap_guard
 
+      # Quality-gate helper suites: floor guard (diff-scoped quality floor),
+      # pull_request_target refusal, subprocess-timeout backlog and
+      # mutmut-on-changed-lines gates. Hermetic unit/fixture suites: stdlib
+      # unittest plus fixture git repos under mktemp only; no network, no
+      # credentials, no writes outside the fixtures. Always run: they are
+      # fast and they pin the gates this repo inherits. Gate enforcement
+      # inside CI (a gates workflow) is a separate follow-up batch.
+      - name: quality-gate helper suites
+        run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target
+
+      - name: mutmut budget-kill fixture suite
+        run: bash ./test_mutmut_changed.sh
+
       # case_658bf6b9. Status-page pilot bundle: config shape, secret sweep,
       # fail-closed pushes, hermetic offline suite (no network/creds).
       - name: status-page pilot suite
@@ -1217,6 +1243,19 @@ jobs:
       # sanitized receipt only. Hermetic fixture suite (no network/creds).
       - name: bounded shadow-reader suite
         run: ./test_case_a38f4d21_shadow_reader_bounded.sh
+
+      # Deferred execution-image packet, ported with a resolved non-root
+      # startup contract (final USER 1000:1000; the inherited entrypoint
+      # execs the application directly without root-only remap or volume
+      # repair). Hermetic source-only checks: manifest consistency, the
+      # fail-closed negative controls, and the Stage-B attestation-policy
+      # suite. No network, no credentials, no image build.
+      - name: execution-image source-only carrier suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: |
+          python3 -B execution-image/test_manifest.py
+          python3 -B execution-image/validate.py execution-image/manifest.json
+          python3 -B execution-image/test_verify_result_policy.py
 
       # case_56fff4c6. Monitoring of the monitor (parent case_66436e78 item 7):
       # off-host Gatus heartbeat probe + staging-only round-trip harness.
@@ -2406,7 +2445,9 @@ jobs:
       # local verify-fast tier while CI runs --parse-only, so a lock or
       # binding regression would merge green.
       - name: activation contract suite
-        run: ./paperclip-upgrade/test-activation-offline.sh
+        run: |
+          ./paperclip-upgrade/test-activation-offline.sh
+          python3 -m unittest -v test_reharden_relative_targets
 
       # case_9cc4c0ad: offline, recorded-model auth evidence. The real incident is
       # INSUFFICIENT; cross-model successes and pre-inference aborts are not

@@ -99,6 +99,20 @@ async function fixture(t, { closeout, repos = [A], open = { [A]: [7] }, limits =
   h.kinds = (kind) => h.calls.filter(([k]) => k === kind)
   return h
 }
+function manualClock() {
+  let now = 0
+  const timers = new Set()
+  return { now: () => now,
+    setTimer: (fire, ms) => { const timer = { fire, at: now + ms }; timers.add(timer); return timer },
+    clearTimer: (timer) => timers.delete(timer),
+    advance: (ms) => {
+      const until = now + ms
+      for (const timer of [...timers].sort((a, b) => a.at - b.at)) {
+        if (timer.at <= until && timers.delete(timer)) { now = timer.at; timer.fire() }
+      }
+      now = until
+    } }
+}
 const nonemptyReasons = (result) => Object.fromEntries(Object.entries(result.disarmShadow.byReason).filter(([, n]) => n))
 async function stored(h) {
   const files = await readdir(h.config.stateDirectory)
@@ -508,20 +522,23 @@ test('an S3c index overrun that stops the pass before the shadow drain fails ON 
       repos: [A, B], open: { [A]: [7] }, limits: { durationMs: 600, maxPages: 1 } })
     h.rulesRepositories.add(B)
     h.snapshots.set(7, { isDraft: true })
-    // Hold the board index read past the whole pass deadline. The lock-held
-    // index drain has no budget check, so the stop is set before the shadow
-    // drain starts; containing it would hide a real primary failure.
+    // Expire at the index read, not at an arbitrary wall-clock instant that
+    // could race local checkpoint I/O on a loaded runner.
+    const clock = manualClock()
     const boardIssues = `${h.config.boardOrigin}/api/companies/${companyId}/issues`
     const fetch = h.fetch
     h.fetch = async (url, init) => {
-      if (String(url).startsWith(boardIssues)) await new Promise((resolve) => setTimeout(resolve, 900))
+      if (String(url).startsWith(boardIssues)) clock.advance(601)
       return fetch(url, init)
     }
-    const result = await h.pass()
+    const result = await h.pass({ clock })
     assert.equal(result.ok, false, 'a pre-drain stop fails the pass with or without the shadow')
     assert.equal(result.reason, 'deadline')
-    assert.deepEqual((await h.state()).repos[A].backfill.done, [7], 'primary completed before the index overrun')
+    assert.deepEqual(h.kinds('primary'), [], 'the index expires before either primary stream starts')
+    assert.deepEqual(h.kinds('snapshot'), [], 'no shadow drain read runs after a pre-drain stop')
+    assert.deepEqual((await h.state()).repos[A]?.backfill.done ?? [], [], 'no primary work means no checkpoint')
     if (disarm) {
+      assert.equal(result.disarmShadow.counters.total, 0, 'no drain accounting for a stop set before the drain')
       assert.equal(result.disarmShadow.counters.deferred, 0, 'no drain read ran, so nothing is contained')
       assert.deepEqual(h.summaryLogs(), [], 'a stopped pass emits no shadow summary')
     }
@@ -685,6 +702,69 @@ test('bounded summaries never contain helper records, arbitrary fields or transp
   assert.ok(JSON.stringify(h.summaryLogs()[0]).length < 1024, 'fixed summary size, not one record per PR')
   assert.equal(JSON.stringify(h.logs).includes(privateText), false)
   assert.equal(JSON.stringify(result.disarmShadow).includes(privateText), false)
+})
+
+test('a sweeps-first S3c index overrun after primary work still fails ON exactly as OFF', async (t) => {
+  const outcomes = []
+  for (const disarm of [undefined, enrolled()]) {
+    const h = await fixture(t, { closeout: { shadow: { enabledRepositories: [B], indexReadsPerPass: 1 }, ...disarm },
+      repos: [A, B], open: { [A]: [] }, limits: { maxPages: 1, maxSweepItems: 1 } })
+    h.rulesRepositories.add(B)
+    h.snapshots.set(7, { isDraft: true })
+    // Force the deterministic sweeps-first schedule the neighbors use: a
+    // resumed review drain is admitted before the event stream, so primary
+    // work for A/7 (which schedules the shadow ref) completes before the
+    // held index read can stop the pass ahead of the shadow drain.
+    assert.equal((await h.pass()).ok, true, 'setup pass succeeds')
+    const state = await h.state()
+    Object.assign(state.repos[A].review, { phase: 'draining', refs: [7], done: [], listedMs: wall, lastCompleteMs: null })
+    await saveSweepState({ directory: h.config.stateDirectory, state })
+    const boardIssues = `${h.config.boardOrigin}/api/companies/${companyId}/issues`
+    const fetch = h.fetch
+    const clock = manualClock()
+    let releaseIndex
+    const indexHeld = new Promise((resolve) => { releaseIndex = resolve })
+    let captureReads = 0
+    h.fetch = async (url, init) => {
+      if (String(url).startsWith(boardIssues)) {
+        // Only the quarter-pass index deadline fires: production can run
+        // while the signal-ignoring read remains held under the receipt lock.
+        clock.advance(301)
+        await indexHeld
+      }
+      const response = await fetch(url, init)
+      if (String(url).startsWith(h.config.captureOrigin) && ++captureReads === 4) {
+        // Sweeps ran first; the last empty capture response completes the
+        // event stream in microtasks. Expire on the next turn, when only the
+        // lock-held index drain remains, then let that read settle.
+        setImmediate(() => { clock.advance(900); releaseIndex() })
+      }
+      return response
+    }
+    h.config.limits.durationMs = 1200
+    h.calls.length = 0
+    h.logs.length = 0
+    const result = await h.pass({ clock })
+    assert.equal(result.events.ok, true, 'the event stream completes before the index drain expires')
+    assert.equal(result.sweeps.ok, true, 'primary sweeps complete before the index drain expires')
+    assert.deepEqual((await h.state()).repos[A].review.done, [7], 'primary checkpoint survives the overrun')
+    assert.deepEqual(h.kinds('primary'), [['primary', A, 7]],
+      'measured pass re-reviews A primary before the held index read')
+    assert.ok(h.calls.findIndex((v) => v[0] === 'primary') <
+      h.calls.findIndex((v) => v[0] === 'http' && String(v[2]).startsWith(boardIssues)),
+      'primary work precedes the index overrun')
+    assert.equal(result.ok, false, 'a pre-drain stop fails the pass with or without the shadow')
+    assert.equal(result.reason, 'deadline')
+    assert.deepEqual(h.kinds('snapshot'), [], 'no shadow drain read runs after a pre-drain stop')
+    if (disarm) {
+      assert.equal(result.disarmShadow.counters.total, 0, 'no drain accounting for a stop set before the drain')
+      assert.equal(result.disarmShadow.counters.deferred, 0, 'no drain read ran, so nothing is contained')
+      assert.equal(result.disarmShadow.counters.wouldDisarm, 0)
+      assert.deepEqual(h.summaryLogs(), [], 'a stopped pass emits no shadow summary')
+    }
+    outcomes.push({ ok: result.ok, reason: result.reason, processed: result.sweeps.processed })
+  }
+  assert.deepEqual(outcomes[1], outcomes[0], 'ON hides no pre-drain failure that OFF reports')
 })
 
 test('an unexpected helper failure is observational and counted, not swallowed or product-poisoned', async () => {

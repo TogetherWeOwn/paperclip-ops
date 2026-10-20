@@ -278,6 +278,15 @@ class CarrierTests(unittest.TestCase):
         # Under the real clock the interval must span the run: finished_at
         # is read after the adapter returns, not copied from claimed_at.
         # (A 1.2 s sleep always crosses an integer-second boundary.)
+        # Fixture expiries are rebuilt relative to one real-clock read so
+        # this test never goes red as the wall clock passes the fixed NOW.
+        real_now = int(time.time())
+        manifest = valid_manifest(self.adapter_sha256())
+        manifest["approval"]["expires_at"] = real_now + 600
+        self.write_manifest(manifest)
+        request = valid_request()
+        request["expires_at"] = real_now + 300
+        self.write_request(request)
         (self.root / "adapter" / "adapter-sleep-seconds").write_text("1.2")
         receipt = self.dispatch(now=None)
         self.assertEqual(receipt["outcome"], "pass")
@@ -657,14 +666,21 @@ class CarrierTests(unittest.TestCase):
         self.assertNotIn(REQUEST_ID + ".claim", self.claims())
         self.assertEqual(self.receipts(), [])
 
-    def test_long_expired_claims_are_pruned(self):
+    def test_long_expired_claims_are_retained_as_uncounted_tombstones(self):
         (self.state_dir / "ancient.claim").write_text(json.dumps({
             "request_sha256": "ff" * 32, "approval_id": APPROVAL,
             "expires_at": NOW - 90000, "claimed_at": NOW - 90000,
             "pid": os.getpid()}))
         receipt = self.dispatch()
         self.assertEqual(receipt["outcome"], "pass")
-        self.assertFalse((self.state_dir / "ancient.claim").exists())
+        # Retained, not pruned: the standing claim keeps the replay guard.
+        self.assertTrue((self.state_dir / "ancient.claim").exists())
+        # ... and uncounted: the fresh dispatch above succeeded. Replaying
+        # the tombstoned id still refuses without a second execution.
+        request = valid_request()
+        request["request_id"] = "ancient"
+        self.write_request(request)
+        self.assertReplayRefused("request_replayed")
 
     def test_consumed_request_id_survives_the_prune_window(self):
         manifest = valid_manifest(self.adapter_sha256())
@@ -688,6 +704,47 @@ class CarrierTests(unittest.TestCase):
         self.assertFalse(self.marker().exists())
         self.assertEqual(self.claims(), [REQUEST_ID + ".claim"])
         self.assertEqual(self.receipts(), [REQUEST_ID + ".receipt.json"])
+
+    def test_crash_consumed_claim_without_receipt_survives_prune_window(self):
+        manifest = valid_manifest(self.adapter_sha256())
+        manifest["approval"]["expires_at"] = NOW + 200000
+        self.write_manifest(manifest)
+        first = self.dispatch()
+        self.assertEqual(first["outcome"], "pass")
+        # Simulate a crash after the adapter ran but before write_receipt:
+        # claim stands, no receipt. Indistinguishable on disk from the crash.
+        (self.state_dir / (REQUEST_ID + ".receipt.json")).unlink()
+        self.marker().unlink()
+        self.assertEqual(self.receipts(), [])
+        # Past the prune window for the claim; same id, fresh expiry.
+        later = NOW + 90000
+        request = valid_request()
+        request["expires_at"] = later + 300
+        self.write_request(request)
+        with self.assertRaises(carrier.Refusal) as caught:
+            self.dispatch(now=later)
+        self.assertEqual(caught.exception.code, "request_replayed")
+        # No second execution: the adapter never re-ran and the claim stands.
+        self.assertFalse(self.marker().exists())
+        self.assertEqual(self.claims(), [REQUEST_ID + ".claim"])
+        self.assertEqual(self.receipts(), [])
+
+    def test_max_claims_tombstones_do_not_exhaust_fresh_dispatches(self):
+        # 128 expired attested claims: all tombstones, none counted live.
+        for index in range(carrier.MAX_CLAIMS):
+            name = f"tomb-{index:04d}"
+            (self.state_dir / f"{name}.claim").write_text(json.dumps({
+                "request_sha256": "ff" * 32, "approval_id": APPROVAL,
+                "expires_at": NOW - 90000, "claimed_at": NOW - 90000,
+                "pid": os.getpid()}))
+            (self.state_dir / f"{name}.receipt.json").write_text("{}")
+        receipt = self.dispatch()
+        self.assertEqual(receipt["outcome"], "pass")
+        # Fresh id dispatched; every tombstone still guards its own replay.
+        request = valid_request()
+        request["request_id"] = "tomb-0000"
+        self.write_request(request)
+        self.assertReplayRefused("request_replayed")
 
     def test_fifo_claim_file_does_not_hang_dispatch(self):
         os.mkfifo(self.state_dir / "planted.claim")

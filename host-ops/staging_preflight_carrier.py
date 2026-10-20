@@ -257,17 +257,8 @@ def open_state_dir(path):
         raise Refusal("state_refused") from None
 
 
-def receipt_exists(dirfd, request_id):
-    """True when any entry already attests this id (never pruned, never reused)."""
-    try:
-        os.lstat(request_id + ".receipt.json", dir_fd=dirfd)
-    except OSError:
-        return False
-    return True
-
-
 def prune_and_count(dirfd, now):
-    """Drop long-expired claims under the caller's lock; count the rest."""
+    """Retain expired claims as uncounted tombstones; count the rest."""
     try:
         names = os.listdir(dirfd)
     except OSError:
@@ -305,18 +296,16 @@ def prune_and_count(dirfd, now):
                            and expires < now - PRUNE_AFTER_SECONDS)
         except (OSError, ValueError, UnicodeDecodeError):
             expired = False
-        if expired and receipt_exists(dirfd, name[:-len(".claim")]):
-            # An attested id stays claimed: pruning it would resurrect the
-            # request id into a second adapter execution whose receipt
-            # write then fails. The standing claim keeps the replay guard.
-            expired = False
         if expired:
-            try:
-                os.unlink(name, dir_fd=dirfd)
-            except OSError:
-                live += 1
-        else:
-            live += 1
+            # Consumed id, with or without a stored receipt: retain the
+            # claim forever as a replay tombstone. Pruning it would resurrect
+            # the id into a second adapter execution (a crash after the
+            # adapter ran leaves no receipt, indistinguishable on disk);
+            # counting it would permanently exhaust the store after 128
+            # lifetime dispatches. Replay of a tombstoned id still refuses
+            # via the O_EXCL claim in claim_request.
+            continue
+        live += 1
     return live
 
 

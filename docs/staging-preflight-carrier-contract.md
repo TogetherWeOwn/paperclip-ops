@@ -150,9 +150,11 @@ Each `request_id` dispatches at most once across concurrent processes
 (`O_CREAT|O_EXCL` claim under an exclusive state-dir lock). A replay, a
 dispatch crash, a timeout and an invalid receipt all leave the claim
 consumed; a new approved request id is required. At most 128 live claims;
-claims expired more than a day are pruned unless a receipt already
-attests their id (an attested id stays claimed, so a replay after the
-prune window still refuses instead of executing twice). Non-regular
+claims expired more than a day are retained as uncounted replay tombstones
+(never pruned, never counted toward the cap), whether or not a receipt
+attests their id, so a replay after the prune window still refuses instead
+of executing twice and lifetime dispatches never exhaust the store. Replay
+of a tombstoned id refuses via the standing claim. Non-regular
 entries under a claim name (FIFO, directory, ...) are never opened for
 reading or pruned; they count toward the live cap so a stuffed store
 refuses loudly instead of hanging. Anything else refuses with

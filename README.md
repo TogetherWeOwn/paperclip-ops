@@ -49,6 +49,21 @@ Its legacy compatibility manifest is not a release-readiness certificate: verify
 restored paths and their contents after sanitization before using it for a build.
 Never add a private artifact to make an old fixture pass.
 
+## Workflow job permissions
+
+Run `python3 check_workflow_job_permissions.py` to check every `.yml` and `.yaml`
+file directly in `.github/workflows/`, or pass workflow paths for fixture checks.
+The gate is offline and requires PyYAML; CI reuses the static-label guard's pinned
+parser (`scripts/static-label-guard-requirements.txt`). Local fast verification
+requires PyYAML to be installed before running `scripts/verify-fast.sh`.
+
+Every job, including reusable-workflow callers, must declare its own permission
+mapping. A job-level declaration replaces the workflow defaults: `{}` grants
+nothing, while absent or null declarations fail the gate. Checkout jobs declare
+`contents: read`; API consumers must name their own additional scopes. The gate
+checks declarations, not whether a declared set is minimal. Quoted keys and inline
+mappings are parsed as YAML; ambiguous duplicate or merge keys fail closed.
+
 ## What is here
 
 Tracked root operator utilities are indexed below. This is a source index, not an
@@ -67,6 +82,7 @@ parser, not a standing operator command. Test entry points begin with `test_`.
 | `capture_host_evidence.sh` |
 | `capture_host_render.sh` |
 | `case_8abb7523-measure.mjs` |
+| `check_workflow_job_permissions.py` |
 | `ci_dark_steps.sh` |
 | `ci_failure_drain.sh` |
 | `ci_node93f4bccf_guard.py` |

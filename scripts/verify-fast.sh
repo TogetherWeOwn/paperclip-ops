@@ -41,7 +41,7 @@ if [[ "${1:-}" == "--parse-only" ]]; then
 elif [[ "${1:-}" == "--list" ]]; then
   echo "parse: bash -n, node --check, python py_compile, ESM check, vendored-tracked gate"
   echo "full: parse + external-disclosure, muse-stop-guard, disposition-stop-guard,"
-  echo "      ci-required-checks-audit, ci-gating, private-mutation-harness, readme-script-index,"
+  echo "      ci-required-checks-audit, workflow-job-permissions, ci-gating, private-mutation-harness, readme-script-index,"
   echo "      public-comment-hygiene,"
   echo "      case_b2acfa5c-runner-contract, dropchannel-fixture, approval-timeout-probe, acceptance-transport reply, gh-access-dispatch,"
   echo "      upstream pre-push hook,"
@@ -141,6 +141,9 @@ python3 -B test_beszel_adapter.py || fail "beszel adapter suite failed"
 python3 -B test_beszel_discord_forwarder.py || fail "beszel discord forwarder suite failed"
 bash test_fetch_beszel_normalized.sh || fail "beszel fetch wrapper suite failed"
 python3 -m unittest test_private_mutation_gates || fail "private mutation harness failed"
+# PyYAML must be installed before running this offline tier. CI reuses the
+# static-label guard's pinned parser; test_ci_gating.sh also runs the fixtures.
+python3 check_workflow_job_permissions.py || fail "workflow job permissions gate failed"
 ./test_ci_gating.sh || fail "change-gating contract failed"
 ./test_readme_script_index.sh || fail "readme script-index gate failed"
 ./test_public_comment_hygiene_gate.sh || fail "public-comment hygiene gate suite failed"

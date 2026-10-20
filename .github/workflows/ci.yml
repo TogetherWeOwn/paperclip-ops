@@ -443,6 +443,8 @@ jobs:
     # docker/sudo.
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       full: ${{ steps.detect.outputs.full }}
       privilege: ${{ steps.detect.outputs.privilege }}
@@ -546,6 +548,8 @@ jobs:
     # unlike the other jobs that may use approved included-minutes overflow.
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
     env:
       PGHOST: 127.0.0.1
       PGUSER: postgres
@@ -817,6 +821,9 @@ jobs:
     # and idle-ttl-contracts.json ttl_min must cover this timeout;
     # test_isolated_garm_drain.py pins the coupling, so move them together.
     timeout-minutes: 210
+    permissions:
+      contents: read
+      actions: read # failure-only dark-step reporter reads this run's jobs
     steps:
       # -- shared prelude (was offline-suites, runs on every suites execution) --
       - name: Prove the private runner selected this job
@@ -988,6 +995,8 @@ jobs:
         run: bash scripts/sync-toolkit.sh
 
       - name: change-gating contract holds
+        env:
+          PYTHONPATH: ${{ runner.temp }}/static-label-guard-deps
         run: ./test_ci_gating.sh
 
       # case_6bf2cca9. The review-routing contract is load-bearing for review-model
@@ -5915,6 +5924,8 @@ jobs:
     if: github.event_name == 'pull_request' && (needs.changes.outputs.full == 'true' || needs.changes.outputs.private_mutation == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -5944,6 +5955,8 @@ jobs:
     if: needs.changes.outputs.full == 'true' || needs.changes.outputs.trivy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -5975,6 +5988,8 @@ jobs:
     # isolated pool delays every merge gate.
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -6092,6 +6107,7 @@ jobs:
     # aggregator needs no checkout and must not occupy an isolated runner
     # while heavy suites queue.
     runs-on: ubuntu-latest
+    permissions: {}
     needs:
       - changes
       - secret-scan

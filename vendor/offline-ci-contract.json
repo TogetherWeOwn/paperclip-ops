@@ -357,7 +357,7 @@
     },
     {
       "name": "change-gating contract holds",
-      "definition_sha256": "9ffe58c2c85d290fd6802ee20b0fc811e2273e31148a82bfc3553f57875f2b87",
+      "definition_sha256": "451c3452f922aef9f181a035a1b21e8523005b4866cc34c038cd8c729864639c",
       "id": "change-gating contract holds:1"
     },
     {
@@ -2119,7 +2119,7 @@
       "plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|v0.2.2"
     ]
   },
-  "suites_job_sha256": "5d0d517daadcbf5743afdf5f9b131afb162bfaed3980a112ba9c4824d546726c",
+  "suites_job_sha256": "e4fb2880e033e4fc98504a181e5d81c8bc1ecfed4be1805acfe3a6227a77d0f8",
   "manifest_sha256": "45002e0b5e92e94f5bda7df2d92c40384f1c6d7b054f1a7ede163f5c3999b13e",
   "restored_files_sha256": {
     "acceptance_org_lib.sh": "8db92e9d11f5a21776dbc1f71296b752291e6758ddc2a5ad67a129a86a5ed00a",

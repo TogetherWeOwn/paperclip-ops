@@ -99,6 +99,20 @@ async function fixture(t, { closeout, repos = [A], open = { [A]: [7] }, limits =
   h.kinds = (kind) => h.calls.filter(([k]) => k === kind)
   return h
 }
+function manualClock() {
+  let now = 0
+  const timers = new Set()
+  return { now: () => now,
+    setTimer: (fire, ms) => { const timer = { fire, at: now + ms }; timers.add(timer); return timer },
+    clearTimer: (timer) => timers.delete(timer),
+    advance: (ms) => {
+      const until = now + ms
+      for (const timer of [...timers].sort((a, b) => a.at - b.at)) {
+        if (timer.at <= until && timers.delete(timer)) { now = timer.at; timer.fire() }
+      }
+      now = until
+    } }
+}
 const nonemptyReasons = (result) => Object.fromEntries(Object.entries(result.disarmShadow.byReason).filter(([, n]) => n))
 async function stored(h) {
   const files = await readdir(h.config.stateDirectory)
@@ -508,25 +522,21 @@ test('an S3c index overrun that stops the pass before the shadow drain fails ON 
       repos: [A, B], open: { [A]: [7] }, limits: { durationMs: 600, maxPages: 1 } })
     h.rulesRepositories.add(B)
     h.snapshots.set(7, { isDraft: true })
-    // Hold the board index read past the whole pass deadline. The lock-held
-    // index drain has no budget check, so the stop is set before the shadow
-    // drain starts; containing it would hide a real primary failure.
+    // Expire at the index read, not at an arbitrary wall-clock instant that
+    // could race local checkpoint I/O on a loaded runner.
+    const clock = manualClock()
     const boardIssues = `${h.config.boardOrigin}/api/companies/${companyId}/issues`
     const fetch = h.fetch
     h.fetch = async (url, init) => {
-      if (String(url).startsWith(boardIssues)) await new Promise((resolve) => setTimeout(resolve, 900))
+      if (String(url).startsWith(boardIssues)) clock.advance(601)
       return fetch(url, init)
     }
-    const result = await h.pass()
+    const result = await h.pass({ clock })
     assert.equal(result.ok, false, 'a pre-drain stop fails the pass with or without the shadow')
     assert.equal(result.reason, 'deadline')
-    // Stream admission on a fresh pass is not pinned here: primary work may
-    // or may not run before the held index read stops the pass. What must
-    // hold under either admission is that no shadow drain read runs and any
-    // checkpoint reflects only primary work that actually ran.
+    assert.deepEqual(h.kinds('primary'), [], 'the index expires before either primary stream starts')
     assert.deepEqual(h.kinds('snapshot'), [], 'no shadow drain read runs after a pre-drain stop')
-    assert.deepEqual((await h.state()).repos[A]?.backfill.done ?? [],
-      h.kinds('primary').length ? [7] : [], 'checkpoint matches only the primary work that ran')
+    assert.deepEqual((await h.state()).repos[A]?.backfill.done ?? [], [], 'no primary work means no checkpoint')
     if (disarm) {
       assert.equal(result.disarmShadow.counters.total, 0, 'no drain accounting for a stop set before the drain')
       assert.equal(result.disarmShadow.counters.deferred, 0, 'no drain read ran, so nothing is contained')
@@ -711,17 +721,33 @@ test('a sweeps-first S3c index overrun after primary work still fails ON exactly
     await saveSweepState({ directory: h.config.stateDirectory, state })
     const boardIssues = `${h.config.boardOrigin}/api/companies/${companyId}/issues`
     const fetch = h.fetch
-    // Wide real-time margins: instant fixture primary work must finish and
-    // the held index read must start well inside the pass budget, while the
-    // hold itself overruns it, even on a loaded runner.
+    const clock = manualClock()
+    let releaseIndex
+    const indexHeld = new Promise((resolve) => { releaseIndex = resolve })
+    let captureReads = 0
     h.fetch = async (url, init) => {
-      if (String(url).startsWith(boardIssues)) await new Promise((resolve) => setTimeout(resolve, 2000))
-      return fetch(url, init)
+      if (String(url).startsWith(boardIssues)) {
+        // Only the quarter-pass index deadline fires: production can run
+        // while the signal-ignoring read remains held under the receipt lock.
+        clock.advance(301)
+        await indexHeld
+      }
+      const response = await fetch(url, init)
+      if (String(url).startsWith(h.config.captureOrigin) && ++captureReads === 4) {
+        // Sweeps ran first; the last empty capture response completes the
+        // event stream in microtasks. Expire on the next turn, when only the
+        // lock-held index drain remains, then let that read settle.
+        setImmediate(() => { clock.advance(900); releaseIndex() })
+      }
+      return response
     }
     h.config.limits.durationMs = 1200
     h.calls.length = 0
     h.logs.length = 0
-    const result = await h.pass()
+    const result = await h.pass({ clock })
+    assert.equal(result.events.ok, true, 'the event stream completes before the index drain expires')
+    assert.equal(result.sweeps.ok, true, 'primary sweeps complete before the index drain expires')
+    assert.deepEqual((await h.state()).repos[A].review.done, [7], 'primary checkpoint survives the overrun')
     assert.deepEqual(h.kinds('primary'), [['primary', A, 7]],
       'measured pass re-reviews A primary before the held index read')
     assert.ok(h.calls.findIndex((v) => v[0] === 'primary') <

@@ -121,6 +121,7 @@ parser, not a standing operator command. Test entry points begin with `test_`.
 | `runner_disk_pressure.sh` |
 | `runner_disk_triage.sh` |
 | `schema_drift.sh` |
+| `shell_subst_guard.py` |
 | `sibling_guard.sh` |
 | `two_bot_staging_precheck.py` |
 | `upstream_draft_pin_audit.sh` |

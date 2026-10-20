@@ -123,7 +123,10 @@ here; an operator installs the cron lines separately.
    Since Beszel v0.20 the hub refuses loopback/private webhook targets
    unless the notification's owner is an admin: own this notification
    as a Beszel admin user. The read-only hub user from step 1 is for
-   fetching only — it cannot own a loopback notification.
+   fetching only — it cannot own a loopback notification. The hub's
+   built-in Test Alert is dropped by the forwarder (its title is not
+   Beszel-alert-shaped): verify with `forward_beszel_discord.py
+   --dry-run` on a real alert title instead.
 
 ## Fail-closed rules
 

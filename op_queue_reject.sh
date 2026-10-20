@@ -71,7 +71,7 @@
 # EXIT CODES (pinned by test_op_queue_reject.sh; executor subset, no 4/7):
 #   0  rejected (or verify-only passed)
 #   2  usage / malformed invocation (bad flags, missing reason)
-#   3  evidence/policy refusal (missing, unreadable, bad name, bad reason)
+#   3  evidence/policy refusal (missing, unreadable, changed, bad name/reason)
 #   5  filesystem boundary / ownership refusal (escape, symlink, perms).
 #      Symlinks refuse even to inside targets (packet_is_symlink): the
 #      receipt name must equal the invoked name.
@@ -155,6 +155,18 @@ check_root_owned_dir() { # $1=directory -> rc 0 ok
   fi
   mode="$(stat -c %a -- "$d")" || return 1
   (( (8#$mode & 8#022) == 0 ))
+}
+
+# The append target and its direct parent must both be protected. In particular,
+# never open a symlink or FIFO as root, even when a receipt could be published.
+check_reject_log() {
+  local parent
+  parent="$(dirname -- "$REJECT_LOG")" || return 1
+  check_root_owned_dir "$parent" || return 1
+  if [[ -e "$REJECT_LOG" || -L "$REJECT_LOG" ]]; then
+    check_root_owned_file "$REJECT_LOG" "rejection log" || return 1
+  fi
+  return 0
 }
 
 # ---- log scrub (same scrub as the approval executor) --------------------------
@@ -245,14 +257,36 @@ check_root_owned_file "$PACKET_REAL" "packet" \
 # ---- step 4: bind the payload WITHOUT interpreting it ------------------------------
 # The packet is opaque bytes: hash, size, and mtime bind it to the receipt.
 # No field is parsed, so an executor-unparsable packet is still rejectable.
+# Keep full-resolution metadata for change detection even though the receipt's
+# human timestamp is second-resolution. Include inode identity to catch swaps.
+PACKET_STAMP="$(stat -c '%d:%i:%s:%y' -- "$PACKET_REAL")" \
+  || { emit_result "$(result refused packet_unreadable "" "" false)"; exit 3; }
 PACKET_SHA="$(sha256sum -- "$PACKET_REAL" | cut -d' ' -f1)" || PACKET_SHA=""
-[[ -n "$PACKET_SHA" ]] \
+[[ "$PACKET_SHA" =~ ^[a-f0-9]{64}$ ]] \
   || { emit_result "$(result refused packet_unreadable "" "" false)"; log_human "packet unreadable"; exit 3; }
 PACKET_SHA="sha256:$PACKET_SHA"
-PACKET_BYTES="$(stat -c %s -- "$PACKET_REAL")" || PACKET_BYTES="0"
-PACKET_MTIME="$(stat -c %y -- "$PACKET_REAL" | cut -d' ' -f1,2 | tr ' ' 'T')" || PACKET_MTIME="unknown"
-# Normalize mtime to a stable UTC-ish stamp; fall back to raw on odd systems.
-PACKET_MTIME="$(date -u -d "@$(stat -c %Y -- "$PACKET_REAL")" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")"
+PACKET_BYTES="$(stat -c %s -- "$PACKET_REAL")" \
+  || { emit_result "$(result refused packet_unreadable "" "" false)"; exit 3; }
+PACKET_EPOCH="$(stat -c %Y -- "$PACKET_REAL")" \
+  || { emit_result "$(result refused packet_unreadable "" "" false)"; exit 3; }
+PACKET_MTIME="$(date -u -d "@$PACKET_EPOCH" +%Y-%m-%dT%H:%M:%SZ)" \
+  || { emit_result "$(result refused packet_unreadable "" "" false)"; exit 3; }
+
+# Revalidate trust before reading again; a replacement symlink or FIFO must not
+# be hashed. The claim serializes rejectors, not packet producers. Provisioning
+# must still prevent writers changing a packet during the final publish window.
+packet_unchanged() {
+  local real stamp sha
+  real="$(within_dir_strict "$QUEUE_DIR" "$PACKET_REAL")" || return 1
+  [[ "$real" == "$PACKET_REAL" ]] || return 1
+  check_root_owned_file "$PACKET_REAL" "packet" || return 1
+  stamp="$(stat -c '%d:%i:%s:%y' -- "$PACKET_REAL")" || return 1
+  [[ "$stamp" == "$PACKET_STAMP" ]] || return 1
+  sha="$(sha256sum -- "$PACKET_REAL" | cut -d' ' -f1)" || return 1
+  [[ "sha256:$sha" == "$PACKET_SHA" ]] || return 1
+  stamp="$(stat -c '%d:%i:%s:%y' -- "$PACKET_REAL")" || return 1
+  [[ "$stamp" == "$PACKET_STAMP" ]]
+}
 
 # ---- step 5: replay + claim (atomic; nothing writes before this) ----------------------
 RECEIPT="$PROCESSED_DIR/$PACKET_BASE.rejected.json"
@@ -269,6 +303,9 @@ if [[ -e "$RECEIPT" || -L "$RECEIPT" ]]; then
   log_human "replay: receipt already exists; refusing"
   exit 6
 fi
+
+check_reject_log \
+  || { emit_result "$(result refused log_ownership "$PACKET_SHA" "" true)"; log_human "unsafe rejection log or parent directory"; exit 5; }
 
 if [[ "$MODE" == "verify-only" ]]; then
   emit_result "$(result verified would_reject "$PACKET_SHA" "" true)"
@@ -318,6 +355,10 @@ if [[ -e "$RECEIPT" || -L "$RECEIPT" ]]; then
   exit 6
 fi
 
+# Do not turn the pre-claim snapshot of a changed packet into terminal state.
+packet_unchanged \
+  || { emit_result "$(result refused packet_changed "" "" false)"; log_human "packet changed while claiming"; exit 3; }
+
 # ---- step 6: one receipt + one log line, secrets scrubbed -------------------------------
 TS="$(iso_now)" \
   || { emit_result "$(result failed receipt_unwritten "$PACKET_SHA" "" true)"; log_human "could not timestamp receipt"; exit 1; }
@@ -342,6 +383,12 @@ SCRUBBED="$(jq -cse --arg pkt "$PACKET_BASE" --arg sha "$PACKET_SHA" --arg reaso
   || { emit_result "$(result failed receipt_unwritten "$PACKET_SHA" "" true)"; log_human "invalid scrubbed receipt"; exit 1; }
 printf '%s\n' "$SCRUBBED" > "$RECEIPT_TMP" \
   || { emit_result "$(result failed receipt_unwritten "$PACKET_SHA" "" true)"; log_human "could not write receipt"; exit 1; }
+# Recheck the sibling output and the packet after receipt construction, as
+# close as possible to publication. Refusals leave no terminal record or log.
+check_reject_log \
+  || { emit_result "$(result refused log_ownership "$PACKET_SHA" "" true)"; log_human "unsafe rejection log or parent directory"; exit 5; }
+packet_unchanged \
+  || { emit_result "$(result refused packet_changed "" "" false)"; log_human "packet changed before publication"; exit 3; }
 # Hard-link publication is atomic and cannot replace an existing terminal file,
 # including one created by a writer outside this claim protocol.
 if ! ln -T -- "$RECEIPT_TMP" "$RECEIPT"; then

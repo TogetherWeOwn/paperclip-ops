@@ -21,15 +21,15 @@ outside this verb's contract and needs its own review.
 | File | Role |
 | --- | --- |
 | `op_queue_reject.sh` | The verb. Installed root-owned 755, run once as root. |
-| `test_op_queue_reject.sh` | Offline refusal/regression suite (63 cases). |
+| `test_op_queue_reject.sh` | Offline refusal/regression suite (65 cases). |
 | `docs/runbooks/op-queue-reject.md` | This file. |
 
 Hashes below pin the reviewed revision. The approving reviewer re-checks
 them at the exact head that merges; a re-push re-pins.
 
 ```
-c2aa3672340316679dee7dcfe6b90f8ba71c6825c4515e197ee2d56e5877d20b  op_queue_reject.sh
-92140d6b748e44958eee8dcad05cd8f38cb60107f5fc789ce115ed14b70049ff  test_op_queue_reject.sh
+341595f76f1fade8b85ae059a24b4f26d9aeb648a38778efca2d1a77aa22c2f6  op_queue_reject.sh
+5e22feb80d6abef15cfdfd2e30567606c4f0f5939b4a33087938b5aa452281e2  test_op_queue_reject.sh
 ```
 
 Trust lineage: the queue-dir jail (`within_dir_strict`) and the root-owned
@@ -66,14 +66,20 @@ write bits. Unsafe state refuses with exit 5 / `processed_dir_ownership`,
 not replay or busy. `verify-only` also refuses an unsafe existing directory,
 but does not create an absent one.
 
-Output ancestors and the audit log remain host provisioning preconditions:
-use protected root-owned ancestor directories and a root-owned regular audit
-log that non-root users cannot write to (or an absent log in a protected
-directory), never a symlink. The helper
-does not validate every ancestor or the audit log's custody. It does not
-repair permissions. Use a restrictive umask (for example `077`) during the
-bounded invocation; a newly created group/other-writable processed directory
-is refused before a claim or receipt can be written.
+The helper also validates the audit log and its direct parent before
+`verify-only` or claiming, then again before receipt publication. The parent
+must pass the same protected-directory checks; an existing log must be a
+root-owned regular non-symlink file without group/other write bits. An absent
+log is allowed only in that protected parent. Symlinks (including dangling),
+FIFOs, directories, unsafe modes and non-root production ownership refuse
+with exit 5 / `log_ownership`, without publishing a receipt or appending a log
+line. `verify-only` never creates the log.
+
+Protected root-owned output ancestors remain host provisioning preconditions:
+the helper validates direct parents, not every ancestor. It does not repair
+permissions. Use a restrictive umask (for example `077`) during the bounded
+invocation; a newly created group/other-writable processed directory is
+refused before a claim or receipt can be written.
 
 Re-verification is read-only through existing reads: the receipt under
 `processed/` plus `sha256sum` over the preserved packet re-establishes
@@ -119,6 +125,15 @@ only their own temporary file and empty claim directory, never packet bytes
 or a terminal receipt. The filesystem must support hard links; otherwise the
 verb fails closed with `receipt_unwritten`.
 
+The packet's jail and file trust, SHA-256, size, full-resolution mtime and
+inode identity are rechecked under the acquired claim before receipt
+construction and again immediately before publication. A mismatch or failed
+recheck returns exit 3 / `packet_changed`, publishes no receipt or audit event,
+and cleans the owned claim so a clean retry can bind the current bytes. This
+is change detection, not a producer lock: host custody must still prevent
+writers mutating or replacing the selected packet during the final
+check-to-publication window. The verb never locks or modifies packet bytes.
+
 A successful reject appends exactly one compact JSON object to the JSONL audit
 log. If that append fails after receipt publication, exit 1 / `failed/log_unwritten`
 includes the committed receipt path. The packet is already terminal: re-verify
@@ -139,11 +154,11 @@ or restarts a service.
 
 ```bash
 bash -n op_queue_reject.sh && bash -n test_op_queue_reject.sh
-./test_op_queue_reject.sh          # expect: 63 passed, 0 failed
+./test_op_queue_reject.sh          # expect: 65 passed, 0 failed
 sha256sum op_queue_reject.sh test_op_queue_reject.sh
 ```
 
-Expected: exit 0, `63 passed, 0 failed`, and hashes equal to the manifest
+Expected: exit 0, `65 passed, 0 failed`, and hashes equal to the manifest
 above. On the host (operator only, read-only after install):
 
 ```bash

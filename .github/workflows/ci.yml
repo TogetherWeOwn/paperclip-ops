@@ -2011,6 +2011,13 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_org_snapshot.sh
 
+      # verify-fast --parse-only exits before its local full-tier suites. Run
+      # receipt-only rejection regressions explicitly; fixtures need no root,
+      # database, credentials, network, or live operator queue.
+      - name: queue-packet reject offline suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_op_queue_reject.sh
+
       # case_1b34645a. A third question again: the first two ask who may decide and
       # whether the record survives, this one asks whether the REQUESTER ever
       # finds out. It also carries the containment half — that a failed or

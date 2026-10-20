@@ -18,7 +18,9 @@
 #   3. reason boundary: the closed enum admits exactly three tokens.
 #   4. replay/concurrency: second reject is a replay (receipt bytes and log
 #      lines unchanged); pre-claimed packet is busy; verify-only on a
-#      rejected packet replays instead of re-verifying.
+#      rejected packet replays instead of re-verifying. Adversarial matrices
+#      cover receipt I/O faults, processed-directory and audit-log trust, and
+#      packet changes under the claim and during receipt construction.
 #   5. filesystem boundary: packet outside the queue, symlink escape,
 #      symlink-to-inside, group-writable packet, non-root packet under
 #      production ownership rules.
@@ -434,8 +436,16 @@ finally:
     ln_shim.unlink()
 print("  atomic publication collision: existing receipt preserved without second audit event")
 
+# Inject an actual append failure on a trusted regular log, not an unsafe
+# pathname that should be refused before receipt publication.
+fault_env.write_text('''if [[ -n "${ORIGINAL_BASH_ENV:-}" ]]; then source "$ORIGINAL_BASH_ENV"; fi
+printf() {
+  if [[ "$(readlink /proc/$$/fd/1)" == "$OP_REJECT_LOG" ]]; then return 1; fi
+  builtin printf "$@"
+}
+''')
 path = packet("log-failure")
-rc, result = run(path, extra={"OP_REJECT_LOG": str(root)})
+rc, result = run(path, extra={"BASH_ENV": str(fault_env), "ORIGINAL_BASH_ENV": env.get("BASH_ENV", "")})
 assert rc == 1 and result["reason_code"] == "log_unwritten", (rc, result)
 assert result["receipt"] == str(receipt(path))
 assert json.loads(receipt(path).read_text())["outcome"] == "rejected"
@@ -591,6 +601,224 @@ then
   ok "processed-directory trust, forged-state refusals, creation recheck and clean creation"
 else
   bad "processed-directory trust regressions"
+fi
+
+# ===========================================================================
+section "4d. audit-log trust before publication"
+if python3 - "$TOOL" "$TMP" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+source = str(Path(sys.argv[1]).resolve())
+root = Path(sys.argv[2]) / "log-trust"
+queue, processed, bin_dir = (root / name for name in ("queue", "processed", "bin"))
+for directory in (queue, processed, bin_dir):
+    directory.mkdir(parents=True)
+packet = queue / "log-trust.json"
+packet.write_bytes(b'{"opaque":"never execute"}\n')
+packet.chmod(0o644)
+before = hashlib.sha256(packet.read_bytes()).hexdigest(), packet.stat().st_mtime_ns
+receipt = processed / (packet.name + ".rejected.json")
+claim = processed / (packet.name + ".claim")
+env = os.environ | {
+    "OP_REJECT_QUEUE_DIR": str(queue), "OP_REJECT_PROCESSED_DIR": str(processed),
+    "FIXTURE_BIN": str(bin_dir), "FIXTURE_SOURCE": source,
+    "REAL_STAT": shutil.which("stat"), "REAL_MKDIR": shutil.which("mkdir"),
+}
+command = ["bash", "-c", 'umask 077; export PATH="$FIXTURE_BIN:$PATH"; source "$FIXTURE_SOURCE" "$@"', "fixture"]
+
+def run(log, mode="reject", extra=None):
+    result = subprocess.run(command + [mode, "--packet", str(packet), "--reason", "schema-probe"],
+                            env=env | {"OP_REJECT_LOG": str(log)} | (extra or {}),
+                            capture_output=True, text=True, timeout=5)
+    return result.returncode, json.loads(result.stdout)
+
+def refused(log, extra=None):
+    for mode in ("verify-only", "reject"):
+        rc, result = run(log, mode, extra)
+        assert (rc, result["outcome"], result["reason_code"]) == (5, "refused", "log_ownership"), (mode, log, rc, result)
+        assert not receipt.exists() and not claim.exists(), "unsafe log published terminal state"
+    assert (hashlib.sha256(packet.read_bytes()).hexdigest(), packet.stat().st_mtime_ns) == before
+
+victim = root / "victim"
+victim.write_bytes(b"preserve audit target\n")
+linked = root / "linked.log"
+linked.symlink_to(victim)
+refused(linked)
+assert victim.read_bytes() == b"preserve audit target\n"
+dangling = root / "dangling.log"
+dangling.symlink_to(root / "absent-target")
+refused(dangling)
+assert not (root / "absent-target").exists()
+for name, mode in (("group", 0o664), ("other", 0o646), ("world", 0o666)):
+    log = root / (name + ".log")
+    log.write_bytes(b"preserve log\n")
+    log.chmod(mode)
+    refused(log)
+    assert log.read_bytes() == b"preserve log\n"
+fifo = root / "fifo.log"
+os.mkfifo(fifo)
+refused(fifo)
+refused(root)
+print("  symlink, dangling link, writable logs, FIFO and directory refuse with no publication or hang")
+
+for name, kind in (("writable-parent", "writable"), ("linked-parent", "symlink"), ("missing-parent", "missing")):
+    parent = root / name
+    if kind == "writable":
+        parent.mkdir()
+        parent.chmod(0o777)
+    elif kind == "symlink":
+        parent.symlink_to(processed, target_is_directory=True)
+    refused(parent / "new.log")
+    assert not (parent / "new.log").exists()
+print("  absent log requires a protected real parent, with no implicit directory creation")
+
+# Simulate production uid checks for each trust object, without chown or root.
+log = root / "nonroot.log"
+log.write_bytes(b"preserve owner\n")
+stat_shim = bin_dir / "stat"
+stat_shim.write_text('''#!/usr/bin/env python3
+import os, subprocess, sys
+if sys.argv[1:3] == ["-c", "%u"]:
+    print("1000" if sys.argv[-1] == os.environ["UNTRUSTED_UID_PATH"] else "0")
+else:
+    sys.exit(subprocess.run([os.environ["REAL_STAT"], *sys.argv[1:]]).returncode)
+''')
+stat_shim.chmod(0o755)
+try:
+    refused(log, {"OP_REJECT_REQUIRE_ROOT_OWNERSHIP": "1", "UNTRUSTED_UID_PATH": str(log)})
+    refused(root / "absent.log", {"OP_REJECT_REQUIRE_ROOT_OWNERSHIP": "1", "UNTRUSTED_UID_PATH": str(root)})
+finally:
+    stat_shim.unlink()
+assert log.read_bytes() == b"preserve owner\n"
+print("  production non-root log and absent-log parent refuse (uid fixtures)")
+
+# Unsafe log appears after preflight but before the claim is acquired.
+late_log = root / "late.log"
+mkdir_shim = bin_dir / "mkdir"
+mkdir_shim.write_text('''#!/usr/bin/env python3
+import os, pathlib, subprocess, sys
+if sys.argv[-1].endswith(".claim"):
+    pathlib.Path(os.environ["OP_REJECT_LOG"]).symlink_to(os.environ["FIXTURE_VICTIM"])
+sys.exit(subprocess.run([os.environ["REAL_MKDIR"], *sys.argv[1:]]).returncode)
+''')
+mkdir_shim.chmod(0o755)
+try:
+    rc, result = run(late_log, extra={"FIXTURE_VICTIM": str(victim)})
+    assert (rc, result["reason_code"]) == (5, "log_ownership"), (rc, result)
+    assert not receipt.exists() and not claim.exists()
+    assert victim.read_bytes() == b"preserve audit target\n"
+finally:
+    mkdir_shim.unlink()
+print("  log revalidated under claim before terminal publication")
+
+clean_log = root / "clean.log"
+assert run(clean_log, "verify-only")[0] == 0
+assert not clean_log.exists() and not receipt.exists()
+assert run(clean_log)[0] == 0
+assert len(clean_log.read_text().splitlines()) == 1
+assert not (clean_log.stat().st_mode & 0o022)
+print("  protected absent log is not created by verify-only; clean reject creates one audit event")
+PY
+then
+  ok "audit-log type, mode, ownership, parent and late-substitution matrix"
+else
+  bad "audit-log trust regressions"
+fi
+
+# ===========================================================================
+section "4e. packet binding rechecked under claim"
+if python3 - "$TOOL" "$TMP" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+source = str(Path(sys.argv[1]).resolve())
+root = Path(sys.argv[2]) / "packet-binding"
+queue, processed, bin_dir = (root / name for name in ("queue", "processed", "bin"))
+for directory in (queue, processed, bin_dir):
+    directory.mkdir(parents=True)
+log = root / "audit.log"
+env = os.environ | {
+    "OP_REJECT_QUEUE_DIR": str(queue), "OP_REJECT_PROCESSED_DIR": str(processed),
+    "OP_REJECT_LOG": str(log), "FIXTURE_BIN": str(bin_dir), "FIXTURE_SOURCE": source,
+    "REAL_MKDIR": shutil.which("mkdir"), "REAL_SED": shutil.which("sed"),
+}
+command = ["bash", "-c", 'export PATH="$FIXTURE_BIN:$PATH"; source "$FIXTURE_SOURCE" "$@"', "fixture"]
+mutator = '''#!/usr/bin/env python3
+import os, pathlib, subprocess, sys
+when = os.environ["MUTATE_WHEN"]
+if (when == "claim" and sys.argv[-1].endswith(".claim")) or when == "scrub":
+    path = pathlib.Path(os.environ["FIXTURE_PACKET"])
+    before = path.stat()
+    kind = os.environ["MUTATE_KIND"]
+    if kind == "same-size":
+        path.write_bytes(b"B" * before.st_size)
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    elif kind == "size":
+        path.write_bytes(b"different size payload")
+    elif kind == "mtime":
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1))
+    elif kind == "symlink":
+        target = path.with_suffix(".target")
+        target.write_bytes(path.read_bytes())
+        path.unlink()
+        path.symlink_to(target)
+    elif kind == "mode":
+        path.chmod(0o666)
+sys.exit(subprocess.run([os.environ["REAL_MKDIR" if when == "claim" else "REAL_SED"], *sys.argv[1:]]).returncode)
+'''
+for when in ("claim", "scrub"):
+    for kind in ("same-size", "size", "mtime", "symlink", "mode"):
+        packet = queue / (when + "-" + kind + ".json")
+        packet.write_bytes(b"opaque initial bytes")
+        packet.chmod(0o644)
+        # Pin nanoseconds away from a second boundary: mtime-only must not hide
+        # behind the second-resolution timestamp serialized into the receipt.
+        os.utime(packet, ns=(1792436400000000000, 1792436400000000100))
+        receipt = processed / (packet.name + ".rejected.json")
+        claim = processed / (packet.name + ".claim")
+        log_before = log.read_bytes() if log.exists() else b""
+        shim = bin_dir / ("mkdir" if when == "claim" else "sed")
+        shim.write_text(mutator)
+        shim.chmod(0o755)
+        try:
+            result = subprocess.run(command + ["reject", "--packet", str(packet), "--reason", "schema-probe"],
+                                    env=env | {"MUTATE_WHEN": when, "MUTATE_KIND": kind, "FIXTURE_PACKET": str(packet)},
+                                    capture_output=True, text=True, timeout=10)
+            output = json.loads(result.stdout)
+            assert (result.returncode, output["reason_code"]) == (3, "packet_changed"), (when, kind, result.returncode, output)
+            assert not receipt.exists() and not claim.exists(), "mutation left terminal or partial state"
+            assert (log.read_bytes() if log.exists() else b"") == log_before
+        finally:
+            shim.unlink()
+        # Repair only the hostile fixture shape; retry binds the current bytes.
+        if packet.is_symlink():
+            current = packet.read_bytes()
+            packet.unlink()
+            packet.write_bytes(current)
+        packet.chmod(0o644)
+        result = subprocess.run(command + ["reject", "--packet", str(packet), "--reason", "schema-probe"],
+                                env=env, capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stdout
+        record = json.loads(receipt.read_text())
+        assert record["packet_sha256"] == "sha256:" + hashlib.sha256(packet.read_bytes()).hexdigest()
+        assert record["packet_bytes"] == packet.stat().st_size
+        print("  " + when + "/" + kind + ": no receipt/log/claim on change; clean retry binds current bytes")
+PY
+then
+  ok "packet content, size, nanosecond mtime and trust mutations refuse before publication"
+else
+  bad "packet binding regressions"
 fi
 
 # ===========================================================================

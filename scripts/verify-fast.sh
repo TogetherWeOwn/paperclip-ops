@@ -51,7 +51,7 @@ elif [[ "${1:-}" == "--list" ]]; then
   echo "      survival-atomic-write, corpus atomic-write, observational-collect-atomic-write, pr-hygiene owner-match, live-run guard, review-route, shell-subst guard, arm-import, merge-survival-atomic-write, operator-workspace reconciler and sweep, operator copy-risk gate,"
   echo "      translator-fixture (pinned tsc), deploy-window wrapper, deploy-window manifest gate, activation contract (paperclip-upgrade), staged-tier0-drift gate,"
   echo "      migration-safety gates (timeout-preamble, squawk, rehearsal, drift-gate),"
-  echo "      org-snapshot offline suite"
+  echo "      org-snapshot offline suite, queue-reject verb"
   exit 0
 elif [[ -n "${1:-}" ]]; then
   echo "usage: $0 [--parse-only] [--list]" >&2
@@ -163,6 +163,7 @@ env -u BASH_ENV ./test_approval_timeout_probe.sh || fail "approval-timeout probe
 ./test_credential_chain_offline.sh || fail "credential-chain offline fixture suite failed"
 ./test_gh_access_dispatch.sh || fail "gh-access dispatch suite failed"
 ./test_org_snapshot.sh || fail "org-snapshot offline suite failed"
+./test_op_queue_reject.sh || fail "queue-reject verb suite failed"
 # PR #2 landing acceptance: pins the CI wiring-gate/push-key contracts
 # (case_f3500d44/case_6d874ecd) red-to-green. Offline, stdlib only.
 python3 -m unittest test_pr2_acceptance || fail "pr2 acceptance suite failed"
@@ -170,8 +171,8 @@ python3 -m unittest test_alert_queue || fail "alert-queue suite failed"
 python3 -m unittest test_watchdog_snapshot_builder || fail "watchdog snapshot-builder suite failed"
 python3 -m unittest test_case_da79e241_fleet_run_stall || fail "fleet-run-stall suite failed"
 python3 -m unittest test_case_dcf07273_assignment_bundle || fail "assignment host-source suite failed"
-(cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote) \
-  || fail "review-error, review-dedup, PR-supply and flow-guard suites failed"
+(cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_flake_ledger) \
+  || fail "review-error, review-dedup, PR-supply, flow-guard and flake-ledger suites failed"
 (cd ops/paperclip && python3 -B -m unittest test_focus_gate_bounds) || fail "focus-gate bounds suite failed"
 (cd ops/lib && python3 -m unittest test_atomic_state) || fail "atomic state suite failed"
 (cd ops/productivity && python3 -m unittest test_stuck_run_state) || fail "stuck-run state suite failed"

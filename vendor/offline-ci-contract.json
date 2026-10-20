@@ -316,6 +316,7 @@
     "activation contract suite:1",
     "execution-image source-only carrier suite:1",
     "shell-subst guard suite:1",
+    "queue-packet reject offline suite:1",
     "staging-preflight carrier suite:1"
   ],
   "retained": [
@@ -511,7 +512,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "56960f13fcb0e61a69901a9690ebf786e1f0eff4d5232c5d8effc80b997ea30c",
+      "definition_sha256": "3bec0caf24b2a19a8b4dcb1a0340f57a8b6dd1344eee5cc87d2872db074db338",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1773,6 +1774,11 @@
       "name": "shell-subst guard suite",
       "definition_sha256": "86e903744e363c48addcac51ee9cad3caf5828eb818261ace6bf25550632419a",
       "id": "shell-subst guard suite:1"
+    },
+    {
+      "name": "queue-packet reject offline suite",
+      "definition_sha256": "0de2526e8cce1f4d0899b4e430b123344ef961efd0fd9855c6874ba09252595e",
+      "id": "queue-packet reject offline suite:1"
     },
     {
       "name": "staging-preflight carrier suite",

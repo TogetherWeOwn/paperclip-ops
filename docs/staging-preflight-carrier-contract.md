@@ -112,8 +112,10 @@ closed, working directory `/`, environment exactly the present subset of
 `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`,
 `PAPERCLIP_RUN_SCRATCH_DIR`, `HOME` plus fixed `PATH=/usr/bin:/bin` and a
 fixed `C.UTF-8` locale. Any proxy variable in the carrier's own
-environment refuses before dispatch. Stdout is capped at 64 KiB + 1,
-stderr at 16 KiB + 1; the whole dispatch is bounded at 180 seconds.
+environment refuses before dispatch. Stdout and stderr are collected
+while the adapter runs and checked after it exits: more than 64 KiB + 1
+of stdout or 16 KiB + 1 of stderr produces `adapter_output_over_cap`;
+the whole dispatch is bounded at 180 seconds.
 
 Exit codes: `0` dispatched and passed; `1` dispatched and failed (receipt
 written, one-shot consumed); `2` refused before the adapter ran

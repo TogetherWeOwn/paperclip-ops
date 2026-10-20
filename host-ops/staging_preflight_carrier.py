@@ -474,6 +474,9 @@ def dispatch(request_path, install, now=None, expected_uid=0,
         finally:
             fcntl.flock(dirfd, fcntl.LOCK_UN)
         status, output, error = run_adapter(install.adapter_path, dispatch_timeout)
+        # finished_at is read after the adapter returns so the interval
+        # spans the run; under the fake clock it equals claimed_at.
+        finished = int(time.time()) if now is None else now
         if error is not None:
             outcome, failure, observations = "fail", error, []
         else:
@@ -492,7 +495,7 @@ def dispatch(request_path, install, now=None, expected_uid=0,
             "principal": manifest["principal"]["user"],
             "adapter_sha256": adapter_digest,
             "targets": manifest["targets"],
-            "interval": {"claimed_at": moment, "finished_at": moment,
+            "interval": {"claimed_at": moment, "finished_at": finished,
                          "expires_at": request["expires_at"]},
             "outcome": outcome, "failure": failure,
             "observations": observations, "adapter_exit": status,

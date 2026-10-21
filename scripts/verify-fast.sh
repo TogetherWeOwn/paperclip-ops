@@ -315,6 +315,9 @@ python3 test_staged_drift.py || fail "staged Tier-0 drift gate failed"
 ./test_migration_squawk.sh || fail "migration squawk suite failed"
 ./test_migration_rehearsal.sh || fail "migration rehearsal suite failed"
 python3 -m unittest test_migration_drift_gate || fail "migration drift-gate suite failed"
+# Plan/list/no-prepare contract plus the strict inventory-to-execution drift
+# check and the PREPARE-guard check. Offline: stdlib unittest, synthetic stubs.
+python3 -B -m unittest test_verify_fast_plan test_verify_fast_plan_gates || fail "verify-fast plan suites failed"
 
 if [[ "$rc" -ne 0 ]]; then
   echo "verify-fast: FAILED"

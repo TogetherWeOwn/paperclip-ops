@@ -1,5 +1,5 @@
 {
-  "_maintainer_note": "Single repo-owned suite inventory for scripts/verify-fast.sh (bundle verification-plan). --list and --plan/--dry-run output are generated from this file; fast-tier execution runs the same suite selection, held in correspondence by the paired first-token test. When adding, removing or rewording a suite command in verify-fast.sh, update the matching entry here in the same commit. Prerequisite probes are read-only (PATH lookup or local check, no network, no writes).",
+  "_maintainer_note": "Single repo-owned suite inventory for scripts/verify-fast.sh (bundle verification-plan). --list and --plan/--dry-run output are generated from this file; fast-tier execution runs the same suite selection, held in correspondence, in both directions on the whole command, by test_verify_fast_plan_gates. When adding, removing or rewording a suite command in verify-fast.sh, update the matching entry here in the same commit. Prerequisite probes are read-only (PATH lookup or local check, no network, no writes).",
   "schema_version": 1,
   "prerequisite_catalog": {
     "bash": {"probe": {"which": "bash"}},
@@ -76,6 +76,7 @@
     {"id": "migration-timeout-preamble", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_timeout_preamble.sh"]},
     {"id": "migration-squawk", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_squawk.sh"]},
     {"id": "migration-rehearsal", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_rehearsal.sh"]},
-    {"id": "migration-drift-gate", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_migration_drift_gate"]}
+    {"id": "migration-drift-gate", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_migration_drift_gate"]},
+    {"id": "verify-fast-plan", "tier": "fast", "prerequisites": ["python3", "node", "bash"], "preparation": {"actions": []}, "command": ["python3", "-B", "-m", "unittest", "test_verify_fast_plan", "test_verify_fast_plan_gates"]}
   ]
 }

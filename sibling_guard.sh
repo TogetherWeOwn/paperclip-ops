@@ -272,16 +272,17 @@ say() { [[ "$QUIET" -eq 1 || "$JSON" -eq 1 ]] || printf '%s\n' "$*"; }
 
 # _pc_valid_base: the same BASE host gate as the other senders (an http(s)
 # URL whose authority is one bare host[:port] or bracketed [IPv6] literal:
-# no userinfo, whitespace, query/fragment, or curl-glob braces). Returns
+# no userinfo, whitespace or control characters, query/fragment,
+# curl-glob braces, or percent signs in the authority). Returns
 # rather than exiting so each board read fails closed as blind_on. The
 # annotated copy lives in notify_paperclip_issue.sh.
 _pc_valid_base() {
   local _base="$1" _host
   case "$_base" in http://*|https://*) ;; *) return 1;; esac
-  case "$_base" in *@*|*[[:space:]]*|*\?*|*#*|*\{*|*\}*) return 1;; esac
+  case "$_base" in *@*|*[[:space:]]*|*[[:cntrl:]]*|*\?*|*#*|*\{*|*\}*) return 1;; esac
   _host="${_base#http://}"; _host="${_host#https://}"; _host="${_host%%/*}"
   [[ -n "$_host" ]] || return 1
-  case "$_host" in :*|*,*) return 1;; esac
+  case "$_host" in :*|*,*|*%*) return 1;; esac
   if [[ "$_host" == *\[* || "$_host" == *\]* ]]; then
     [[ "$_host" =~ ^\[[0-9a-fA-F:.]+\](:[0-9]+)?$ ]] || return 1
   elif [[ "$_host" == *:* ]]; then

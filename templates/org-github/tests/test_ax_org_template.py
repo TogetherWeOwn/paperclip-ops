@@ -159,6 +159,55 @@ class AxLintWorkflowTest(unittest.TestCase):
                 self.assertNotIn("paths", config)
                 self.assertNotIn("paths-ignore", config)
 
+    def test_source_ref_guard_accepts_sha_rejects_tag_and_repo(self):
+        # Execute the extracted guard under bash: neutering any exit 1
+        # must turn a reject into an accept and fail this test.
+        import subprocess
+        text = read("ax-lint/ax-lint.yml")
+        workflow = yaml.safe_load(text)
+        steps = workflow["jobs"]["ax-lint"]["steps"]
+        run = next(s["run"] for s in steps
+                   if s.get("name") == "Resolve ax-lint source ref")
+        sha = "a" * 40
+        good_ref = (f"TogetherWeOwn/.github/.github/workflows/"
+                    f"ax-lint.yml@{sha}")
+        cases = [
+            ({"WORKFLOW_REPO": "TogetherWeOwn/.github",
+              "WORKFLOW_SHA": sha,
+              "WORKFLOW_REF": good_ref}, 0),
+            ({"WORKFLOW_REPO": "TogetherWeOwn/.github",
+              "WORKFLOW_SHA": sha,
+              "WORKFLOW_REF": "TogetherWeOwn/.github/.github/workflows/"
+                              "ax-lint.yml@v1"}, 1),
+            ({"WORKFLOW_REPO": "EvilOrg/.github",
+              "WORKFLOW_SHA": sha,
+              "WORKFLOW_REF": good_ref}, 1),
+            ({"WORKFLOW_REPO": "TogetherWeOwn/.github",
+              "WORKFLOW_SHA": "v1",
+              "WORKFLOW_REF": "TogetherWeOwn/.github/.github/workflows/"
+                              "ax-lint.yml@v1"}, 1),
+        ]
+        for env_extra, expected in cases:
+            with tempfile.NamedTemporaryFile(
+                    "w", suffix=".github-output",
+                    delete=False) as out:
+                out_path = out.name
+            try:
+                env = dict(os.environ, GITHUB_OUTPUT=out_path,
+                           **env_extra)
+                proc = subprocess.run(
+                    ["bash", "-c", run], env=env,
+                    capture_output=True, text=True, timeout=10)
+                self.assertEqual(
+                    proc.returncode, expected,
+                    f"env {env_extra}: stdout={proc.stdout!r} "
+                    f"stderr={proc.stderr!r}")
+                if expected == 0:
+                    with open(out_path, encoding="utf-8") as fh:
+                        self.assertIn(f"sha={sha}", fh.read())
+            finally:
+                os.unlink(out_path)
+
 
 class AxLintMatcherTest(unittest.TestCase):
     def setUp(self):
@@ -224,6 +273,21 @@ class AxLintMatcherTest(unittest.TestCase):
         self.write("tests/check.sh",
                    "#!/usr/bin/env bash\n# --target X\n", executable=True)
         self.assertEqual(ax_lint.check_script_surface(self.root), [])
+
+    def test_ax_source_checkout_excluded(self):
+        # The reusable workflow checks the lint source into .ax-source/
+        # inside the scanned root; its flag-taking scripts must not warn.
+        self.write("AGENTS.md", "# map\n")
+        self.write(".ax-source/review-rules/tests/selftest.py",
+                   "#!/usr/bin/env python3\n# --target X\n",
+                   executable=True)
+        self.assertEqual(ax_lint.check_script_surface(self.root), [])
+        # ... while a caller-owned flag CLI still warns.
+        self.write("deploy.sh",
+                   "#!/usr/bin/env bash\n# deploy --target X\n",
+                   executable=True)
+        findings = ax_lint.check_script_surface(self.root)
+        self.assertEqual([f["path"] for f in findings], ["deploy.sh"])
 
     def test_untyped_dispatch_input_warns(self):
         self.write(".github/workflows/ship.yml",
@@ -409,6 +473,54 @@ class AxMetricsComputeTest(unittest.TestCase):
             combine({"state": "pending", "total_count": 0}, []))
         self.assertIsNone(combine(None, None))
 
+    def test_fetch_first_commit_state_merges_check_runs(self):
+        # The wrapper must fetch /status plus /check-runs and merge them:
+        # dropping check_runs from the call must fail this test.
+        seen_urls = []
+
+        def fake_get(url, headers):
+            seen_urls.append(url)
+            if "/pulls/7/commits" in url:
+                return [{"sha": "abc123"}]
+            if url.endswith("/commits/abc123/status"):
+                return {"state": "pending", "total_count": 0}
+            if url.endswith("/commits/abc123/check-runs?per_page=100"):
+                return {"check_runs": [
+                    {"conclusion": "success", "status": "completed"}]}
+            raise AssertionError(f"unexpected url {url}")
+
+        real_get = ax_metrics._http_get_json
+        ax_metrics._http_get_json = fake_get
+        try:
+            state = ax_metrics.fetch_first_commit_state(
+                "Example/a", 7, "token")
+        finally:
+            ax_metrics._http_get_json = real_get
+        self.assertEqual(state, "success")
+        self.assertTrue(
+            any("/pulls/7/commits?per_page=1" in u for u in seen_urls),
+            f"first-commit selection missing per_page=1: {seen_urls}")
+
+    def test_fetch_first_commit_state_failing_check_run_fails(self):
+        def fake_get(url, headers):
+            if "/pulls/7/commits" in url:
+                return [{"sha": "abc123"}]
+            if url.endswith("/commits/abc123/status"):
+                return {"state": "success", "total_count": 1}
+            if url.endswith("/commits/abc123/check-runs?per_page=100"):
+                return {"check_runs": [
+                    {"conclusion": "failure", "status": "completed"}]}
+            raise AssertionError(f"unexpected url {url}")
+
+        real_get = ax_metrics._http_get_json
+        ax_metrics._http_get_json = fake_get
+        try:
+            state = ax_metrics.fetch_first_commit_state(
+                "Example/a", 7, "token")
+        finally:
+            ax_metrics._http_get_json = real_get
+        self.assertEqual(state, "failure")
+
     def test_from_file_report_shape(self):
         fixture = {
             "github_rows": [{"repo": "Example/a", "merged_prs": 2,
@@ -488,6 +600,72 @@ class AxMetricsComputeTest(unittest.TestCase):
             fetched, True, None)
         self.assertEqual(issues, fetched)
         self.assertTrue(truncated)
+
+    def test_fetch_paperclip_issues_paginates_until_short_page(self):
+        import urllib.parse as urlparse
+
+        def fake_get(base_url, api_key, path):
+            page = int(urlparse.parse_qs(
+                urlparse.urlparse(path).query)["page"][0])
+            if page == 1:
+                return [{"id": n} for n in range(100)], None
+            if page == 2:
+                return {"issues": [{"id": n} for n in range(100, 200)]}, None
+            if page == 3:
+                return [{"id": 200}, {"id": 201}], None
+            raise AssertionError(f"unexpected page {page}")
+
+        real_get = ax_metrics.paperclip_get
+        ax_metrics.paperclip_get = fake_get
+        try:
+            issues, truncated, reason = ax_metrics.fetch_paperclip_issues(
+                "https://paperclip.example", "key", "company")
+        finally:
+            ax_metrics.paperclip_get = real_get
+        self.assertEqual(len(issues), 202)
+        self.assertFalse(truncated)
+        self.assertIsNone(reason)
+
+    def test_fetch_paperclip_issues_truncated_at_page_cap(self):
+        calls = []
+
+        def fake_get(base_url, api_key, path):
+            calls.append(path)
+            return [{"id": n} for n in range(100)], None
+
+        real_get = ax_metrics.paperclip_get
+        ax_metrics.paperclip_get = fake_get
+        try:
+            issues, truncated, reason = ax_metrics.fetch_paperclip_issues(
+                "https://paperclip.example", "key", "company")
+        finally:
+            ax_metrics.paperclip_get = real_get
+        self.assertEqual(len(issues),
+                         ax_metrics.MAX_ISSUE_PAGES * ax_metrics.ISSUES_PER_PAGE)
+        self.assertEqual(len(calls), ax_metrics.MAX_ISSUE_PAGES)
+        self.assertTrue(truncated)
+        self.assertIsNone(reason)
+
+    def test_fetch_paperclip_issues_mid_scan_failure(self):
+        import urllib.parse as urlparse
+
+        def fake_get(base_url, api_key, path):
+            page = int(urlparse.parse_qs(
+                urlparse.urlparse(path).query)["page"][0])
+            if page == 1:
+                return [{"id": n} for n in range(100)], None
+            return None, "HTTPError: HTTP Error 500"
+
+        real_get = ax_metrics.paperclip_get
+        ax_metrics.paperclip_get = fake_get
+        try:
+            issues, truncated, reason = ax_metrics.fetch_paperclip_issues(
+                "https://paperclip.example", "key", "company")
+        finally:
+            ax_metrics.paperclip_get = real_get
+        self.assertEqual(len(issues), 100)
+        self.assertTrue(truncated)
+        self.assertIn("500", reason)
 
     def test_issue_truncation_reaches_report(self):
         report = ax_metrics.build_report(

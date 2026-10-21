@@ -27,6 +27,9 @@ AGENTS_BUDGET_LINES = 120
 EXCLUDE_DIRS = frozenset({
     ".git", "node_modules", "vendor", ".venv", "venv", "__pycache__",
     ".tox", "target", "dist", "build", ".mypy_cache", ".pytest_cache",
+    # The reusable workflow checks the lint source out at .ax-source/
+    # inside the caller's tree; its scripts are ours, not the caller's.
+    ".ax-source",
 })
 
 SCRIPT_EXTENSIONS = (".sh", ".bash", ".py")

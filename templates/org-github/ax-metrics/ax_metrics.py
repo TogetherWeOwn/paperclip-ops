@@ -215,6 +215,9 @@ def compute_tokens_per_pr(cost_tokens, merged_count):
     return cost_tokens / merged_count
 
 
+_UNSET = object()
+
+
 def resolve_issue_scan(fetched, truncated, reason):
     """Failed scans degrade to None so the reason surfaces in provenance.
 
@@ -551,15 +554,19 @@ def _tokens_metric(cost_tokens, cost_evidence, merged_total, report_window,
 
 
 def _escalations_metric(issues, window_start, report_window,
-                        paperclip_reason, issues_truncated):
-    """escalations_per_100_cards; partial scans never read as complete."""
+                        scan_reason, issues_truncated):
+    """escalations_per_100_cards; partial scans never read as complete.
+
+    `scan_reason` is the issue-scan reason only; cost failures never
+    reach this metric.
+    """
     definition = ("cards currently blocked per 100 cards touched in "
                   "window (v0 proxy for escalations)")
     provenance = ("paperclip issues api" if issues is not None
-                  else (paperclip_reason or "no paperclip data"))
+                  else (scan_reason or "no paperclip data"))
     num_source = "paperclip issues api"
     den_source = "paperclip issues api (touched in window)"
-    if issues is None and _mentions_credentials(paperclip_reason):
+    if issues is None and _mentions_credentials(scan_reason):
         return _metric(None, definition, provenance,
                        validity="unavailable",
                        reason_code="credentials_missing",
@@ -571,18 +578,18 @@ def _escalations_metric(issues, window_start, report_window,
                        numerator_source=num_source,
                        denominator_source=den_source)
     if issues is None:
-        if _looks_like_failure(paperclip_reason):
+        if _looks_like_failure(scan_reason):
             code = "scan_failed"
-            why = f"issue scan failed: {paperclip_reason}"
+            why = f"issue scan failed: {scan_reason}"
             action = "retry the run; check paperclip api availability"
         elif issues_truncated:
             code = "scan_truncated"
             why = "issue scan hit the page cap before completing"
             action = ("narrow the window or re-run; treat counts as a "
                       "sample")
-        elif paperclip_reason:
+        elif scan_reason:
             code = "scan_incomplete"
-            why = f"issue scan incomplete: {paperclip_reason}"
+            why = f"issue scan incomplete: {scan_reason}"
             action = "re-run the scan; narrow the window if it recurs"
         else:
             code = "no_evidence"
@@ -639,8 +646,14 @@ def _escalations_metric(issues, window_start, report_window,
 
 def build_report(github_rows, cost_tokens, issues, window_start, window_days,
                  paperclip_reason=None, issues_truncated=False,
-                 cost_evidence=None):
-    """Assemble the report dict from fetched (or fixture) data."""
+                 cost_evidence=None, issues_reason=_UNSET):
+    """Assemble the report dict from fetched (or fixture) data.
+
+    `issues_reason` is the issue-scan failure reason; left unset it falls
+    back to `paperclip_reason` (legacy callers that carry one reason).
+    """
+    scan_reason = (paperclip_reason if issues_reason is _UNSET
+                   else issues_reason)
     merged_total = sum(r["merged_prs"] for r in github_rows)
     states = [s for r in github_rows for s in r["first_commit_states"]]
     window_end = _window_end_iso(window_start, window_days)
@@ -662,7 +675,7 @@ def build_report(github_rows, cost_tokens, issues, window_start, window_days,
                 cost_tokens, cost_evidence, merged_total, report_window,
                 paperclip_reason),
             "escalations_per_100_cards": _escalations_metric(
-                issues, window_start, report_window, paperclip_reason,
+                issues, window_start, report_window, scan_reason,
                 issues_truncated),
         },
     }
@@ -685,6 +698,7 @@ def collect_live(args, window_start):
     key = os.environ.get(args.paperclip_key_env, "")
     company = os.environ.get(args.paperclip_company_env, "")
     cost_tokens, issues, reason = None, None, None
+    issues_reason = _UNSET
     cost_evidence = None
     issues_truncated = False
     if base and key and company:
@@ -715,7 +729,8 @@ def collect_live(args, window_start):
     return build_report(github_rows, cost_tokens, issues, window_start,
                         args.days, paperclip_reason=reason,
                         issues_truncated=issues_truncated,
-                        cost_evidence=cost_evidence)
+                        cost_evidence=cost_evidence,
+                        issues_reason=issues_reason)
 
 
 def collect_from_file(path, days):
@@ -723,8 +738,12 @@ def collect_from_file(path, days):
         fixture = json.load(fh)
     issues = fixture.get("issues")
     issues_truncated = fixture.get("issues_truncated", False)
+    # An explicit issues_reason (even null) scopes the failure to the
+    # issue scan; absent, the legacy shared paperclip_reason applies.
+    issues_reason = fixture["issues_reason"] \
+        if "issues_reason" in fixture else fixture.get("paperclip_reason")
     issues, issues_truncated = resolve_issue_scan(
-        issues, issues_truncated, fixture.get("paperclip_reason"))
+        issues, issues_truncated, issues_reason)
     return build_report(
         fixture.get("github_rows", []),
         fixture.get("cost_tokens"),
@@ -732,7 +751,8 @@ def collect_from_file(path, days):
         fixture.get("window_start", ""), days,
         paperclip_reason=fixture.get("paperclip_reason"),
         issues_truncated=issues_truncated,
-        cost_evidence=fixture.get("cost_evidence"))
+        cost_evidence=fixture.get("cost_evidence"),
+        issues_reason=issues_reason)
 
 
 def main(argv=None):

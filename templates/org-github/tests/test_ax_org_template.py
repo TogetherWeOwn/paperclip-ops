@@ -939,10 +939,52 @@ class AxMetricsInputValidationTest(unittest.TestCase):
             paperclip_reason="scan returned a partial page")
         code, text = self._run_fixture(fixture)
         self.assertEqual(code, 0)
-        metric = json.loads(text)["metrics"]["escalations_per_100_cards"]
+        report = json.loads(text)
+        metric = report["metrics"]["escalations_per_100_cards"]
         self.assertIsNone(metric["value"])
         self.assertEqual(metric["validity"], "withheld")
         self.assertEqual(metric["reason_code"], "scan_incomplete")
+        self.assertEqual(metric["completeness"], "partial")
+        self.assertEqual(
+            report["metrics"]["tokens_per_merged_pr"]["validity"], "valid")
+
+    def _two_issues(self):
+        return [{"status": "blocked",
+                 "updatedAt": "2026-10-19T00:00:00Z"},
+                {"status": "done",
+                 "updatedAt": "2026-10-19T00:00:00Z"}]
+
+    def test_fixture_cost_only_failure_keeps_complete_issue_scan(self):
+        fixture = self._base_fixture(
+            issues=self._two_issues(),
+            paperclip_reason="costs api HTTP Error 500",
+            issues_reason=None)
+        code, text = self._run_fixture(fixture)
+        self.assertEqual(code, 0)
+        metric = json.loads(text)["metrics"]["escalations_per_100_cards"]
+        self.assertEqual(metric["validity"], "valid")
+        self.assertEqual(metric["value"], 50.0)
+
+    def test_fixture_issues_reason_withholds_escalations(self):
+        fixture = self._base_fixture(
+            issues=self._two_issues(),
+            issues_reason="HTTP Error 500")
+        code, text = self._run_fixture(fixture)
+        self.assertEqual(code, 0)
+        metric = json.loads(text)["metrics"]["escalations_per_100_cards"]
+        self.assertIsNone(metric["value"])
+        self.assertEqual(metric["reason_code"], "scan_failed")
+
+    def test_issue_reason_ignores_unrelated_cost_reason(self):
+        fixture = self._base_fixture(
+            issues=None,
+            paperclip_reason="costs api HTTP Error 500",
+            issues_reason="scan returned a partial page")
+        code, text = self._run_fixture(fixture)
+        self.assertEqual(code, 0)
+        metric = json.loads(text)["metrics"]["escalations_per_100_cards"]
+        self.assertEqual(metric["reason_code"], "scan_incomplete")
+        self.assertNotIn("costs api", metric["reason"])
 
 
 class ReviewDimensionTest(unittest.TestCase):

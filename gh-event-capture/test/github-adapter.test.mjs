@@ -558,3 +558,59 @@ test('enable-auto-merge arms squash bound to the evaluated head', async () => {
   const failing = createGithubAdapter({ allowedRepositories: [repository], run: async () => { throw new Error('PRIVATE') } })
   await assert.rejects(failing.enableAutoMerge(repository, 42, sha), /auto-merge arm failed/)
 })
+
+test('every GraphQL document the adapter sends is brace- and paren-balanced', async () => {
+  // Regression: SNAPSHOT_QUERY once shipped with 18 `{` and 17 `}` (its tail
+  // was copied from MAIN_HEAD_QUERY, which nests one level shallower), so
+  // every getCloseoutSnapshot call failed GraphQL parsing and the sweep
+  // recorded snapshot-read-failed for every PR. The mocks in this file never
+  // parse the query, so assert on the exact documents the adapter sends.
+  const documents = []
+  const collect = (calls) => {
+    for (const [, args] of calls) {
+      const query = args.find((arg) => typeof arg === 'string' && arg.startsWith('query='))
+      if (query !== undefined) documents.push(query.slice('query='.length))
+    }
+  }
+  const prCall = fake([envelope({ pullRequest: pr() })])
+  await prCall.adapter.getPullRequest(repository, 42)
+  collect(prCall.calls)
+  const openCall = fake([page([42])])
+  await openCall.adapter.listOpenPullRequests(repository)
+  collect(openCall.calls)
+  const nowMs = pushedMs + 60_000
+  const snapCall = fake([snapEnvelope(closeoutPr())])
+  await snapCall.adapter.getCloseoutSnapshot(repository, 42, { nowMs })
+  collect(snapCall.calls)
+  const mainCall = fake([
+    envelope({ defaultBranchRef: { name: 'main', target: { __typename: 'Commit', oid: headSha,
+      pushedDate: pushedAt, statusCheckRollup: { contexts: { nodes: [], pageInfo: { hasNextPage: false } } } } } }),
+    { required_status_checks: { contexts: [], checks: [] } },
+  ])
+  await mainCall.adapter.getMainHeadChecks(repository, { nowMs })
+  collect(mainCall.calls)
+  const nodeId = 'UHVsbFJlcXVlc3Q0Mg=='
+  const draftCall = fake([
+    { data: { repository: { nameWithOwner: repository, pullRequest: { id: nodeId } } } },
+    { data: { convertPullRequestToDraft: { pullRequest: { isDraft: true } } } },
+  ])
+  await draftCall.adapter.convertToDraft(repository, 42)
+  collect(draftCall.calls)
+  // Four module-level queries plus the two inline convert-to-draft documents.
+  // If a call shape changes and a document stops being collected, this fails
+  // loudly instead of silently shrinking the contract.
+  assert.equal(documents.length, 6)
+  for (const document of documents) {
+    for (const [open, close, label] of [['{', '}', 'brace'], ['(', ')', 'paren']]) {
+      let depth = 0
+      for (const char of document) {
+        if (char === open) depth++
+        if (char === close) {
+          assert.ok(depth > 0, `GraphQL document closes a ${label} that was never opened: ${document.slice(0, 60)}`)
+          depth--
+        }
+      }
+      assert.equal(depth, 0, `GraphQL document leaves ${depth} ${label}(s) unclosed: ${document.slice(0, 60)}`)
+    }
+  }
+})

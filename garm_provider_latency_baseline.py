@@ -496,7 +496,11 @@ def _publish_json(path, doc):
     except OSError:
         pass  # Durability hint only: the rename already committed.
     finally:
-        os.close(dir_fd)
+        try:
+            os.close(dir_fd)
+        except OSError:
+            pass  # Cleanup only: the rename already committed, so a failed
+            # close must not masquerade as a failed publication.
 
 
 def _outcome(operation, baseline_path, samples_path, *, code, retryable,

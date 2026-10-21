@@ -103,6 +103,11 @@ def audit(event, args):
                 raise OSError("injected atomic publication failure")
 
 sys.addaudithook(audit)
+if fault == "close_failure":
+    _real_close = os.close
+    def _flaky_close(fd):
+        raise OSError("injected post-rename directory close failure")
+    os.close = _flaky_close
 sys.argv = [script] + argv
 runpy.run_path(script, run_name="__main__")
 '''
@@ -478,6 +483,13 @@ class ProviderBaselineIntegrityTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         doc = self.outcome(proc, "record")
         self.assertTrue(doc["retryable"])
+
+    def test_post_rename_close_failure_still_reports_success(self):
+        self.write_samples(create=[120000] * 10)
+        proc = self.cli("record", "--json", fault="close_failure")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        stored = json.loads(self.baseline.read_text())
+        self.assertEqual(stored["operations"]["create"]["count"], 20)
 
     def test_cli_help_exposes_json_and_dry_run_without_writes(self):
         before = self.snapshot()

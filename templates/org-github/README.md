@@ -38,6 +38,14 @@ Operator applies these files there after this PR merges.
 | `tests/test_policy_checkout.py` | reference only (real pinned checkout action; symlink regression plus normal-directory control) |
 | `scripts/ci_policy.py` | `.github/scripts/ci_policy.py` (warn mode; wired into `pr-lint`, needs no ruleset change) |
 | `tests/test_ci_policy.py` | `.github/scripts/test_ci_policy.py` (unit tests, run beside the lint) |
+| `pull-request-template/AX-BLOCK.md` | merged into `.github/pull_request_template.md` as a `## Agent Experience (AX)` section after `## Attestation` (see the file's Operator merge note) |
+| `repo-template/AGENTS.md` | `repo-template/AGENTS.md` (new-repo seed; provisioning copies it to each new repo root — see the file's seeding note) |
+| `ax-lint/ax-lint.yml` | `.github/workflows/ax-lint.yml` (reusable `workflow_call`, advisory warn default) |
+| `ax-lint/ax_lint.py` | `ax-lint/ax_lint.py` (the lint the workflow checks out at the invoked ref) |
+| `ax-metrics/ax-metrics.yml` | PRIVATE ops repo `.github/workflows/ax-metrics.yml` (weekly schedule; cost/card data stays internal — see the file's header) |
+| `ax-metrics/ax_metrics.py` | PRIVATE ops repo `ax-metrics/ax_metrics.py` (ships with the workflow above) |
+| `review/AX-DIMENSION.md` | reference only (stays here; exact AX dimension text for the host-side review owner to install) |
+| `tests/test_ax_org_template.py` | reference only (stays here; structural contract for everything above) |
 
 > `scripts/ci_policy.py` + `tests/test_ci_policy.py` are a verbatim copy of
 > `paperclip-ops@4fb40122` (PR #656, warn mode). Do not edit the copy:
@@ -180,6 +188,7 @@ PYTHONPATH=templates/org-github/scripts \
   python3 -m unittest discover -s templates/org-github/tests -p 'test_ci_policy.py'
 ./templates/org-github/tests/test_tier0_org_template.sh
 ./templates/org-github/check-staged-drift.sh
+python3 -m unittest discover -s templates/org-github/tests -p 'test_ax_org_template.py'
 ```
 
 Covers 65 matcher fixtures/controls, 22 actual-workflow tests and five template

@@ -1,0 +1,73 @@
+# Weekly Agent Experience metrics (v0 scaffold).
+#
+# Destination: the PRIVATE ops repo that holds scheduled jobs, at
+# `.github/workflows/ax-metrics.yml`, with `ax-metrics/ax_metrics.py`
+# and `ax-metrics/repos.txt` beside it. Private-only: the full JSON
+# report carries cost and card data, which is internal. The step
+# summary prints the public-safe subset (merged PR counts and the
+# first-push green rate) so the shape stays safe if the job ever
+# moves; cost and card metrics stay in the log.
+#
+# Operator provisioning (not delivered by copying files):
+# - `METRICS_GITHUB_TOKEN`: read-only token covering the repos in
+#   repos.txt (the automatic GITHUB_TOKEN cannot read other repos).
+# - `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY`, `PAPERCLIP_COMPANY_ID`:
+#   optional; without them the Paperclip-backed metrics report null
+#   with a reason instead of failing the run.
+# - `ax-metrics/repos.txt`: one owner/name per line; `#` comments ok.
+# - Runner: ubuntu-latest below; switch to the repo's pool if policy
+#   says private repos must not use hosted minutes.
+# Rollback: delete the workflow file; the script has no side effects.
+
+name: ax-metrics (weekly)
+
+on:
+  schedule:
+    - cron: '17 7 * * 1'
+  workflow_dispatch:
+
+jobs:
+  ax-metrics:
+    name: ax-metrics
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      # Pinned: actions/checkout v4.2.2. Repin with the SHA, never a moving tag.
+      - name: Check out metrics source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Collect AX metrics
+        env:
+          GITHUB_TOKEN: ${{ secrets.METRICS_GITHUB_TOKEN }}
+          PAPERCLIP_API_URL: ${{ secrets.PAPERCLIP_API_URL }}
+          PAPERCLIP_API_KEY: ${{ secrets.PAPERCLIP_API_KEY }}
+          PAPERCLIP_COMPANY_ID: ${{ secrets.PAPERCLIP_COMPANY_ID }}
+        run: |
+          python3 -I ax-metrics/ax_metrics.py \
+            --repos-file ax-metrics/repos.txt --days 7 \
+            --out ax-metrics-report.json
+
+      - name: Summarize public-safe subset
+        run: |
+          python3 -I - ax-metrics-report.json >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          report = json.load(open(sys.argv[1]))
+          print("## AX metrics (week)")
+          print(f"merged PRs: {report['merged_prs_total']} "
+                f"(window: {report['window_days']}d from {report['window_start'][:10]})")
+          for row in report["repos"]:
+              print(f"- {row['repo']}: {row['merged_prs']} merged"
+                    + (" (truncated)" if row["truncated"] else ""))
+          for key in ("first_push_green_rate", "tokens_per_merged_pr",
+                      "escalations_per_100_cards"):
+              metric = report["metrics"][key]
+              if key == "first_push_green_rate":
+                  print(f"- {key}: {metric['value']}")
+              else:
+                  shown = metric["value"] is not None
+                  print(f"- {key}: {'see log (internal)' if shown else 'n/a: ' + str(metric['provenance'])}")
+          PY

@@ -1,0 +1,76 @@
+# Reusable Agent Experience lint for the org (advisory first).
+#
+# Lives in the org `.github` repo at `.github/workflows/ax-lint.yml`,
+# with `ax-lint/ax_lint.py` beside it at `ax-lint/ax_lint.py`.
+# Callers reference a pinned SHA:
+#   uses: TogetherWeOwn/.github/.github/workflows/ax-lint.yml@<sha>
+#
+# Warns about three cheap, deterministic AX gaps: AGENTS.md map size
+# (AX6), flag-taking scripts without --json/--dry-run (AX1/AX4), and
+# untyped workflow_dispatch inputs (AX2). Advisory: `mode: warn`
+# (the default) always exits 0. Flip a caller to `error` only after
+# its warnings are triaged; there is no org-wide enforce date.
+#
+# The lint script is checked out from this same repo at the invoked
+# ref (parsed from github.workflow_ref), so the script version always
+# matches the workflow version with no placeholder to fill.
+
+name: ax-lint (reusable, advisory)
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: >-
+          'warn' prints findings and exits 0 (advisory);
+          'error' exits 1 when any finding exists.
+        required: false
+        default: 'warn'
+        type: string
+      root:
+        description: Repository-relative directory to lint.
+        required: false
+        default: '.'
+        type: string
+
+jobs:
+  ax-lint:
+    name: ax-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # Pinned: actions/checkout v4.2.2. Repin with the SHA, never a moving tag.
+      - name: Check out caller repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve ax-lint source ref
+        id: source-ref
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          ref="${WORKFLOW_REF##*@}"
+          if ! [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::ax-lint must be invoked at a full commit SHA (got: $ref)"
+            exit 1
+          fi
+          echo "sha=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Check out ax-lint source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: TogetherWeOwn/.github
+          ref: ${{ steps.source-ref.outputs.sha }}
+          path: .ax-source
+          persist-credentials: false
+
+      - name: Run ax-lint
+        env:
+          AX_MODE: ${{ inputs.mode }}
+          AX_ROOT: ${{ inputs.root }}
+        run: |
+          python3 -I .ax-source/ax-lint/ax_lint.py --root "$AX_ROOT" --mode "$AX_MODE"

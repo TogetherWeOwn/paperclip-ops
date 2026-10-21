@@ -628,6 +628,27 @@ commit_change "feat(auth): parse token response"
 run_check
 [[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "turbofish path passes authz" \
   || bad "turbofish path passes authz (rc=$RC)"
+# A bare secret glued to a bracket is left unflagged: `<` is neither in
+# the bare-value run nor a trailing boundary (pre-review.sh section 7).
+# Split across adjacent strings so this file never holds the shape.
+new_repo
+BARE_GLUED="hunter2""hunter2"
+printf 'password = %s<\n' "$BARE_GLUED" > "$REPO_DIR/auth.rs"
+printf 'mod test_auth {}\n' > "$REPO_DIR/test_auth.rs"
+commit_change "feat(auth): add password default"
+run_check
+[[ "$RC" -eq 0 ]] && ! has_row FAIL authz && ok "bare secret glued to bracket passes authz" \
+  || bad "bare secret glued to bracket passes authz (rc=$RC)"
+# A quoted value containing a bracket is still a literal: `<` is allowed
+# inside the quoted run.
+new_repo
+QUOTED_BRACKET='ab<'"cdefghijklmno"
+printf 'token = "%s"\n' "$QUOTED_BRACKET" > "$REPO_DIR/app.py"
+printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+commit_change "feat(app): add token default"
+run_check
+[[ "$RC" -eq 1 ]] && has_row FAIL authz && ok "quoted bracket value still fails authz" \
+  || bad "quoted bracket value still fails authz (rc=$RC)"
 # Cloud and private-key literals still fail. Split across adjacent
 # strings so this file never holds a contiguous scanner pattern; bash
 # concatenates them at runtime into the real fixture.

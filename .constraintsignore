@@ -1,0 +1,9 @@
+# floor_guard.py self-exemption (reviewed like code).
+# The guard's own pattern table necessarily names every suppression/skip/stub
+# trigger, and its unit-test fixtures necessarily contain those triggers as
+# test data. Without this exemption the floor gate could never go green,
+# including on the PR that introduces it. Everything else -- every other code
+# file, every other test, and all threshold/exception checks -- is still
+# fully checked.
+scripts/quality-gates/floor_guard.py
+test_floor_guard.py

@@ -176,6 +176,14 @@ class TestRouting(ForwarderCase):
         self.assertIsNone(payload)
         self.assertIn("dropped", proc.stderr)
 
+    def test_host_down_prefix_pin_blocks_unheaded_route(self):
+        # Beszel-shaped (SMART head) and embeds " is down", but lacks the
+        # "Connection to " head the host-down route pins: it must take
+        # the default warning route, not the critical host-down route.
+        _proc, payload = self.dry_run("SMART failed on ovh-1: sda is down 🔴")
+        self.assertTrue(payload["content"].startswith("[warning]"),
+                        payload["content"])
+
     def test_mid_text_threshold_lookalike_is_dropped(self):
         # Foreign prose embedding route substrings mid-text is not
         # Beszel-shaped: real threshold titles END at "threshold".

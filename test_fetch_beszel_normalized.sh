@@ -210,7 +210,8 @@ for evil_url in \
     "http://0x7f.0.0.1:8090/" \
     "http://2130706433/" \
     "http://[::1%25lo]:8090/" \
-    "http://::1:8090/"; do
+    "http://::1:8090/" \
+    "http://192.0.2.1:8090/"; do
   D="$(fresh_case gate-refused)"
   run_tool "$D" BESZEL_HUB_URL="$evil_url"
   if [[ "$(cat "$D/rc")" == "2" ]] && ! [[ -s "$D/stdout" ]] \

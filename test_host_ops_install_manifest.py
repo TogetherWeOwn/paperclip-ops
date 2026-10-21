@@ -74,6 +74,9 @@ TREE = [
     ("prepare-first-install.sh", "preparation-entrypoint"),
     ("spool_carrier.py", "offline-tool"),
     ("spool_mapping.py", "offline-tool"),
+    # The disabled staging-preflight carrier: same offline-tool terms as
+    # the spool carrier (offline conformance suite only, never installed).
+    ("staging_preflight_carrier.py", "offline-tool"),
     # The manifest tool classifies itself as an offline tool (see
     # OFFLINE_TOOLS): the fixture tree mirrors the shipped categories.
     ("install_manifest.py", "offline-tool"),

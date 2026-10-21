@@ -145,6 +145,55 @@ class UsageLine(CertifyMixin, unittest.TestCase):
             self.assertTrue(self.certifies(body), body)
 
 
+class HeredocCertification(CertifyMixin, unittest.TestCase):
+    openers = ("<<EOF", "<<'EOF'", '<<"EOF"', r"<<\EOF", r"<<-\EOF")
+
+    def assert_generated_evidence_warns(self, evidence):
+        for opener in self.openers:
+            for flag in ("--json", "--dry-run"):
+                body = (f"cat {opener}\n{evidence.format(flag=flag)}\n"
+                        "EOF\n--target x\n")
+                with self.subTest(opener=opener, flag=flag):
+                    self.assertFalse(self.certifies(body), body)
+
+    def test_usage_inside_heredoc_warns(self):
+        self.assert_generated_evidence_warns("# usage: helper {flag}")
+
+    def test_argparse_inside_heredoc_warns(self):
+        self.assert_generated_evidence_warns("p.add_argument('{flag}')")
+
+    def test_argv_inside_heredoc_warns(self):
+        self.assert_generated_evidence_warns("if '{flag}' in sys.argv:\n    pass")
+
+    def test_backslash_quoted_shell_evidence_warns(self):
+        self.assert_generated_evidence_warns('[ "$1" = {flag} ]')
+        self.assert_generated_evidence_warns(
+            'case "$1" in\n  {flag}) emit ;;\nesac')
+
+    def test_real_evidence_after_heredoc_certifies(self):
+        for opener in self.openers:
+            for flag in ("--json", "--dry-run"):
+                for evidence in (
+                    "# usage: tool {flag}",
+                    "p.add_argument('{flag}')",
+                    "if '{flag}' in sys.argv:\n    pass",
+                    '[ "$1" = {flag} ]',
+                    'case "$1" in\n  {flag}) emit ;;\nesac',
+                ):
+                    body = (f"cat {opener}\ntext --target\nEOF\n"
+                            f"{evidence.format(flag=flag)}\n")
+                    with self.subTest(opener=opener, evidence=evidence, flag=flag):
+                        self.assertTrue(self.certifies(body), body)
+
+    def test_commented_opener_does_not_hide_real_evidence(self):
+        self.assertTrue(self.certifies(
+            "# cat <<EOF\n# usage: tool --json\n--target x\n"))
+
+    def test_terminator_with_comment_does_not_end_body(self):
+        self.assert_generated_evidence_warns(
+            "EOF # still generated text\n[ \"$1\" = {flag} ]")
+
+
 class PythonShapes(CertifyMixin, unittest.TestCase):
     name = "tool.py"
     head = PY

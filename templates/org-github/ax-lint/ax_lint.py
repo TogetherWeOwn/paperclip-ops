@@ -174,15 +174,17 @@ def _certified_surface_flags(text):
     """
     certified = set()
     lines = text.splitlines()
-    for line in lines:
-        if USAGE_RE.match(line):
+    skip = _heredoc_body_lines(lines)
+    for idx, line in enumerate(lines):
+        if idx not in skip and USAGE_RE.match(line):
             for flag in MACHINE_FLAGS:
                 if re.search(_flag_literal(flag), line):
                     certified.add(flag)
     if len(certified) == len(MACHINE_FLAGS):
         return certified
     code_lines = [_strip_comment(line) for line in lines]
-    code = "\n".join(code_lines)
+    code = "\n".join("" if idx in skip else line
+                     for idx, line in enumerate(code_lines))
     in_literal = _string_content_mask(code)
     for flag in MACHINE_FLAGS:
         if flag in certified:
@@ -194,9 +196,9 @@ def _certified_surface_flags(text):
         elif _code_match(r"['\"]%s['\"]\s+in\s+[^\n]*\bargv\b"
                          % re.escape(flag), code, in_literal):
             certified.add(flag)
-        elif _shell_flag_comparison(code_lines, flag):
+        elif _shell_flag_comparison(code_lines, flag, skip):
             certified.add(flag)
-        elif _shell_case_branch(code_lines, flag):
+        elif _shell_case_branch(code_lines, flag, skip):
             certified.add(flag)
     return certified
 
@@ -235,14 +237,14 @@ def _blank_quoted(line):
     return "".join(out)
 
 
-_HEREDOC_OPEN_RE = re.compile(r"<<(-?)\s*['\"]?([A-Za-z0-9_]+)")
+_HEREDOC_OPEN_RE = re.compile(r"<<(-?)\s*\\?['\"]?([A-Za-z0-9_]+)")
 
 
 def _heredoc_body_lines(code_lines):
     """Indexes of lines inside `<<word ... word` heredoc bodies.
 
-    Heredoc bodies are generated text, not executed code: a `$1`
-    comparison or `case` statement inside one must not certify the
+    Heredoc bodies are generated text, not executed code: none of the
+    certification channels may use their contents as evidence for the
     generator script. The opener is matched on the raw line (a quoted
     delimiter such as `<<'EOF'` is blanked away) but accepted only when
     its `<<` survives quote-blanking, so `echo "<<"` never opens a span.
@@ -259,6 +261,7 @@ def _heredoc_body_lines(code_lines):
             if body == term:
                 term = None
             continue
+        line = _strip_comment(line)
         bare = _blank_quoted(line)
         for found in _HEREDOC_OPEN_RE.finditer(line):
             if bare[found.start():found.start() + 2] == "<<":
@@ -268,7 +271,7 @@ def _heredoc_body_lines(code_lines):
     return skip
 
 
-def _shell_flag_comparison(code_lines, flag):
+def _shell_flag_comparison(code_lines, flag, skip):
     """A positional-parameter equality test against the flag certifies it.
 
     Matches ``[[ "$1" == "--json" ]]``, ``[ "$1" = --dry-run ]`` and the
@@ -286,7 +289,6 @@ def _shell_flag_comparison(code_lines, flag):
         var, lit, lit, var)
     opener = re.compile(r"\[\[\s*|\[\s+")
     test = re.compile(operands + r"(?=[^\n\]]*(?:\]\]|\]))")
-    skip = _heredoc_body_lines(code_lines)
     for idx, line in enumerate(code_lines):
         if idx in skip:
             continue
@@ -297,7 +299,7 @@ def _shell_flag_comparison(code_lines, flag):
     return False
 
 
-def _shell_case_branch(code_lines, flag):
+def _shell_case_branch(code_lines, flag, skip):
     """A ``case`` branch on $1/$@/$* matching the flag certifies it.
 
     Only ``case`` statements switching on a positional parameter count:
@@ -305,7 +307,6 @@ def _shell_case_branch(code_lines, flag):
     """
     depth = 0
     expect_label = False
-    skip = _heredoc_body_lines(code_lines)
     for idx, line in enumerate(code_lines):
         if idx in skip:
             continue

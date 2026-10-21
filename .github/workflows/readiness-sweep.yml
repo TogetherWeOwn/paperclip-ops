@@ -1,0 +1,170 @@
+name: Readiness Sweep
+
+# Deterministic PR readiness: bot-maintained checks block, draft-until-CI-green
+# ready gate, auto-merge. Each run performs ONE reconcile pass over the
+# policy's scanned repos and exits; the reconciler is idempotent, so
+# overlapping triggers converge instead of fighting.
+#
+# CREDENTIAL ROUTE (no key, no PEM, no App, no mint). The job's ONLY credential
+# is the ephemeral per-job GITHUB_TOKEN, scoped by the exact job `permissions`
+# below — sized to the sweep's four mutations plus its two reads, repo-scoped
+# and minutes-lived instead of custodied on a host. The sweep script admits it
+# ONLY with READINESS_JOB_TOKEN=1 plus exactly GH_TOKEN (gh-pinned.js
+# resolveSweepToken: an ambient token without the flag, or two token sources
+# at once, fails closed), runs it through an absolute-pinned /usr/bin/gh with
+# an isolated empty GH_CONFIG_DIR, and preflights `auth status` before reading
+# anything. No secret is printed, persisted, or placed on argv on any path.
+#
+# WHY EVENT-DRIVEN, NOT SCHEDULED. The gate must re-evaluate when (a) a PR
+# changes, (b) a gating Actions workflow completes, or (c) a hold label flips.
+# Polling would burn runner minutes around the clock to re-prove an unchanged
+# rollup; these triggers fire on those state changes, with one named exception
+# (the post-review arm wake — see EVENT CONTRACT). There is deliberately
+# NO `schedule:` trigger, and deliberately NO `check_suite:` trigger: GitHub
+# does not fire check_suite when the suite was created by Actions or the head
+# SHA is associated with Actions, which covers every PR head in this repo, so
+# that trigger would be dead for exactly the state change it claims to cover.
+# Completion wakes arrive as workflow_run over the named gating workflows
+# below. workflow_run has no wildcard, so the list must name every workflow
+# that posts PR checks — the contract test derives that set from the sibling
+# workflow files and fails if one is added without naming it here.
+#
+# EVENT CONTRACT (read before flag-on). Writes made with GITHUB_TOKEN do NOT
+# re-fire workflows: GitHub suppresses token-triggered events (dispatch events
+# are the only exception). Consequences, all load-bearing:
+#   * No self-trigger is possible: a pass never chains another pass. Each run
+#     is terminal; follow-up passes come only from later real events (author
+#     pushes, CI completions from author-triggered runs, label flips).
+#   * A ready-for-review transition made by the sweep does NOT start the heavy
+#     CI selection that a human ready-click would. The automatic heavy-CI
+#     handoff is therefore UNPROVEN on this route: before any repo is enabled,
+#     a trusted exact-head post-draft verification handoff must be demonstrated
+#     and the gate must fail closed without it. No extra grant (actions:write,
+#     dispatch rights, new credentials) may be inferred to close this gap —
+#     that is a fresh security review, not an edit to this file.
+#   * The post-review auto-merge arm has NO wake. Arming requires the Paperclip
+#     Review check to pass on the head, that check is an App check-run (not one
+#     of the named workflows), review completion is systematically the last
+#     state change, and passes act mutually exclusively — so an enabled PR
+#     would sit ready-but-unarmed until an unrelated event. A wake for external
+#     check completion is therefore UNPROVEN on this route (check_run docs carry
+#     the same Actions-associated-SHA suppression wording as check_suite, so any
+#     candidate needs live proof, never a docs assertion): before any repo is
+#     enabled, the arm wake must be demonstrated and the gate must fail closed
+#     without it.
+#
+# FORK CONTEXT. A job triggered by pull_request on a fork PR already carries a
+# read-only token (GitHub-enforced). workflow_run jobs run base code with base
+# permissions even when the completed run was fork-head, so fork origin is
+# re-derived from the event (pull_request.head.repo.fork or
+# workflow_run.head_repository.fork): either fork case sets
+# READINESS_READ_ONLY=1, telling the sweep to reconcile as would-act everywhere
+# instead of erroring per PR (PR forks) or writing from a fork-timed wake
+# (workflow_run forks). Jobs from any other context run with the full job
+# permissions and may act on any enabled PR.
+#
+# CONCURRENCY. Exactly two queues: fork (read-only) and base (write-capable).
+# The group keys ONLY on fork/read-only separation — never on the event name —
+# so write-capable passes from pull_request, workflow_run and workflow_dispatch
+# serialize behind each other: body/ready writes carry no head precondition
+# (only auto-merge binds the head), so overlapping passes would let a stale
+# snapshot overwrite newer state or mark an unevaluated head ready. Sequential
+# passes converge because every mutation is idempotent (byte-identical bodies
+# skip, in-state transitions are no-ops). The fork queue stays separate so a
+# flood of fork-triggered passes cannot head-of-line-block pending
+# write-capable passes.
+#
+# PWN-REQUEST GUARD. The checkout below pins `ref:` to the reviewed base tree
+# (the PR's base SHA for pull_request events, the default branch otherwise) —
+# PR-head code NEVER executes beside the job token, so a fork PR cannot
+# smuggle code into this job. workflow_run passes execute default-branch code
+# by platform design, which agrees with the pin (default branch for every
+# non-PR event); the triggering run's head_sha/head_branch are never checked
+# out or executed (forbidden by the contract test), which is what closes the
+# workflow_run untrusted-head threat. Consequence: sweep and policy changes
+# (including the flag-on change itself) take effect after merge; acceptance
+# runs against the merged tree.
+#
+# FLAG-OFF DEFAULT. gh-event-capture/readiness-policy.json ships with an
+# empty enabledRepositories: passes authenticate, scan, and log would-act
+# without changing anything. Enabling a repo is a reviewed change that lists
+# it (rollback is the revert), only after the security review and sign-off
+# this binding requires.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]
+  # zizmor: ignore[dangerous-triggers] reason="wake-only trigger: base-tree checkout pin (never head_sha/head_branch) + fork read-only, both pinned by readiness-job-token.test.mjs"
+  workflow_run:
+    workflows: [CI, docs-fast-path, PR lint, public-safety, test-guard]
+    types: [completed]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # ONE base queue for every write-capable pass plus a separate fork queue
+  # (see header): the group keys ONLY on fork/read-only separation, never on
+  # the event name, so passes from every event type serialize.
+  group: readiness-sweep-${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) || (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.fork)) && 'fork' || 'base' }}
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: readiness-sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # EXACT grant set for the four sweep mutations plus the two sweep reads
+    # (pinned by gh-event-capture/test/readiness-job-token.test.mjs — widening
+    # this block fails that test and needs a fresh security review):
+    #   pull-requests: write — body PATCH, mark-ready, convert-to-draft,
+    #     auto-merge arm, PR reads (write implies read).
+    #   contents: write — enablePullRequestAutoMerge requires it. The sweep
+    #     never merges, closes, or pushes; it arms auto-merge only.
+    #   checks / statuses: read — head commit rollup.
+    # `metadata` is deliberately absent: it is implicit for job tokens, not a
+    # permission key (actionlint rejects it). NOT granted: workflows (a PR
+    # touching .github/workflows/* fails closed on arm, as designed), issues,
+    # actions, administration, secrets.
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: read
+      statuses: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: gh-event-capture
+          sparse-checkout-cone-mode: true
+          # Pwn-request guard (see header): never execute PR-head code.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.repository.default_branch }}
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Run one readiness pass
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          READINESS_JOB_TOKEN: '1'
+          READINESS_READ_ONLY: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) || (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.fork)) && '1' || '' }}
+        run: |
+          set -euo pipefail
+          if [ "${READINESS_READ_ONLY:-}" = '1' ]; then
+            echo 'read-only pass (fork pull_request context): decisions will log as would-act'
+          fi
+          # Bootstrap tolerance: pull_request runs check out the reviewed BASE
+          # tree (pwn-request guard above), so on the change that introduces
+          # this route the base tree has no policy file yet. Skip loud instead
+          # of red; every base tree after merge carries the file.
+          if [ ! -f gh-event-capture/readiness-policy.json ]; then
+            echo 'base tree predates the sweep policy; skipping until merge'
+            exit 0
+          fi
+          # The sweep requires a 0600 owner-uid policy file; install the
+          # checked-in flag-off policy into job-private temp (never edit the
+          # checkout copy: enablement is a reviewed change, not a job mutation).
+          install -m 0600 gh-event-capture/readiness-policy.json "$RUNNER_TEMP/readiness-policy.json"
+          node gh-event-capture/scripts/readiness-sweep.mjs "$RUNNER_TEMP/readiness-policy.json"

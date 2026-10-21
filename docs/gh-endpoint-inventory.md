@@ -5,18 +5,20 @@ credential. Read this before changing any GitHub transport: endpoint shape
 alone does not identify the caller — several tools below build the same
 `/repos/.../actions/runs` shapes with different credentials.
 
-Scope: live tooling only. Test fixtures (`test_*`, `*_test.py`) build the same
-shapes against `.invalid` stubs and are excluded. Line numbers are approximate;
-grep the cited anchor if they drift.
+Scope: live tooling only, plus staged templates marked `(template)` (they run
+in consumer repos, not here, but attach a credential all the same). Test
+fixtures (`test_*`, `*_test.py`) build the same shapes against `.invalid` stubs
+and are excluded. Line numbers are approximate; grep the cited anchor if they
+drift.
 
 ## Base URLs
 
 | Base | Default | Users |
 | --- | --- | --- |
 | `GITHUB_API_URL` | `https://api.github.com` | `ci_failure_drain.sh`, `ci_dark_steps.sh` (Actions-provided) |
-| `GH_API_URL` | `https://api.github.com` | `red_main_poll.sh`, `upstream_gate.sh`, `upstream_lint.py`, `gh-event-capture/scripts/check-subscription.sh`, `gh-event-capture/scripts/gh-wrapper.mjs`, `gh-event-capture/scripts/gh-readiness-wrapper.mjs`, `sibling_guard.sh` |
+| `GH_API_URL` | `https://api.github.com` | `red_main_poll.sh`, `upstream_gate.sh`, `upstream_lint.py`, `gh-event-capture/scripts/check-subscription.sh`, `gh-event-capture/scripts/gh-wrapper.mjs`, `sibling_guard.sh` |
 | `GITHUB_API_BASE` | `https://api.github.com` | `push-github-rate-limit.sh` (token-free read) |
-| Pinned `https://api.github.com` | — | `gh_token.sh`, `ci_node93f4bccf_guard.py` (default), `push-runner-census.py`, `pr-hygiene/sweep.py`, `push-ci-queue-age-reviewed.py` |
+| Pinned `https://api.github.com` | — | `gh_token.sh`, `ci_node93f4bccf_guard.py` (default), `push-runner-census.py`, `pr-hygiene/sweep.py`, `push-ci-queue-age-reviewed.py`, `templates/org-github/ax-metrics/ax_metrics.py` (template) |
 | `gh` CLI credential | — | `gh run list`, `gh api` call sites below (auth lives in the CLI environment, not in our env) |
 
 ## Endpoint table
@@ -26,7 +28,7 @@ grep the cited anchor if they drift.
 | `GET /repos/{o}/{r}/actions/runs/{id}/attempts/{n}/jobs?per_page=100` | `ci_failure_drain.sh` (jobs list), `ci_dark_steps.sh:124` (job steps) | `GH_TOKEN` (actions:read) | curl + header file |
 | `GET /repos/{o}/{r}/actions/jobs/{id}/logs` (302 to storage, `-L` follows) | `ci_failure_drain.sh` (log fetch) | `GH_TOKEN` (actions:read) | curl `-L` + header file; see REDIRECT SCOPING in that file |
 | `GET /repos/{slug}/commits/main`, `GET /repos/{slug}/commits/{sha}/check-runs` | `red_main_poll.sh` (`gh_api`, `resolve_main`, `failing_checks`) | `GH_TOKEN` | curl + 0600 header file. Note: this tool ALSO reads the Paperclip board with `RED_MAIN_API_KEY`/`PAPERCLIP_API_KEY` (`board_titles`) — two credentials, two hosts, one process |
-| `GET /repos/{slug}/pulls?state=open&per_page=100` | `sibling_guard.sh:481` (open-PR query) | `GH_TOKEN` when set, else the token from `git credential fill` for this clone (`:462-467`) | curl + 0600 header file |
+| `GET /repos/{slug}/pulls?state=open&per_page=100` | `sibling_guard.sh:505` (open-PR query) | `GH_TOKEN` when set, else the token from `git credential fill` for this clone (`:487-492`) | curl + 0600 header file |
 | `GET/POST /app/installations/...`, installation-token mint | `gh_token.sh` (`app_api`, `mint_token`) | GitHub App JWT (short-lived, minted from the App key), then the minted installation token | curl + config file (`curl_authed`) |
 | `GET /repos/{repo}/commits/{sha}/pulls`, `.../check-runs`, `GET /repos/{repo}/pulls/{n}[...]`, `.../issues/{n}/comments`, `.../pulls/{n}/files`, `.../contents/...`, `.../git/ref/...`, `gh api graphql` (reviewThreads) | `upstream_gate.sh` (`api_get`, `fetch_all_items`, review threads) | `GH_TOKEN` via curl + header file; `gh` CLI when no token | curl, else `gh api` |
 | `gh pr create` (draft upstream PR, publish path), `PATCH repos/{upstream}/pulls/{n}` + `gh pr ready` (ready body + mark ready, ready path), GraphQL `convertPullRequestToDraft` (audit `--enforce` path) | `upstream_gate.sh:1215` (cmd_publish), `:1550,:1555` (cmd_ready), `:1719` (cmd_audit) | `gh` CLI credential | `gh` subprocess (the four mutations in this file; create is gated on static gate + lint passing on the exact SHA) |
@@ -44,19 +46,24 @@ grep the cited anchor if they drift.
 | `gh pr list -R {repo} --state open --limit 100` | `ops/productivity/orphan_prs.py:156`, `pr_supply.py:270` | `GH_TOKEN` minted by `gh_token.sh token` (direct in `orphan_prs.py` main; via `review_error_rerequest.gh_env()` in `pr_supply.py`) | `gh` subprocess with `GH_TOKEN` in the child env only |
 | `GET /repos/{repo}/commits/{sha}/pulls`, `/pulls/{n}`, `/commits/{sha}/check-runs`, `/pulls/{n}/files`, `/issues/{n}/comments`; `POST /issues/{n}/labels`, `POST /repos/{repo}/labels` (create-on-404), `POST /issues/{n}/comments` (trigger body) | `.github/scripts/review_trigger_step.py:179,185,190` (`api`, `paginate`) | `GH_TOKEN` (CI; HEAD_SHA and REPO required) | urllib (reads plus label and comment mutations) |
 | `GET /app`, `GET /app/hook/config` | `gh-event-capture/scripts/check-subscription.sh` | GitHub App JWT (RS256, openssl-signed per run from the App key) | curl + config file |
-| `GET /app/installations` (discover, when unpinned), `POST /app/installations/{id}/access_tokens` | `gh-event-capture/scripts/gh-wrapper.mjs:169` (read grants: pull_requests read + metadata read, sized to the adapter's GraphQL reads), `gh-readiness-wrapper.mjs:215` (write grants at `READINESS_PERMISSIONS` `:70-76`: pull_requests/contents write + checks/statuses/metadata read, sized to the sweep surface) | App JWT (RS256, node-crypto-signed per run from the host-private PEM); the minted token lives only in the real-`gh` child env | fetch + execFile (`gh` argv forwarded verbatim) |
+| `GET /app/installations` (discover, when unpinned), `POST /app/installations/{id}/access_tokens` | `gh-event-capture/scripts/gh-wrapper.mjs:169` (read grants: pull_requests read + metadata read, sized to the adapter's GraphQL reads) | App JWT (RS256, node-crypto-signed per run from the host-private PEM); the minted token lives only in the real-`gh` child env | fetch + execFile (`gh` argv forwarded verbatim) |
 | GraphQL PR/node/check reads, `GET branches/{branch}/protection`, `GET rules/branches/{branch}`; `PATCH pulls/{n}` (body), `POST pulls/{n}/ready_for_review`, GraphQL `convertPullRequestToDraft`, `gh pr merge --auto` / `--disable-auto` | `gh-event-capture/src/github-adapter.js` (reads `:252,:376,:446`; mutations `:487,:504,:521,:299,:560`) | installed `gh` credential path — in the capture runtime the wrapper above mints a per-invocation installation token (runtime pins `gh` to the wrapper) | `gh` subprocess (`gh api --hostname github.com`, `gh pr merge`) |
+| `gh auth status` (credential preflight) + shared-adapter PR/node/check reads | `gh-event-capture/scripts/readiness-sweep.mjs:196-198` (pinned runner + `github-adapter.js`; flag-off when the scan list is empty) | ephemeral per-job `GITHUB_TOKEN` from `readiness-sweep.yml:150-151`, admitted ONLY as `GH_TOKEN` with `READINESS_JOB_TOKEN=1` (`gh-pinned.js` `resolveSweepToken` `:175`; ambient tokens refused `:159`) | absolute-pinned `/usr/bin/gh` subprocess, isolated config, minimal child env |
 | `gh pr merge --auto --squash --match-head-commit` (arm writer), `GET repos/{o}/{r}` + `GET repos/{o}/{r}/rules/branches/{branch}` (live branch-gate read) | `gh-event-capture/src/closeout-arm.js` (writer `buildArmArgv` `:169`, run `:187`; gate reads `:212,:227`; CLI entrypoint `:495-500`; the PR-opening agent calls it once at open per header `:1-2`; snapshot reads delegate to the adapter above `:473-474`) | calling agent's inherited `gh` credential (execFile with no env override; header `:40`) — NOT the runtime wrapper mint. Note: this module ALSO opens the S5b merge confirmation on the Paperclip board with `PAPERCLIP_API_KEY` (`:300-307`) — two credentials, two hosts, one process | `gh` subprocess (`gh api --hostname github.com`, `gh pr merge`) |
 | `POST /app/installations/{id}/access_tokens`, scoped `GET /repos/{repo}...`, `.../actions/artifacts/{id}/zip` | `protection-rule/src/github.js` | App JWT for the mint, then the installation token (same-origin-only on redirects; explicit repo allowlist) | fetch with redirect budget, https-only, credential-free URLs — the prior art for redirect scoping in this repo |
 | `POST {callbackUrl}` (caller-supplied URL, host constrained to api.github.com) | `protection-rule/src/callback.js` (`postVerdict`) | installation token, header-only, whitespace-refused | fetch |
 | `GET /repos/{repo}/pulls/{n}` (+ `/commits`, `/files` pages) | `upstream_reputation.py` (delegates to `upstream_lint.api_get`) | delegated: `GH_TOKEN` or `gh api` per `upstream_lint.py` | urllib or `gh api` subprocess |
 | `GET /orgs/{org}/repos`, `/meta`, `/rate_limit` | `verification/case_092cd51d-public-fork-disclosure-audit.sh` (CI gate) | `GH_TOKEN` optional (anonymous fallback); never on argv | curl + config file |
+| `GET /search/issues?q=...`, `GET /repos/{repo}/pulls/{n}/commits`, `GET /repos/{repo}/commits/{sha}/status`, `GET .../check-runs` | `templates/org-github/ax-metrics/ax_metrics.py:61,:120,:127,:129` (STAGED TEMPLATE — runs in consumer repos via `ax-metrics.yml:48`, not live here) | `GITHUB_TOKEN` (`--github-token-env`, header-only Bearer `:45-48`, never logged `:141`) | urllib |
 
 ## Negative inventory (deliberate non-senders)
 
-- `gh-event-capture/src/gh-pinned.js` pins the `gh` binary and REFUSES
-  `GH_TOKEN`/`GITHUB_TOKEN` in the child env — capture subprocesses must not
-  inherit GitHub credentials.
+- `gh-event-capture/src/gh-pinned.js` pins the `gh` binary, refuses INHERITED
+  `GH_TOKEN`/`GITHUB_TOKEN` (`refuseInheritedTokens` `:159`) and every token
+  key in the child base env — the only admission is the explicit `jobToken`
+  runner parameter fed by `resolveSweepToken` under `READINESS_JOB_TOKEN=1`
+  (the readiness sweep's ephemeral per-job token; isolated config, no stored
+  login).
 - `push-runner-census.py` strips `GH_TOKEN` from the Gatus push subprocess env.
 - `ops/case_658bf6b9/push-github-rate-limit.sh` reads token-free
   `GET /rate_limit` by design — no Authorization header is sent.

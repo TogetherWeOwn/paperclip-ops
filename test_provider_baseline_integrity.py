@@ -22,6 +22,7 @@ silent corruption reset; direct truncation/non-atomic publication; ignored
 publication errors; altered percentile/window/threshold policy; JSON-only fake
 success; and --dry-run/usage errors that write. No live collection is authorized.
 """
+import io
 import json
 import math
 import os
@@ -487,6 +488,76 @@ class ProviderBaselineIntegrityTest(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertEqual(self.snapshot(), before)
         self.outcome(proc, "record")
+
+    def test_provisional_record_reports_inadequate_coverage(self):
+        self.baseline.unlink()
+        self.write_samples(create=[60000] * 5, delete=[])
+        for extra in (("--dry-run",), ()):
+            with self.subTest(dry_run=bool(extra)):
+                proc = self.cli("record", "--json", *extra)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                doc = self.outcome(proc, "record")
+                self.assertFalse(doc["maturity"]["mature"])
+                self.assertFalse(doc["coverage"]["adequate"])
+                self.assertIn("10 per operation", doc["coverage"]["reason"])
+
+    def test_mature_record_reports_adequate_coverage(self):
+        proc = self.cli("record", "--json")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        doc = self.outcome(proc, "record")
+        self.assertTrue(doc["maturity"]["mature"])
+        self.assertTrue(doc["coverage"]["adequate"])
+
+    def test_publish_failure_coverage_follows_threshold(self):
+        proc = self.cli("record", "--json", fault="publish_failure")
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        doc = self.outcome(proc, "record")
+        self.assertEqual(doc["code"], "publish_failed")
+        self.assertTrue(doc["coverage"]["adequate"])
+        self.baseline.unlink()
+        self.write_samples(create=[60000] * 5, delete=[])
+        proc = self.cli("record", "--json", fault="publish_failure")
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        doc = self.outcome(proc, "record")
+        self.assertEqual(doc["code"], "publish_failed")
+        self.assertFalse(doc["coverage"]["adequate"])
+
+    def test_record_preserves_existing_baseline_mode(self):
+        os.chmod(self.baseline, 0o640)
+        proc = self.cli("record")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(os.stat(self.baseline).st_mode & 0o777, 0o640)
+
+    def test_fresh_baseline_keeps_restrictive_default_mode(self):
+        self.baseline.unlink()
+        proc = self.cli("record")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(os.stat(self.baseline).st_mode & 0o777, 0o600)
+
+    def test_explicit_argv_controls_json_usage_error(self):
+        sys.path.insert(0, str(ROOT))
+        try:
+            from garm_provider_latency_baseline import main
+        finally:
+            sys.path.remove(str(ROOT))
+        saved_argv, saved_stdout = sys.argv, sys.stdout
+        try:
+            sys.argv = ["garm_provider_latency_baseline.py"]
+            capture = io.StringIO()
+            sys.stdout = capture
+            try:
+                with self.assertRaises(SystemExit) as exited:
+                    main(["record", "--json", "--baseline", str(self.baseline),
+                          "--samples", str(self.samples), "--source", "x",
+                          "--not-a-provider-option"])
+            finally:
+                sys.stdout = saved_stdout
+            self.assertEqual(exited.exception.code, 1)
+            doc = json.loads(capture.getvalue())
+            self.assertEqual(doc["schema"], OUTCOME_SCHEMA)
+            self.assertEqual(doc["code"], "usage_error")
+        finally:
+            sys.argv = saved_argv
 
 
 # Each hostile persisted value must fail BOTH consumers independently. Testing

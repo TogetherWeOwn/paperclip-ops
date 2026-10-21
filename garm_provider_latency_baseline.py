@@ -451,14 +451,24 @@ def _publish_json(path, doc):
     The document is written to a temp file in the target directory, then
     renamed over the target. A failed rename leaves the prior valid file
     untouched; callers report the OSError instead of retrying in place.
+    The temp file inherits the existing baseline's permission bits so the
+    first record does not lock out other readers; a fresh baseline keeps
+    mkstemp's 0600 default. Contents are fsynced before the rename and the
+    directory entry after it, so a crash cannot leave a torn baseline.
     """
     directory = os.path.dirname(os.path.abspath(path)) or "."
     fd, tmp = tempfile.mkstemp(prefix=".baseline-", suffix=".tmp",
                                dir=directory)
     try:
+        try:
+            os.fchmod(fd, os.stat(path).st_mode & 0o7777)
+        except OSError:
+            pass  # Absent target keeps mkstemp's 0600; publish unaffected.
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(doc, handle, indent=2, sort_keys=True)
             handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         os.rename(tmp, path)
     except BaseException:
         try:
@@ -466,6 +476,16 @@ def _publish_json(path, doc):
         except OSError:
             pass
         raise
+    try:
+        dir_fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass  # Durability hint only: the rename already committed.
+    finally:
+        os.close(dir_fd)
 
 
 def _outcome(operation, baseline_path, samples_path, *, code, retryable,
@@ -517,6 +537,15 @@ def _maturity_summary(counts):
                        "(%s)" % (MIN_SAMPLES_PER_OP, parts))
     return (True, "mature: stored samples meet %d per operation (%s)"
                   % (MIN_SAMPLES_PER_OP, parts))
+
+
+def _coverage_summary(counts):
+    parts = ", ".join("%s=%d" % (op, counts[op]) for op in OPERATIONS)
+    if all(counts[op] >= MIN_SAMPLES_PER_OP for op in OPERATIONS):
+        return (True, "stored evidence meets %d per operation (%s)"
+                       % (MIN_SAMPLES_PER_OP, parts))
+    return (False, "stored evidence below %d per operation (%s)"
+                   % (MIN_SAMPLES_PER_OP, parts))
 
 
 def _baseline_extra(baseline):
@@ -587,6 +616,7 @@ def _report_publish_failure(args, exc, as_json, computed):
     """Report a failed atomic publication: exit 1, prior bytes preserved."""
     counts = _stored_counts(computed)
     _, maturity_reason = _maturity_summary(counts)
+    covered, coverage_reason = _coverage_summary(counts)
     if as_json:
         _print_outcome(_outcome(
             args.command, args.baseline,
@@ -599,9 +629,8 @@ def _report_publish_failure(args, exc, as_json, computed):
                             "publication failed: %s" % exc,
             maturity_mature=not computed["provisional"],
             maturity_reason="computed but unpublished: " + maturity_reason,
-            coverage_ok=True,
-            coverage_reason="computed from validated evidence; not yet "
-                            "published",
+            coverage_ok=covered,
+            coverage_reason="computed but unpublished: " + coverage_reason,
             extra=_baseline_extra(computed)))
     else:
         print("error: baseline write failed: %s" % exc, file=sys.stderr)
@@ -739,7 +768,9 @@ def _cmd_record(args, grouped, as_json, dry_run):
         else:
             print("error: %s" % exc, file=sys.stderr)
         return 1
-    mature, maturity_reason = _maturity_summary(_stored_counts(baseline))
+    counts = _stored_counts(baseline)
+    mature, maturity_reason = _maturity_summary(counts)
+    covered, coverage_reason = _coverage_summary(counts)
     total = baseline["provenance"]["total_samples"]
     if dry_run:
         if as_json:
@@ -751,8 +782,7 @@ def _cmd_record(args, grouped, as_json, dry_run):
                 validity_reason="samples and stored evidence valid; update "
                                 "computed, not published",
                 maturity_mature=mature, maturity_reason=maturity_reason,
-                coverage_ok=True,
-                coverage_reason="computed over validated stored evidence",
+                coverage_ok=covered, coverage_reason=coverage_reason,
                 dry_run=True, extra=_baseline_extra(baseline)))
         else:
             print("dry-run: would record: provisional=%s total_samples=%d"
@@ -772,8 +802,7 @@ def _cmd_record(args, grouped, as_json, dry_run):
             validity_ok=True,
             validity_reason="samples recorded and statistics recomputed",
             maturity_mature=mature, maturity_reason=maturity_reason,
-            coverage_ok=True,
-            coverage_reason="stored evidence covers both operations",
+            coverage_ok=covered, coverage_reason=coverage_reason,
             extra=_baseline_extra(baseline)))
     else:
         print("recorded: provisional=%s total_samples=%d"
@@ -890,8 +919,15 @@ def _usage_outcome(argv, message):
 
 
 class _ArgumentParser(argparse.ArgumentParser):
+    # Effective argv for usage-error reporting, set by main() before parsing
+    # so explicit argv (not the host process's sys.argv) controls --json.
+    # A class attribute because add_subparsers builds subparsers from it.
+    active_argv = None
+
     def error(self, message):
-        argv = sys.argv[1:]
+        argv = _ArgumentParser.active_argv
+        if argv is None:
+            argv = sys.argv[1:]
         if "--json" in argv:
             _print_outcome(_usage_outcome(argv, message))
         else:
@@ -940,6 +976,7 @@ def main(argv=None):
     _common(p_check)
     p_check.add_argument("--samples", required=True)
 
+    _ArgumentParser.active_argv = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(argv)
     as_json = args.json
     dry_run = args.dry_run

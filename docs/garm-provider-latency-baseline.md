@@ -47,8 +47,10 @@ has no standing, so the decision must be made on something else and said so.
 - Absent vs invalid: an absent path initializes; an existing unreadable,
   malformed or inconsistent baseline is refused without replacing
   thresholds/history or truncating bytes. No silent reset, no auto-repair.
-- Publication is atomic (temp file plus rename); a failed rename reports
-  exit 1 and the prior valid file survives.
+- Publication is atomic (temp file plus rename; the temp file inherits the
+  existing baseline's permission bits, contents are fsynced before the
+  rename and the directory after it). A failed rename reports exit 1 and
+  the prior valid file survives.
 
 ## `--json` outcome contract (repo-owned)
 
@@ -58,7 +60,10 @@ One object, finite JSON, stable IDs:
 - `baseline_schema` / `samples_schema`: the existing v1 input schema IDs.
 - `source`: `{baseline: <input path>, samples: <input path or null>}`.
 - `validity` / `maturity` / `coverage`: each `{ok|mature|adequate: bool,
-  reason: <nonempty string>}`.
+  reason: <nonempty string>}`. On `record`, `coverage.adequate` is true
+  only when stored evidence holds >= 10 samples per operation (the same
+  threshold as maturity), in dry-run, published and publish-failed
+  outcomes alike.
 - `code`: stable string (`ok`, `breach`, `unknown_provisional`,
   `unknown_missing_baseline`, `unknown_missing_samples`,
   `invalid_baseline`, `unreadable_baseline`, `invalid_samples`,

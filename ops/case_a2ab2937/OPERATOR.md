@@ -69,6 +69,9 @@ to retry or change credentials. Codes are fixed identifiers, never server text:
   `auth_status_body`, `auth_status_latency`, `up_status`, `up_origin`,
   `up_latency`, `retry_after_invalid`: fail closed; inspect the named step offline.
 - `login_throttled`: retryable `throttled`, **not** authenticated-journey success.
+- `probe_aborted`: retryable failure for an interrupted journey or final delivery,
+  or an unexpected exit after preflight. Preserve HOLDs and the existing scheduler;
+  this result never authorizes an immediate retry. INT/TERM retain exits 130/143.
 
 Exit 0 means `ok`, static `dry_run`, help, or the existing non-paging repeated-429
 policy. Exit 1 is a failed journey/push; exit 2 is refusal (no push). A repeated

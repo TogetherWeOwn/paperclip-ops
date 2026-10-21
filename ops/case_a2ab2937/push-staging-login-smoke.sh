@@ -15,13 +15,20 @@ OUTCOME=refused; ERROR_CODE=invalid_arguments; RETRYABLE=false
 NEXT_ACTION="Use --help and supply only the documented flags."
 TMPD=""; STEPS=(); PLAN=false
 
+mark_aborted() {
+  OUTCOME=failed; ERROR_CODE=probe_aborted; RETRYABLE=true
+  NEXT_ACTION='The probe stopped before completion; use only the existing authorized scheduler and preserve all HOLDs.'
+}
+
 # Emit only allowlisted metadata, including on refusals. No response data crosses
 # this boundary; metrics are validated before they enter STEPS.
 finish() {
   local rc=$?
+  # Signals supersede even a journey whose final Gatus delivery was interrupted.
+  [[ "$rc" != 130 && "$rc" != 143 ]] || mark_aborted
   [[ -z "$TMPD" ]] || rm -rf "$TMPD"
   if [[ "$JSON" == true ]]; then
-    python3 - "$KEY" "$OUTCOME" "$ERROR_CODE" "$RETRYABLE" "$NEXT_ACTION" "$PLAN" "${STEPS[@]}" <<'PY'
+    python3 - "$KEY" "$OUTCOME" "$ERROR_CODE" "$RETRYABLE" "$NEXT_ACTION" "$PLAN" "${STEPS[@]}" >&"$RESULT_FD" <<'PY'
 import json, sys
 key, outcome, code, retryable, action, plan, *metrics = sys.argv[1:]
 ids = ("login", "auth_status", "up")
@@ -43,6 +50,8 @@ PY
 }
 # Recognize structured mode even when another argument is invalid. Never echo it.
 for flag in "$@"; do [[ "$flag" != --json ]] || JSON=true; done
+# An EXIT inside push_result must not redirect the JSON into its private capture.
+[[ "$JSON" != true ]] || exec {RESULT_FD}>&1
 trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -71,7 +80,7 @@ fi
 
 STAGING_ORIGIN="https://next.togetherweown.com"
 BASE="${STAGING_BASE_URL:-$STAGING_ORIGIN}"
-ERROR_CODE=staging_origin_refused
+OUTCOME=refused; ERROR_CODE=staging_origin_refused
 NEXT_ACTION="Use only the canonical staging origin; do not broaden its allowlist."
 # Preserve the exact destination guard before credentials or private config I/O.
 case "$BASE" in
@@ -90,7 +99,7 @@ if [[ "$DRY_RUN" == true ]]; then
 fi
 
 refuse() {
-  ERROR_CODE="$1"; NEXT_ACTION="$2"
+  OUTCOME=refused; RETRYABLE=false; ERROR_CODE="$1"; NEXT_ACTION="$2"
   echo "push-staging-login-smoke: refusing — $ERROR_CODE" >&2
   exit 2
 }
@@ -112,6 +121,8 @@ JAR="$TMPD/jar"; HDR="$TMPD/hdr"; BODY="$TMPD/body"; CFG="$TMPD/curlcfg"
   printf 'header = "Origin: https://next.togetherweown.com"\n'
 } > "$CFG"
 chmod 0600 "$CFG" || refuse temp_permissions 'Restore private temporary-file permissions before retrying.'
+# Preflight passed: an uncoded exit is an abort, not an origin refusal.
+mark_aborted
 
 # Shared Gatus helper diagnostics can contain curl text: capture, never relay it.
 push_result() {
@@ -238,10 +249,10 @@ PY
   sleep "$RA" || fail_push backoff_failed 'login backoff failed' true
   step1_once || fail_push login_transport 'login POST transport failure on retry' true
   if [[ "$CODE" == "429" ]]; then
-    OUTCOME=throttled; ERROR_CODE=login_throttled; RETRYABLE=true
-    NEXT_ACTION='Wait for the existing scheduled probe; do not treat this as authenticated-journey evidence.'
     echo 'push-staging-login-smoke: still throttled after backoff; not paging' >&2
     push_result true || exit 1
+    OUTCOME=throttled; ERROR_CODE=login_throttled; RETRYABLE=true
+    NEXT_ACTION='Wait for the existing scheduled probe; do not treat this as authenticated-journey evidence.'
     exit 0
   fi
 fi
@@ -259,6 +270,6 @@ run_capped 2 15 --cookie '' "$BASE/up" || fail_push up_transport 'up transport f
 verify_response up || fail_push up_origin 'up missing exact x-two-origin: two-web-next header'
 check_latency 3.0 || fail_push up_latency "up ${SECS}s over 3000ms bound"
 
-OUTCOME=ok
 [[ "$JSON" == true ]] || printf 'push-staging-login-smoke: login %s, status %s, up %s (HTTP/seconds)\n' "${STEPS[0]}" "${STEPS[1]}" "${STEPS[2]}"
 push_result true || exit 1
+OUTCOME=ok

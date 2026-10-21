@@ -91,22 +91,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Runner images vary: some lack a `pip` binary, some lack even the
-          # pip module and ensurepip. Prefer the interpreter's own pip, then
-          # bundled ensurepip (offline), then a throwaway venv seeded with
-          # --without-pip (stdlib only) and bootstrapped with get-pip.py.
-          # The venv is fully runner-owned, so no sudo is ever needed.
-          PIP_PY="python3"
-          if ! python3 -m pip --version >/dev/null 2>&1; then
-            python3 -m ensurepip --default-pip >/dev/null 2>&1 || true
-          fi
-          if ! python3 -m pip --version >/dev/null 2>&1; then
+          # Always install into a runner-owned venv: distro Python is
+          # PEP 668 externally managed, so a system-wide pip install can
+          # fail. Try a normal venv first; if the image cannot seed pip,
+          # recreate it with --without-pip (stdlib only) and bootstrap pip
+          # with the checksum-verified get-pip.py. No sudo is ever needed.
+          PIP_PY="$RUNNER_TEMP/qgvenv/bin/python"
+          if ! python3 -m venv "$RUNNER_TEMP/qgvenv" >/dev/null 2>&1; then
+            rm -rf "$RUNNER_TEMP/qgvenv"
             python3 -m venv --without-pip "$RUNNER_TEMP/qgvenv"
             curl -sSL -o "$RUNNER_TEMP/get-pip.py" https://bootstrap.pypa.io/get-pip.py
             echo "${GET_PIP_SHA256}  $RUNNER_TEMP/get-pip.py" | sha256sum -c -
-            "$RUNNER_TEMP/qgvenv/bin/python" "$RUNNER_TEMP/get-pip.py" \
-              --disable-pip-version-check >/dev/null
-            PIP_PY="$RUNNER_TEMP/qgvenv/bin/python"
+            "$PIP_PY" "$RUNNER_TEMP/get-pip.py" --disable-pip-version-check >/dev/null
           fi
           "$PIP_PY" -m pip install --quiet \
             "ruff==${RUFF_VERSION}" \

@@ -493,6 +493,14 @@ def main():
                   file=sys.stderr)
     invalid_findings_parse = len(findings_parse_errors)
 
+    # Validate findings before the empty-ledger early return: content-invalid
+    # findings are excluded evidence with reason counts even when no decision
+    # rows were supplied (never silently skipped).
+    findings_valid, invalid_findings_content = collapse_findings(
+        findings_objects, args.findings or "(findings)", reason_counts,
+        errors_detail)
+    invalid_findings = invalid_findings_parse + invalid_findings_content
+
     total_supplied_rows = len(ledger_objects) + invalid_decisions_parse
     # Empty decision ledger is unknown, never a verified zero-spend week.
     if total_supplied_rows == 0:
@@ -507,8 +515,8 @@ def main():
                     "matched_findings": 0,
                     "unmatched_findings": 0,
                     "invalid_decisions": 0,
-                    "invalid_findings": invalid_findings_parse,
-                    "excluded_rows": invalid_findings_parse,
+                    "invalid_findings": invalid_findings,
+                    "excluded_rows": invalid_findings,
                 },
                 "metrics": {
                     "expensive_review_share": None,
@@ -551,7 +559,7 @@ def main():
         print("bucket_histogram:")
         print("promotion_candidates: none")
         print("status: unknown (partial; empty ledger is not a verified zero-spend week)")
-        print(f"excluded_rows: {invalid_findings_parse}")
+        print(f"excluded_rows: {invalid_findings}")
         if reason_counts:
             print("reason_counts: " + ", ".join(f"{k}={v}" for k, v in sorted(reason_counts.items())))
         return 1
@@ -559,10 +567,8 @@ def main():
     prs, invalid_decisions_content = collapse_ledger(
         ledger_objects, args.ledger, reason_counts, errors_detail)
     invalid_decisions = invalid_decisions_parse + invalid_decisions_content
-
-    findings_valid, invalid_findings_content = collapse_findings(
-        findings_objects, args.findings or "(findings)", reason_counts, errors_detail)
-    invalid_findings = invalid_findings_parse + invalid_findings_content
+    # findings_valid / invalid_findings computed above (before the
+    # empty-ledger early return) so invalid findings are never skipped.
 
     total = len(prs)
     expensive = {k for k, v in prs.items() if v["expensive"]}

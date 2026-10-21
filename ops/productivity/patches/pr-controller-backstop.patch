@@ -1,6 +1,6 @@
 --- a/ops/productivity/pr_controller.py
 +++ b/ops/productivity/pr_controller.py
-@@ -1,25 +1,38 @@
+@@ -349,25 +349,38 @@
  def ensure_backstop(iid, ident, why, url):
 -    """PR cards keep ONE long backstop monitor instead of polling ones. The server's in_review validator accepts a
 -    scheduled monitor as the review path (routes/issues.ts: missing review_path -> 422), so a monitor must exist on an
@@ -52,7 +52,7 @@
          mon['timeoutAt'] = None
      if mon.get('externalRef') == '[redacted]':
          mon['externalRef'] = url
-@@ -27,8 +40,7 @@
+@@ -375,8 +388,7 @@
      mon['serviceName'] = mon.get('serviceName') or 'github-pr-controller'
      mon['notes'] = ('PR controller backstop: the host PR controller wakes this card on red CI, review findings, '
                      'conflicts or merge; this monitor is only the in_review review path.')

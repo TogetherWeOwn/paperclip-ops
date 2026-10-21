@@ -220,6 +220,24 @@ class BackstopTest(unittest.TestCase):
         self.api.assert_not_called()
 
 
+class BackstopPatchOffsetTest(unittest.TestCase):
+    def test_backstop_patch_applies_at_live_offset_without_fuzz(self):
+        # The live controller carries ensure_backstop near line 349 (base
+        # header -349,22). A hunk anchored at line 1 cannot float down with
+        # --fuzz=0, so the patch must also apply embedded after prefix lines,
+        # installing the byte-identical function the BOF round-trip exercises.
+        prefix = ''.join(f'# live controller prefix line {i}\n' for i in range(1, 349))
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'ops/productivity/pr_controller.py'
+            target.parent.mkdir(parents=True)
+            target.write_text(prefix + FIXTURE.read_text())
+            result = subprocess.run(['patch', '--batch', '--fuzz=0', '-p1', '-i', str(PATCH)],
+                                    cwd=directory, capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            offset_patched = target.read_text()
+        self.assertEqual(patched_source(), offset_patched[len(prefix):])
+
+
 class PacketImportTest(unittest.TestCase):
     def test_wake_import_hunk_applies_without_fuzz(self):
         patch = (HERE / 'patches/pr-controller-wakes.patch').read_text()

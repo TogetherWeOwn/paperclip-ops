@@ -661,19 +661,37 @@ class TextCompatibilityTest(AxHarness):
         self.assertIn("older than 24h", out)
 
     def test_exit_codes_match_text_and_json(self):
+        # Fixture helpers write fixed filenames (candidate.txt, ledger.txt,
+        # evidence.json) into the shared tmp dir, so each case must build
+        # its fixtures immediately before running. Pre-building all cases
+        # eagerly lets later cases clobber earlier ones (e.g. empty-ledger
+        # empties ledger.txt for green/pending/stale).
+        def build_green():
+            return ["--sql-hashes", self.hashes([("0042_a", A)]),
+                    "--ledger", self.ledger([A])]
+
+        def build_pending():
+            return ["--sql-hashes", self.hashes([("0042_a", A), ("0043_b", B)]),
+                    "--ledger", self.ledger([A])]
+
+        def build_stale():
+            return ["--sql-hashes", self.hashes([("0042_a", A)]),
+                    "--ledger", self.ledger([A]),
+                    "--evidence", self.evidence(age_hours=30)]
+
+        def build_empty_ledger():
+            return ["--sql-hashes", self.hashes([("0042_a", A)]),
+                    "--ledger", self.ledger([])]
+
         cases = [
-            ("green", 0, ["--sql-hashes", self.hashes([("0042_a", A)]),
-                          "--ledger", self.ledger([A])]),
-            ("pending", 1, ["--sql-hashes", self.hashes([("0042_a", A), ("0043_b", B)]),
-                             "--ledger", self.ledger([A])]),
-            ("stale", 1, ["--sql-hashes", self.hashes([("0042_a", A)]),
-                           "--ledger", self.ledger([A]),
-                           "--evidence", self.evidence(age_hours=30)]),
-            ("empty-ledger", 2, ["--sql-hashes", self.hashes([("0042_a", A)]),
-                                  "--ledger", self.ledger([])]),
+            ("green", 0, build_green),
+            ("pending", 1, build_pending),
+            ("stale", 1, build_stale),
+            ("empty-ledger", 2, build_empty_ledger),
         ]
-        for label, expected, argv in cases:
+        for label, expected, build in cases:
             with self.subTest(kind=label):
+                argv = build()
                 rc_text, _, _, _ = self.run_gate(*argv)
                 rc_json, _, _, _ = self.run_gate(*argv, "--json")
                 self.assertEqual(rc_text, expected, f"{label}: text exit")

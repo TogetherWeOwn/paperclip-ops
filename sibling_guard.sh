@@ -270,6 +270,23 @@ note()     { NOTES+=("$1"); }
 # stdout must not have to strip a trailing prose verdict off the JSON.
 say() { [[ "$QUIET" -eq 1 || "$JSON" -eq 1 ]] || printf '%s\n' "$*"; }
 
+# BASE host validation: the board bearer is sent ONLY to a base that is an
+# http(s) URL with a non-empty bare host — no userinfo (`user@host` misdirects
+# the credential), no whitespace (a newline would inject a curl-config
+# directive). Every Paperclip send site below checks this first; a malformed
+# base goes blind (never clear) with zero requests built. A well-formed hostile
+# host still passes; blocking that needs an operator-owned host allowlist, not
+# a per-script guess.
+_paperclip_base_ok() {
+  local _b="${1%/}" _h
+  _b="${_b%/api}"
+  case "$_b" in http://*|https://*) ;; *) return 1;; esac
+  _h="${_b#http://}"; _h="${_h#https://}"; _h="${_h%%[/?#]*}"
+  [[ -n "$_h" ]] || return 1
+  case "$_b" in *@*|*[[:space:]]*) return 1;; esac
+  return 0
+}
+
 TMPD="$(mktemp -d)"
 trap 'rm -rf "$TMPD"' EXIT
 
@@ -284,6 +301,7 @@ detect_control_plane() {
   [[ -n "$key" ]] || { blind_on "control-plane: PAPERCLIP_API_KEY is unset"; return; }
   [[ -n "${PAPERCLIP_RUN_ID:-}" ]] || { blind_on "control-plane: PAPERCLIP_RUN_ID is unset, so every row including my own would read as a sibling"; return; }
   [[ -n "${PAPERCLIP_AGENT_ID:-}" ]] || { blind_on "control-plane: PAPERCLIP_AGENT_ID is unset, so a foreign agent's run cannot be told from mine"; return; }
+  if ! _paperclip_base_ok "$base"; then blind_on "control-plane: PAPERCLIP_API_URL is not a clean http(s) base, so the run list cannot be read"; return; fi
 
   base="${base%/}"; base="${base%/api}"
 
@@ -613,6 +631,9 @@ detect_remote() {
             elif [[ -z "${PAPERCLIP_API_URL:-}" || -z "${PAPERCLIP_API_KEY:-}" ]]; then
               blind_on "remote: cross-branch ownership check cannot learn our own card key for $ISSUE_ARG with no control-plane credential, so a generic PR cannot be attributed"
               generic_mykey=""
+            elif ! _paperclip_base_ok "${PAPERCLIP_API_URL:-}"; then
+              blind_on "remote: cross-branch ownership check refuses a PAPERCLIP_API_URL that is not a clean http(s) base, so a generic PR cannot be attributed"
+              generic_mykey=""
             else
               local gbase ghdr gbody gcode
               gbase="${PAPERCLIP_API_URL%/}"; gbase="${gbase%/api}"
@@ -715,6 +736,9 @@ detect_remote() {
             if [[ -z "${PAPERCLIP_API_URL:-}" || -z "${PAPERCLIP_API_KEY:-}" ]]; then
               blind_on "remote: prepush ownership check cannot learn our own card key for $ISSUE_ARG with no control-plane credential, so a same-head PR cannot be attributed"
               mykey=""
+            elif ! _paperclip_base_ok "${PAPERCLIP_API_URL:-}"; then
+              blind_on "remote: prepush ownership check refuses a PAPERCLIP_API_URL that is not a clean http(s) base, so a same-head PR cannot be attributed"
+              mykey=""
             else
               local obase ohdrs obody ocode
               obase="${PAPERCLIP_API_URL%/}"; obase="${obase%/api}"
@@ -800,6 +824,9 @@ detect_remote() {
               # attribute, a transient API error must not go indeterminate.
               if [[ -z "${PAPERCLIP_API_URL:-}" || -z "${PAPERCLIP_API_KEY:-}" ]]; then
                 blind_on "remote: same-commit ownership check cannot learn our own card key for $ISSUE_ARG with no control-plane credential, so a same-commit PR cannot be attributed"
+                sha_mykey=""
+              elif ! _paperclip_base_ok "${PAPERCLIP_API_URL:-}"; then
+                blind_on "remote: same-commit ownership check refuses a PAPERCLIP_API_URL that is not a clean http(s) base, so a same-commit PR cannot be attributed"
                 sha_mykey=""
               else
                 sha_obase="${PAPERCLIP_API_URL%/}"; sha_obase="${sha_obase%/api}"

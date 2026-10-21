@@ -289,7 +289,7 @@ board_titles() {
     # an operator-owned host allowlist, not a per-script guess.
     local _base="${PAPERCLIP_API_URL%/}" _base_host
     case "$_base" in http://*|https://*) ;; *) echo "red_main_poll: board base is not an http(s) URL" >&2; return 1;; esac
-    _base_host="${_base#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%/*}"
+    _base_host="${_base#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%[/?#]*}"
     [[ -n "$_base_host" ]] || { echo "red_main_poll: board base has an empty host" >&2; return 1; }
     case "$_base" in *@*|*[[:space:]]*) echo "red_main_poll: board base carries userinfo or whitespace" >&2; return 1;; esac
     # The key travels in a config pipe, never on argv: `curl -H "Bearer $key"`

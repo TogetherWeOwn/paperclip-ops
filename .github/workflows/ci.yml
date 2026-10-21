@@ -2101,9 +2101,9 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_notify_transport.sh
 
-      # API base validation: every PAPERCLIP_API_KEY sender refuses a base
-      # that is not an http(s) URL with a bare host before any request is
-      # built. Hermetic (stub curl, env -i), no network, no credentials.
+      # API base validation: every shell PAPERCLIP_API_KEY sender refuses a
+      # base that is not an http(s) URL with a bare host before any request
+      # is built. Hermetic (stub curl, env -i), no network, no credentials.
       - name: api-base-validation suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_paperclip_api_base_validation.sh

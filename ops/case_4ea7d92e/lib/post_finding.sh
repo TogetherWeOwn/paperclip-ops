@@ -61,7 +61,7 @@ _pf_api() {
   # allowlist, not a per-script guess.
   local _base="${PAPERCLIP_API_URL%/}" _base_host
   case "$_base" in http://*|https://*) ;; *) echo "post_finding: refusing: PAPERCLIP_API_URL is not an http(s) URL" >&2; return 1;; esac
-  _base_host="${_base#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%/*}"
+  _base_host="${_base#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%[/?#]*}"
   [[ -n "$_base_host" ]] || { echo "post_finding: refusing: PAPERCLIP_API_URL has an empty host" >&2; return 1; }
   case "$_base" in *@*|*[[:space:]]*) echo "post_finding: refusing: PAPERCLIP_API_URL carries userinfo or whitespace" >&2; return 1;; esac
   local args=(-sS --connect-timeout 10 --max-time 30 -X "$method" -H "Content-Type: application/json" -w $'\n%{http_code}')

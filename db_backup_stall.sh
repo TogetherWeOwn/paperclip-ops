@@ -425,7 +425,7 @@ if (( CHECK_HEALTH == 1 )) && [[ -n "${PAPERCLIP_API_URL:-}" ]] && command -v cu
   base_ok=1
   case "$base" in http://*|https://*) ;; *) base_ok=0;; esac
   if (( base_ok == 1 )); then
-    _base_host="${base#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%/*}"
+    _base_host="${base#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%[/?#]*}"
     [[ -n "$_base_host" ]] || base_ok=0
     case "$base" in *@*|*[[:space:]]*) base_ok=0;; esac
   fi

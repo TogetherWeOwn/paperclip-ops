@@ -19,7 +19,7 @@ ok()  { printf '  \033[32mPASS\033[0m  %s\n' "$1"; PASS=$((PASS+1)); }
 bad() { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; [[ -n "${2:-}" ]] && printf '       %s\n' "$2"; FAIL=$((FAIL+1)); }
 hdr() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
-for tool in jq python3; do
+for tool in jq python3 node; do
   command -v "$tool" >/dev/null || { echo "ERROR: $tool is required" >&2; exit 1; }
 done
 
@@ -90,6 +90,7 @@ for ((i=${#args[@]}-1; i>=0; i--)); do
 done
 case "$url" in
   */api/companies/*) printf '[]\n200'; exit 0 ;;
+  */api/issues/*) printf '[]' > "$out"; printf '200'; exit 0 ;;
   */commits/main) printf '{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' > "$out"; printf '200'; exit 0 ;;
 esac
 echo "stub curl: unserved url $url" >&2; exit 90
@@ -112,6 +113,8 @@ MALFORMED=(
   "https://board@evil.invalid/api"
   "https://board.invalid/api with space"
   "http:///no-host"
+  "https://?x"
+  "https://#frag"
   "$NL_BASE"
 )
 
@@ -205,10 +208,12 @@ for base in "${MALFORMED[@]}"; do
   out="$("${RUN_ENV[@]}" PAPERCLIP_API_URL="$base" PAPERCLIP_API_KEY="$CANARY" \
     "$HERE/db_backup_stall.sh" --log "$WORK/healthy.log" --backup-dir "$WORK/good" --json 2>"$WORK/err.txt")"; rc=$?
   health="$(printf '%s' "$out" | jq -r '.healthStatus // "MISSING"' 2>/dev/null)"
-  if [[ "$(curl_calls)" -eq 0 && "$health" == "not_checked" ]] && grep -q "WARNING" "$WORK/err.txt"; then
+  verdict="$(printf '%s' "$out" | jq -r '.verdict // "MISSING"' 2>/dev/null)"
+  if [[ "$(curl_calls)" -eq 0 && "$health" == "not_checked" && "$rc" -eq 1 && "$verdict" == "stall" ]] \
+     && grep -q "WARNING" "$WORK/err.txt"; then
     ok "skips $(printf '%s' "$base" | head -c 48)"
   else
-    bad "skips $(printf '%s' "$base" | head -c 48)" "curl_calls=$(curl_calls) health=$health err=$(cat "$WORK/err.txt")"
+    bad "skips $(printf '%s' "$base" | head -c 48)" "rc=$rc verdict=$verdict curl_calls=$(curl_calls) health=$health err=$(cat "$WORK/err.txt")"
   fi
 done
 
@@ -279,6 +284,32 @@ out="$("${RUN_ENV[@]}" PAPERCLIP_API_URL="https://paperclip.invalid/api" PAPERCL
 mv "$WORK/bin/curl-main" "$WORK/bin/curl"
 [[ "$rc" -eq 0 ]] && ok "exit 0" || bad "exit 0" "exit=$rc err=$(cat "$WORK/err.txt")"
 [[ "$(curl_calls)" -eq 1 ]] && ok "one curl call" || bad "one curl call" "calls=$(curl_calls)"
+
+# --- sibling_guard.sh: malformed -> exit 3 (blind, never clear), zero curl ---
+hdr "sibling_guard: malformed bases go blind (exit 3) before curl"
+mkdir -p "$WORK/norepo"
+ln -sf "$(command -v node)" "$WORK/bin/node"
+SIB_UUID="12345678-1234-1234-1234-123456789abc"
+for base in "${MALFORMED[@]}"; do
+  reset_logs
+  out="$(cd "$WORK/norepo" && "${RUN_ENV[@]}" PAPERCLIP_API_URL="$base" PAPERCLIP_API_KEY="$CANARY" \
+    PAPERCLIP_RUN_ID="run-me" PAPERCLIP_AGENT_ID="agent-me" \
+    "$HERE/sibling_guard.sh" "$SIB_UUID" --json 2>"$WORK/err.txt")"; rc=$?
+  if [[ "$rc" -eq 3 && "$(curl_calls)" -eq 0 ]] && grep -q "not a clean http(s) base" <<<"$out"; then
+    ok "blind $(printf '%s' "$base" | head -c 48)"
+  else
+    bad "blind $(printf '%s' "$base" | head -c 48)" "exit=$rc curl_calls=$(curl_calls) out=$(printf '%s' "$out" | head -c 200)"
+  fi
+done
+
+hdr "sibling_guard: well-formed base still reads the run list"
+reset_logs
+out="$(cd "$WORK/norepo" && "${RUN_ENV[@]}" PAPERCLIP_API_URL="https://paperclip.invalid/api" PAPERCLIP_API_KEY="$CANARY" \
+  PAPERCLIP_RUN_ID="run-me" PAPERCLIP_AGENT_ID="agent-me" \
+  "$HERE/sibling_guard.sh" "$SIB_UUID" --json 2>"$WORK/err.txt")"; rc=$?
+[[ "$rc" -eq 3 ]] && ok "exit 3 (repo detectors blind, never clear)" || bad "exit 3 (repo detectors blind, never clear)" "exit=$rc out=$out"
+grep -q "https://paperclip.invalid/api/issues/" "$CURL_LOG" && ok "run-list URL requested" || bad "run-list URL requested" "$(cat "$CURL_LOG")"
+if grep -q "not a clean http(s) base" <<<"$out"; then bad "no base refusal" "$out"; else ok "no base refusal"; fi
 
 printf '\nbase validation: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

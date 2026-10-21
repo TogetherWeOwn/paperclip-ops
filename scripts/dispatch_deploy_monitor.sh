@@ -107,7 +107,7 @@ BASE="${PAPERCLIP_API_URL%/}"; BASE="${BASE%/api}"
 # inject a curl-config directive). A well-formed hostile host still passes;
 # blocking that needs an operator-owned host allowlist, not a per-script guess.
 case "$BASE" in http://*|https://*) ;; *) echo "ERROR: PAPERCLIP_API_URL is not an http(s) URL" >&2; exit 2;; esac
-_base_host="${BASE#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%/*}"
+_base_host="${BASE#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%[/?#]*}"
 [[ -n "$_base_host" ]] || { echo "ERROR: PAPERCLIP_API_URL has an empty host" >&2; exit 2; }
 case "$BASE" in *@*|*[[:space:]]*) echo "ERROR: PAPERCLIP_API_URL carries userinfo or whitespace" >&2; exit 2;; esac
 WORK="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/dispatch_deploy_monitor.XXXXXXXX")" \

@@ -346,6 +346,18 @@ def _check_baseline_shape(doc):
                     or not math.isfinite(value) or value < 0):
                 _reject("baseline.thresholds.%s.%s: finite value >= 0 "
                         "required" % (op, key))
+        # Threshold metadata is echoed into check details, so it must be
+        # finite-safe too: rationale is text when present, and unknown keys
+        # refuse, matching the exact-shape rule for sample rows.
+        for key, value in spec.items():
+            if key in ("p50_alert_ms", "p95_alert_ms"):
+                continue
+            if key == "rationale":
+                if not isinstance(value, str):
+                    _reject("baseline.thresholds.%s.rationale: text "
+                            "required" % op)
+            else:
+                _reject("baseline.thresholds.%s: unknown key %r" % (op, key))
     provenance = doc.get("provenance")
     if type(provenance) is not dict:
         _reject("baseline.provenance: object required")
@@ -517,7 +529,7 @@ def _baseline_extra(baseline):
     }}
 
 
-def _fail_samples(args, exc, as_json):
+def _fail_samples(args, exc, as_json, dry_run):
     """Refuse invalid samples for record/check: exit 1, zero writes."""
     if as_json:
         _print_outcome(_outcome(
@@ -530,13 +542,14 @@ def _fail_samples(args, exc, as_json):
             maturity_reason="maturity not established: samples invalid",
             coverage_ok=False,
             coverage_reason="coverage not established: samples invalid",
-            verdict="unknown" if args.command == "check" else None))
+            verdict="unknown" if args.command == "check" else None,
+            dry_run=dry_run))
     else:
         print("error: %s" % exc, file=sys.stderr)
     return 1
 
 
-def _refuse_invalid_baseline(args, exc, as_json, check_mode):
+def _refuse_invalid_baseline(args, exc, as_json, check_mode, dry_run):
     """Refuse an existing invalid baseline without touching its bytes.
 
     `record`/`init` report exit 1; `check` reports exit 3 (unknown), since
@@ -561,7 +574,8 @@ def _refuse_invalid_baseline(args, exc, as_json, check_mode):
             coverage_ok=False,
             coverage_reason="coverage not established: stored evidence "
                             "invalid",
-            verdict="unknown" if check_mode else None))
+            verdict="unknown" if check_mode else None,
+            dry_run=dry_run))
     else:
         print("%s: refusing invalid baseline: %s"
               % ("unknown" if check_mode else "error", message),
@@ -609,7 +623,8 @@ def _cmd_init(args, as_json, dry_run):
                 maturity_reason="maturity not established: invalid arguments",
                 coverage_ok=False,
                 coverage_reason="coverage not established: invalid "
-                                "arguments"))
+                                "arguments",
+                dry_run=dry_run))
         else:
             print("error: %s" % exc, file=sys.stderr)
         return 1
@@ -628,7 +643,8 @@ def _cmd_init(args, as_json, dry_run):
                                 "left untouched",
                 coverage_ok=False,
                 coverage_reason="coverage not established: existing baseline "
-                                "left untouched"))
+                                "left untouched",
+                dry_run=dry_run))
         else:
             print("error: baseline already exists at %s; refusing to "
                   "overwrite evidence" % args.baseline, file=sys.stderr)
@@ -681,7 +697,8 @@ def _cmd_record(args, grouped, as_json, dry_run):
             baseline = _check_baseline_shape(
                 _read_json(args.baseline, "baseline"))
         except InvalidInput as exc:
-            return _refuse_invalid_baseline(args, exc, as_json, False)
+            return _refuse_invalid_baseline(args, exc, as_json, False,
+                                            dry_run)
     else:
         try:
             baseline = init_baseline(args.source)
@@ -698,7 +715,8 @@ def _cmd_record(args, grouped, as_json, dry_run):
                                     "arguments",
                     coverage_ok=False,
                     coverage_reason="coverage not established: invalid "
-                                    "arguments"))
+                                    "arguments",
+                    dry_run=dry_run))
             else:
                 print("error: %s" % exc, file=sys.stderr)
             return 1
@@ -716,7 +734,8 @@ def _cmd_record(args, grouped, as_json, dry_run):
                 maturity_reason="maturity not established: invalid arguments",
                 coverage_ok=False,
                 coverage_reason="coverage not established: invalid "
-                                "arguments"))
+                                "arguments",
+                dry_run=dry_run))
         else:
             print("error: %s" % exc, file=sys.stderr)
         return 1
@@ -788,7 +807,7 @@ def _cmd_check(args, grouped, as_json, dry_run):
         baseline = _check_baseline_shape(
             _read_json(args.baseline, "baseline"))
     except InvalidInput as exc:
-        return _refuse_invalid_baseline(args, exc, as_json, True)
+        return _refuse_invalid_baseline(args, exc, as_json, True, dry_run)
     verdict, details = evaluate(baseline, grouped)
     mature, maturity_reason = _maturity_summary(_stored_counts(baseline))
     if as_json:
@@ -866,7 +885,8 @@ def _usage_outcome(argv, message):
         coverage_ok=False,
         coverage_reason="coverage not established: usage error, no evidence "
                         "validated",
-        verdict="unknown" if operation == "check" else None)
+        verdict="unknown" if operation == "check" else None,
+        dry_run="--dry-run" in argv)
 
 
 class _ArgumentParser(argparse.ArgumentParser):
@@ -928,7 +948,7 @@ def main(argv=None):
     try:
         grouped = parse_samples(_read_json(args.samples, "samples"))
     except InvalidInput as exc:
-        return _fail_samples(args, exc, as_json)
+        return _fail_samples(args, exc, as_json, dry_run)
     if args.command == "record":
         return _cmd_record(args, grouped, as_json, dry_run)
     return _cmd_check(args, grouped, as_json, dry_run)

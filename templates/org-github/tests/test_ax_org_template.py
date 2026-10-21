@@ -785,6 +785,8 @@ class AxMetricsInputValidationTest(unittest.TestCase):
             ax_metrics._evidence_tokens({"tokens": float("inf")}))
         self.assertIsNone(ax_metrics._evidence_tokens(
             {"summary": {"totalTokens": float("inf")}}))
+        self.assertIsNone(
+            ax_metrics._evidence_tokens({"tokens": 10 ** 1000}))
         self.assertEqual(ax_metrics._evidence_tokens({"tokens": 0}), 0)
         self.assertEqual(
             ax_metrics._evidence_tokens({"tokens": 1000}), 1000)
@@ -824,6 +826,20 @@ class AxMetricsInputValidationTest(unittest.TestCase):
                     "tokens_per_merged_pr"]
                 self.assertIsNone(metric["value"])
                 self.assertNotEqual(metric["validity"], "valid")
+
+    def test_oversized_token_total_withheld(self):
+        fixture = self._base_fixture(cost_evidence={
+            "tokens": 10 ** 1000,
+            "window_start": "2026-10-13T00:00:00Z",
+            "window_end": "2026-10-20T00:00:00Z",
+        })
+        fixture["cost_tokens"] = None
+        code, text = self._run_fixture(fixture)
+        self.assertEqual(code, 0)
+        metric = json.loads(text)["metrics"][
+            "tokens_per_merged_pr"]
+        self.assertIsNone(metric["value"])
+        self.assertNotEqual(metric["validity"], "valid")
 
     def test_legacy_boolean_and_nonfinite_cost_tokens_ignored(self):
         for bad in (True, False, float("nan"), float("inf")):

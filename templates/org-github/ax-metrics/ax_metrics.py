@@ -313,10 +313,15 @@ def _as_token_total(value):
     The costs payload is external input: bool is an int subclass and
     json.loads accepts NaN/Infinity, so both are rejected here to keep
     emitted ratios standard-compliant JSON. Zero stays a real total.
+    Oversized ints (math.isfinite raises OverflowError past float range)
+    are invalid input, never a crash.
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return value if math.isfinite(value) else None
+    try:
+        return value if math.isfinite(value) else None
+    except OverflowError:
+        return None
 
 
 def _evidence_tokens(evidence):

@@ -354,7 +354,7 @@ EOF
       [[ -r "$HASHES" ]] || die "--sql-hashes must be a readable file"
     fi
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    python3 - "$EV" "$MAX_AGE" "$HASHES" "$SCRIPT_DIR" <<'EOF'
+    python3 -B - "$EV" "$MAX_AGE" "$HASHES" "$SCRIPT_DIR" <<'EOF'
 import datetime, json, re, sys
 sys.path.insert(0, sys.argv[4])
 from migration_drift_gate import validate_evidence_shape

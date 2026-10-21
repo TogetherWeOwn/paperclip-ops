@@ -166,6 +166,23 @@ class CustodyError(PruneError):
     """Recovery-custody hold file unreadable or malformed: fail closed."""
 
 
+def _valid_api_base(base):
+    # BASE host validation: the bearer below is sent ONLY to this base.
+    # Refuse a base that is not an http(s) URL with a non-empty bare host --
+    # no userinfo (`user@host` misdirects the credential), no whitespace (a
+    # newline would inject a request directive). A well-formed hostile host
+    # still passes; blocking that needs an operator-owned host allowlist,
+    # not a per-script guess.
+    if not base.startswith(("http://", "https://")):
+        return False
+    host = base.split("://", 1)[1].split("/", 1)[0]
+    if not host:
+        return False
+    if "@" in base:
+        return False
+    return not any(char in " \t\n\r\x0b\x0c" for char in base)
+
+
 def read_keep(path=None):
     """Recovery-custody hold set: one run UUID per line.
 
@@ -1018,6 +1035,13 @@ def main(argv=None, api=None, env=None):
                     "KEY: the per-removal run re-read would be impossible")
             raise PruneError("API env is required even for dry-run (run "
                              "statuses come from the control plane)")
+        if not _valid_api_base(base.rstrip("/")):
+            if opts.apply:
+                raise SafetyRefusal(
+                    "refusing --apply with a PAPERCLIP_API_URL that is not "
+                    "a clean http(s) base: the bearer would misdirect")
+            raise PruneError(
+                "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
         api = reclaim.ApiClient(base, company, key)
     try:
         summary = run_tool(opts, api, env)

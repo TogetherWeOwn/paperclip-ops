@@ -2108,6 +2108,13 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_paperclip_api_base_validation.sh
 
+      # API base validation (Python senders): same malformed-base gate as
+      # the shell suite above, for the urllib senders. Hermetic (mocked
+      # urlopen), no network, no credentials.
+      - name: api-base-validation-python suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -B -m unittest -v test_paperclip_api_base_validation_py
+
       # case_acb41886. The capability gate — the sibling of the provisioning queue,
       # for asks whose object is a CAPABILITY rather than an org seat. It runs
       # here for the same reason the three above do: it fabricates its whole

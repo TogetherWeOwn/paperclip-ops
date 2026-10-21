@@ -155,7 +155,27 @@ def propose(
     return records
 
 
+def _valid_api_base(base):
+    # BASE host validation: the bearer below is sent ONLY to this base.
+    # Refuse a base that is not an http(s) URL with a non-empty bare host --
+    # no userinfo (`user@host` misdirects the credential), no whitespace (a
+    # newline would inject a request directive). A well-formed hostile host
+    # still passes; blocking that needs an operator-owned host allowlist,
+    # not a per-script guess.
+    if not base.startswith(("http://", "https://")):
+        return False
+    host = base.split("://", 1)[1].split("/", 1)[0]
+    if not host:
+        return False
+    if "@" in base:
+        return False
+    return not any(char in " \t\n\r\x0b\x0c" for char in base)
+
+
 def api_get(base_url: str, api_key: str, path: str) -> Any:
+    if not _valid_api_base(base_url):
+        raise RuntimeError(
+            "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
     request = urllib.request.Request(
         base_url + path,
         headers={"Authorization": f"Bearer {api_key}"},

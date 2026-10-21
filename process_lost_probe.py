@@ -163,10 +163,30 @@ def unpack_runs(payload):
     return payload
 
 
+def _valid_api_base(base):
+    # BASE host validation: the bearer below is sent ONLY to this base.
+    # Refuse a base that is not an http(s) URL with a non-empty bare host --
+    # no userinfo (`user@host` misdirects the credential), no whitespace (a
+    # newline would inject a request directive). A well-formed hostile host
+    # still passes; blocking that needs an operator-owned host allowlist,
+    # not a per-script guess.
+    if not base.startswith(("http://", "https://")):
+        return False
+    host = base.split("://", 1)[1].split("/", 1)[0]
+    if not host:
+        return False
+    if "@" in base:
+        return False
+    return not any(char in " \t\n\r\x0b\x0c" for char in base)
+
+
 def fetch_runs(api_url, api_key, company_id, limit):
     base = api_url.rstrip("/")
     if base.endswith("/api"):
         base = base[:-4]
+    if not _valid_api_base(base):
+        raise ValueError(
+            "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
     # NOTE: this company-wide request returns at most the newest 1,000 rows.
     # The route accepts agentId and limit, but this probe does not request an
     # agent-scoped page and the API has no cursor/offset pagination. Deep

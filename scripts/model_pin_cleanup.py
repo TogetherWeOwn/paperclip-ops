@@ -486,6 +486,23 @@ def render_plan_table(plan):
 # truncated, secret-free message. No token is ever printed, logged or stored.
 # ---------------------------------------------------------------------------
 
+def _valid_api_base(base):
+    # BASE host validation: the bearer below is sent ONLY to this base.
+    # Refuse a base that is not an http(s) URL with a non-empty bare host --
+    # no userinfo (`user@host` misdirects the credential), no whitespace (a
+    # newline would inject a request directive). A well-formed hostile host
+    # still passes; blocking that needs an operator-owned host allowlist,
+    # not a per-script guess.
+    if not base.startswith(("http://", "https://")):
+        return False
+    host = base.split("://", 1)[1].split("/", 1)[0]
+    if not host:
+        return False
+    if "@" in base:
+        return False
+    return not any(char in " \t\n\r\x0b\x0c" for char in base)
+
+
 class PaperclipClient:
     def __init__(self, base_url, api_key, company_id, run_id=None):
         base = (base_url or "").rstrip("/")
@@ -496,6 +513,9 @@ class PaperclipClient:
                 "PAPERCLIP_API_URL, PAPERCLIP_API_KEY and PAPERCLIP_COMPANY_ID "
                 "must all be set for live modes."
             )
+        if not _valid_api_base(base):
+            raise CleanupError(
+                "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
         self.base = base
         self.key = api_key
         self.company = company_id

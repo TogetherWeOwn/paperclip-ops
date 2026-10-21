@@ -353,12 +353,19 @@ EOF
     if [[ -n "$HASHES" ]]; then
       [[ -r "$HASHES" ]] || die "--sql-hashes must be a readable file"
     fi
-    python3 - "$EV" "$MAX_AGE" "$HASHES" <<'EOF'
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    python3 -B - "$EV" "$MAX_AGE" "$HASHES" "$SCRIPT_DIR" <<'EOF'
 import datetime, json, re, sys
+sys.path.insert(0, sys.argv[4])
+from migration_drift_gate import validate_evidence_shape
 try:
     doc = json.load(open(sys.argv[1]))
 except (OSError, ValueError) as exc:
     sys.exit(f"REFUSED: unreadable evidence: {exc.__class__.__name__}")
+try:
+    validate_evidence_shape(doc)
+except Exception as exc:  # _InputError: fail closed exactly like the drift gate
+    sys.exit(f"REFUSED: malformed evidence shape: {exc}")
 if doc.get("status") != "passed":
     sys.exit(f"FAIL: rehearsal evidence status is {doc.get('status')!r}, want 'passed'")
 provider, cleanup = doc.get("provider"), doc.get("cleanup")
@@ -388,7 +395,11 @@ if not_applied:
 if sys.argv[3]:
     pat = re.compile(r"([0-9a-f]{64})\s+\*?(?:.*/)?([^/\s]+)\.sql")
     candidate = {}
-    for raw in open(sys.argv[3], encoding="utf-8"):
+    try:
+        hashes_lines = open(sys.argv[3], encoding="utf-8").read().splitlines()
+    except (OSError, ValueError) as exc:
+        sys.exit(f"REFUSED: unreadable --sql-hashes: {exc.__class__.__name__}")
+    for raw in hashes_lines:
         line = raw.strip()
         if not line:
             continue

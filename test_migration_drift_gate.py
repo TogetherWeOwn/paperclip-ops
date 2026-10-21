@@ -10,7 +10,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, redirect_stderr
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -164,6 +164,182 @@ class DriftGateTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             self.run_gate("--sql-hashes", bad, "--ledger", self.ledger([A]))
         self.assertEqual(cm.exception.code, 2)
+
+
+class ReviewRoundTest(unittest.TestCase):
+    """Round-1 review pins (Paperclip Review 4/5 on 21bb8bab).
+
+    The acceptance suite (test_migration_evidence_ax.py) is Test-Author
+    owned and immutable, so the review's new fixtures live here: byte-level
+    input fixtures in both modes, text-refusal stdout preservation,
+    refused-first next_action precedence, and one emitter per verdict
+    reason the acceptance suite only allowlists.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="drift-gate-review-")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def write_bytes(self, name, data):
+        p = self.root / name
+        p.write_bytes(data)
+        return str(p)
+
+    def hashes(self, pairs):
+        p = self.root / "candidate.txt"
+        p.write_text("".join(f"{h}  {t}.sql\n" for t, h in pairs))
+        return str(p)
+
+    def ledger(self, hashes):
+        p = self.root / "ledger.txt"
+        p.write_text("".join(h + "\n" for h in hashes))
+        return str(p)
+
+    def evidence_doc(self, **overrides):
+        finished = (datetime.now(timezone.utc) - timedelta(hours=1))
+        ts = finished.strftime("%Y-%m-%dT%H:%M:%SZ")
+        doc = {"version": 1, "provider": "planetscale", "branch": "rehearsal/x",
+               "apply_target": "rehearsal/x", "base": "prod",
+               "migrations": [{"tag": "0042_a", "sha256": A, "result": "applied"}],
+               "status": "passed", "started_at": ts, "finished_at": ts,
+               "cleanup": "deleted"}
+        doc.update(overrides)
+        return doc
+
+    def run_full(self, *args):
+        """(rc, stdout, stderr). Refusals surface as rc 2; anything else
+        that raises (a gate crash) propagates and fails the test."""
+        buf_out, buf_err = io.StringIO(), io.StringIO()
+        with redirect_stdout(buf_out), redirect_stderr(buf_err):
+            try:
+                rc = gate.main(list(args))
+            except SystemExit as e:
+                rc = e.code
+        return rc, buf_out.getvalue(), buf_err.getvalue()
+
+    def run_json(self, *args):
+        rc, out, err = self.run_full(*args, "--json")
+        self.assertNotIn("Traceback", out + err, f"no traceback in JSON mode: rc={rc!r}")
+        try:
+            obj = json.loads(out)
+        except json.JSONDecodeError:
+            self.fail(f"JSON stdout must parse: rc={rc!r} out={out[:400]!r} err={err[:400]!r}")
+        return rc, obj, out, err
+
+    def assert_refused_json(self, obj, rc, expected_reason, context):
+        self.assertEqual(rc, 2, f"{context}: must fail closed exit 2")
+        self.assertEqual(obj["verdict"], "refused", f"{context}: verdict must be refused")
+        reasons = [c["reason"] for c in obj["checks"]]
+        self.assertIn(expected_reason, reasons,
+                      f"{context}: expected reason {expected_reason!r} in {reasons}")
+        self.assertTrue(obj["next_action"].strip(),
+                        f"{context}: next_action must be actionable on refusal")
+
+    # Finding 1: non-UTF-8 inputs refuse with a verdict instead of crashing.
+    def test_non_utf8_candidate_refused_both_modes(self):
+        bad = self.write_bytes("candidate.bin", b"\xff\xfe\x00bad\n")
+        ok_ledger = self.ledger([A])
+        rc, out, err = self.run_full("--sql-hashes", bad, "--ledger", ok_ledger)
+        self.assertEqual(rc, 2, f"text must refuse, got rc={rc!r} out={out[:200]!r}")
+        self.assertIn("REFUSED", err)
+        self.assertNotIn("Traceback", out + err)
+        rc, obj, _, _ = self.run_json("--sql-hashes", bad, "--ledger", ok_ledger)
+        self.assert_refused_json(obj, rc, "input_malformed_hashes", "non-utf8-candidate")
+
+    def test_non_utf8_ledger_refused_both_modes(self):
+        ok_hashes = self.hashes([("0042_a", A)])
+        bad = self.write_bytes("ledger.bin", b"\xff\xfe\x00bad\n")
+        rc, out, err = self.run_full("--sql-hashes", ok_hashes, "--ledger", bad)
+        self.assertEqual(rc, 2, f"text must refuse, got rc={rc!r} out={out[:200]!r}")
+        self.assertIn("REFUSED", err)
+        self.assertNotIn("Traceback", out + err)
+        rc, obj, _, _ = self.run_json("--sql-hashes", ok_hashes, "--ledger", bad)
+        self.assert_refused_json(obj, rc, "input_malformed_ledger", "non-utf8-ledger")
+
+    def test_non_utf8_evidence_refused_both_modes(self):
+        ok_hashes = self.hashes([("0042_a", A)])
+        ok_ledger = self.ledger([A])
+        bad = self.write_bytes("evidence.bin", b"\xff\xfe\x00bad")
+        rc, out, err = self.run_full("--sql-hashes", ok_hashes, "--ledger", ok_ledger,
+                                     "--evidence", bad)
+        self.assertEqual(rc, 2, f"text must refuse, got rc={rc!r} out={out[:200]!r}")
+        self.assertIn("REFUSED", err)
+        self.assertNotIn("Traceback", out + err)
+        rc, obj, _, _ = self.run_json("--sql-hashes", ok_hashes, "--ledger", ok_ledger,
+                                      "--evidence", bad)
+        self.assert_refused_json(obj, rc, "evidence_invalid_json", "non-utf8-evidence")
+
+    # Finding 2: text mode keeps the lines evaluated before an evidence refusal.
+    def test_text_refusal_prints_earlier_lines(self):
+        ev = self.root / "evidence.json"
+        ev.write_text("[1, 2]")
+        rc, out, err = self.run_full(
+            "--sql-hashes", self.hashes([("0042_a", A), ("0043_b", B)]),
+            "--ledger", self.ledger([A, C]),
+            "--evidence", str(ev))
+        self.assertEqual(rc, 2, f"text must fail closed exit 2, got rc={rc!r}")
+        self.assertIn("REFUSED", err)
+        self.assertIn("pending migration(s) require bound rehearsal evidence", out,
+                      "text refusal must keep the candidate line evaluated before it")
+        self.assertIn("out-of-band", out,
+                      "text refusal must keep the ledger diagnostic evaluated before it")
+        self.assertNotIn("Traceback", out + err)
+
+    # Finding 5: refused-first next_action precedence is pinned by a combined
+    # fixture (an earlier ledger FAIL plus a later evidence refusal).
+    def test_refusal_action_precedes_failed_ledger(self):
+        ev = self.root / "evidence.json"
+        ev.write_text("[1, 2]")
+        rc, obj, _, _ = self.run_json(
+            "--sql-hashes", self.hashes([("0042_a", A)]),
+            "--ledger", self.ledger([A, C]),
+            "--evidence", str(ev))
+        self.assertEqual(rc, 2)
+        self.assertEqual(obj["verdict"], "refused")
+        self.assertEqual(obj["next_action"],
+                         "Fix the evidence shape: top-level JSON must be an object.")
+
+    # Finding 6: every NEXT_ACTIONS reason the gate can emit is exercised.
+    def test_unparseable_time_emits_stable_reason(self):
+        ev = self.root / "evidence.json"
+        ev.write_text(json.dumps(self.evidence_doc(finished_at="not-a-time")))
+        rc, obj, _, _ = self.run_json(
+            "--sql-hashes", self.hashes([("0042_a", A)]),
+            "--ledger", self.ledger([A]),
+            "--evidence", str(ev))
+        self.assertEqual(rc, 1, "unparseable finished_at is a gate failure, not a refusal")
+        self.assertEqual(obj["verdict"], "fail")
+        reasons = [c["reason"] for c in obj["checks"]]
+        self.assertIn("evidence_unparseable_time", reasons)
+        self.assertTrue(obj["next_action"].strip())
+
+    def test_empty_candidate_emits_stable_reason(self):
+        empty = self.write_bytes("empty.txt", b"")
+        rc, obj, _, _ = self.run_json("--sql-hashes", empty, "--ledger", self.ledger([A]))
+        self.assert_refused_json(obj, rc, "input_empty_candidate", "empty-candidate")
+
+    def test_hashless_ledger_row_emits_stable_reason(self):
+        bad = self.root / "ledger.txt"
+        bad.write_text("no hash on this row\n")
+        rc, obj, _, _ = self.run_json(
+            "--sql-hashes", self.hashes([("0042_a", A)]), "--ledger", str(bad))
+        self.assert_refused_json(obj, rc, "input_malformed_ledger", "hashless-ledger-row")
+
+    # Finding 7 (AX2): a top-level field refusal must not point only at rows.
+    def test_top_level_field_action_names_top_level_fields(self):
+        ev = self.root / "evidence.json"
+        ev.write_text(json.dumps(self.evidence_doc(finished_at=123)))
+        rc, obj, _, _ = self.run_json(
+            "--sql-hashes", self.hashes([("0042_a", A)]),
+            "--ledger", self.ledger([A]),
+            "--evidence", str(ev))
+        self.assertEqual(rc, 2)
+        self.assertEqual(obj["verdict"], "refused")
+        reasons = [c["reason"] for c in obj["checks"]]
+        self.assertIn("evidence_invalid_field", reasons)
+        self.assertIn("top-level", obj["next_action"],
+                      f"action must name the level that failed: {obj['next_action']!r}")
 
 
 if __name__ == "__main__":

@@ -57,6 +57,7 @@ const SNAPSHOT_QUERY = `query BridgeCloseoutSnapshot($owner: String!, $name: Str
               ... on CheckRun { name status conclusion completedAt }
               ... on StatusContext { context state createdAt } }
             pageInfo { hasNextPage } } } }
+        }
       }
     }
   }

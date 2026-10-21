@@ -85,9 +85,14 @@ class TestCompare(unittest.TestCase):
         self.assertEqual(gate.compare({"a.py": 3}, {"a.py": 3}), [])
 
 
-# NOTE: TestWorkflowComparisonBase (workflow merge-base wiring) is not moved
-# with this batch: it pins .github/workflows/quality-gates.yml, which moves
-# with the workflow-split batch. Re-add it there.
+class TestWorkflowComparisonBase(unittest.TestCase):
+    def test_pr_diff_gates_use_checked_out_merge_base(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "quality-gates.yml").read_text()
+        self.assertIn('QUALITY_GATE_BASE_SHA="$(git rev-parse HEAD^1)"', workflow)
+        self.assertEqual(
+            workflow.count("BASE_SHA: ${{ env.QUALITY_GATE_BASE_SHA || github.event.pull_request.base.sha }}"),
+            2,
+        )
 
 class TestScan(unittest.TestCase):
     def _finding(self, file, rule="py-subprocess-timeout"):

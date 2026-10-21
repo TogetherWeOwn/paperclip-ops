@@ -342,10 +342,18 @@ function headerValue(headers, name) {
   return typeof value === "string" ? value : undefined;
 }
 
+// The one bearer parse. requireBearer and the inbox redaction secret share
+// it so a credential this transport accepts is always the credential it
+// redacts (a case-sensitive or untrimmed second parse would miss the
+// non-canonical forms the regex accepts).
+function bearerToken(headers) {
+  const authorization = headerValue(headers, "authorization") ?? "";
+  return /^Bearer\s+(.+)$/i.exec(authorization.trim())?.[1].trim() ?? "";
+}
+
 function requireBearer(req, cfg) {
-  const authorization = headerValue(req.headers, "authorization") ?? "";
-  const match = /^Bearer\s+(.+)$/i.exec(authorization.trim());
-  if (!match || !bearerMatches(match[1].trim(), cfg.bearerSha256)) {
+  const token = bearerToken(req.headers);
+  if (!token || !bearerMatches(token, cfg.bearerSha256)) {
     // NOTE: no WWW-Authenticate header on this 401, and that is not an
     // oversight. The gateway treats `401` + a WWW-Authenticate mentioning
     // bearer/oauth as a signal to go discover OAuth endpoints on us
@@ -1319,7 +1327,7 @@ const INBOX_ACTIONS = {
   rejected: "Read the recorded reason and safer alternatives; submit a revised request only if it addresses the refusal.",
   expired: "If the need remains, submit a fresh request with current facts; the expired request grants nothing.",
   failed: "Ask the queue operator to diagnose this request by its ID before attempting another submission.",
-  pending: "Wait for the authorized decision maker; a pending notice is not an approval.",
+  pending: "If you are the notice's named responsible leader, decide it via the queue's thread and review commands; otherwise wait for the authorized decision maker. A pending notice is not an approval.",
 };
 const INBOX_ERRORS = {
   inbox_refused: "Ask the queue operator to check your authenticated inbox access; do not change identity or credentials.",
@@ -1523,7 +1531,7 @@ export function createHandler(cfg, deps = {}) {
       const inbox = toolName === "read_my_requests"
         ? ownInboxResult(result, identity, [
           cfg.bearerSha256,
-          headerValue(req.headers, "authorization")?.replace(/^Bearer /, ""),
+          bearerToken(req.headers),
         ]) : null;
       audit({
         event: "tool.call",

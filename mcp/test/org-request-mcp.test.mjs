@@ -300,6 +300,41 @@ test("the read tool is scoped by the AUTHENTICATED principal, and takes no argum
   });
 });
 
+test("a non-canonical Authorization the transport accepts is still the credential it redacts", async () => {
+  const dir = scratch();
+  const row = JSON.stringify({
+    rid: "REQ-101",
+    status: "approved",
+    agent: CALLER,
+    body: `approval recorded; stray credential ${BEARER} must not survive`,
+  });
+  await withServer(configFor(dir, {
+    queueBody: `#!/bin/sh\necho '${row}'\n`,
+  }), {}, async (call) => {
+    // requireBearer accepts these (case-insensitive scheme, extra
+    // whitespace), so the redaction secret must be the same parse — a
+    // case-sensitive `replace(/^Bearer /, "")` would leave the bare token.
+    for (const authorization of [`bearer ${BEARER}`, `Bearer  ${BEARER}  `]) {
+      const response = await call(
+        rpc("tools/call", { name: "read_my_requests", arguments: {} }),
+        { ...IDENTITY_HEADERS, authorization },
+      );
+      assert.equal(response.status, 200, `rejected ${JSON.stringify(authorization)}`);
+      assert.equal(response.json.result.isError, false, `error for ${JSON.stringify(authorization)}`);
+      const sc = response.json.result.structuredContent;
+      assert.ok(sc, `missing structuredContent for ${JSON.stringify(authorization)}`);
+      assert.ok(
+        !JSON.stringify(sc).includes(BEARER),
+        `structured output leaks the bearer via ${JSON.stringify(authorization)}`,
+      );
+      assert.ok(
+        !response.json.result.content[0].text.includes(BEARER),
+        `text leaks the bearer via ${JSON.stringify(authorization)}`,
+      );
+    }
+  });
+});
+
 // Compose the exact authenticated selector above with the REAL queue.
 // Standing authority is named by permission profile, but MCP knows only the
 // authenticated UUID. The enqueue path must record each live holder's UUID;

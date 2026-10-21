@@ -389,6 +389,41 @@ class AxMetricsComputeTest(unittest.TestCase):
             code = ax_metrics.main(["--days", "7"])
         self.assertEqual(code, 2)
 
+    def test_failed_issue_scan_degrades_to_none(self):
+        issues, truncated = ax_metrics.resolve_issue_scan(
+            [{"status": "done"}], False, "HTTP Error 500")
+        self.assertIsNone(issues)
+        self.assertFalse(truncated)
+
+    def test_truncated_issue_scan_rides_along(self):
+        fetched = [{"status": "done"}]
+        issues, truncated = ax_metrics.resolve_issue_scan(
+            fetched, True, None)
+        self.assertEqual(issues, fetched)
+        self.assertTrue(truncated)
+
+    def test_issue_truncation_reaches_report(self):
+        report = ax_metrics.build_report(
+            [], None, None, "2026-10-13T00:00:00Z", 7,
+            paperclip_reason="scan failed", issues_truncated=True)
+        self.assertTrue(report["issues_truncated"])
+        self.assertIsNone(
+            report["metrics"]["escalations_per_100_cards"]["value"])
+        self.assertIn("scan failed", report["metrics"]
+                      ["escalations_per_100_cards"]["provenance"])
+
+    def test_parse_repos_skips_indented_comments(self):
+        with tempfile.NamedTemporaryFile(
+                "w", suffix=".txt", delete=False) as fh:
+            fh.write("# top comment\n\n  # indented comment\nExample/a\n")
+            path = fh.name
+        try:
+            self.assertEqual(
+                ax_metrics.parse_repos("Example/b, ", path),
+                ["Example/b", "Example/a"])
+        finally:
+            os.unlink(path)
+
     def test_paperclip_get_round_trip_and_failure(self):
         import threading
         from http.server import BaseHTTPRequestHandler, HTTPServer

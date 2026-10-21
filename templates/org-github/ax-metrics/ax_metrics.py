@@ -135,8 +135,32 @@ def compute_tokens_per_pr(cost_tokens, merged_count):
     return cost_tokens / merged_count
 
 
+def resolve_issue_scan(fetched, truncated, reason):
+    """Failed scans degrade to None so the reason surfaces in provenance.
+
+    A partial list from a failed scan must never masquerade as a healthy
+    empty window. Truncation rides along either way, mirroring the
+    per-repo `truncated` flag on the GitHub side.
+    """
+    if reason:
+        return None, truncated
+    return fetched, truncated
+
+
+def parse_repos(repos_arg, repos_file):
+    """Repo list from --repos plus --repos-file (# comments ok)."""
+    repos = [r.strip() for r in repos_arg.split(",") if r.strip()]
+    if repos_file:
+        with open(repos_file, encoding="utf-8") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    repos.append(stripped)
+    return repos
+
+
 def build_report(github_rows, cost_tokens, issues, window_start, window_days,
-                 paperclip_reason=None):
+                 paperclip_reason=None, issues_truncated=False):
     """Assemble the report dict from fetched (or fixture) data."""
     merged_total = sum(r["merged_prs"] for r in github_rows)
     states = [s for r in github_rows for s in r["first_commit_states"]]
@@ -150,6 +174,7 @@ def build_report(github_rows, cost_tokens, issues, window_start, window_days,
         "window_start": window_start,
         "repos": github_rows,
         "merged_prs_total": merged_total,
+        "issues_truncated": issues_truncated,
         "metrics": {
             "first_push_green_rate": {
                 "value": green,
@@ -193,6 +218,7 @@ def collect_live(args, window_start):
     key = os.environ.get(args.paperclip_key_env, "")
     company = os.environ.get(args.paperclip_company_env, "")
     cost_tokens, issues, reason = None, None, None
+    issues_truncated = False
     if base and key and company:
         costs, costs_reason = paperclip_get(
             base, key, f"/api/companies/{company}/costs/summary")
@@ -205,8 +231,10 @@ def collect_live(args, window_start):
                 inner = costs.get("summary", {})
                 if isinstance(inner, dict) and isinstance(inner.get("totalTokens"), (int, float)):
                     cost_tokens = inner["totalTokens"]
-        fetched, _, issues_reason = fetch_paperclip_issues(base, key, company)
-        issues = fetched
+        fetched, truncated, issues_reason = fetch_paperclip_issues(
+            base, key, company)
+        issues, issues_truncated = resolve_issue_scan(
+            fetched, truncated, issues_reason)
         parts = [r for r in (costs_reason, issues_reason) if r]
         reason = "; ".join(parts) if parts else None
         if cost_tokens is None and not reason:
@@ -214,7 +242,8 @@ def collect_live(args, window_start):
     else:
         reason = "paperclip credentials not configured"
     return build_report(github_rows, cost_tokens, issues, window_start,
-                        args.days, paperclip_reason=reason)
+                        args.days, paperclip_reason=reason,
+                        issues_truncated=issues_truncated)
 
 
 def collect_from_file(path, days):
@@ -224,7 +253,8 @@ def collect_from_file(path, days):
         fixture.get("cost_tokens"),
         fixture.get("issues"),
         fixture.get("window_start", ""), days,
-        paperclip_reason=fixture.get("paperclip_reason"))
+        paperclip_reason=fixture.get("paperclip_reason"),
+        issues_truncated=fixture.get("issues_truncated", False))
 
 
 def main(argv=None):
@@ -259,11 +289,7 @@ def main(argv=None):
     if args.from_file:
         report = collect_from_file(args.from_file, args.days)
     else:
-        repos = [r.strip() for r in args.repos.split(",") if r.strip()]
-        if args.repos_file:
-            with open(args.repos_file, encoding="utf-8") as fh:
-                repos.extend(ln.strip() for ln in fh
-                             if ln.strip() and not ln.startswith("#"))
+        repos = parse_repos(args.repos, args.repos_file)
         if not repos:
             print("ax-metrics: error: no repos (use --repos or --repos-file)",
                   file=sys.stderr)

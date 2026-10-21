@@ -159,19 +159,52 @@ def _certified_surface_flags(text):
 _POS_PARAM_RE = r"(?:\$1\b|\$\{1(?::[^}]*)?\}|\$[@*#]|\$\{[@*#]\})"
 
 
+def _blank_quoted(line):
+    """Copy of *line* with quoted spans replaced by spaces.
+
+    Length-preserving, so match offsets still line up with the original.
+    Quote tracking mirrors :func:`_strip_comment`.
+    """
+    out = []
+    quote = None
+    for ch in line:
+        if quote is None and ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+        elif ch == quote:
+            quote = None
+            out.append(ch)
+        elif quote is None:
+            out.append(ch)
+        else:
+            out.append(" ")
+    return "".join(out)
+
+
 def _shell_flag_comparison(code_lines, flag):
     """A positional-parameter equality test against the flag certifies it.
 
     Matches ``[[ "$1" == "--json" ]]``, ``[ "$1" = --dry-run ]`` and the
-    reversed operand order. Deliberately excludes ``!=`` (a negative test
-    advertises nothing), non-positional variables (``$FLAGS``), and
-    single-quoted parameters (``'$1'`` compares a literal, not the argument).
+    reversed operand order, including trailing compound conditions
+    (``[[ "$1" == "--json" && ... ]]``). The test opener must sit outside
+    quotes, so incidental strings such as ``echo '"$1" == "--json"'``
+    or ``echo '[ $1 = --json ]'`` never certify. Deliberately excludes
+    ``!=`` (a negative test advertises nothing), non-positional
+    variables (``$FLAGS``), and single-quoted parameters (``'$1'``
+    compares a literal, not the argument).
     """
     var = r"\"?%s\"?" % _POS_PARAM_RE
     lit = _flag_literal(flag)
-    compare = re.compile(
-        r"%s\s*(?:==|=)\s*%s|%s\s*(?:==|=)\s*%s" % (var, lit, lit, var))
-    return any(compare.search(line) for line in code_lines)
+    operands = r"(?:%s\s*(?:==|=)\s*%s|%s\s*(?:==|=)\s*%s)" % (
+        var, lit, lit, var)
+    opener = re.compile(r"\[\[\s*|\[\s+")
+    test = re.compile(operands + r"(?=[^\n\]]*(?:\]\]|\]))")
+    for line in code_lines:
+        bare = _blank_quoted(line)
+        for match in opener.finditer(bare):
+            if test.match(line, match.end()):
+                return True
+    return False
 
 
 def _shell_case_branch(code_lines, flag):

@@ -317,7 +317,8 @@
     "execution-image source-only carrier suite:1",
     "shell-subst guard suite:1",
     "queue-packet reject offline suite:1",
-    "staging-preflight carrier suite:1"
+    "staging-preflight carrier suite:1",
+    "api-base-validation suite:1"
   ],
   "retained": [
     {
@@ -1784,6 +1785,11 @@
       "name": "staging-preflight carrier suite",
       "definition_sha256": "ff33fab7ad096ca46d69786740c6873b40c8bdeb8ec59e2370a3d660f563dd12",
       "id": "staging-preflight carrier suite:1"
+    },
+    {
+      "name": "api-base-validation suite",
+      "definition_sha256": "7e30b54dc00c4dfbaa85b27c196949c3121114d6c1fd6b2c5504e09911ad0fcb",
+      "id": "api-base-validation suite:1"
     }
   ],
   "removed": [

@@ -1439,7 +1439,7 @@
     },
     {
       "name": "org-request-mcp regression suite",
-      "definition_sha256": "6a37e701118978e49e914ea7f43137fb9231f77ca7931038db102951bf952db6",
+      "definition_sha256": "70cacf39bc8b9ab3ad16703a6f67d24d5606b0aa7f8a5e55a61c58da9e5599c2",
       "id": "org-request-mcp regression suite:1"
     },
     {

@@ -522,11 +522,19 @@ class AxMetricsComputeTest(unittest.TestCase):
         self.assertEqual(state, "failure")
 
     def test_from_file_report_shape(self):
+        # Schema v2: a bare cost total no longer yields a ratio; the
+        # fixture carries explicit window evidence (see
+        # test_ax_paperclip_window.py for the withhold cases).
         fixture = {
             "github_rows": [{"repo": "Example/a", "merged_prs": 2,
                              "truncated": False,
                              "first_commit_states": ["success", "failure"]}],
             "cost_tokens": 1000,
+            "cost_evidence": {
+                "tokens": 1000,
+                "window_start": "2026-10-13T00:00:00Z",
+                "window_end": "2026-10-20T00:00:00Z",
+            },
             "issues": [{"status": "done",
                         "updatedAt": "2026-10-20T00:00:00Z"}],
             "window_start": "2026-10-13T00:00:00Z",

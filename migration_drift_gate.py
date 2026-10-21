@@ -350,10 +350,13 @@ def _verdict_object(checks, pending_count, unknown_count):
     elif any(status == "fail" for _, status, _ in checks):
         verdict = "fail"
     next_action = ""
-    for _, status, reason in checks:
-        if status != "pass":
-            next_action = NEXT_ACTIONS[reason]
-            break
+    # Match the verdict precedence above: a refusal outranks a gate failure,
+    # so point the caller at the refused check first (e.g. an evidence-shape
+    # refusal appended after an already-failed ledger check).
+    ranked = ([c for c in checks if c[1] == "refused"]
+              + [c for c in checks if c[1] == "fail"])
+    if ranked:
+        next_action = NEXT_ACTIONS[ranked[0][2]]
     return {
         "version": JSON_SCHEMA_VERSION,
         "verdict": verdict,

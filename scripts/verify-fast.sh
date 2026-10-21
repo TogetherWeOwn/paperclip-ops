@@ -126,6 +126,8 @@ if ! python3 verification/offline_ci_contract.py --check-restored >/dev/null 2>&
 fi
 
 echo "=== verify-fast: fast unit/contract gates ==="
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_backup_observation_contract \
+  || fail "backup observation contract failed"
 node --test test/external-disclosure.test.mjs || fail "external-disclosure suite failed"
 node --test hooks/muse-stop-guard/muse-stop-guard.test.mjs || fail "muse-stop-guard suite failed"
 node --test hooks/disposition-stop-guard/disposition-stop-guard.test.mjs hooks/disposition-stop-guard/measure/census.test.mjs \

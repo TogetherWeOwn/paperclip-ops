@@ -89,8 +89,8 @@
 # landing independently-verified archives on the same schedule. Since that
 # script writes paperclip-<ts>-hostcron.sql.gz into the SAME directory, it
 # already matches this detector's existing `$PREFIX-*.sql.gz` glob with no
-# code change: --staleness-only answers "is there a recent, restorable
-# backup at all," which is what the owner asked this monitor to alert on,
+# code change: --staleness-only answers "is there a recent archive usable by
+# size/mtime at all" (not a restore proof), the availability question,
 # regardless of which writer produced it or what the in-server scheduler's
 # internal bookkeeping says.
 #
@@ -102,7 +102,7 @@
 # --staleness-only exit status:
 #   0  a usable archive exists within --max-backup-age-hours
 #   1  every archive is stale, truncated, or absent
-#   2  the backup directory itself could not be measured
+#   2  required directory/file freshness observations could not be measured
 # ===========================================================================
 set -uo pipefail
 
@@ -144,7 +144,7 @@ usage: db_backup_stall.sh [--json] [--log FILE] [--backup-dir DIR]
                           [--min-backup-bytes N] [--max-backup-age-hours N]
                           [--prefix NAME] [--exclude-suffix NAME]
                           [--include-all-producers] [--no-health]
-                          [--staleness-only]
+                          [--local-only | --dry-run] [--staleness-only]
 
 Detects a wedged database backup scheduler from the server log's own
 "Skipping scheduled database backup" WARN -- the leading indicator that
@@ -152,10 +152,26 @@ Detects a wedged database backup scheduler from the server log's own
 
   0 no stall   1 STALL detected   2 inconclusive / tool failure
 
-By default, archives ending `-hostcron.sql.gz` are excluded from the
-in-server orphan/staleness signals and reported separately. Change the
-producer marker with --exclude-suffix, or use --include-all-producers to
-restore the legacy all-writers view.
+By default, host dumps/archives ending `-hostcron.sql` / `-hostcron.sql.gz`
+are excluded from the in-server orphan/staleness signals and reported
+separately. Change the producer marker with --exclude-suffix, or use
+--include-all-producers to restore the legacy all-writers view.
+
+Missing/unreadable directories, failed scans/stats and invalid/future mtimes
+are unknown observations, not fresh backups. A measured empty directory is
+a stall; unmeasured required evidence is inconclusive unless an independent
+stall was positively observed. A valid independent fresh archive still counts.
+JSON adds schemaVersion, signals, producers, codes and next_action to the
+legacy fields. Unknown/excluded observations are explained in codes and notes.
+
+--no-health, --local-only and its alias --dry-run observe local files only:
+no network, board/state writes or credential config. They do not simulate a
+restore or rearm a monitor. Without these flags, the optional GET /api/health
+may use a temporary protected credential config; it is advisory, not files-only.
+
+Local-only examples (paths are placeholders):
+  ./db_backup_stall.sh --local-only --log ./current.log --backup-dir ./backups --json
+  ./db_backup_stall.sh --dry-run --staleness-only --backup-dir ./backups --json
 
 --staleness-only evaluates ONLY whether a usable archive exists within
 --max-backup-age-hours (signal 3), ignoring the server log and the orphan
@@ -168,7 +184,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --json) JSON=1 ;;
-    --no-health) CHECK_HEALTH=0 ;;
+    --no-health|--local-only|--dry-run) CHECK_HEALTH=0 ;;
     --staleness-only) STALENESS_ONLY=1 ;;
     --exclude-suffix) shift; [[ $# -gt 0 ]] || { echo "ERROR: --exclude-suffix needs a value" >&2; exit 2; }; EXCLUDE_SUFFIX="$1"; EXCLUDE_ENABLED=1; EXCLUDE_WAS_EXPLICIT=1 ;;
     --include-all-producers) EXCLUDE_ENABLED=0; EXCLUDE_WAS_EXPLICIT=1 ;;
@@ -192,7 +208,7 @@ done
   || { echo "ERROR: prefix contains characters that could escape the glob" >&2; exit 2; }
 [[ -z "$EXCLUDE_SUFFIX" || "$EXCLUDE_SUFFIX" =~ ^[A-Za-z0-9._-]+$ ]] \
   || { echo "ERROR: exclude-suffix contains characters that could escape the glob" >&2; exit 2; }
-for tool in tail grep stat date; do
+for tool in tail grep stat date find; do
   command -v "$tool" >/dev/null 2>&1 || { echo "ERROR: $tool is required" >&2; exit 2; }
 done
 
@@ -215,12 +231,17 @@ NOW_ISO="$(date -u -d "@$NOW_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
 # Values are emitted through a real escaper so a log line containing a quote or
 # a backslash cannot produce malformed JSON that a consumer silently misparses.
 json_escape() {
-  local s="$1"
+  local s="$1" code char escaped
   s="${s//\\/\\\\}"
   s="${s//\"/\\\"}"
-  s="${s//$'\t'/\\t}"
-  s="${s//$'\r'/\\r}"
-  s="${s//$'\n'/\\n}"
+  # Filenames and log lines can contain any non-NUL control byte, not just
+  # tabs/newlines. Escape them all without an external JSON dependency.
+  for (( code=1; code<32; code++ )); do
+    printf -v char '\\%03o' "$code"
+    printf -v char '%b' "$char"
+    printf -v escaped '\\u%04x' "$code"
+    s="${s//"$char"/"$escaped"}"
+  done
   printf '%s' "$s"
 }
 
@@ -232,6 +253,63 @@ NOTES=()
 add_reason() { REASONS+=("$1"); }
 add_note()   { NOTES+=("$1"); }
 
+# Stable IDs supplement (not replace) the legacy prose and fields. Unknown is
+# an observation failure, never a fabricated zero-byte file or epoch-zero age.
+declare -A SIGNAL_STATE=([suppression]=unknown [orphan]=unknown [freshness]=unknown)
+declare -A SIGNAL_CODES=([suppression]="" [orphan]="" [freshness]="")
+CODES=""
+add_code() {
+  local signal="$1" code="$2"
+  [[ " ${SIGNAL_CODES[$signal]} " == *" $code "* ]] || SIGNAL_CODES[$signal]+=" $code"
+  [[ " $CODES " == *" $code "* ]] || CODES+=" $code"
+}
+
+# Both scans classify the configured suffix identically, including custom tags.
+select_producer() {
+  local name="${1##*/}"
+  name="${name%.gz}"
+  PRODUCER_ID=in_server
+  PRODUCER_SELECTED=1
+  if [[ -n "$EXCLUDE_SUFFIX" && "$name" == *-"$EXCLUDE_SUFFIX".sql ]]; then
+    PRODUCER_ID=host
+    PRODUCER_SELECTED=$(( 1 - EFFECTIVE_EXCLUDE_ENABLED ))
+  fi
+}
+
+# Keep numbers out of shell arithmetic until checked (also rejects overflow).
+# GNU stat -L follows a regular-file symlink, just as the -f check does.
+read_stat() {
+  local field="$1" file="$2" signal="$3" code=stat_failed
+  STAT_VALUE=""
+  if STAT_VALUE="$(stat -L -c "$field" -- "$file" 2>/dev/null)"; then
+    if [[ ! -f "$file" ]]; then
+      code=file_unmeasured
+    elif [[ "$STAT_VALUE" =~ ^[0-9]{1,18}$ ]]; then
+      STAT_VALUE=$(( 10#$STAT_VALUE ))
+      if [[ "$field" != %Y ]] || (( STAT_VALUE > 0 && STAT_VALUE <= NOW_EPOCH )); then
+        return 0
+      fi
+      code=mtime_invalid
+      (( STAT_VALUE > NOW_EPOCH )) && code=mtime_future
+    elif [[ "$field" == %Y ]]; then
+      code=mtime_invalid
+    fi
+  fi
+  add_code "$signal" "$code"
+  add_note "UNKNOWN: ${file} (${PRODUCER_ID:-in_server}) has an unusable ${field} observation: ${code}; excluded from ${signal} evidence."
+  return 1
+}
+
+json_codes() {
+  local code comma=""
+  printf '['
+  for code in $1; do
+    printf '%s"%s"' "$comma" "$code"
+    comma=,
+  done
+  printf ']'
+}
+
 # --- Signal 1: suppression (the definitive leading indicator) ---------------
 LOG_READABLE=0
 WINDOW_ANCHORED=0
@@ -242,16 +320,25 @@ SKIP_COUNT_IN_WINDOW=0
 FAILED_COUNT_IN_WINDOW=0
 LOG_SIZE_BYTES=0
 
-if (( STALENESS_ONLY == 0 )) && [[ -r "$LOG_FILE" ]]; then
+if (( STALENESS_ONLY == 0 )) && [[ -r "$LOG_FILE" && -f "$LOG_FILE" ]]; then
   LOG_READABLE=1
-  LOG_SIZE_BYTES="$(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0)"
+  PRODUCER_ID=in_server
+  if read_stat %s "$LOG_FILE" suppression; then
+    LOG_SIZE_BYTES="$STAT_VALUE"
+  else
+    LOG_READABLE=0
+  fi
 
   # Bounded tail. Ordering within the window is what matters, so record the
   # position of each marker's LAST occurrence rather than parsing timestamps --
   # the log's bracketed [HH:MM:SS] carries no date and would be ambiguous across
   # midnight, which is precisely the kind of subtle wrongness that turns a
   # detector into a false green.
-  WINDOW="$(tail -c "$WINDOW_BYTES" -- "$LOG_FILE" 2>/dev/null)" || WINDOW=""
+  if ! WINDOW="$(tail -c "$WINDOW_BYTES" -- "$LOG_FILE" 2>/dev/null)"; then
+    WINDOW=""
+    LOG_READABLE=0
+    add_code suppression log_read_failed
+  fi
 
   if [[ -n "$WINDOW" ]]; then
     complete_pos="$(printf '%s\n' "$WINDOW" | grep -a -n -F -- "$M_COMPLETE" | tail -1 | cut -d: -f1)"
@@ -271,6 +358,7 @@ if (( STALENESS_ONLY == 0 )) && [[ -r "$LOG_FILE" ]]; then
 
       if [[ -n "$skip_pos" ]] && (( skip_pos > complete_pos )); then
         VERDICT="stall"
+        add_code suppression backup_suppressed
         add_reason "SUPPRESSION: a '${M_SKIP}' WARN appears AFTER the most recent '${M_COMPLETE}' in the scanned window. The in-flight guard (server/src/index.ts:671) is wedged and every scheduled tick is a no-op."
       fi
 
@@ -278,6 +366,7 @@ if (( STALENESS_ONLY == 0 )) && [[ -r "$LOG_FILE" ]]; then
       # hour of a wedge -- before the next tick has even fired.
       if [[ "$VERDICT" == "ok" && -n "$starting_pos" ]] && (( starting_pos > complete_pos )); then
         VERDICT="stall"
+        add_code suppression backup_unsettled
         add_reason "UNSETTLED: the most recent '${M_STARTING}' has no matching '${M_COMPLETE}' after it. A backup is in flight and has not settled; if it never does, the guard wedges permanently."
       fi
     fi
@@ -285,10 +374,14 @@ if (( STALENESS_ONLY == 0 )) && [[ -r "$LOG_FILE" ]]; then
 fi
 
 if (( STALENESS_ONLY == 1 )); then
-  add_note "--staleness-only: the server log and the orphan/truncation signal were not evaluated. Only the newest usable archive's age was measured."
+  SIGNAL_STATE[suppression]=not_evaluated
+  SIGNAL_STATE[orphan]=not_evaluated
+  add_note "--staleness-only: the server log and the orphan/truncation signal were not evaluated. Only archive freshness was requested; see its measured/unknown state."
 elif (( LOG_READABLE == 0 )); then
+  add_code suppression log_unmeasured
   add_note "Server log is not readable at ${LOG_FILE} -- the suppression signal could not be evaluated."
 elif (( WINDOW_ANCHORED == 0 )); then
+  add_code suppression window_unanchored
   add_note "No '${M_COMPLETE}' anchor found in the last ${WINDOW_BYTES} bytes of ${LOG_FILE}. The window is UNANCHORED: this run cannot distinguish a healthy scheduler from a wedged one. Re-run with a larger --window-bytes."
 fi
 
@@ -302,35 +395,81 @@ fi
 # a DIFFERENT writer (e.g. host_db_backup.sh mid-run) is not this detector's
 # concern once it is only answering "is there a recent usable archive."
 ORPHANS=()
+ORPHAN_AGES=()
+ORPHAN_SIZES=()
+ORPHAN_GZ_SIZES=()
 BACKUP_DIR_READABLE=0
-if [[ -d "$BACKUP_DIR" ]]; then
-  BACKUP_DIR_READABLE=1
-  if (( STALENESS_ONLY == 0 )); then
-    orphan_cutoff=$(( NOW_EPOCH - ORPHAN_MIN_AGE_MINUTES * 60 ))
-    for f in "$BACKUP_DIR/$PREFIX"-*.sql; do
-      [[ -e "$f" ]] || continue
-      gz_size=-1
-      if [[ -e "$f.gz" ]]; then
-        gz_size="$(stat -c %s "$f.gz" 2>/dev/null || echo 0)"
-        (( gz_size >= MIN_BACKUP_BYTES )) && continue
+BACKUP_FILES=()
+SCAN_DIR="$BACKUP_DIR"
+[[ "$SCAN_DIR" == /* || "$SCAN_DIR" == ./* || "$SCAN_DIR" == ../* ]] || SCAN_DIR="./$SCAN_DIR"
+if [[ -d "$SCAN_DIR" && -r "$SCAN_DIR" && -x "$SCAN_DIR" ]]; then
+  # A glob silently looks empty when readdir fails. Read a NUL-delimited listing
+  # AND its exit status, without a temp file or a pipeline that loses the status.
+  mapfile -d '' -t BACKUP_FILES < <(
+    find -H "$SCAN_DIR" -mindepth 1 -maxdepth 1 \( -name "$PREFIX-*.sql" -o -name "$PREFIX-*.sql.gz" \) -print0 2>/dev/null
+    printf '%s\0' "$?"
+  )
+  scan_status="${BACKUP_FILES[-1]:-1}"
+  unset 'BACKUP_FILES[-1]'
+  [[ "$scan_status" == 0 ]] && BACKUP_DIR_READABLE=1
+fi
+if (( BACKUP_DIR_READABLE == 0 )); then
+  add_code freshness directory_unmeasured
+  (( STALENESS_ONLY == 0 )) && add_code orphan directory_unmeasured
+  add_note "UNKNOWN: backup directory ${BACKUP_DIR} is absent, unreadable or its scan failed -- the orphan and staleness signals could not be fully measured."
+fi
+if (( STALENESS_ONLY == 0 )); then
+  # Partial enumeration cannot clear health, but a file it did observe can
+  # still establish a positive orphan finding after successful stat reads.
+  (( BACKUP_DIR_READABLE == 1 )) && SIGNAL_STATE[orphan]=measured
+  orphan_cutoff=$(( NOW_EPOCH - ORPHAN_MIN_AGE_MINUTES * 60 ))
+  for f in "${BACKUP_FILES[@]}"; do
+    [[ "$f" == *.sql ]] || continue
+    select_producer "$f"
+    if (( PRODUCER_SELECTED == 0 )); then
+      add_code orphan producer_excluded
+      add_note "EXCLUDED: ${f##*/} belongs to producer ${PRODUCER_ID}; the orphan signal uses --exclude-suffix ${EXCLUDE_SUFFIX}."
+      continue
+    fi
+    if ! read_stat %Y "$f" orphan; then
+      SIGNAL_STATE[orphan]=unknown
+      continue
+    fi
+    mtime="$STAT_VALUE"
+    (( mtime > orphan_cutoff )) && continue
+    if ! read_stat %s "$f" orphan; then
+      SIGNAL_STATE[orphan]=unknown
+      continue
+    fi
+    size="$STAT_VALUE"
+    gz_size=-1
+    if [[ -e "$f.gz" || -L "$f.gz" ]]; then
+      if ! read_stat %s "$f.gz" orphan; then
+        SIGNAL_STATE[orphan]=unknown
+        continue
       fi
-      mtime="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
-      (( mtime > orphan_cutoff )) && continue
-      age_min=$(( (NOW_EPOCH - mtime) / 60 ))
-      size="$(stat -c %s "$f" 2>/dev/null || echo 0)"
-      ORPHANS+=("$(basename "$f")|${age_min}|${size}|${gz_size}")
-    done
-  fi
-else
-  add_note "Backup directory ${BACKUP_DIR} does not exist -- the orphan and staleness signals could not be evaluated."
+      gz_size="$STAT_VALUE"
+      (( gz_size >= MIN_BACKUP_BYTES )) && continue
+    fi
+    age_min=$(( (NOW_EPOCH - mtime) / 60 ))
+    ORPHANS+=("${f##*/}")
+    ORPHAN_AGES+=("$age_min")
+    ORPHAN_SIZES+=("$size")
+    ORPHAN_GZ_SIZES+=("$gz_size")
+  done
 fi
 
 if (( ${#ORPHANS[@]} > 0 )); then
-  for entry in "${ORPHANS[@]}"; do
-    IFS='|' read -r oname oage osize ogz <<<"$entry"
+  for i in "${!ORPHANS[@]}"; do
+    oname="${ORPHANS[$i]}"
+    oage="${ORPHAN_AGES[$i]}"
+    osize="${ORPHAN_SIZES[$i]}"
+    ogz="${ORPHAN_GZ_SIZES[$i]}"
     if (( ogz < 0 )); then
+      add_code orphan orphan_dump
       add_reason "ORPHAN: ${oname} is ${oage} minutes old with no .sql.gz sibling (${osize} bytes). The JavaScript backup engine compresses only after writer.close() (packages/db/src/backup-lib.ts:1019-1025), so this dump died mid-write."
     else
+      add_code orphan truncated_sibling
       add_reason "TRUNCATED: ${oname} is ${oage} minutes old (${osize} bytes) and its .sql.gz sibling is only ${ogz} bytes, under the ${MIN_BACKUP_BYTES}-byte floor. The tiny .gz is residue of the failed pg_dump attempt, not output of this dump: the pg_dump branch opens the .gz, the spawn fails, and the catch-block cleanup at backup-lib.ts:565-567 tests existsSync BEFORE the stream has created the file, so the unlink never fires and a finalized 20-byte empty frame is left behind (verification/case_214ad18c-empty-gzip-residue-repro.mjs, survives ~50-70% of attempts). The .sql beside it is the JavaScript engine's dump, which then died mid-write. This is the 2026-09-05 signature; an empty gzip frame is 20 bytes and gzip -t passes it."
     fi
   done
@@ -346,43 +485,61 @@ NEWEST_GOOD_NAME="none"
 NEWEST_GOOD_AGE_MIN=-1
 NEWEST_HOST_NAME="none"
 NEWEST_HOST_AGE_MIN=-1
-if (( BACKUP_DIR_READABLE == 1 )); then
+if (( BACKUP_DIR_READABLE == 1 || ${#BACKUP_FILES[@]} > 0 )); then
   newest_mtime=0
   newest_host_mtime=0
-  for f in "$BACKUP_DIR/$PREFIX"-*.sql.gz; do
-    [[ -e "$f" ]] || continue
-    sz="$(stat -c %s "$f" 2>/dev/null || echo 0)"
-    (( sz >= MIN_BACKUP_BYTES )) || continue   # a truncated archive is not a backup
-    mt="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
-
-    is_host=0
-    [[ -n "$EXCLUDE_SUFFIX" && "$f" == *-"$EXCLUDE_SUFFIX".sql.gz ]] && is_host=1
-    if (( is_host == 1 )); then
-      # Tracked for observability regardless of whether it counts toward the
-      # verdict, so the fallback's own freshness is never invisible.
-      (( mt > newest_host_mtime )) && { newest_host_mtime="$mt"; NEWEST_HOST_NAME="$(basename "$f")"; }
+  selected_unknown=$(( 1 - BACKUP_DIR_READABLE ))
+  for f in "${BACKUP_FILES[@]}"; do
+    [[ "$f" == *.sql.gz ]] || continue
+    select_producer "$f"
+    if (( PRODUCER_SELECTED == 0 )); then
+      add_code freshness producer_excluded
+      add_note "EXCLUDED: ${f##*/} belongs to producer ${PRODUCER_ID}; it cannot answer for the selected writer."
     fi
-    if (( is_host == 0 || EFFECTIVE_EXCLUDE_ENABLED == 0 )); then
-      (( mt > newest_mtime )) && { newest_mtime="$mt"; NEWEST_GOOD_NAME="$(basename "$f")"; }
+    if ! read_stat %s "$f" freshness; then
+      (( PRODUCER_SELECTED == 1 )) && selected_unknown=1
+      continue
+    fi
+    sz="$STAT_VALUE"
+    (( sz >= MIN_BACKUP_BYTES )) || continue   # a measured truncated archive is not a backup
+    if ! read_stat %Y "$f" freshness; then
+      (( PRODUCER_SELECTED == 1 )) && selected_unknown=1
+      continue
+    fi
+    mt="$STAT_VALUE"
+    if [[ "$PRODUCER_ID" == host ]]; then
+      # Host observability is independent of whether it counts for the verdict.
+      (( mt > newest_host_mtime )) && { newest_host_mtime="$mt"; NEWEST_HOST_NAME="${f##*/}"; }
+    fi
+    if (( PRODUCER_SELECTED == 1 )); then
+      (( mt > newest_mtime )) && { newest_mtime="$mt"; NEWEST_GOOD_NAME="${f##*/}"; }
     fi
   done
 
   (( newest_host_mtime > 0 )) && NEWEST_HOST_AGE_MIN=$(( (NOW_EPOCH - newest_host_mtime) / 60 ))
+  (( newest_mtime > 0 )) && NEWEST_GOOD_AGE_MIN=$(( (NOW_EPOCH - newest_mtime) / 60 ))
 
-  if (( newest_mtime == 0 )); then
-    NEWEST_GOOD_AGE_MIN=-1
+  # A valid fresh archive proves availability despite another unknown candidate.
+  # An old archive cannot prove global staleness when an unmeasured one may be
+  # newer. Likewise, a failed observation is not proof of an empty directory.
+  if (( BACKUP_DIR_READABLE == 1 && newest_mtime > 0 && NEWEST_GOOD_AGE_MIN <= MAX_BACKUP_AGE_HOURS * 60 )); then
+    SIGNAL_STATE[freshness]=measured
+  elif (( selected_unknown == 1 )); then
+    add_note "UNKNOWN: selected archive observations are incomplete; absence/staleness cannot be established."
+  elif (( newest_mtime == 0 )); then
+    SIGNAL_STATE[freshness]=measured
     VERDICT="stall"
+    add_code freshness no_usable_backup
     if (( EFFECTIVE_EXCLUDE_ENABLED == 1 )); then
       add_reason "NO USABLE BACKUP: ${BACKUP_DIR} contains no in-server ${PREFIX}-*.sql.gz (excluding *-${EXCLUDE_SUFFIX}.sql.gz) of at least ${MIN_BACKUP_BYTES} bytes. Every in-server archive present is truncated or absent."
     else
       add_reason "NO USABLE BACKUP: ${BACKUP_DIR} contains no ${PREFIX}-*.sql.gz of at least ${MIN_BACKUP_BYTES} bytes. Every archive present is truncated or absent."
     fi
   else
-    NEWEST_GOOD_AGE_MIN=$(( (NOW_EPOCH - newest_mtime) / 60 ))
-    if (( NEWEST_GOOD_AGE_MIN > MAX_BACKUP_AGE_HOURS * 60 )); then
-      [[ "$VERDICT" == "ok" ]] && VERDICT="stall"
-      add_reason "STALE: the newest usable backup ${NEWEST_GOOD_NAME} is ${NEWEST_GOOD_AGE_MIN} minutes old, over the ${MAX_BACKUP_AGE_HOURS}-hour threshold. Backups are hourly, so this is at least one missed tick regardless of what the log says."
-    fi
+    SIGNAL_STATE[freshness]=measured
+    [[ "$VERDICT" == "ok" ]] && VERDICT="stall"
+    add_code freshness archive_stale
+    add_reason "STALE: the newest usable backup ${NEWEST_GOOD_NAME} is ${NEWEST_GOOD_AGE_MIN} minutes old, over the ${MAX_BACKUP_AGE_HOURS}-hour threshold. Backups are hourly, so this is at least one missed tick regardless of what the log says."
   fi
 
   if (( EFFECTIVE_EXCLUDE_ENABLED == 1 && newest_host_mtime > 0 )); then
@@ -397,11 +554,16 @@ fi
 # LOG_READABLE stays 0 by construction, not because anything failed.
 LOG_STALE=0
 if (( STALENESS_ONLY == 0 && LOG_READABLE == 1 && WINDOW_ANCHORED == 1 )); then
-  log_mtime="$(stat -c %Y "$LOG_FILE" 2>/dev/null || echo 0)"
-  log_age_min=$(( (NOW_EPOCH - log_mtime) / 60 ))
-  if (( log_age_min > MAX_BACKUP_AGE_HOURS * 60 )); then
-    LOG_STALE=1
-    add_note "Server log ${LOG_FILE} has not been written to for ${log_age_min} minutes, over the ${MAX_BACKUP_AGE_HOURS}-hour threshold. Its anchor is historical: the suppression signal cannot testify to present health and was NOT used to clear anything. Point --log at the live log."
+  PRODUCER_ID=in_server
+  if read_stat %Y "$LOG_FILE" suppression; then
+    log_age_min=$(( (NOW_EPOCH - STAT_VALUE) / 60 ))
+    if (( log_age_min > MAX_BACKUP_AGE_HOURS * 60 )); then
+      LOG_STALE=1
+      add_code suppression log_stale
+      add_note "Server log ${LOG_FILE} has not been written to for ${log_age_min} minutes, over the ${MAX_BACKUP_AGE_HOURS}-hour threshold. Its anchor is historical: the suppression signal cannot testify to present health and was NOT used to clear anything. Point --log at the live log."
+    else
+      SIGNAL_STATE[suppression]=measured
+    fi
   fi
 fi
 
@@ -507,31 +669,37 @@ if [[ "$VERDICT" == "stall" && "$HEALTH_STATUS" == "ok" ]]; then
 fi
 
 # --- Verdict ---------------------------------------------------------------
-if (( STALENESS_ONLY == 1 )); then
-  # Only signal 3 ran. "Inconclusive" here means the backup directory itself
-  # could not be measured -- there is no log-anchoring question to fail on.
-  if [[ "$VERDICT" == "stall" ]]; then
-    EXIT_CODE=1
-  elif (( BACKUP_DIR_READABLE == 0 )); then
-    VERDICT="inconclusive"
-    EXIT_CODE=2
-  else
-    EXIT_CODE=0
-  fi
-elif [[ "$VERDICT" == "stall" ]]; then
+if [[ "$VERDICT" == "stall" ]]; then
+  # Positively observed findings survive unrelated observation failures.
   EXIT_CODE=1
-elif (( LOG_READABLE == 0 || WINDOW_ANCHORED == 0 || LOG_STALE == 1 )); then
-  # LOG_STALE belongs here and not with the stall arm on purpose: a dead log is
-  # a failure to OBSERVE, not evidence of a wedge. Signals 2 and 3 have already
-  # had their say; if they are quiet, "I cannot tell" is the honest verdict.
+elif [[ "${SIGNAL_STATE[freshness]}" == unknown ]] ||
+     { (( STALENESS_ONLY == 0 )) && [[ "${SIGNAL_STATE[suppression]}" == unknown || "${SIGNAL_STATE[orphan]}" == unknown ]]; }; then
   VERDICT="inconclusive"
   EXIT_CODE=2
 else
   EXIT_CODE=0
 fi
 
+case "$VERDICT" in
+  stall) NEXT_ACTION="Investigate the measured findings for the selected producers; this read-only verdict authorizes no restart, restore or monitor rearm." ;;
+  inconclusive) NEXT_ACTION="Repair the unknown observation sources listed in codes/notes, then repeat the local-only observation; do not infer health or rearm a monitor." ;;
+  *) NEXT_ACTION="No stall observed within the selected scope; keep independent restore verification and monitor acceptance separate." ;;
+esac
+
 if (( JSON == 1 )); then
   printf '{'
+  printf '"schemaVersion":1,"codes":'
+  json_codes "$CODES"
+  printf ',"next_action":"%s","signals":{' "$(json_escape "$NEXT_ACTION")"
+  comma=""
+  for signal in suppression orphan freshness; do
+    printf '%s"%s":{"state":"%s","codes":' "$comma" "$signal" "${SIGNAL_STATE[$signal]}"
+    json_codes "${SIGNAL_CODES[$signal]}"
+    printf '}'
+    comma=,
+  done
+  printf '},"producers":{"in_server":{"selected":true},"host":{"selected":%s}},' \
+    "$( (( EFFECTIVE_EXCLUDE_ENABLED == 0 )) || [[ -z "$EXCLUDE_SUFFIX" ]] && echo true || echo false )"
   printf '"verdict":"%s",' "$(json_escape "$VERDICT")"
   printf '"stalenessOnly":%s,' "$( ((STALENESS_ONLY==1)) && echo true || echo false )"
   printf '"checkedAt":"%s",' "$(json_escape "$NOW_ISO")"
@@ -579,7 +747,7 @@ else
   else
     printf '  log                %s (%s bytes, window %s)\n' "$LOG_FILE" "$LOG_SIZE_BYTES" "$WINDOW_BYTES"
     printf '  window anchored    %s\n' "$( ((WINDOW_ANCHORED==1)) && echo yes || echo 'NO -- cannot conclude health' )"
-    printf '  log freshness      %s\n' "$( ((LOG_STALE==1)) && echo 'STALE -- anchor is historical' || echo current )"
+    printf '  log freshness      %s\n' "$( if (( LOG_STALE == 1 )); then echo 'STALE -- anchor is historical'; elif [[ "${SIGNAL_STATE[suppression]}" == measured ]]; then echo current; else echo 'UNKNOWN -- cannot conclude health'; fi )"
     printf '  skips in window    %s\n' "${SKIP_COUNT_IN_WINDOW:-0}"
     printf '  orphaned/truncated %s\n' "${#ORPHANS[@]}"
   fi

@@ -141,6 +141,49 @@ class BackstopTest(unittest.TestCase):
                 self.run_backstop()
                 self.api.assert_not_called()
 
+    def test_minute_precision_timeout_far_future_is_preserved(self):
+        # Live timeoutAt values can be minute precision ('...T13:43Z'); the
+        # pre-fix [:19] + 'Z' splice double-appended 'Z' and crashed the pass.
+        self.assignee_monitor()
+        self.next_at = NOW + 10 * 3600
+        self.mon.update(timeoutAt=stamp(NOW + 48 * 3600)[:16] + 'Z')
+        self.run_backstop()
+        self.api.assert_called_once()
+        monitor = self.api.call_args.args[2]['executionPolicy']['monitor']
+        self.assertEqual(self.mon['timeoutAt'], monitor['timeoutAt'])
+
+    def test_minute_precision_timeout_soon_after_target_is_cleared(self):
+        self.assignee_monitor()
+        self.next_at = NOW + 10 * 3600
+        # 12h30m lands inside target + 1h (target = NOW + 12h).
+        minute = (NOW + 12 * 3600 + 1800) // 60 * 60
+        self.mon.update(timeoutAt=stamp(minute)[:16] + 'Z')
+        self.run_backstop()
+        self.api.assert_called_once()
+        monitor = self.api.call_args.args[2]['executionPolicy']['monitor']
+        self.assertIsNone(monitor['timeoutAt'])
+
+    def test_timeout_without_z_suffix_is_accepted(self):
+        self.assignee_monitor()
+        self.next_at = NOW + 10 * 3600
+        for timeout in (stamp(NOW + 48 * 3600)[:-1], stamp(NOW + 48 * 3600)[:16]):
+            with self.subTest(timeout=timeout):
+                self.mon.update(timeoutAt=timeout)
+                self.api.reset_mock()
+                self.run_backstop()
+                self.api.assert_called_once()
+                monitor = self.api.call_args.args[2]['executionPolicy']['monitor']
+                self.assertEqual(timeout, monitor['timeoutAt'])
+
+    def test_unparseable_timeout_is_preserved_not_crashed(self):
+        self.assignee_monitor()
+        self.next_at = NOW + 10 * 3600
+        self.mon.update(timeoutAt='not-a-time')
+        self.run_backstop()
+        self.api.assert_called_once()
+        monitor = self.api.call_args.args[2]['executionPolicy']['monitor']
+        self.assertEqual('not-a-time', monitor['timeoutAt'])
+
     def test_due_assignee_monitor_is_not_postponed(self):
         self.assignee_monitor()
         self.next_at = NOW - 1

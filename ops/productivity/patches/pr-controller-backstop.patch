@@ -1,6 +1,6 @@
 --- a/ops/productivity/pr_controller.py
 +++ b/ops/productivity/pr_controller.py
-@@ -349,22 +349,26 @@
+@@ -1,25 +1,38 @@
  def ensure_backstop(iid, ident, why, url):
 -    """PR cards keep ONE long backstop monitor instead of polling ones. The server's in_review validator accepts a
 -    scheduled monitor as the review path (routes/issues.ts: missing review_path -> 422), so a monitor must exist on an
@@ -38,8 +38,21 @@
 -    mon = dict(pol.get('monitor') or {})
      target = NOW + BACKSTOP_H * 3600
      mon['nextCheckAt'] = ts(target)
-     if mon.get('timeoutAt') and parse(mon['timeoutAt'][:19] + 'Z') < target + 3600:
-@@ -375,8 +379,7 @@
+-    if mon.get('timeoutAt') and parse(mon['timeoutAt'][:19] + 'Z') < target + 3600:
++    # Live timeoutAt values vary: HH:MM or HH:MM:SS, with or without 'Z'.
++    raw_timeout = mon.get('timeoutAt')
++    norm_timeout = raw_timeout.strip().rstrip('Z') if isinstance(raw_timeout, str) else ''
++    if len(norm_timeout) == 16:
++        norm_timeout += ':00'
++    try:
++        timeout_soon = bool(norm_timeout) and parse(norm_timeout[:19] + 'Z') < target + 3600
++    except ValueError:
++        timeout_soon = False
++    if timeout_soon:
+         mon['timeoutAt'] = None
+     if mon.get('externalRef') == '[redacted]':
+         mon['externalRef'] = url
+@@ -27,8 +40,7 @@
      mon['serviceName'] = mon.get('serviceName') or 'github-pr-controller'
      mon['notes'] = ('PR controller backstop: the host PR controller wakes this card on red CI, review findings, '
                      'conflicts or merge; this monitor is only the in_review review path.')

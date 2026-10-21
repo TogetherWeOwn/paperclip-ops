@@ -1,6 +1,6 @@
 """Acceptance contract: read-only plan + explicit no-preparation mode.
 
-Builder contract under test (TOG-35165, bundle key `verification-plan`):
+Builder contract under test (paired acceptance card, bundle key `verification-plan`):
 
 * `scripts/verify-fast.sh --plan --json` (with `--dry-run` as a plan alias)
   returns schema version, stable suite IDs, exact commands, tier,

@@ -395,7 +395,11 @@ if not_applied:
 if sys.argv[3]:
     pat = re.compile(r"([0-9a-f]{64})\s+\*?(?:.*/)?([^/\s]+)\.sql")
     candidate = {}
-    for raw in open(sys.argv[3], encoding="utf-8"):
+    try:
+        hashes_lines = open(sys.argv[3], encoding="utf-8").read().splitlines()
+    except (OSError, ValueError) as exc:
+        sys.exit(f"REFUSED: unreadable --sql-hashes: {exc.__class__.__name__}")
+    for raw in hashes_lines:
         line = raw.strip()
         if not line:
             continue

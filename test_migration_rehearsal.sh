@@ -575,6 +575,35 @@ if [[ "$row_string_rc" -ne 0 ]] && grep -q "REFUSED" "$WORK/row-string-output" \
 else
   bad "verify refuses non-object migration rows without a traceback"
 fi
+# An unreadable --sql-hashes input (non-UTF-8 bytes, or a directory, both of
+# which pass the bash [[ -r ]] precheck) must be refused, not crash the
+# hashes loop with a traceback.
+printf '\xff\xfe not utf-8' > "$WORK/bad-hashes.bin"
+set +e
+"$GATE" verify --evidence "$WORK/verify-evidence.json" \
+  --sql-hashes "$WORK/bad-hashes.bin" --max-age-hours 24 \
+  >"$WORK/bad-hashes-output" 2>&1
+bad_hashes_rc=$?
+set -e
+if [[ "$bad_hashes_rc" -ne 0 ]] && grep -q "REFUSED" "$WORK/bad-hashes-output" \
+    && ! grep -q "Traceback" "$WORK/bad-hashes-output"; then
+  ok "verify refuses non-UTF-8 --sql-hashes without a traceback"
+else
+  bad "verify refuses non-UTF-8 --sql-hashes without a traceback"
+fi
+mkdir -p "$WORK/hashes-dir"
+set +e
+"$GATE" verify --evidence "$WORK/verify-evidence.json" \
+  --sql-hashes "$WORK/hashes-dir" --max-age-hours 24 \
+  >"$WORK/hashes-dir-output" 2>&1
+hashes_dir_rc=$?
+set -e
+if [[ "$hashes_dir_rc" -ne 0 ]] && grep -q "REFUSED" "$WORK/hashes-dir-output" \
+    && ! grep -q "Traceback" "$WORK/hashes-dir-output"; then
+  ok "verify refuses a directory --sql-hashes without a traceback"
+else
+  bad "verify refuses a directory --sql-hashes without a traceback"
+fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

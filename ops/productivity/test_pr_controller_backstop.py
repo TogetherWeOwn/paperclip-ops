@@ -13,7 +13,7 @@ import tempfile
 import time
 import types
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 HERE = Path(__file__).resolve().parent
 PATCH = HERE / 'patches/pr-controller-backstop.patch'
@@ -32,6 +32,10 @@ def parse(value):
 def patched_source():
     if os.environ.get('PR_CONTROLLER_SOURCE'):
         return Path(os.environ['PR_CONTROLLER_SOURCE']).read_text()
+    return patched_fixture_source()
+
+
+def patched_fixture_source():
     with tempfile.TemporaryDirectory() as directory:
         target = Path(directory) / 'ops/productivity/pr_controller.py'
         target.parent.mkdir(parents=True)
@@ -221,6 +225,13 @@ class BackstopTest(unittest.TestCase):
 
 
 class BackstopPatchOffsetTest(unittest.TestCase):
+    def test_offset_check_is_independent_of_staged_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            staged = Path(directory) / 'staged_controller.py'
+            staged.write_text('# full staged controller\n' + patched_source())
+            with patch.dict(os.environ, {'PR_CONTROLLER_SOURCE': str(staged)}):
+                self.test_backstop_patch_applies_at_live_offset_without_fuzz()
+
     def test_backstop_patch_applies_at_live_offset_without_fuzz(self):
         # The live controller carries ensure_backstop near line 349 (base
         # header -349,22). A hunk anchored at line 1 cannot float down with
@@ -235,7 +246,7 @@ class BackstopPatchOffsetTest(unittest.TestCase):
                                     cwd=directory, capture_output=True, text=True)
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             offset_patched = target.read_text()
-        self.assertEqual(patched_source(), offset_patched[len(prefix):])
+        self.assertEqual(patched_fixture_source(), offset_patched[len(prefix):])
 
 
 class PacketImportTest(unittest.TestCase):

@@ -166,7 +166,7 @@ def _shell_flag_comparison(code_lines, flag):
     reversed operand order. Deliberately excludes ``!=`` (a negative test
     advertises nothing) and non-positional variables (``$FLAGS``).
     """
-    var = _POS_PARAM_RE
+    var = r"[\"']?%s[\"']?" % _POS_PARAM_RE
     lit = _flag_literal(flag)
     compare = re.compile(
         r"%s\s*(?:==|=)\s*%s|%s\s*(?:==|=)\s*%s" % (var, lit, lit, var))

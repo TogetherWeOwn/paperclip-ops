@@ -127,6 +127,8 @@ MALFORMED=(
   "http://ho,st.invalid/api"
   "https://host:/x"
   "http://host:80:90/"
+  $'https://ho\x01st.invalid/api'
+  "http://ho%09st.invalid/api"
 )
 
 # --- notify_paperclip_issue.sh: malformed -> exit 65, curl never called ------

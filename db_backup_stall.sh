@@ -416,8 +416,10 @@ if (( CHECK_HEALTH == 1 )) && [[ -n "${PAPERCLIP_API_URL:-}" ]] && command -v cu
   base="${PAPERCLIP_API_URL%/}"; base="${base%/api}"
   # BASE host validation: the bearer below is sent ONLY to this base. A base
   # that is not an http(s) URL with a non-empty bare host -- userinfo
-  # (`user@host` misdirects the credential), whitespace (a newline would
-  # inject a curl-config directive), query/fragment, braces, or an authority
+  # (`user@host` misdirects the credential), whitespace or control
+  # characters (a newline would inject a curl-config directive; any other
+  # raw control corrupts the request), query/fragment, braces, a percent
+  # sign in the authority (parity with the Python gate), or an authority
   # that is not one bare host[:port] or bracketed [IPv6] literal -- skips
   # this corroboration read, with a warning. Skipping is fail-closed here:
   # the stall verdict never depended on this read, and the bearer is never
@@ -427,12 +429,12 @@ if (( CHECK_HEALTH == 1 )) && [[ -n "${PAPERCLIP_API_URL:-}" ]] && command -v cu
   base_ok=1
   case "$base" in http://*|https://*) ;; *) base_ok=0;; esac
   if (( base_ok == 1 )); then
-    case "$base" in *@*|*[[:space:]]*|*\?*|*#*|*\{*|*\}*) base_ok=0;; esac
+    case "$base" in *@*|*[[:space:]]*|*[[:cntrl:]]*|*\?*|*#*|*\{*|*\}*) base_ok=0;; esac
   fi
   if (( base_ok == 1 )); then
     _base_host="${base#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%/*}"
     [[ -n "$_base_host" ]] || base_ok=0
-    case "$_base_host" in :*|*,*) base_ok=0;; esac
+    case "$_base_host" in :*|*,*|*%*) base_ok=0;; esac
     if (( base_ok == 1 )); then
       if [[ "$_base_host" == *\[* || "$_base_host" == *\]* ]]; then
         [[ "$_base_host" =~ ^\[[0-9a-fA-F:.]+\](:[0-9]+)?$ ]] || base_ok=0

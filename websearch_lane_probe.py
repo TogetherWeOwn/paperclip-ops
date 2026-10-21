@@ -313,9 +313,11 @@ def aggregate_exit(results: Sequence[Result]) -> int:
 def _valid_api_base(base):
     # BASE host validation: the bearer below is sent ONLY to this base.
     # Refuse a base that is not an http(s) URL with a non-empty bare host:
-    # no userinfo (`user@host` misdirects the credential), no whitespace (a
-    # newline would inject a request directive), no query or fragment (the
-    # appended /api path would be swallowed into them), a real hostname (an
+    # no userinfo (`user@host` misdirects the credential), no control
+    # characters or DEL -- raw anywhere, or %-encoded in the authority
+    # (urllib decodes those before the transport, which then raises outside
+    # the module's error contract) -- no query or fragment (the appended
+    # /api path would be swallowed into them), a real hostname (an
     # empty `:port`-only authority is not a host), a numeric port, and no
     # `{`/`}` anywhere (curl expands `{a,b}` globs, so one base is one host
     # -- parity with the shell gate). A well-formed hostile host still
@@ -325,7 +327,7 @@ def _valid_api_base(base):
         return False
     if "@" in base:
         return False
-    if any(char in " \t\n\r\x0b\x0c" for char in base):
+    if any(ord(char) < 0x21 or ord(char) == 0x7f for char in base):
         return False
     if "{" in base or "}" in base:
         return False
@@ -336,6 +338,9 @@ def _valid_api_base(base):
     if parts.username or parts.password:
         return False
     if parts.query or parts.fragment:
+        return False
+    decoded_netloc = urllib.parse.unquote(parts.netloc)
+    if any(ord(char) < 0x21 or ord(char) == 0x7f for char in decoded_netloc):
         return False
     host = parts.hostname or ""
     if not host:

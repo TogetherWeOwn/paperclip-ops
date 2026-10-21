@@ -133,17 +133,29 @@ done
 BASE="${PAPERCLIP_API_URL%/}"; BASE="${BASE%/api}"
 
 # BASE host validation: the bearer below is sent ONLY to this base. Refuse a
-# base that is not an http(s) URL with a non-empty bare host — no userinfo
-# (`user@host` misdirects the credential), no whitespace (a newline would
-# inject a curl-config directive), no query/fragment (the API path would land
-# inside them), no leading-`:` authority (an empty host with a port). A
-# well-formed hostile host still passes; blocking that needs an
-# operator-owned host allowlist, not a per-script guess.
+# base that is not an http(s) URL with a non-empty bare host: no userinfo
+# (`user@host` misdirects the credential), no whitespace or control
+# characters (a newline would inject a curl-config directive; any other raw
+# control corrupts the request), no query/fragment (the appended /api path
+# would be swallowed into them), no braces (curl expands `{a,b}` globs in
+# the URL, so one base is one host). The authority itself must be a bare
+# host[:port] or a bracketed [IPv6] literal: never a `:port`-only empty
+# host, a range glob, a non-numeric port, or a percent sign (parity with
+# the Python gate, which refuses %-encoded controls urllib would decode).
+# A well-formed hostile host still passes; blocking that needs an operator-owned
+# host allowlist, not a per-script guess.
 case "$BASE" in http://*|https://*) ;; *) echo "ERROR: PAPERCLIP_API_URL is not an http(s) URL" >&2; exit 2;; esac
-_base_host="${BASE#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%[/?#]*}"
+case "$BASE" in *@*|*[[:space:]]*|*[[:cntrl:]]*|*\?*|*#*|*\{*|*\}*) echo "ERROR: PAPERCLIP_API_URL carries userinfo, whitespace/control characters, a query/fragment, or braces" >&2; exit 2;; esac
+_base_host="${BASE#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%/*}"
 [[ -n "$_base_host" ]] || { echo "ERROR: PAPERCLIP_API_URL has an empty host" >&2; exit 2; }
-case "$_base_host" in :*) echo "ERROR: PAPERCLIP_API_URL has an empty host" >&2; exit 2;; esac
-case "$BASE" in *@*|*[[:space:]]*|*\?*|*#*) echo "ERROR: PAPERCLIP_API_URL carries userinfo, whitespace, or a query/fragment" >&2; exit 2;; esac
+case "$_base_host" in :*|*,*|*%*) echo "ERROR: PAPERCLIP_API_URL authority is not one bare host" >&2; exit 2;; esac
+if [[ "$_base_host" == *\[* || "$_base_host" == *\]* ]]; then
+  [[ "$_base_host" =~ ^\[[0-9a-fA-F:.]+\](:[0-9]+)?$ ]] || { echo "ERROR: PAPERCLIP_API_URL authority is not one bare host" >&2; exit 2; }
+elif [[ "$_base_host" == *:* ]]; then
+  if [[ "${_base_host%:*}" == *:* || ! "${_base_host##*:}" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: PAPERCLIP_API_URL authority is not one bare host" >&2; exit 2
+  fi
+fi
 WORK="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/db_backup_stall_monitor.XXXXXXXX")" \
   || { echo "ERROR: could not create private work directory" >&2; exit 2; }
 cleanup() { rm -rf "$WORK"; }

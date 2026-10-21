@@ -82,45 +82,16 @@ test('check-in pair is a 60s timer-driven single gated attempt, installable besi
     'ping file resolves sibling-side, never on argv')
 })
 
-test('readiness sweep pair is a 5-minute timer-driven single pass with the deadline inside the period', async () => {
-  const service = await unit('readiness-sweep.service')
-  const timer = await unit('readiness-sweep.timer')
-  assert.equal(timer.Timer.OnCalendar, '*-*-* *:0/5:00')
-  assert.equal(timer.Timer.Unit, 'readiness-sweep.service')
-  assert.equal(timer.Timer.Persistent, 'false')
-  assert.equal(timer.Install.WantedBy, 'timers.target')
-  assert.deepEqual(Object.keys(timer.Unit), ['Description'], 'no dependency on the main timer/service')
-  const seconds = (value) => {
-    const match = /^(\d+)(s|min)$/.exec(value)
-    assert.ok(match, `unit duration is explicit: ${value}`)
-    return parseInt(match[1]) * (match[2] === 'min' ? 60 : 1)
+test('the retired host-PEM readiness path stays absent (one credential route only)', async () => {
+  // The sweep moved to the Actions job-token route when the host-PEM path
+  // was retired (staged but never enabled): its systemd pair, PEM-mint
+  // wrapper, and binding doc were deleted, not left beside this route. If
+  // any of these files reappear, the repo holds two credential routes
+  // again — fail loudly instead of shipping that.
+  for (const rel of ['systemd/readiness-sweep.service', 'systemd/readiness-sweep.timer',
+    'scripts/gh-readiness-wrapper.mjs', 'UNATTENDED-GH-READINESS.md']) {
+    await assert.rejects(readFile(join(root, rel), 'utf8'), { code: 'ENOENT' }, `${rel} stays deleted`)
   }
-  // The pass must finish before the next tick even when the tick starts at
-  // the latest allowed delay: deadline (190s) + max start delay (50s) < 300s.
-  const deadline = seconds(service.Service.TimeoutStartSec) + seconds(service.Service.TimeoutStopSec)
-  const maxDelay = seconds(timer.Timer.AccuracySec) + seconds(timer.Timer.RandomizedDelaySec)
-  assert.ok(deadline + maxDelay < 300, `deadline ${deadline}s + delay ${maxDelay}s must fit the 300s period`)
-  assert.equal(service.Service.Type, 'oneshot')
-  assert.equal(service.Service.Restart, 'no')
-  assert.equal(service.Service.UMask, '0077')
-  assert.equal(service.Service.NoNewPrivileges, 'yes')
-  assert.equal(service.Service.ExecStart,
-    '/usr/bin/node %h/.local/lib/readiness-sweep/current/gh-event-capture/scripts/readiness-sweep.mjs %h/secure-drop/readiness-sweep/policy.json')
-  // Credential pin (review R1): the only credential reference is the 0600
-  // policy file path — no token values, no PATH-resolved gh on argv.
-  for (const name of ['PAPERCLIP_API_KEY', 'PAPERCLIP_RUN_ID', 'GH_TOKEN', 'GITHUB_TOKEN', 'NODE_OPTIONS']) {
-    assert.ok(service.Service.UnsetEnvironment.split(' ').includes(name), `unit unsets ${name}`)
-  }
-  assert.ok(!service.Service.ExecStart.includes('GH_TOKEN'))
-  assert.equal(service.Service.Environment, '"PATH=/usr/local/bin:/usr/bin:/bin"',
-    'child PATH is the exact minimal set')
-  assert.ok(!('GH_CONFIG_DIR' in service.Service) &&
-    !service.Service.Environment.includes('GH_CONFIG_DIR') &&
-    !service.Service.ExecStart.includes('GH_CONFIG_DIR'),
-    'no static GH_CONFIG_DIR: isolation is per-pass at runtime (prepareIsolatedGhConfig)')
-  const argvHead = service.Service.ExecStart.split('readiness-sweep.mjs')[0].trim().split(/\s+/)
-  assert.ok(!argvHead.some((part) => part === 'gh' || part.endsWith('/gh')),
-    'no bare gh binary on argv before the script')
 })
 
 async function fixture(t) {

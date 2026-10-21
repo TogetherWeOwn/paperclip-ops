@@ -318,7 +318,8 @@
     "shell-subst guard suite:1",
     "queue-packet reject offline suite:1",
     "staging-preflight carrier suite:1",
-    "api-base-validation suite:1"
+    "api-base-validation suite:1",
+    "api-base-validation-python suite:1"
   ],
   "retained": [
     {
@@ -1790,6 +1791,11 @@
       "name": "api-base-validation suite",
       "definition_sha256": "7e30b54dc00c4dfbaa85b27c196949c3121114d6c1fd6b2c5504e09911ad0fcb",
       "id": "api-base-validation suite:1"
+    },
+    {
+      "name": "api-base-validation-python suite",
+      "definition_sha256": "2a8399fe0cbc1e8d57ee3a482f7cc5ed1fa9df2045dd18a28579609545b2e33d",
+      "id": "api-base-validation-python suite:1"
     }
   ],
   "removed": [

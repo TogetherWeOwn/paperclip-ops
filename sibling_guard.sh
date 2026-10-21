@@ -270,22 +270,26 @@ note()     { NOTES+=("$1"); }
 # stdout must not have to strip a trailing prose verdict off the JSON.
 say() { [[ "$QUIET" -eq 1 || "$JSON" -eq 1 ]] || printf '%s\n' "$*"; }
 
-# BASE host validation: the board bearer is sent ONLY to a base that is an
-# http(s) URL with a non-empty bare host — no userinfo (`user@host` misdirects
-# the credential), no whitespace (a newline would inject a curl-config
-# directive), no query/fragment (the API path would land inside them), no
-# leading-`:` authority (an empty host with a port). Every Paperclip send site
-# below checks this first; a malformed base goes blind (never clear) with zero
-# requests built. A well-formed hostile host still passes; blocking that needs
-# an operator-owned host allowlist, not a per-script guess.
-_paperclip_base_ok() {
-  local _b="${1%/}" _h
-  _b="${_b%/api}"
-  case "$_b" in http://*|https://*) ;; *) return 1;; esac
-  _h="${_b#http://}"; _h="${_h#https://}"; _h="${_h%%[/?#]*}"
-  [[ -n "$_h" ]] || return 1
-  case "$_h" in :*) return 1;; esac
-  case "$_b" in *@*|*[[:space:]]*|*\?*|*#*) return 1;; esac
+# _pc_valid_base: the same BASE host gate as the other senders (an http(s)
+# URL whose authority is one bare host[:port] or bracketed [IPv6] literal:
+# no userinfo, whitespace or control characters, query/fragment,
+# curl-glob braces, or percent signs in the authority). Returns
+# rather than exiting so each board read fails closed as blind_on. The
+# annotated copy lives in notify_paperclip_issue.sh.
+_pc_valid_base() {
+  local _base="$1" _host
+  case "$_base" in http://*|https://*) ;; *) return 1;; esac
+  case "$_base" in *@*|*[[:space:]]*|*[[:cntrl:]]*|*\?*|*#*|*\{*|*\}*) return 1;; esac
+  _host="${_base#http://}"; _host="${_host#https://}"; _host="${_host%%/*}"
+  [[ -n "$_host" ]] || return 1
+  case "$_host" in :*|*,*|*%*) return 1;; esac
+  if [[ "$_host" == *\[* || "$_host" == *\]* ]]; then
+    [[ "$_host" =~ ^\[[0-9a-fA-F:.]+\](:[0-9]+)?$ ]] || return 1
+  elif [[ "$_host" == *:* ]]; then
+    if [[ "${_host%:*}" == *:* || ! "${_host##*:}" =~ ^[0-9]+$ ]]; then
+      return 1
+    fi
+  fi
   return 0
 }
 
@@ -303,9 +307,9 @@ detect_control_plane() {
   [[ -n "$key" ]] || { blind_on "control-plane: PAPERCLIP_API_KEY is unset"; return; }
   [[ -n "${PAPERCLIP_RUN_ID:-}" ]] || { blind_on "control-plane: PAPERCLIP_RUN_ID is unset, so every row including my own would read as a sibling"; return; }
   [[ -n "${PAPERCLIP_AGENT_ID:-}" ]] || { blind_on "control-plane: PAPERCLIP_AGENT_ID is unset, so a foreign agent's run cannot be told from mine"; return; }
-  if ! _paperclip_base_ok "$base"; then blind_on "control-plane: PAPERCLIP_API_URL is not a clean http(s) base, so the run list cannot be read"; return; fi
 
   base="${base%/}"; base="${base%/api}"
+  _pc_valid_base "$base" || { blind_on "control-plane: PAPERCLIP_API_URL is not a clean http(s) base"; return; }
 
   hdrs="$TMPD/hdrs"; : > "$hdrs"; chmod 600 "$hdrs"
   printf 'Authorization: Bearer %s\n' "$key" > "$hdrs"   # never on argv — /proc is world readable
@@ -633,25 +637,27 @@ detect_remote() {
             elif [[ -z "${PAPERCLIP_API_URL:-}" || -z "${PAPERCLIP_API_KEY:-}" ]]; then
               blind_on "remote: cross-branch ownership check cannot learn our own card key for $ISSUE_ARG with no control-plane credential, so a generic PR cannot be attributed"
               generic_mykey=""
-            elif ! _paperclip_base_ok "${PAPERCLIP_API_URL:-}"; then
-              blind_on "remote: cross-branch ownership check refuses a PAPERCLIP_API_URL that is not a clean http(s) base, so a generic PR cannot be attributed"
-              generic_mykey=""
             else
               local gbase ghdr gbody gcode
               gbase="${PAPERCLIP_API_URL%/}"; gbase="${gbase%/api}"
-              ghdr="$TMPD/gownhdrs"; : > "$ghdr"; chmod 600 "$ghdr"
-              printf 'Authorization: Bearer %s\n' "$PAPERCLIP_API_KEY" > "$ghdr"
-              gbody="$TMPD/gown.json"
-              gcode="$(curl -sS -m 30 -o "$gbody" -w '%{http_code}' -H "@$ghdr" "$gbase/api/issues/$ISSUE_ARG" 2>/dev/null || echo 000)"
-              if [[ "$gcode" == "200" ]]; then
-                generic_mykey="$(node -e 'try { const i = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String(i.identifier || "").toLowerCase()) } catch (e) { process.exit(9) }' "$gbody" 2>/dev/null)"
-                if [[ $? -ne 0 || -z "$generic_mykey" ]]; then
-                  blind_on "remote: cross-branch ownership check could not read our own card key off /api/issues/$ISSUE_ARG (HTTP $gcode)"
+              if ! _pc_valid_base "$gbase"; then
+                blind_on "remote: cross-branch ownership check refuses PAPERCLIP_API_URL (not a clean http(s) base), so a generic PR cannot be attributed"
+                generic_mykey=""
+              else
+                ghdr="$TMPD/gownhdrs"; : > "$ghdr"; chmod 600 "$ghdr"
+                printf 'Authorization: Bearer %s\n' "$PAPERCLIP_API_KEY" > "$ghdr"
+                gbody="$TMPD/gown.json"
+                gcode="$(curl -sS -m 30 -o "$gbody" -w '%{http_code}' -H "@$ghdr" "$gbase/api/issues/$ISSUE_ARG" 2>/dev/null || echo 000)"
+                if [[ "$gcode" == "200" ]]; then
+                  generic_mykey="$(node -e 'try { const i = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String(i.identifier || "").toLowerCase()) } catch (e) { process.exit(9) }' "$gbody" 2>/dev/null)"
+                  if [[ $? -ne 0 || -z "$generic_mykey" ]]; then
+                    blind_on "remote: cross-branch ownership check could not read our own card key off /api/issues/$ISSUE_ARG (HTTP $gcode)"
+                    generic_mykey=""
+                  fi
+                else
+                  blind_on "remote: cross-branch ownership check GET /api/issues/$ISSUE_ARG returned HTTP $gcode, so a generic PR cannot be attributed"
                   generic_mykey=""
                 fi
-              else
-                blind_on "remote: cross-branch ownership check GET /api/issues/$ISSUE_ARG returned HTTP $gcode, so a generic PR cannot be attributed"
-                generic_mykey=""
               fi
             fi
           fi
@@ -738,25 +744,27 @@ detect_remote() {
             if [[ -z "${PAPERCLIP_API_URL:-}" || -z "${PAPERCLIP_API_KEY:-}" ]]; then
               blind_on "remote: prepush ownership check cannot learn our own card key for $ISSUE_ARG with no control-plane credential, so a same-head PR cannot be attributed"
               mykey=""
-            elif ! _paperclip_base_ok "${PAPERCLIP_API_URL:-}"; then
-              blind_on "remote: prepush ownership check refuses a PAPERCLIP_API_URL that is not a clean http(s) base, so a same-head PR cannot be attributed"
-              mykey=""
             else
               local obase ohdrs obody ocode
               obase="${PAPERCLIP_API_URL%/}"; obase="${obase%/api}"
-              ohdrs="$TMPD/ownhdrs"; : > "$ohdrs"; chmod 600 "$ohdrs"
-              printf 'Authorization: Bearer %s\n' "$PAPERCLIP_API_KEY" > "$ohdrs"
-              obody="$TMPD/own.json"
-              ocode="$(curl -sS -m 30 -o "$obody" -w '%{http_code}' -H "@$ohdrs" "$obase/api/issues/$ISSUE_ARG" 2>/dev/null || echo 000)"
-              if [[ "$ocode" == "200" ]]; then
-                mykey="$(node -e 'try { const i = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String(i.identifier || "").toLowerCase()) } catch (e) { process.exit(9) }' "$obody" 2>/dev/null)"
-                if [[ $? -ne 0 || -z "$mykey" ]]; then
-                  blind_on "remote: prepush ownership check could not read our own card key off /api/issues/$ISSUE_ARG (HTTP $ocode)"
+              if ! _pc_valid_base "$obase"; then
+                blind_on "remote: prepush ownership check refuses PAPERCLIP_API_URL (not a clean http(s) base), so a same-head PR cannot be attributed"
+                mykey=""
+              else
+                ohdrs="$TMPD/ownhdrs"; : > "$ohdrs"; chmod 600 "$ohdrs"
+                printf 'Authorization: Bearer %s\n' "$PAPERCLIP_API_KEY" > "$ohdrs"
+                obody="$TMPD/own.json"
+                ocode="$(curl -sS -m 30 -o "$obody" -w '%{http_code}' -H "@$ohdrs" "$obase/api/issues/$ISSUE_ARG" 2>/dev/null || echo 000)"
+                if [[ "$ocode" == "200" ]]; then
+                  mykey="$(node -e 'try { const i = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String(i.identifier || "").toLowerCase()) } catch (e) { process.exit(9) }' "$obody" 2>/dev/null)"
+                  if [[ $? -ne 0 || -z "$mykey" ]]; then
+                    blind_on "remote: prepush ownership check could not read our own card key off /api/issues/$ISSUE_ARG (HTTP $ocode)"
+                    mykey=""
+                  fi
+                else
+                  blind_on "remote: prepush ownership check GET /api/issues/$ISSUE_ARG returned HTTP $ocode, so a same-head PR cannot be attributed"
                   mykey=""
                 fi
-              else
-                blind_on "remote: prepush ownership check GET /api/issues/$ISSUE_ARG returned HTTP $ocode, so a same-head PR cannot be attributed"
-                mykey=""
               fi
             fi
           fi
@@ -827,24 +835,26 @@ detect_remote() {
               if [[ -z "${PAPERCLIP_API_URL:-}" || -z "${PAPERCLIP_API_KEY:-}" ]]; then
                 blind_on "remote: same-commit ownership check cannot learn our own card key for $ISSUE_ARG with no control-plane credential, so a same-commit PR cannot be attributed"
                 sha_mykey=""
-              elif ! _paperclip_base_ok "${PAPERCLIP_API_URL:-}"; then
-                blind_on "remote: same-commit ownership check refuses a PAPERCLIP_API_URL that is not a clean http(s) base, so a same-commit PR cannot be attributed"
-                sha_mykey=""
               else
                 sha_obase="${PAPERCLIP_API_URL%/}"; sha_obase="${sha_obase%/api}"
-                sha_ohdrs="$TMPD/shaownhdrs"; : > "$sha_ohdrs"; chmod 600 "$sha_ohdrs"
-                printf 'Authorization: Bearer %s\n' "$PAPERCLIP_API_KEY" > "$sha_ohdrs"
-                sha_obody="$TMPD/shaown.json"
-                sha_ocode="$(curl -sS -m 30 -o "$sha_obody" -w '%{http_code}' -H "@$sha_ohdrs" "$sha_obase/api/issues/$ISSUE_ARG" 2>/dev/null || echo 000)"
-                if [[ "$sha_ocode" == "200" ]]; then
-                  sha_mykey="$(node -e 'try { const i = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String(i.identifier || "").toLowerCase()) } catch (e) { process.exit(9) }' "$sha_obody" 2>/dev/null)"
-                  if [[ $? -ne 0 || -z "$sha_mykey" ]]; then
-                    blind_on "remote: same-commit ownership check could not read our own card key off /api/issues/$ISSUE_ARG (HTTP $sha_ocode)"
+                if ! _pc_valid_base "$sha_obase"; then
+                  blind_on "remote: same-commit ownership check refuses PAPERCLIP_API_URL (not a clean http(s) base), so a same-commit PR cannot be attributed"
+                  sha_mykey=""
+                else
+                  sha_ohdrs="$TMPD/shaownhdrs"; : > "$sha_ohdrs"; chmod 600 "$sha_ohdrs"
+                  printf 'Authorization: Bearer %s\n' "$PAPERCLIP_API_KEY" > "$sha_ohdrs"
+                  sha_obody="$TMPD/shaown.json"
+                  sha_ocode="$(curl -sS -m 30 -o "$sha_obody" -w '%{http_code}' -H "@$sha_ohdrs" "$sha_obase/api/issues/$ISSUE_ARG" 2>/dev/null || echo 000)"
+                  if [[ "$sha_ocode" == "200" ]]; then
+                    sha_mykey="$(node -e 'try { const i = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String(i.identifier || "").toLowerCase()) } catch (e) { process.exit(9) }' "$sha_obody" 2>/dev/null)"
+                    if [[ $? -ne 0 || -z "$sha_mykey" ]]; then
+                      blind_on "remote: same-commit ownership check could not read our own card key off /api/issues/$ISSUE_ARG (HTTP $sha_ocode)"
+                      sha_mykey=""
+                    fi
+                  else
+                    blind_on "remote: same-commit ownership check GET /api/issues/$ISSUE_ARG returned HTTP $sha_ocode, so a same-commit PR cannot be attributed"
                     sha_mykey=""
                   fi
-                else
-                  blind_on "remote: same-commit ownership check GET /api/issues/$ISSUE_ARG returned HTTP $sha_ocode, so a same-commit PR cannot be attributed"
-                  sha_mykey=""
                 fi
               fi
             fi

@@ -106,6 +106,7 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
         "test_migration_squawk.sh",
         "test_migration_rehearsal.sh",
         "test_migration_drift_gate.py",
+        "test_migration_evidence_ax.py",
         # Harness code, fixtures and scored tables are offline suite inputs.
         "eval/review-bakeoff/",
     ),
@@ -280,6 +281,10 @@ ALSO_CORE_PREFIXES: tuple[str, ...] = (
     # readme script-index gate: test_readme_script_index.sh parses the README
     # "What is here" table, so a README-only edit must wake offline-suites.
     "README.md",
+    # migration contract doc: DocsCanonicalTest in
+    # test_migration_evidence_ax.py scores this file, so a docs-only edit to
+    # the JSON contract must still wake the suites that guard it.
+    "docs/migration-standard.md",
     # case_1d1195e1: upstream-pipeline family. The suites job's core block
     # executes these tools and suites (upstream-gated steps), so a PR that
     # changes only them must still wake core; without these entries it would

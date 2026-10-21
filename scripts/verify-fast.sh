@@ -212,6 +212,7 @@ python3 test_staged_drift.py || fail "staged Tier-0 drift gate failed"
 ./test_migration_squawk.sh || fail "migration squawk suite failed"
 ./test_migration_rehearsal.sh || fail "migration rehearsal suite failed"
 python3 -m unittest test_migration_drift_gate || fail "migration drift-gate suite failed"
+python3 -m unittest test_migration_evidence_ax || fail "migration evidence-AX suite failed"
 
 if [[ "$rc" -ne 0 ]]; then
   echo "verify-fast: FAILED"

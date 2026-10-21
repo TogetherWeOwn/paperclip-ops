@@ -316,7 +316,8 @@
     "activation contract suite:1",
     "execution-image source-only carrier suite:1",
     "shell-subst guard suite:1",
-    "queue-packet reject offline suite:1"
+    "queue-packet reject offline suite:1",
+    "staging-preflight carrier suite:1"
   ],
   "retained": [
     {
@@ -1778,6 +1779,11 @@
       "name": "queue-packet reject offline suite",
       "definition_sha256": "0de2526e8cce1f4d0899b4e430b123344ef961efd0fd9855c6874ba09252595e",
       "id": "queue-packet reject offline suite:1"
+    },
+    {
+      "name": "staging-preflight carrier suite",
+      "definition_sha256": "ff33fab7ad096ca46d69786740c6873b40c8bdeb8ec59e2370a3d660f563dd12",
+      "id": "staging-preflight carrier suite:1"
     }
   ],
   "removed": [

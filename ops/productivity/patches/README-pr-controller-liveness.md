@@ -24,10 +24,14 @@ its inventory, classification, review, merge, capacity, hold, or live-run rules.
 A comment's HTTP success records a pending request, not delivery. Subsequent
 inventory passes observe a queued/deferred request without posting duplicates.
 A skipped request (independent of reason), failed request, or cancelled request
-becomes retryable on the next pass, subject to the unchanged controller guards.
-Delivery is acknowledged only when both a run id and claim timestamp exist.
-Changing the event/head or owning issue invalidates the pending correlation.
-Read failures preserve the pending state instead of treating it as delivery.
+becomes retryable subject to per-key exponential backoff (1h, 2h, 4h, ... capped
+at 24h) and a 5-attempt cap, plus the unchanged controller guards. A missing
+request row after a comment is bounded the same way. Delivery is acknowledged
+when both a run id and claim timestamp exist, or when the server coalesces the
+wake onto an already-queued run (status coalesced with a run id). Retry state
+resets on claim or event/head/owner change. Changing the event/head or owning
+issue invalidates the pending correlation. Read failures preserve the pending
+state instead of treating it as delivery.
 
 For pre-packet state that recorded only `woke`, reconciliation matches the exact
 controller-generated message on the owning issue. Positive skipped evidence

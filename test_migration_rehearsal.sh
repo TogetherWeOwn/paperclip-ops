@@ -543,6 +543,38 @@ EOF
 "$GATE" verify --evidence "$WORK/future-evidence.json" --max-age-hours 24 >/dev/null 2>&1 \
   && bad "verify fails a future finished_at" \
   || ok "verify fails a future finished_at"
+# Wrong-shaped evidence must be refused, not crash the embedded evaluator
+# with an AttributeError traceback (same fail-closed shape guard as the
+# drift gate; verify delegates to its validator).
+printf '[1, 2]' > "$WORK/root-list-evidence.json"
+set +e
+"$GATE" verify --evidence "$WORK/root-list-evidence.json" --max-age-hours 24 \
+  >"$WORK/root-list-output" 2>&1
+root_list_rc=$?
+set -e
+if [[ "$root_list_rc" -ne 0 ]] && grep -q "REFUSED" "$WORK/root-list-output" \
+    && ! grep -q "Traceback" "$WORK/root-list-output"; then
+  ok "verify refuses root-list evidence without a traceback"
+else
+  bad "verify refuses root-list evidence without a traceback"
+fi
+python3 - "$WORK/verify-evidence.json" "$WORK/row-string-evidence.json" <<'EOF'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["migrations"] = ["0042_a"]
+json.dump(doc, open(sys.argv[2], "w"))
+EOF
+set +e
+"$GATE" verify --evidence "$WORK/row-string-evidence.json" --max-age-hours 24 \
+  >"$WORK/row-string-output" 2>&1
+row_string_rc=$?
+set -e
+if [[ "$row_string_rc" -ne 0 ]] && grep -q "REFUSED" "$WORK/row-string-output" \
+    && ! grep -q "Traceback" "$WORK/row-string-output"; then
+  ok "verify refuses non-object migration rows without a traceback"
+else
+  bad "verify refuses non-object migration rows without a traceback"
+fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

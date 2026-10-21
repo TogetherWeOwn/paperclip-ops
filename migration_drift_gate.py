@@ -88,8 +88,9 @@ NEXT_ACTIONS = {
         "Fix the evidence shape: each migration row must be an object "
         "with tag, sha256 and result.",
     "evidence_invalid_field":
-        "Fix the evidence field types and shape: each migration row needs "
-        "a string tag and 64-hex sha256.",
+        "Fix the evidence shape: top-level fields (status, provider, branch, "
+        "apply_target, cleanup, finished_at) must be strings, and each "
+        "migration row needs a string tag and 64-hex sha256.",
     "evidence_duplicate_tag":
         "Remove duplicate migration tags from the evidence and re-run "
         "the rehearsal.",
@@ -120,6 +121,9 @@ class _InputError(Exception):
         self.checks = []
         self.pending_count = 0
         self.unknown_count = 0
+        # Text lines evaluated before the refusal (evidence path only), so
+        # text mode still prints them like the pre-buffering gate did.
+        self.lines = []
 
 
 def load_candidate(path):
@@ -141,7 +145,7 @@ def load_candidate(path):
                         "input_malformed_hashes",
                         f"duplicate migration tag in --sql-hashes: {m.group(2)}")
                 tags[m.group(2)] = m.group(1)
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise _InputError(
             "input_malformed_hashes",
             f"cannot read --sql-hashes {path}: {exc.__class__.__name__}") from None
@@ -165,7 +169,7 @@ def load_ledger(path):
                         "input_malformed_ledger",
                         "ledger row without exactly one sha256 hash field")
                 hashes.append(found[0])
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise _InputError(
             "input_malformed_ledger",
             f"cannot read --ledger {path}: {exc.__class__.__name__}") from None
@@ -416,6 +420,7 @@ def _run(args):
             exc.checks = checks
             exc.pending_count = len(pending)
             exc.unknown_count = len(unknown)
+            exc.lines = list(lines)
             raise
         rc_ev, ev_lines, ev_checks = evaluate_evidence(
             doc, args.max_age_hours, evidence_chain)
@@ -463,6 +468,8 @@ def main(argv):
                                              exc.unknown_count),
                              sort_keys=True))
             return 2
+        for line in exc.lines:
+            print(line)
         print(f"REFUSED: migration_drift_gate: {exc.message}", file=sys.stderr)
         raise SystemExit(2) from None
 

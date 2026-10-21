@@ -217,10 +217,11 @@ See `reusable-migration-drift.yml` for the exact paging steps to copy.
 ```bash
 ./migration_squawk.sh --migrations-dir path/to/migrations
 ./test_migration_timeout_preamble.sh && ./test_migration_squawk.sh \
-  && ./test_migration_rehearsal.sh && python3 -m unittest test_migration_drift_gate
+  && ./test_migration_rehearsal.sh && python3 -m unittest test_migration_drift_gate \
+  && python3 -m unittest test_migration_evidence_ax
 ```
 
-All four suites are offline: fixture files, fake binaries on `PATH`, a
+All five suites are offline: fixture files, fake binaries on `PATH`, a
 throwaway temp dir. A suite that cannot reach a database, a provider, or
 the network refuses or skips loudly — it never scores itself green.
 

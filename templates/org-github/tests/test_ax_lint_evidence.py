@@ -17,7 +17,7 @@ Red baseline (2026-10-21, base e5cfced0): nested harness, conservative
 rule IDs + remediation, explicit skipped/unknown coverage, and --help/README
 evidence assertions fail; preservation guards (advisory default, error opt-in,
 JSON compat keys, .ax-source exclusion, AGENTS checks, idempotent read-only
-scans) pass. See TOG-35167 for the exact SHA and counts.
+scans) pass. See the paired acceptance-test card for the exact SHA and counts.
 """
 
 import io

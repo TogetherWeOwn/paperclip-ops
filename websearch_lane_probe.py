@@ -35,6 +35,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
@@ -184,17 +185,20 @@ def fetch_run_secret(secret_key: str, environ: Mapping[str, str]) -> str | None:
     required = ("PAPERCLIP_API_URL", "PAPERCLIP_API_KEY")
     if any(not environ.get(name) for name in required):
         return None
-    url = f"{_paperclip_api_base(environ)}/api/agents/me/secrets/{secret_key}/value"
-    request = urllib.request.Request(
-        url,
-        data=b"{}",
-        headers={
-            "authorization": "Bearer " + environ["PAPERCLIP_API_KEY"],
-            "content-type": "application/json",
-        },
-        method="POST",
-    )
     try:
+        # Inside the try: a refused base reads as "secret unavailable"
+        # (stderr + None), the same as any other transport failure -- the
+        # probe keeps its per-lane verdict taxonomy instead of crashing.
+        url = f"{_paperclip_api_base(environ)}/api/agents/me/secrets/{secret_key}/value"
+        request = urllib.request.Request(
+            url,
+            data=b"{}",
+            headers={
+                "authorization": "Bearer " + environ["PAPERCLIP_API_KEY"],
+                "content-type": "application/json",
+            },
+            method="POST",
+        )
         with urllib.request.urlopen(request, timeout=15) as response:
             payload = json.loads(response.read())
     except urllib.error.HTTPError as error:
@@ -306,9 +310,61 @@ def aggregate_exit(results: Sequence[Result]) -> int:
     return 0
 
 
+def _valid_api_base(base):
+    # BASE host validation: the bearer below is sent ONLY to this base.
+    # Refuse a base that is not an http(s) URL with a non-empty bare host:
+    # no userinfo (`user@host` misdirects the credential), no control
+    # characters or DEL -- raw anywhere, or %-encoded in the authority
+    # (urllib decodes those before the transport, which then raises outside
+    # the module's error contract) -- no query or fragment (the appended
+    # /api path would be swallowed into them), a real hostname (an
+    # empty `:port`-only authority is not a host), a numeric port, and no
+    # `{`/`}` anywhere (curl expands `{a,b}` globs, so one base is one host
+    # -- parity with the shell gate). A well-formed hostile host still
+    # passes; blocking that needs an operator-owned host allowlist, not a
+    # per-script guess.
+    if not base.startswith(("http://", "https://")):
+        return False
+    if "@" in base:
+        return False
+    if any(ord(char) < 0x21 or ord(char) == 0x7f for char in base):
+        return False
+    if "{" in base or "}" in base:
+        return False
+    try:
+        parts = urllib.parse.urlsplit(base)
+    except ValueError:
+        return False
+    if parts.username or parts.password:
+        return False
+    if parts.query or parts.fragment:
+        return False
+    decoded_netloc = urllib.parse.unquote(parts.netloc)
+    if any(ord(char) < 0x21 or ord(char) == 0x7f for char in decoded_netloc):
+        return False
+    host = parts.hostname or ""
+    if not host:
+        return False
+    if any(char in "[]{}," for char in host):
+        return False
+    if not parts.netloc.startswith("[") and parts.netloc.count(":") > 1:
+        return False
+    try:
+        port = parts.port
+    except ValueError:
+        return False
+    if port is None and parts.netloc.endswith(":"):
+        return False
+    return True
+
+
 def _paperclip_api_base(environ: Mapping[str, str]) -> str:
     base = environ["PAPERCLIP_API_URL"].rstrip("/")
-    return base[:-4] if base.endswith("/api") else base
+    base = base[:-4] if base.endswith("/api") else base
+    if not _valid_api_base(base):
+        raise ValueError(
+            "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
+    return base
 
 
 def post_board_alarm(results: Sequence[Result], environ: Mapping[str, str]) -> None:

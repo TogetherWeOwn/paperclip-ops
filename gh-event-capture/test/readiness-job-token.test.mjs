@@ -21,7 +21,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, writeFile, chmod, rm } from 'node:fs/promises'
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -360,14 +360,12 @@ test('triggers cover PR changes, gating-workflow completion, and manual dispatch
   assert.ok(!code.includes('pull_request_target'), 'never pull_request_target')
 })
 
-test('workflow_run names every PR-check workflow, so no gating completion can pass without a wake', () => {
-  // The gate waits on ruleset-required checks; a completion the sweep never
-  // hears about stalls its PR until some later event. workflow_run has no
-  // wildcard, so the workflows list must name every workflow that posts PR
-  // checks. This test DERIVES that set by scanning the sibling workflow
-  // files for pull_request triggers: adding a PR workflow without naming it
-  // here fails loudly instead of stalling PRs silently.
-  const workflowsDir = join(workflowRoot, '..', '.github', 'workflows')
+// The wake list is DERIVED by scanning the sibling workflow files for
+// pull_request triggers: adding a PR workflow without naming it in the sweep
+// fails loudly instead of stalling PRs silently. GitHub loads both .yml and
+// .yaml as workflows, so the scan covers both — a .yml-only filter would miss
+// a future gating workflow added under the other extension.
+function deriveExpectedWakeList(workflowsDir) {
   const knownTriggers = new Set(['pull_request', 'push', 'merge_group', 'workflow_call',
     'workflow_dispatch', 'workflow_run', 'schedule', 'check_run', 'check_suite'])
   const excluded = new Map([
@@ -375,7 +373,8 @@ test('workflow_run names every PR-check workflow, so no gating completion can pa
     ['review-rules (shadow)', 'shadow checks never gate readiness, so their completion wakes nothing'],
   ])
   const expected = []
-  for (const file of readdirSync(workflowsDir).filter((name) => name.endsWith('.yml')).sort()) {
+  for (const file of readdirSync(workflowsDir)
+    .filter((name) => name.endsWith('.yml') || name.endsWith('.yaml')).sort()) {
     const text = readFileSync(join(workflowsDir, file), 'utf8')
     const nameLine = text.split('\n').find((line) => /^name:/.test(line)) ?? ''
     const nameMatch = /^name:\s*(.+?)\s*$/.exec(nameLine)
@@ -389,6 +388,16 @@ test('workflow_run names every PR-check workflow, so no gating completion can pa
     if (excluded.has(nameMatch[1])) continue
     expected.push(nameMatch[1])
   }
+  return expected
+}
+
+test('workflow_run names every PR-check workflow, so no gating completion can pass without a wake', () => {
+  // The gate waits on ruleset-required checks; a completion the sweep never
+  // hears about stalls its PR until some later event. workflow_run has no
+  // wildcard, so the workflows list must name every workflow that posts PR
+  // checks (derived by deriveExpectedWakeList).
+  const workflowsDir = join(workflowRoot, '..', '.github', 'workflows')
+  const expected = deriveExpectedWakeList(workflowsDir)
   assert.ok(expected.length >= 2, `sibling scan found PR-check workflows, got ${JSON.stringify(expected)}`)
   const namedMatch = /^workflows:\s*\[(.*)\]\s*$/.exec(exactCodeLine('workflows:'))
   assert.ok(namedMatch, 'workflow_run carries a flow-style workflows list')
@@ -396,6 +405,26 @@ test('workflow_run names every PR-check workflow, so no gating completion can pa
   assert.ok(!named.includes('Readiness Sweep'), 'the sweep never names itself (no self-trigger loop)')
   assert.deepEqual(named, [...expected].sort(),
     'every PR-check workflow is named in the wake list, nothing more')
+})
+
+test('the wake-list derivation scans both .yml and .yaml (the two extensions GitHub loads)', async (t) => {
+  // Regression pin for the .yaml miss: a gating workflow added as .yaml must
+  // land in the derived wake list, or its completions stall PRs silently.
+  const dir = await scratch(t, 'readiness-wake-list-')
+  const prWorkflow = (name) => `name: ${name}\n\non:\n  pull_request:\n    types: [opened]\n\njobs:\n  gate:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n`
+  writeFileSync(join(dir, 'a-gate.yml'), prWorkflow('A Gate'))
+  writeFileSync(join(dir, 'b-gate.yaml'), prWorkflow('B Gate'))
+  writeFileSync(join(dir, 'notes.txt'), 'not a workflow\n')
+  assert.deepEqual(deriveExpectedWakeList(dir), ['A Gate', 'B Gate'])
+})
+
+test('the header discloses both pre-enablement gaps and claims no exact coverage', () => {
+  // Neither the heavy-CI handoff nor the post-review arm wake is proven on
+  // this route; the disclosure must survive edits — deleting a gap paragraph
+  // fails here instead of shipping a silently incomplete contract.
+  assert.ok(workflow.includes('heavy-CI'), 'heavy-CI handoff gap disclosed')
+  assert.ok(workflow.includes('post-review auto-merge arm has NO wake'), 'arm-wake gap disclosed')
+  assert.ok(!workflow.includes('fire exactly on state changes'), 'no exact-coverage claim')
 })
 
 test('workflow_run wakes on completion (success or failure both re-evaluate the gate)', () => {

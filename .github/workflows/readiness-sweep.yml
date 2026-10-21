@@ -18,7 +18,8 @@ name: Readiness Sweep
 # WHY EVENT-DRIVEN, NOT SCHEDULED. The gate must re-evaluate when (a) a PR
 # changes, (b) a gating Actions workflow completes, or (c) a hold label flips.
 # Polling would burn runner minutes around the clock to re-prove an unchanged
-# rollup; these triggers fire exactly on state changes. There is deliberately
+# rollup; these triggers fire on those state changes, with one named exception
+# (the post-review arm wake — see EVENT CONTRACT). There is deliberately
 # NO `schedule:` trigger, and deliberately NO `check_suite:` trigger: GitHub
 # does not fire check_suite when the suite was created by Actions or the head
 # SHA is associated with Actions, which covers every PR head in this repo, so
@@ -30,7 +31,7 @@ name: Readiness Sweep
 #
 # EVENT CONTRACT (read before flag-on). Writes made with GITHUB_TOKEN do NOT
 # re-fire workflows: GitHub suppresses token-triggered events (dispatch events
-# are the only exception). Consequences, both load-bearing:
+# are the only exception). Consequences, all load-bearing:
 #   * No self-trigger is possible: a pass never chains another pass. Each run
 #     is terminal; follow-up passes come only from later real events (author
 #     pushes, CI completions from author-triggered runs, label flips).
@@ -41,6 +42,16 @@ name: Readiness Sweep
 #     and the gate must fail closed without it. No extra grant (actions:write,
 #     dispatch rights, new credentials) may be inferred to close this gap —
 #     that is a fresh security review, not an edit to this file.
+#   * The post-review auto-merge arm has NO wake. Arming requires the Paperclip
+#     Review check to pass on the head, that check is an App check-run (not one
+#     of the named workflows), review completion is systematically the last
+#     state change, and passes act mutually exclusively — so an enabled PR
+#     would sit ready-but-unarmed until an unrelated event. A wake for external
+#     check completion is therefore UNPROVEN on this route (check_run docs carry
+#     the same Actions-associated-SHA suppression wording as check_suite, so any
+#     candidate needs live proof, never a docs assertion): before any repo is
+#     enabled, the arm wake must be demonstrated and the gate must fail closed
+#     without it.
 #
 # FORK CONTEXT. A job triggered by pull_request on a fork PR already carries a
 # read-only token (GitHub-enforced). workflow_run jobs run base code with base

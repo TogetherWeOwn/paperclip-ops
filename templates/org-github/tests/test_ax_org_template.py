@@ -811,6 +811,51 @@ class AxMetricsInputValidationTest(unittest.TestCase):
         self.assertNotEqual(metric["validity"], "valid")
         self.assertIsNone(metric["numerator"])
 
+    def test_negative_token_totals_rejected(self):
+        for bad in (-100, -0.5, -5e-324, -(10 ** 1000)):
+            with self.subTest(bad=bad):
+                self.assertIsNone(ax_metrics._as_token_total(bad))
+
+    def test_negative_token_total_withheld(self):
+        for bad in (-100, -0.5):
+            for payload in ({"tokens": bad}, {"totalTokens": bad},
+                            {"summary": {"totalTokens": bad}}):
+                with self.subTest(payload=payload):
+                    fixture = self._base_fixture(cost_evidence={
+                        **payload,
+                        "window_start": "2026-10-13T00:00:00Z",
+                        "window_end": "2026-10-20T00:00:00Z",
+                    })
+                    code, text = self._run_fixture(fixture)
+                    self.assertEqual(code, 0)
+                    metrics = json.loads(text)["metrics"]
+                    metric = metrics["tokens_per_merged_pr"]
+                    self.assertIsNone(metric["value"])
+                    self.assertEqual(metric["validity"], "unavailable")
+                    self.assertEqual(metric["reason_code"], "no_evidence")
+                    self.assertIsNone(metric["numerator"])
+                    self.assertEqual(
+                        metrics["first_push_green_rate"]["validity"], "valid")
+                    self.assertEqual(
+                        metrics["escalations_per_100_cards"]["validity"],
+                        "valid")
+
+    def test_zero_token_total_remains_valid(self):
+        for total in (0, 0.0, -0.0):
+            with self.subTest(total=total):
+                fixture = self._base_fixture(cost_evidence={
+                    "tokens": total,
+                    "window_start": "2026-10-13T00:00:00Z",
+                    "window_end": "2026-10-20T00:00:00Z",
+                })
+                code, text = self._run_fixture(fixture)
+                self.assertEqual(code, 0)
+                metric = json.loads(text)["metrics"]["tokens_per_merged_pr"]
+                self.assertEqual(metric["value"], 0)
+                self.assertEqual(metric["validity"], "valid")
+                self.assertEqual(metric["reason_code"], "ok")
+                self.assertEqual(metric["numerator"], 0)
+
     def test_nonfinite_token_total_withheld(self):
         for bad in (float("nan"), float("inf"), float("-inf")):
             with self.subTest(bad=bad):

@@ -311,15 +311,18 @@ def _metric(value, definition, provenance, *, validity, reason_code,
 
 
 def _as_token_total(value):
-    """Token total as a finite number; None for bools/non-finite.
+    """Token total as a non-negative finite number; None for invalid input.
 
     The costs payload is external input: bool is an int subclass and
     json.loads accepts NaN/Infinity, so both are rejected here to keep
-    emitted ratios standard-compliant JSON. Zero stays a real total.
+    emitted ratios standard-compliant JSON. Negative totals are invalid;
+    zero stays a real total.
     Oversized ints (math.isfinite raises OverflowError past float range)
     are invalid input, never a crash.
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value < 0:
         return None
     try:
         return value if math.isfinite(value) else None

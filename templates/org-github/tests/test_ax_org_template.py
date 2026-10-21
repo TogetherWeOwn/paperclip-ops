@@ -737,6 +737,138 @@ class AxMetricsComputeTest(unittest.TestCase):
             thread.join()
 
 
+def _reject_json_constant(value):
+    raise AssertionError(f"non-standard JSON constant in report: {value}")
+
+
+class AxMetricsInputValidationTest(unittest.TestCase):
+    """External cost payloads are validated, never trusted (PR #60)."""
+
+    def _run_fixture(self, fixture):
+        with tempfile.NamedTemporaryFile(
+                "w", suffix=".json", delete=False) as fh:
+            json.dump(fixture, fh)
+            path = fh.name
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = ax_metrics.main(
+                    ["--from-file", path, "--days", "7"])
+            return code, buf.getvalue()
+        finally:
+            os.unlink(path)
+
+    def _base_fixture(self, **overrides):
+        fixture = {
+            "github_rows": [{"repo": "Example/a", "merged_prs": 2,
+                             "truncated": False,
+                             "first_commit_states": ["success", "failure"]}],
+            "cost_tokens": 1000,
+            "cost_evidence": {
+                "tokens": 1000,
+                "window_start": "2026-10-13T00:00:00Z",
+                "window_end": "2026-10-20T00:00:00Z",
+            },
+            "issues": [{"status": "done",
+                        "updatedAt": "2026-10-20T00:00:00Z"}],
+            "window_start": "2026-10-13T00:00:00Z",
+        }
+        fixture.update(overrides)
+        return fixture
+
+    def test_evidence_tokens_rejects_bool_and_nonfinite(self):
+        self.assertIsNone(ax_metrics._evidence_tokens({"tokens": True}))
+        self.assertIsNone(ax_metrics._evidence_tokens({"tokens": False}))
+        self.assertIsNone(
+            ax_metrics._evidence_tokens({"tokens": float("nan")}))
+        self.assertIsNone(
+            ax_metrics._evidence_tokens({"tokens": float("inf")}))
+        self.assertIsNone(ax_metrics._evidence_tokens(
+            {"summary": {"totalTokens": float("inf")}}))
+        self.assertEqual(ax_metrics._evidence_tokens({"tokens": 0}), 0)
+        self.assertEqual(
+            ax_metrics._evidence_tokens({"tokens": 1000}), 1000)
+
+    def test_window_days_between_rejects_mixed_timezones(self):
+        self.assertIsNone(ax_metrics._window_days_between(
+            "2026-10-01", "2026-10-08T00:00:00+00:00"))
+        self.assertEqual(ax_metrics._window_days_between(
+            "2026-10-01T00:00:00Z", "2026-10-08T00:00:00Z"), 7)
+
+    def test_boolean_token_total_withheld(self):
+        fixture = self._base_fixture(cost_evidence={
+            "tokens": True,
+            "window_start": "2026-10-13T00:00:00Z",
+            "window_end": "2026-10-20T00:00:00Z",
+        })
+        fixture["cost_tokens"] = None
+        code, text = self._run_fixture(fixture)
+        self.assertEqual(code, 0)
+        metric = json.loads(text)["metrics"]["tokens_per_merged_pr"]
+        self.assertIsNone(metric["value"])
+        self.assertNotEqual(metric["validity"], "valid")
+        self.assertIsNone(metric["numerator"])
+
+    def test_nonfinite_token_total_withheld(self):
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(bad=bad):
+                fixture = self._base_fixture(cost_evidence={
+                    "tokens": bad,
+                    "window_start": "2026-10-13T00:00:00Z",
+                    "window_end": "2026-10-20T00:00:00Z",
+                })
+                fixture["cost_tokens"] = None
+                code, text = self._run_fixture(fixture)
+                self.assertEqual(code, 0)
+                metric = json.loads(text)["metrics"][
+                    "tokens_per_merged_pr"]
+                self.assertIsNone(metric["value"])
+                self.assertNotEqual(metric["validity"], "valid")
+
+    def test_legacy_boolean_and_nonfinite_cost_tokens_ignored(self):
+        for bad in (True, False, float("nan"), float("inf")):
+            with self.subTest(bad=bad):
+                fixture = self._base_fixture(cost_tokens=bad)
+                fixture["cost_evidence"] = {
+                    "window_start": "2026-10-13T00:00:00Z",
+                    "window_end": "2026-10-20T00:00:00Z",
+                }
+                code, text = self._run_fixture(fixture)
+                self.assertEqual(code, 0)
+                metric = json.loads(text)["metrics"][
+                    "tokens_per_merged_pr"]
+                self.assertIsNone(metric["value"])
+                self.assertNotEqual(metric["validity"], "valid")
+                self.assertIsNone(metric["numerator"])
+
+    def test_mixed_timezone_mismatch_withholds_without_crash(self):
+        fixture = self._base_fixture(cost_evidence={
+            "tokens": 1000,
+            "window_start": "2026-10-01",
+            "window_end": "2026-10-08T00:00:00+00:00",
+        })
+        code, text = self._run_fixture(fixture)
+        self.assertEqual(code, 0)
+        metric = json.loads(text)["metrics"]["tokens_per_merged_pr"]
+        self.assertIsNone(metric["value"])
+        self.assertEqual(metric["validity"], "withheld")
+        self.assertEqual(metric["reason_code"], "window_mismatch")
+        self.assertIsNone(metric["source_window"]["days"])
+
+    def test_report_output_is_strict_json(self):
+        fixture = self._base_fixture(cost_evidence={
+            "tokens": float("nan"),
+            "window_start": "2026-10-13T00:00:00Z",
+            "window_end": "2026-10-20T00:00:00Z",
+        })
+        fixture["cost_tokens"] = float("inf")
+        code, text = self._run_fixture(fixture)
+        self.assertEqual(code, 0)
+        report = json.loads(text, parse_constant=_reject_json_constant)
+        self.assertIsNone(
+            report["metrics"]["tokens_per_merged_pr"]["value"])
+
+
 class ReviewDimensionTest(unittest.TestCase):
     def test_blocking_and_nit_split(self):
         dimension = read("review/AX-DIMENSION.md")

@@ -36,6 +36,7 @@ metric instead of yielding an ordinary complete-population value.
 import argparse
 import datetime
 import json
+import math
 import os
 import sys
 import urllib.parse
@@ -268,7 +269,7 @@ def _window_days_between(start, end):
         delta = (datetime.datetime.fromisoformat(last)
                  - datetime.datetime.fromisoformat(first))
         return max(0, delta.days)
-    except ValueError:
+    except (ValueError, TypeError):
         return None
 
 
@@ -306,6 +307,18 @@ def _metric(value, definition, provenance, *, validity, reason_code,
     return metric
 
 
+def _as_token_total(value):
+    """Token total as a finite number; None for bools/non-finite.
+
+    The costs payload is external input: bool is an int subclass and
+    json.loads accepts NaN/Infinity, so both are rejected here to keep
+    emitted ratios standard-compliant JSON. Zero stays a real total.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if math.isfinite(value) else None
+
+
 def _evidence_tokens(evidence):
     """Token total from a cost-evidence mapping; None when absent.
 
@@ -315,13 +328,13 @@ def _evidence_tokens(evidence):
     if not isinstance(evidence, dict):
         return None
     for key in ("tokens", "totalTokens"):
-        value = evidence.get(key)
-        if isinstance(value, (int, float)):
+        value = _as_token_total(evidence.get(key))
+        if value is not None:
             return value
     inner = evidence.get("summary")
     if isinstance(inner, dict):
-        value = inner.get("totalTokens")
-        if isinstance(value, (int, float)):
+        value = _as_token_total(inner.get("totalTokens"))
+        if value is not None:
             return value
     return None
 
@@ -399,8 +412,8 @@ def _tokens_metric(cost_tokens, cost_evidence, merged_total, report_window,
     definition = ("paperclip cost-window tokens / merged PRs "
                   "(experimental)")
     tokens = _evidence_tokens(cost_evidence)
-    if tokens is None and isinstance(cost_tokens, (int, float)):
-        tokens = cost_tokens
+    if tokens is None:
+        tokens = _as_token_total(cost_tokens)
     provenance = ("paperclip costs api" if tokens is not None
                   else (paperclip_reason or "no paperclip data"))
     num_source = "paperclip costs api"

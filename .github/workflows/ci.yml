@@ -4889,6 +4889,7 @@ jobs:
           ./test_migration_squawk.sh
           ./test_migration_rehearsal.sh
           python3 -m unittest -v test_migration_drift_gate
+          python3 -m unittest -v test_migration_evidence_ax
 
       # == area: runbook (was runbook-gates; runs only when runbook or full changed) ==
       - name: DLQ redrive CLI standalone suite

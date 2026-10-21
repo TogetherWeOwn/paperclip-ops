@@ -77,6 +77,7 @@
     {"id": "migration-squawk", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_squawk.sh"]},
     {"id": "migration-rehearsal", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_rehearsal.sh"]},
     {"id": "migration-drift-gate", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_migration_drift_gate"]},
+    {"id": "migration-evidence-ax", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_migration_evidence_ax"]},
     {"id": "verify-fast-plan", "tier": "fast", "prerequisites": ["python3", "node", "bash"], "preparation": {"actions": []}, "command": ["python3", "-B", "-m", "unittest", "test_verify_fast_plan", "test_verify_fast_plan_gates"]}
   ]
 }

@@ -3,8 +3,9 @@
 #
 # Every sender below derives its base from PAPERCLIP_API_URL and attaches the
 # run/board bearer to it. A base that is not an http(s) URL with a non-empty
-# bare host — wrong scheme, userinfo, whitespace — must be refused BEFORE any
-# request is built, so the bearer is never sent to a base we refused to trust.
+# bare host — wrong scheme, userinfo, whitespace, a query/fragment, a
+# leading-`:` authority — must be refused BEFORE any request is built, so the
+# bearer is never sent to a base we refused to trust.
 # A well-formed hostile host still passes by design (that needs an
 # operator-owned host allowlist); this gate pins the malformed-env layer.
 #
@@ -115,6 +116,9 @@ MALFORMED=(
   "http:///no-host"
   "https://?x"
   "https://#frag"
+  "https://paperclip.invalid?x=1"
+  "https://paperclip.invalid#frag"
+  "http://:8080"
   "$NL_BASE"
 )
 

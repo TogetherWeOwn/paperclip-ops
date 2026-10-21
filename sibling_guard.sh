@@ -273,17 +273,19 @@ say() { [[ "$QUIET" -eq 1 || "$JSON" -eq 1 ]] || printf '%s\n' "$*"; }
 # BASE host validation: the board bearer is sent ONLY to a base that is an
 # http(s) URL with a non-empty bare host — no userinfo (`user@host` misdirects
 # the credential), no whitespace (a newline would inject a curl-config
-# directive). Every Paperclip send site below checks this first; a malformed
-# base goes blind (never clear) with zero requests built. A well-formed hostile
-# host still passes; blocking that needs an operator-owned host allowlist, not
-# a per-script guess.
+# directive), no query/fragment (the API path would land inside them), no
+# leading-`:` authority (an empty host with a port). Every Paperclip send site
+# below checks this first; a malformed base goes blind (never clear) with zero
+# requests built. A well-formed hostile host still passes; blocking that needs
+# an operator-owned host allowlist, not a per-script guess.
 _paperclip_base_ok() {
   local _b="${1%/}" _h
   _b="${_b%/api}"
   case "$_b" in http://*|https://*) ;; *) return 1;; esac
   _h="${_b#http://}"; _h="${_h#https://}"; _h="${_h%%[/?#]*}"
   [[ -n "$_h" ]] || return 1
-  case "$_b" in *@*|*[[:space:]]*) return 1;; esac
+  case "$_h" in :*) return 1;; esac
+  case "$_b" in *@*|*[[:space:]]*|*\?*|*#*) return 1;; esac
   return 0
 }
 

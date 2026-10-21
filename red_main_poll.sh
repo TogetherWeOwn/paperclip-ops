@@ -284,14 +284,17 @@ board_titles() {
     [[ -n "$key" ]] || { echo "red_main_poll: no board credential (set RED_MAIN_API_KEY)" >&2; return 1; }
     # BASE host validation: the board key is sent ONLY to this base. A base
     # that is not an http(s) URL with a non-empty bare host — userinfo,
-    # whitespace — reads as an unreadable board (return 1), never as "no
-    # incident". A well-formed hostile host still passes; blocking that needs
-    # an operator-owned host allowlist, not a per-script guess.
+    # whitespace, a query/fragment (the API path would land inside them), a
+    # leading-`:` authority (an empty host with a port) — reads as an
+    # unreadable board (return 1), never as "no incident". A well-formed
+    # hostile host still passes; blocking that needs an operator-owned host
+    # allowlist, not a per-script guess.
     local _base="${PAPERCLIP_API_URL%/}" _base_host
     case "$_base" in http://*|https://*) ;; *) echo "red_main_poll: board base is not an http(s) URL" >&2; return 1;; esac
     _base_host="${_base#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%[/?#]*}"
     [[ -n "$_base_host" ]] || { echo "red_main_poll: board base has an empty host" >&2; return 1; }
-    case "$_base" in *@*|*[[:space:]]*) echo "red_main_poll: board base carries userinfo or whitespace" >&2; return 1;; esac
+    case "$_base_host" in :*) echo "red_main_poll: board base has an empty host" >&2; return 1;; esac
+    case "$_base" in *@*|*[[:space:]]*|*\?*|*#*) echo "red_main_poll: board base carries userinfo, whitespace, or a query/fragment" >&2; return 1;; esac
     # The key travels in a config pipe, never on argv: `curl -H "Bearer $key"`
     # would expose it in /proc/<pid>/cmdline (case_3d790dcb; post_finding.sh §NON-DISCLOSURE).
     # The status comes back through -w: without it a 401 or 500 is an exit-0

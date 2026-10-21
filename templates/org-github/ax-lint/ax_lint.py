@@ -113,6 +113,11 @@ def _is_script_candidate(root, relpath, fullname):
     return bool(SHEBANG_RE.match(first))
 
 
+def _flag_literal(flag):
+    """Exact flag token: `--json` never matches `--json-file`."""
+    return r"(?<![\w-])[\"']?%s[\"']?(?![\w-])" % re.escape(flag)
+
+
 def _certified_surface_flags(text):
     """Machine flags with advertised top-level support.
 
@@ -129,7 +134,7 @@ def _certified_surface_flags(text):
     for line in lines:
         if "usage:" in line.lower():
             for flag in MACHINE_FLAGS:
-                if flag in line:
+                if re.search(_flag_literal(flag), line):
                     certified.add(flag)
     if len(certified) == len(MACHINE_FLAGS):
         return certified
@@ -162,7 +167,7 @@ def _shell_flag_comparison(code_lines, flag):
     advertises nothing) and non-positional variables (``$FLAGS``).
     """
     var = _POS_PARAM_RE
-    lit = r"(?<![\w-])[\"']?%s[\"']?(?![\w-])" % re.escape(flag)
+    lit = _flag_literal(flag)
     compare = re.compile(
         r"%s\s*(?:==|=)\s*%s|%s\s*(?:==|=)\s*%s" % (var, lit, lit, var))
     return any(compare.search(line) for line in code_lines)

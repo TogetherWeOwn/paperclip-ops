@@ -884,6 +884,66 @@ class AxMetricsInputValidationTest(unittest.TestCase):
         self.assertIsNone(
             report["metrics"]["tokens_per_merged_pr"]["value"])
 
+    def test_tokenless_matching_evidence_ignores_legacy_total(self):
+        fixture = self._base_fixture(cost_evidence={
+            "window_start": "2026-10-13T00:00:00Z",
+            "window_end": "2026-10-20T00:00:00Z",
+        })
+        fixture["cost_tokens"] = 1000
+        code, text = self._run_fixture(fixture)
+        self.assertEqual(code, 0)
+        metric = json.loads(text)["metrics"]["tokens_per_merged_pr"]
+        self.assertIsNone(metric["value"])
+        self.assertEqual(metric["validity"], "unavailable")
+        self.assertEqual(metric["reason_code"], "no_evidence")
+        self.assertIsNone(metric["numerator"])
+
+    def test_invalid_evidence_tokens_ignore_legacy_total(self):
+        fixture = self._base_fixture(cost_evidence={
+            "tokens": "bogus",
+            "window_start": "2026-10-13T00:00:00Z",
+            "window_end": "2026-10-20T00:00:00Z",
+        })
+        fixture["cost_tokens"] = 1000
+        code, text = self._run_fixture(fixture)
+        self.assertEqual(code, 0)
+        metric = json.loads(text)["metrics"]["tokens_per_merged_pr"]
+        self.assertIsNone(metric["value"])
+        self.assertNotEqual(metric["validity"], "valid")
+        self.assertIsNone(metric["numerator"])
+
+    def test_fixture_scan_failure_withholds_despite_issues_list(self):
+        fixture = self._base_fixture(
+            issues=[{"status": "blocked",
+                     "updatedAt": "2026-10-19T00:00:00Z"},
+                    {"status": "done",
+                     "updatedAt": "2026-10-19T00:00:00Z"}],
+            paperclip_reason="HTTP Error 500")
+        code, text = self._run_fixture(fixture)
+        self.assertEqual(code, 0)
+        report = json.loads(text)
+        metric = report["metrics"]["escalations_per_100_cards"]
+        self.assertIsNone(metric["value"])
+        self.assertEqual(metric["validity"], "withheld")
+        self.assertEqual(metric["reason_code"], "scan_failed")
+        self.assertEqual(metric["completeness"], "partial")
+        tokens = report["metrics"]["tokens_per_merged_pr"]
+        self.assertEqual(tokens["validity"], "valid")
+
+    def test_fixture_incomplete_scan_withholds_despite_issues_list(self):
+        fixture = self._base_fixture(
+            issues=[{"status": "blocked",
+                     "updatedAt": "2026-10-19T00:00:00Z"},
+                    {"status": "done",
+                     "updatedAt": "2026-10-19T00:00:00Z"}],
+            paperclip_reason="scan returned a partial page")
+        code, text = self._run_fixture(fixture)
+        self.assertEqual(code, 0)
+        metric = json.loads(text)["metrics"]["escalations_per_100_cards"]
+        self.assertIsNone(metric["value"])
+        self.assertEqual(metric["validity"], "withheld")
+        self.assertEqual(metric["reason_code"], "scan_incomplete")
+
 
 class ReviewDimensionTest(unittest.TestCase):
     def test_blocking_and_nit_split(self):

@@ -417,7 +417,10 @@ def _tokens_metric(cost_tokens, cost_evidence, merged_total, report_window,
     definition = ("paperclip cost-window tokens / merged PRs "
                   "(experimental)")
     tokens = _evidence_tokens(cost_evidence)
-    if tokens is None:
+    if tokens is None and cost_evidence is None:
+        # Legacy bare total: a fallback only when no structured
+        # evidence exists. Tokenless evidence must not upgrade it
+        # to a verified-window ratio.
         tokens = _as_token_total(cost_tokens)
     provenance = ("paperclip costs api" if tokens is not None
                   else (paperclip_reason or "no paperclip data"))
@@ -718,13 +721,17 @@ def collect_live(args, window_start):
 def collect_from_file(path, days):
     with open(path, encoding="utf-8") as fh:
         fixture = json.load(fh)
+    issues = fixture.get("issues")
+    issues_truncated = fixture.get("issues_truncated", False)
+    issues, issues_truncated = resolve_issue_scan(
+        issues, issues_truncated, fixture.get("paperclip_reason"))
     return build_report(
         fixture.get("github_rows", []),
         fixture.get("cost_tokens"),
-        fixture.get("issues"),
+        issues,
         fixture.get("window_start", ""), days,
         paperclip_reason=fixture.get("paperclip_reason"),
-        issues_truncated=fixture.get("issues_truncated", False),
+        issues_truncated=issues_truncated,
         cost_evidence=fixture.get("cost_evidence"))
 
 

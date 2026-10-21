@@ -147,6 +147,17 @@ def _reject(message):
     raise InvalidInput(message)
 
 
+def _is_finite(value):
+    """math.isfinite without int-to-float overflow.
+
+    math.isfinite(10**1000) raises OverflowError instead of returning
+    False, which would escape validation as a traceback. Ints are
+    finite by definition, so only floats take the isfinite path.
+    Callers exclude bool and non-numbers before calling this.
+    """
+    return not isinstance(value, float) or math.isfinite(value)
+
+
 def _read_json(path, what):
     try:
         with open(path, "rb") as handle:
@@ -171,7 +182,7 @@ def _check_duration(value, where):
     # bool is an int subclass; True == 1 would otherwise pass as 1 ms.
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         _reject("%s: number required" % where)
-    if not math.isfinite(value) or value < 0:
+    if not _is_finite(value) or value < 0:
         _reject("%s: finite value >= 0 required" % where)
     if value > MAX_DURATION_MS:
         _reject("%s: exceeds 6h, refusing unit/clock error" % where)
@@ -343,7 +354,7 @@ def _check_baseline_shape(doc):
         for key in ("p50_alert_ms", "p95_alert_ms"):
             value = spec.get(key)
             if (isinstance(value, bool) or not isinstance(value, (int, float))
-                    or not math.isfinite(value) or value < 0):
+                    or not _is_finite(value) or value < 0):
                 _reject("baseline.thresholds.%s.%s: finite value >= 0 "
                         "required" % (op, key))
         # Threshold metadata is echoed into check details, so it must be

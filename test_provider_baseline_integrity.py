@@ -376,6 +376,15 @@ class ProviderBaselineIntegrityTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.outcome(proc, "record")
 
+    def test_huge_integer_duration_is_structured_invalid_without_traceback(self):
+        self.baseline.unlink()
+        self.write_samples(create=[10**1000])
+        before = self.snapshot()
+        proc = self.cli("record", "--dry-run", "--json")
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.outcome(proc, "record")
+
     def test_json_invalid_existing_never_echoes_nonfinite_values(self):
         self.base["operations"]["create"]["samples"] = [float("inf")] * 10
         self.write(self.baseline, self.base)
@@ -383,6 +392,18 @@ class ProviderBaselineIntegrityTest(unittest.TestCase):
         proc = self.cli("check", "--json")
         self.assertEqual(self.snapshot(), before)
         self.assertIn(proc.returncode, (1, 3), proc.stdout + proc.stderr)
+        self.outcome(proc, "check")
+
+    def test_huge_integer_threshold_is_finite_without_traceback(self):
+        # Thresholds are finite-and-nonnegative with no upper bound, so a
+        # huge int is valid input; before the isfinite guard it escaped as
+        # an OverflowError traceback instead of a structured outcome.
+        self.base["thresholds"]["create"]["p50_alert_ms"] = 10**1000
+        self.write(self.baseline, self.base)
+        before = self.snapshot()
+        proc = self.cli("check", "--json")
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.outcome(proc, "check")
 
     def test_json_forged_maturity_reports_unmeasured_with_reasons(self):

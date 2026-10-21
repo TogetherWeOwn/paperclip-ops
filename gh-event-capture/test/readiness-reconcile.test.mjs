@@ -15,6 +15,7 @@ const HEAD = head('a')
 const HEAD2 = head('b')
 const REQUIRED = ['ci-ok', 'gitleaks']
 const NOW = 1728285600000
+const readyCiPass = () => ({ name: 'ready-ci', status: 'completed', conclusion: 'success', completedMs: 1 })
 
 const off = readinessPolicy()
 const on = readinessPolicy({ enabledRepositories: [repo] })
@@ -163,19 +164,19 @@ test('pending checks never flap a ready PR back to draft', () => {
 test('auto-merge arms only on a ready PR with CI and the review check green on this head', () => {
   const reviewPass = { name: 'Paperclip Review', status: 'completed', conclusion: 'success', completedMs: 1 }
   const armed = decideReadinessActions(
-    input(6, { draft: false, autoMerge: false, checks: [...greenChecks(), reviewPass] }), on)
+    input(6, { draft: false, autoMerge: false, checks: [...greenChecks(), reviewPass, readyCiPass()] }), on)
   assert.ok(armed.actions.includes('enable-automerge'))
   assert.ok(!armed.actions.includes('mark-ready'))
   // Missing review check on this head: no arm, even with green CI.
-  const missing = decideReadinessActions(input(6, { draft: false }), on)
+  const missing = decideReadinessActions(input(6, { draft: false, checks: [...greenChecks(), readyCiPass()] }), on)
   assert.ok(!missing.actions.includes('enable-automerge'))
   // Already armed: no second arm call.
   const already = decideReadinessActions(
-    input(6, { draft: false, autoMerge: true, checks: [...greenChecks(), reviewPass] }), on)
+    input(6, { draft: false, autoMerge: true, checks: [...greenChecks(), reviewPass, readyCiPass()] }), on)
   assert.ok(!already.actions.includes('enable-automerge'))
   // Drafts never arm.
   const draft = decideReadinessActions(
-    input(6, { draft: true, checks: [...greenChecks(), reviewPass] }), on)
+    input(6, { draft: true, checks: [...greenChecks(), reviewPass, readyCiPass()] }), on)
   assert.ok(!draft.actions.includes('enable-automerge'))
 })
 
@@ -292,7 +293,7 @@ test('a failed write records the step and counts the error without blinding the 
 test('the duty never merges, never closes and never comments', async () => {
   const reviewPass = { name: 'Paperclip Review', status: 'completed', conclusion: 'success', completedMs: 1 }
   const snapshots = new Map([
-    [`${repo}#6`, snapshot(6, { draft: false, checks: [...greenChecks(), reviewPass] })],
+    [`${repo}#6`, snapshot(6, { draft: false, checks: [...greenChecks(), reviewPass, readyCiPass()] })],
   ])
   const { github, calls } = doubles(snapshots)
   await createReconciler({ github, policy: on })

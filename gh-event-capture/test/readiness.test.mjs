@@ -200,20 +200,58 @@ function reviewPass() {
   return { name: REVIEW_CHECK, status: 'completed', conclusion: 'success', completedMs: 1 }
 }
 
-test('auto-merge arms only when CI and the review check pass on THIS head', () => {
-  const base = { draft: false, headSha: HEAD, autoMergeEnabled: false, checks: [...snapshotChecks(), reviewPass()], requiredChecks: ['ci-ok', 'gitleaks', 'pr-lint'] }
+function readyCiPass() {
+  return { name: 'ready-ci', status: 'completed', conclusion: 'success', completedMs: 1 }
+}
+
+test('auto-merge arms only when CI, ready-ci and the review check pass on THIS head', () => {
+  const base = { draft: false, headSha: HEAD, autoMergeEnabled: false, checks: [...snapshotChecks(), readyCiPass(), reviewPass()], requiredChecks: ['ci-ok', 'gitleaks', 'pr-lint'] }
   assert.equal(shouldEnableAutoMerge(base), true)
   assert.equal(shouldEnableAutoMerge({ ...base, draft: true }), false, 'never arm a draft')
   assert.equal(shouldEnableAutoMerge({ ...base, autoMergeEnabled: true }), false, 'already armed: no-op')
-  // The verdict is bound through the rollup, never a score string: a missing,
-  // pending or failing review check on this head refuses, even with green CI.
-  assert.equal(shouldEnableAutoMerge({ ...base, checks: snapshotChecks() }), false, 'missing review check never arms')
-  const pendingReview = [...snapshotChecks(), { name: REVIEW_CHECK, status: 'in_progress' }]
+  // Keep ready-ci successful to isolate the unconditional review binding.
+  assert.equal(shouldEnableAutoMerge({ ...base, checks: [...snapshotChecks(), readyCiPass()] }), false, 'missing review check never arms')
+  const pendingReview = [...snapshotChecks(), readyCiPass(), { name: REVIEW_CHECK, status: 'in_progress' }]
   assert.equal(shouldEnableAutoMerge({ ...base, checks: pendingReview }), false, 'pending review never arms')
-  const failingReview = [...snapshotChecks(), { name: REVIEW_CHECK, status: 'completed', conclusion: 'failure', completedMs: 1 }]
+  const failingReview = [...snapshotChecks(), readyCiPass(), { name: REVIEW_CHECK, status: 'completed', conclusion: 'failure', completedMs: 1 }]
   assert.equal(shouldEnableAutoMerge({ ...base, checks: failingReview }), false, 'failing review never arms')
-  const failingCi = [...snapshotChecks().map((c) => (c.name === 'ci-ok' ? { ...c, conclusion: 'failure' } : c)), reviewPass()]
+  const failingCi = [...snapshotChecks().map((c) => (c.name === 'ci-ok' ? { ...c, conclusion: 'failure' } : c)), readyCiPass(), reviewPass()]
   assert.equal(shouldEnableAutoMerge({ ...base, checks: failingCi }), false, 'red CI never arms')
+})
+
+// Each case catches a permissive marker gate: the ordinary required-check
+// helper allows skipped/neutral, but ready-ci must be completed AND success.
+// The marker is deliberately absent from requiredChecks in every case.
+const nonSuccessReadyCi = [
+  ['missing', null],
+  ['skipped', { name: 'ready-ci', status: 'completed', conclusion: 'skipped', completedMs: 1 }],
+  ['neutral', { name: 'ready-ci', status: 'completed', conclusion: 'neutral', completedMs: 1 }],
+  ['pending', { name: 'ready-ci', status: 'in_progress' }],
+  ['queued', { name: 'ready-ci', status: 'queued' }],
+  ['failed', { name: 'ready-ci', status: 'completed', conclusion: 'failure', completedMs: 1 }],
+  ['cancelled', { name: 'ready-ci', status: 'completed', conclusion: 'cancelled', completedMs: 1 }],
+  ['timed out', { name: 'ready-ci', status: 'completed', conclusion: 'timed_out', completedMs: 1 }],
+  ['success before completion', { name: 'ready-ci', status: 'in_progress', conclusion: 'success' }],
+  ['success without status', { name: 'ready-ci', conclusion: 'success' }],
+  ['completed without conclusion', { name: 'ready-ci', status: 'completed', completedMs: 1 }],
+  ['wrong context name', { name: 'ready-ci-other', status: 'completed', conclusion: 'success', completedMs: 1 }],
+]
+
+for (const [shape, marker] of nonSuccessReadyCi) {
+  test(`auto-merge refuses ${shape} ready-ci even when every required check and review pass`, () => {
+    const checks = [...snapshotChecks(), reviewPass(), ...(marker ? [marker] : [])]
+    assert.equal(shouldEnableAutoMerge({ draft: false, headSha: HEAD,
+      autoMergeEnabled: false, checks, requiredChecks: ['ci-ok', 'gitleaks', 'pr-lint', REVIEW_CHECK] }), false,
+    'the non-draft CI evidence gate is unconditional, not a ruleset requirement')
+  })
+}
+
+test('completed successful ready-ci arms whether or not the ruleset requires the marker', () => {
+  const base = { draft: false, headSha: HEAD, autoMergeEnabled: false,
+    checks: [...snapshotChecks(), reviewPass(), readyCiPass()] }
+  const required = ['ci-ok', 'gitleaks', 'pr-lint', REVIEW_CHECK]
+  assert.equal(shouldEnableAutoMerge({ ...base, requiredChecks: required }), true)
+  assert.equal(shouldEnableAutoMerge({ ...base, requiredChecks: [...required, 'ready-ci'] }), true)
 })
 
 // --- event filter ---------------------------------------------------------

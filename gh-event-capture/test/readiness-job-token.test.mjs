@@ -422,7 +422,14 @@ test('the header discloses the demonstrated fail-closed posture and claims no ex
   // Both pre-enablement gaps were demonstrated fail-closed in the flag-on
   // change; the disclosure must survive edits — deleting a posture paragraph
   // fails here instead of shipping a silently incomplete contract.
-  assert.ok(workflow.includes('heavy-CI'), 'heavy-CI handoff posture disclosed')
+  const header = workflowLines.filter((line) => /^#/.test(line))
+    .map((line) => line.replace(/^#\s?/, '')).join(' ').replaceAll('`', '').replace(/\s+/g, ' ')
+  assert.ok(header.includes('heavy-CI'), 'heavy-CI handoff posture disclosed')
+  assert.ok(header.includes('ready-ci'), 'real non-draft CI evidence marker disclosed')
+  assert.match(header, /draft ci-ok.{0,120}(?:insufficient|not enough|does not prove)/i, 'draft ci-ok is not non-draft evidence')
+  assert.match(header, /(?:independent|comment).{0,80}review.{0,120}(?:insufficient|not enough|does not prove)/i, 'independent comment review does not prove non-draft CI')
+  assert.match(header, /(?:token-ready|token-made ready)[\s\S]*(?:unarmed|cannot arm|must wait)[\s\S]*non-draft[\s\S]*ready-ci/i,
+    'token-ready PRs wait for ready-ci from a non-draft CI event/rerun')
   assert.ok(workflow.includes('post-review auto-merge arm has NO wake'), 'arm-wake posture disclosed')
   assert.ok(!workflow.includes('UNPROVEN'), 'no gap is left unproven at flag-on')
   assert.ok(!workflow.includes('before any repo is enabled'), 'no deferred pre-enablement demand remains')

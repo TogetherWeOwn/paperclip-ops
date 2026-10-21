@@ -88,7 +88,7 @@ function stubQueue(dir, body) {
 for a in "$@"; do printf '%s\\n' "$a" >> "$(dirname "$0")/argv.txt"; done
 printf 'COMPANY_ID=%s\\n' "$COMPANY_ID" > "$(dirname "$0")/env.txt"
 env | grep -c BEARER >> "$(dirname "$0")/env.txt" 2>/dev/null || true
-echo "SUBMITTED REQ-001"
+if [ "$1" != "inbox" ]; then echo "SUBMITTED REQ-001"; fi
 `,
     { mode: 0o700 },
   );
@@ -295,7 +295,7 @@ test("the read tool is scoped by the AUTHENTICATED principal, and takes no argum
     // request in the company, which would turn a personal inbox into a company
     // -wide read the moment somebody "generalised" it. And `--for` carries the
     // authenticated agent id, which is the only selector that exists.
-    assert.deepEqual(recordedArgv(dir), ["inbox", "--for", CALLER]);
+    assert.deepEqual(recordedArgv(dir), ["inbox", "--for", CALLER, "--json"]);
     assert.ok(!recordedArgv(dir).includes(VICTIM), "the victim's id must appear nowhere in the argv");
   });
 });

@@ -5491,7 +5491,7 @@ jobs:
 
       - name: org-request-mcp regression suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.mcp == 'true'
-        run: node --test mcp/test/org-request-mcp.test.mjs
+        run: node --test mcp/test/own-inbox-diagnostics.test.mjs mcp/test/org-request-mcp.test.mjs
 
       # A suite that cannot fail is decoration, and this one guards an IDENTITY
       # boundary — the property the whole epic rests on. Every mutation below is

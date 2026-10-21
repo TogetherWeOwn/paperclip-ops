@@ -3,8 +3,9 @@
 #
 # Every sender below derives its base from PAPERCLIP_API_URL and attaches the
 # run/board bearer to it. A base that is not an http(s) URL with a non-empty
-# bare host — wrong scheme, userinfo, whitespace — must be refused BEFORE any
-# request is built, so the bearer is never sent to a base we refused to trust.
+# bare host -- wrong scheme, userinfo, whitespace, query/fragment, curl-glob
+# hosts, empty or non-numeric ports -- must be refused BEFORE any request is
+# built, so the bearer is never sent to a base we refused to trust.
 # A well-formed hostile host still passes by design (that needs an
 # operator-owned host allowlist); this gate pins the malformed-env layer.
 #
@@ -19,7 +20,7 @@ ok()  { printf '  \033[32mPASS\033[0m  %s\n' "$1"; PASS=$((PASS+1)); }
 bad() { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; [[ -n "${2:-}" ]] && printf '       %s\n' "$2"; FAIL=$((FAIL+1)); }
 hdr() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
-for tool in jq python3; do
+for tool in jq python3 node; do
   command -v "$tool" >/dev/null || { echo "ERROR: $tool is required" >&2; exit 1; }
 done
 
@@ -105,6 +106,8 @@ RUN_ENV=(env -i "PATH=$WORK/bin:/usr/bin:/bin" "CURL_LOG=$CURL_LOG" "CFG_LOG=$CF
 curl_calls() { grep -c '^---CALL---$' "$CURL_LOG" 2>/dev/null || true; }
 reset_logs() { : > "$CURL_LOG"; : > "$CFG_LOG"; }
 
+# Kept identical (modulo $NL_BASE) to MALFORMED in
+# test_paperclip_api_base_validation_py.py: both gates refuse the same set.
 MALFORMED=(
   "ftp://board.invalid/api"
   "file:///etc/passwd"
@@ -113,6 +116,17 @@ MALFORMED=(
   "https://board.invalid/api with space"
   "http:///no-host"
   "$NL_BASE"
+  "https://:8080/api"
+  "http://?q"
+  "http://#frag"
+  "https://host.invalid/api?x=1"
+  "https://host.invalid/api#frag"
+  "http://{127.0.0.1,127.0.0.2}/api"
+  "http://127.0.0.[1-2]/api"
+  "https://host:badport/api"
+  "http://ho,st.invalid/api"
+  "https://host:/x"
+  "http://host:80:90/"
 )
 
 # --- notify_paperclip_issue.sh: malformed -> exit 65, curl never called ------
@@ -136,6 +150,13 @@ out="$("${RUN_ENV[@]}" PAPERCLIP_API_URL="https://paperclip.invalid/api" PAPERCL
 [[ "$rc" -eq 0 ]] && ok "exit 0" || bad "exit 0" "exit=$rc err=$(cat "$WORK/err.txt")"
 [[ "$(curl_calls)" -eq 1 ]] && ok "one curl call" || bad "one curl call" "calls=$(curl_calls)"
 grep -qF "$CANARY" "$CFG_LOG" && ok "bearer reached curl by config" || bad "bearer reached curl by config"
+
+hdr "notify: bracketed IPv6 base still delivers"
+reset_logs
+out="$("${RUN_ENV[@]}" PAPERCLIP_API_URL="http://[::1]:9/api" PAPERCLIP_API_KEY="$CANARY" \
+  "$HERE/notify_paperclip_issue.sh" <<<"$PAYLOAD" 2>"$WORK/err.txt")"; rc=$?
+[[ "$rc" -eq 0 ]] && ok "exit 0" || bad "exit 0" "exit=$rc err=$(cat "$WORK/err.txt")"
+[[ "$(curl_calls)" -eq 1 ]] && ok "one curl call" || bad "one curl call" "calls=$(curl_calls)"
 
 # --- db_backup_stall_monitor.sh: malformed -> exit 2, detector untouched ------
 hdr "stall monitor: malformed bases refuse (exit 2) before detector/curl"
@@ -279,6 +300,27 @@ out="$("${RUN_ENV[@]}" PAPERCLIP_API_URL="https://paperclip.invalid/api" PAPERCL
 mv "$WORK/bin/curl-main" "$WORK/bin/curl"
 [[ "$rc" -eq 0 ]] && ok "exit 0" || bad "exit 0" "exit=$rc err=$(cat "$WORK/err.txt")"
 [[ "$(curl_calls)" -eq 1 ]] && ok "one curl call" || bad "one curl call" "calls=$(curl_calls)"
+
+# --- sibling_guard.sh: malformed -> blind (exit 3), board never curled ------
+hdr "sibling_guard: malformed bases go blind (exit 3) before board curl"
+mkdir -p "$WORK/empty-guard"
+[[ -e "$WORK/bin/node" ]] || ln -s "$(command -v node)" "$WORK/bin/node"
+GUARD_UUID="11111111-2222-3333-4444-555555555555"
+# Board reads are the only curls that carry the board bearer; GH-detector
+# curls (stubbed, GH_API only) may still be attempted and go blind.
+board_calls() { grep -c "api/issues\|api/companies" "$CURL_LOG" 2>/dev/null || true; }
+for base in "${MALFORMED[@]}"; do
+  reset_logs
+  out="$(cd "$WORK/empty-guard" && "${RUN_ENV[@]}" PAPERCLIP_API_URL="$base" PAPERCLIP_API_KEY="$CANARY" \
+    PAPERCLIP_COMPANY_ID="co-stub" PAPERCLIP_AGENT_ID="agent-stub" PAPERCLIP_RUN_ID="run-stub" \
+    "$HERE/sibling_guard.sh" --json "$GUARD_UUID" 2>"$WORK/err.txt")"; rc=$?
+  verdict="$(printf '%s' "$out" | jq -r '.verdict // "MISSING"' 2>/dev/null)"
+  if [[ "$rc" -eq 3 && "$(board_calls)" -eq 0 && "$verdict" == "indeterminate" ]]; then
+    ok "blind $(printf '%s' "$base" | head -c 48)"
+  else
+    bad "blind $(printf '%s' "$base" | head -c 48)" "exit=$rc board_calls=$(board_calls) verdict=$verdict err=$(cat "$WORK/err.txt")"
+  fi
+done
 
 printf '\nbase validation: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

@@ -415,19 +415,33 @@ HEALTH_LATEST="not_reported"
 if (( CHECK_HEALTH == 1 )) && [[ -n "${PAPERCLIP_API_URL:-}" ]] && command -v curl >/dev/null 2>&1; then
   base="${PAPERCLIP_API_URL%/}"; base="${base%/api}"
   # BASE host validation: the bearer below is sent ONLY to this base. A base
-  # that is not an http(s) URL with a non-empty bare host — userinfo
+  # that is not an http(s) URL with a non-empty bare host -- userinfo
   # (`user@host` misdirects the credential), whitespace (a newline would
-  # inject a curl-config directive) — skips this corroboration read, with a
-  # warning. Skipping is fail-closed here: the stall verdict never depended
-  # on this read, and the bearer is never sent to a base we refused to trust.
-  # A well-formed hostile host still passes; blocking that needs an
-  # operator-owned host allowlist, not a per-script guess.
+  # inject a curl-config directive), query/fragment, braces, or an authority
+  # that is not one bare host[:port] or bracketed [IPv6] literal -- skips
+  # this corroboration read, with a warning. Skipping is fail-closed here:
+  # the stall verdict never depended on this read, and the bearer is never
+  # sent to a base we refused to trust. A well-formed hostile host still
+  # passes; blocking that needs an operator-owned host allowlist, not a
+  # per-script guess.
   base_ok=1
   case "$base" in http://*|https://*) ;; *) base_ok=0;; esac
   if (( base_ok == 1 )); then
+    case "$base" in *@*|*[[:space:]]*|*\?*|*#*|*\{*|*\}*) base_ok=0;; esac
+  fi
+  if (( base_ok == 1 )); then
     _base_host="${base#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%/*}"
     [[ -n "$_base_host" ]] || base_ok=0
-    case "$base" in *@*|*[[:space:]]*) base_ok=0;; esac
+    case "$_base_host" in :*|*,*) base_ok=0;; esac
+    if (( base_ok == 1 )); then
+      if [[ "$_base_host" == *\[* || "$_base_host" == *\]* ]]; then
+        [[ "$_base_host" =~ ^\[[0-9a-fA-F:.]+\](:[0-9]+)?$ ]] || base_ok=0
+      elif [[ "$_base_host" == *:* ]]; then
+        if [[ "${_base_host%:*}" == *:* || ! "${_base_host##*:}" =~ ^[0-9]+$ ]]; then
+          base_ok=0
+        fi
+      fi
+    fi
   fi
   if (( base_ok == 0 )); then
     echo "db_backup_stall: WARNING: PAPERCLIP_API_URL is not a clean http(s) base; skipping health corroboration" >&2

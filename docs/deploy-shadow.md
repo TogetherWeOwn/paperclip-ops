@@ -56,12 +56,51 @@ state. There is no QA smoke execution, task creation, comment, wake, merge or
 disarm mutation. Deploy-success observation never suppresses or gates the
 independent disarm and red-main shadows.
 
+## Deployment-failure shadow observation
+
+A sibling observer watches `deployment_status` deliveries with an exact,
+case-sensitive `failure` or `error` state. It is enrolled independently under
+`closeout.deployFailShadow` with the same enrollment rules: unique `owner/repo`
+values already in `allowedRepositories`, unknown keys refused before effects,
+absent or empty meaning fully off with no extra reads, logs, result field or
+state change. Remove the block or empty the list to roll back observation.
+
+```json
+{
+  "closeout": {
+    "deployFailShadow": {
+      "enabledRepositories": ["TogetherWeOwn/paperclip-ops"]
+    }
+  }
+}
+```
+
+The failure observer drains after the success observer under the same receipt
+lock, with the same bounds (seven-day window, paged listing, at most 1000 body
+reads per repository), the same shared surplus admission and the same
+deadline/cancellation containment. The deployment environment is recorded, never
+matched: staging and production failures both count. `success` stays on the
+success path and every other state is acknowledged non-failure; none of them
+can become a failure intent.
+
+The result gains `deployFailShadow: { counters, byReason }` and the log sink
+receives one `closeout-deployfail-shadow` JSON summary per unstopped or
+drain-contained pass. Summaries and logs carry fixed counters and reason labels
+only: no URLs, SHAs, repository names, bodies or error text. The log pointer is
+first-safe-wins across the documented link chain; credentialed or otherwise
+unsafe candidates are skipped in favor of a safe fallback, and an all-unsafe
+chain records a null pointer with a counted `unsafePointer` drop. Live
+enrollment stays empty, the intent writer throws, and no suppression input is
+connected: red-main counters never suppress this hook. Nothing is persisted,
+and no task, comment, wake, merge or disarm mutation can occur.
+
 ## Local verification
 
 ```sh
 npm --prefix gh-event-capture run check
 npm --prefix gh-event-capture test
 node --test gh-event-capture/test/closeout-deploy-wiring.test.mjs
+node --test gh-event-capture/test/closeout-deployfail-wiring.test.mjs
 ```
 
 The wiring tests cover off-mode byte compatibility, refusing writer spies,

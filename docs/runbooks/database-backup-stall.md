@@ -43,8 +43,10 @@ stall. Local-only output is not proof of API health. The detector has no
 Thresholds are unchanged: at least 1024 bytes, strictly over two hours for
 archive/log staleness, and at least 90 minutes for an orphan. The existing
 unsettled-start rule is unchanged. There is no clock-skew grace: even a one-second
-future mtime is not freshness evidence. This is a size/mtime detector, not gzip,
-SQL or restoration verification.
+future mtime is not freshness evidence. Each file's mtime is checked against a
+clock sampled after its stat; that same observation time determines its age and
+orphan cutoff. `checkedAt` remains the run's start time. This is a size/mtime
+detector, not gzip, SQL or restoration verification.
 
 A measured empty directory is a positive **stall (exit 1)**. An absent/unreadable
 directory, failed enumeration, failed stat or unusable/future timestamp is an
@@ -72,7 +74,7 @@ additive `schemaVersion: 1` contract includes:
   **not** authorization or an executed remediation.
 
 Observation codes include `directory_unmeasured`, `stat_failed`,
-`file_unmeasured`, `mtime_invalid`, `mtime_future`, `producer_excluded`,
+`file_unmeasured`, `mtime_invalid`, `mtime_future`, `clock_unmeasured`, `producer_excluded`,
 `log_unmeasured`, `log_read_failed`, `window_unanchored`, `log_stale`. Finding codes
 are `backup_suppressed`, `backup_unsettled`, `orphan_dump`, `truncated_sibling`,
 `no_usable_backup`, `archive_stale`. Notes identify excluded/unknown files and

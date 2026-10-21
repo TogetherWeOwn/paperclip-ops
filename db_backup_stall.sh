@@ -281,16 +281,27 @@ select_producer() {
 read_stat() {
   local field="$1" file="$2" signal="$3" code=stat_failed
   STAT_VALUE=""
+  STAT_AGE_MIN=""
   if STAT_VALUE="$(stat -L -c "$field" -- "$file" 2>/dev/null)"; then
     if [[ ! -f "$file" ]]; then
       code=file_unmeasured
     elif [[ "$STAT_VALUE" =~ ^[0-9]{1,18}$ ]]; then
       STAT_VALUE=$(( 10#$STAT_VALUE ))
-      if [[ "$field" != %Y ]] || (( STAT_VALUE > 0 && STAT_VALUE <= NOW_EPOCH )); then
-        return 0
+      [[ "$field" != %Y ]] && return 0
+      # A writer may update a file after startup. Capture the clock AFTER stat
+      # and reuse this observation's timestamp for validation, age and cutoff.
+      # No tolerance: even one second beyond this clock is future evidence.
+      if STAT_NOW_EPOCH="$(date -u +%s)" && [[ "$STAT_NOW_EPOCH" =~ ^[0-9]{1,18}$ ]]; then
+        STAT_NOW_EPOCH=$(( 10#$STAT_NOW_EPOCH ))
+        code=mtime_invalid
+        if (( STAT_VALUE > 0 && STAT_VALUE <= STAT_NOW_EPOCH )); then
+          STAT_AGE_MIN=$(( (STAT_NOW_EPOCH - STAT_VALUE) / 60 ))
+          return 0
+        fi
+        (( STAT_VALUE > STAT_NOW_EPOCH )) && code=mtime_future
+      else
+        code=clock_unmeasured
       fi
-      code=mtime_invalid
-      (( STAT_VALUE > NOW_EPOCH )) && code=mtime_future
     elif [[ "$field" == %Y ]]; then
       code=mtime_invalid
     fi
@@ -422,13 +433,13 @@ if (( STALENESS_ONLY == 0 )); then
   # Partial enumeration cannot clear health, but a file it did observe can
   # still establish a positive orphan finding after successful stat reads.
   (( BACKUP_DIR_READABLE == 1 )) && SIGNAL_STATE[orphan]=measured
-  orphan_cutoff=$(( NOW_EPOCH - ORPHAN_MIN_AGE_MINUTES * 60 ))
+  excluded_orphans=()
   for f in "${BACKUP_FILES[@]}"; do
     [[ "$f" == *.sql ]] || continue
     select_producer "$f"
     if (( PRODUCER_SELECTED == 0 )); then
       add_code orphan producer_excluded
-      add_note "EXCLUDED: ${f##*/} belongs to producer ${PRODUCER_ID}; the orphan signal uses --exclude-suffix ${EXCLUDE_SUFFIX}."
+      excluded_orphans+=("${f##*/}")
       continue
     fi
     if ! read_stat %Y "$f" orphan; then
@@ -436,6 +447,8 @@ if (( STALENESS_ONLY == 0 )); then
       continue
     fi
     mtime="$STAT_VALUE"
+    age_min="$STAT_AGE_MIN"
+    orphan_cutoff=$(( STAT_NOW_EPOCH - ORPHAN_MIN_AGE_MINUTES * 60 ))
     (( mtime > orphan_cutoff )) && continue
     if ! read_stat %s "$f" orphan; then
       SIGNAL_STATE[orphan]=unknown
@@ -451,12 +464,14 @@ if (( STALENESS_ONLY == 0 )); then
       gz_size="$STAT_VALUE"
       (( gz_size >= MIN_BACKUP_BYTES )) && continue
     fi
-    age_min=$(( (NOW_EPOCH - mtime) / 60 ))
     ORPHANS+=("${f##*/}")
     ORPHAN_AGES+=("$age_min")
     ORPHAN_SIZES+=("$size")
     ORPHAN_GZ_SIZES+=("$gz_size")
   done
+  if (( ${#excluded_orphans[@]} > 0 )); then
+    add_note "EXCLUDED: ${#excluded_orphans[@]} files from producer host; the orphan signal uses --exclude-suffix ${EXCLUDE_SUFFIX}: ${excluded_orphans[*]}"
+  fi
 fi
 
 if (( ${#ORPHANS[@]} > 0 )); then
@@ -489,12 +504,13 @@ if (( BACKUP_DIR_READABLE == 1 || ${#BACKUP_FILES[@]} > 0 )); then
   newest_mtime=0
   newest_host_mtime=0
   selected_unknown=$(( 1 - BACKUP_DIR_READABLE ))
+  excluded_archives=()
   for f in "${BACKUP_FILES[@]}"; do
     [[ "$f" == *.sql.gz ]] || continue
     select_producer "$f"
     if (( PRODUCER_SELECTED == 0 )); then
       add_code freshness producer_excluded
-      add_note "EXCLUDED: ${f##*/} belongs to producer ${PRODUCER_ID}; it cannot answer for the selected writer."
+      excluded_archives+=("${f##*/}")
     fi
     if ! read_stat %s "$f" freshness; then
       (( PRODUCER_SELECTED == 1 )) && selected_unknown=1
@@ -509,15 +525,24 @@ if (( BACKUP_DIR_READABLE == 1 || ${#BACKUP_FILES[@]} > 0 )); then
     mt="$STAT_VALUE"
     if [[ "$PRODUCER_ID" == host ]]; then
       # Host observability is independent of whether it counts for the verdict.
-      (( mt > newest_host_mtime )) && { newest_host_mtime="$mt"; NEWEST_HOST_NAME="${f##*/}"; }
+      if (( mt > newest_host_mtime )); then
+        newest_host_mtime="$mt"
+        NEWEST_HOST_NAME="${f##*/}"
+        NEWEST_HOST_AGE_MIN="$STAT_AGE_MIN"
+      fi
     fi
     if (( PRODUCER_SELECTED == 1 )); then
-      (( mt > newest_mtime )) && { newest_mtime="$mt"; NEWEST_GOOD_NAME="${f##*/}"; }
+      if (( mt > newest_mtime )); then
+        newest_mtime="$mt"
+        NEWEST_GOOD_NAME="${f##*/}"
+        NEWEST_GOOD_AGE_MIN="$STAT_AGE_MIN"
+      fi
     fi
   done
 
-  (( newest_host_mtime > 0 )) && NEWEST_HOST_AGE_MIN=$(( (NOW_EPOCH - newest_host_mtime) / 60 ))
-  (( newest_mtime > 0 )) && NEWEST_GOOD_AGE_MIN=$(( (NOW_EPOCH - newest_mtime) / 60 ))
+  if (( ${#excluded_archives[@]} > 0 )); then
+    add_note "EXCLUDED: ${#excluded_archives[@]} files from producer host; the freshness signal uses --exclude-suffix ${EXCLUDE_SUFFIX} and they cannot answer for the selected writer: ${excluded_archives[*]}"
+  fi
 
   # A valid fresh archive proves availability despite another unknown candidate.
   # An old archive cannot prove global staleness when an unmeasured one may be
@@ -556,7 +581,7 @@ LOG_STALE=0
 if (( STALENESS_ONLY == 0 && LOG_READABLE == 1 && WINDOW_ANCHORED == 1 )); then
   PRODUCER_ID=in_server
   if read_stat %Y "$LOG_FILE" suppression; then
-    log_age_min=$(( (NOW_EPOCH - STAT_VALUE) / 60 ))
+    log_age_min="$STAT_AGE_MIN"
     if (( log_age_min > MAX_BACKUP_AGE_HOURS * 60 )); then
       LOG_STALE=1
       add_code suppression log_stale

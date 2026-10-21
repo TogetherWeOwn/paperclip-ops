@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Immutable builder acceptance contract for migration evidence AX (TOG-35161).
+"""Immutable builder acceptance contract for migration evidence AX.
 
 IMMUTABLE: builder starts from this pushed branch/commit and MUST NOT edit
 this file. Corrections return to the Test Author card. No standalone

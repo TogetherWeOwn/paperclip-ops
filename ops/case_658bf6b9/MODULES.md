@@ -11,7 +11,7 @@ Endpoint keys use `group_name`; endpoint identities use `group/name`.
 ## Core
 
 Source: `gatus-config.yaml`, `_gatus_push.sh`, `module_wiring_allowlist.json`.
-Suites: `test_case_60330d6f_status_pilot.sh`.
+Suites: `test_case_60330d6f_status_pilot.sh`, `test_queue_age_depth.sh`.
 
 - `two/two-web-prod`, `two/two-web-staging`
 - `platform/paperclip-api`, `platform/discord-bot`
@@ -19,6 +19,7 @@ Suites: `test_case_60330d6f_status_pilot.sh`.
 - `platform/oom-kills`: `push-oom-kills.sh`
 - `platform/ci-queue-age`: `push-ci-queue-age.sh`
 - `platform/tls-expiry`
+- `platform/domain-expiry`: `push-domain-expiry.sh`
 - `platform/garm-pool`: `push-garm-pool.sh`
 - `platform/workers-error-rate`: `push-workers-error-rate.sh`
 - `platform/github-rate-limit`: `push-github-rate-limit.sh`
@@ -51,10 +52,16 @@ Suite: `test_case_8ee359f2_ci_main.sh`.
 
 - `ci/main-togetherweown-two-bot-next`
 - `ci/main-togetherweown-two-web-next`
+- `ci/main-togetherweown-nntunev2`
+- `ci/main-togetherweown-routeware-shadow-api`
 - `ci/main-togetherweown-paperclip-ops`
+- `ci/main-togetherweown--github`
 - `ci/runtime-togetherweown-two-bot-next`
 - `ci/runtime-togetherweown-two-web-next`
+- `ci/runtime-togetherweown-nntunev2`
+- `ci/runtime-togetherweown-routeware-shadow-api`
 - `ci/runtime-togetherweown-paperclip-ops`
+- `ci/runtime-togetherweown--github`
 - `ci/runner-units`
 
 ## CLIProxy lanes
@@ -166,7 +173,8 @@ The same shard torn-tail rule prevents combining inconsistent evidence.
 
 `platform/balancer-silence`: `gatus-balancer-silence.yaml`,
 `push-balancer-silence.sh`, `_gatus_push.sh`,
-`test_case_60330d6f_balancer_silence.sh`.
+`test_case_60330d6f_balancer_silence.sh`,
+`balancer-retirement-PROCEDURE.md` (host retirement application + rollback).
 Registry checker: `ops/case_658bf6b9/check_module_wiring.py`.
 
 ## Neon staging

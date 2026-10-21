@@ -998,7 +998,12 @@ class Batch(Base):
 
 
 def git(cwd, *args):
-    return subprocess.run([os.environ.get("GIT_BIN", "git"), "-C", cwd, *args], capture_output=True, text=True, check=True,
+    # gc.auto=0 / maintenance.auto=false: commit/reset churn crosses git's
+    # loose-object estimate, and a detached auto-gc then writes a pack into
+    # the throwaway repo while TemporaryDirectory cleanup removes it.
+    return subprocess.run([os.environ.get("GIT_BIN", "git"), "-C", cwd,
+                           "-c", "gc.auto=0", "-c", "maintenance.auto=false", *args],
+                          capture_output=True, text=True, check=True,
                           env=dict(os.environ, GIT_AUTHOR_NAME="A", GIT_AUTHOR_EMAIL="a@example.com",
                                    GIT_COMMITTER_NAME="A", GIT_COMMITTER_EMAIL="a@example.com")).stdout
 
@@ -1516,6 +1521,196 @@ class MemoryTools(Base):
         self.files += [{"filename": "server/src/x.ts", "status": "added", "additions": 60, "deletions": 0,
                         "changes": 60, "patch": PATCH_SRC}]
         self.assertRed(self.run_lint(), "budget")
+
+
+class TemplateAbsence(Base):
+    """L1-L10: proven-404 absence writes the internal-minimum memory; anything
+    short of proof refuses and leaves memory untouched. Stub transport only."""
+
+    CANDIDATES = [".github/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md",
+                  "pull_request_template.md", "docs/pull_request_template.md"]
+    SEVEN = ["Thinking Path", "Linked Issues or Issue Description", "What Changed",
+             "Verification", "Risks", "Model Used", "Checklist"]
+    SIX = ["I wrote a thinking path that runs from the project to this change",
+           "I named the model used, with its version",
+           "I searched for duplicate or related PRs and linked them above",
+           "I ran the tests locally and they pass",
+           "I added or updated tests where applicable",
+           "I updated the documentation this change touches"]
+
+    def stub_world(self, outcomes=None, repo_ok=True, contributing="404", listings=None):
+        """outcomes: candidate path -> 404|403|503|timeout|directory|(text, sha).
+        Returns (api_get, fetch_file) mocks for one stubbed upstream repo."""
+        outcomes = outcomes or {}
+
+        def refused(path, signal):
+            if signal == "directory":
+                return ul.Refused("contents/%s on %s is not a file" % (path, REPO))
+            if signal == "timeout":
+                return ul.Refused("GET /repos/%s/contents/%s timed out" % (REPO, path))
+            return ul.Refused("GET /repos/%s/contents/%s returned HTTP %s" % (REPO, path, signal))
+
+        def api_get(path):
+            if path == "/repos/%s" % REPO:
+                if not repo_ok:
+                    raise ul.Refused("GET /repos/%s returned HTTP 404" % REPO)
+                return {"default_branch": "main"}
+            if "/git/ref" in path or path.endswith("/commits/main"):
+                return {"sha": SHA, "object": {"sha": SHA}}
+            if "/contents" in path:
+                return (listings or {}).get(path, [])
+            raise AssertionError(path)
+
+        def fetch_file(repo, path, ref):
+            if path == "CONTRIBUTING.md":
+                if contributing == "404":
+                    raise refused(path, "404")
+                return (contributing, "contributing-sha")
+            signal = outcomes.get(path, "404")
+            if isinstance(signal, tuple):
+                return signal
+            raise refused(path, signal)
+
+        return api_get, fetch_file
+
+    def init_with(self, refresh=False, **kw):
+        api_get, fetch_file = self.stub_world(**kw)
+        with mock.patch.object(ul, "api_get", side_effect=api_get), \
+                mock.patch.object(ul, "fetch_file", side_effect=fetch_file):
+            return ul.memory_init(REPO, self.mdir, refresh=refresh)
+
+    def mem_bytes(self):
+        with open(ul.memory_path(REPO, self.mdir), "rb") as fh:
+            return fh.read()
+
+    def write_absence_mem(self):
+        self.mem["template"] = {
+            "path": "", "blob_sha": "", "sections": list(self.SEVEN),
+            "checkboxes": [ul.norm(b) for b in self.SIX],
+            "pending_ok_at_first_push": ["greptile", "ci gates are green"],
+            "section_rules": [], "absent": True,
+            "absence_evidence": {
+                "candidates": [{"candidate": c, "outcome": "HTTP 404"} for c in self.CANDIDATES],
+                "source": "GET /repos/%s/contents/<cand>?ref=%s" % (REPO, SHA),
+                "revision": "main@%s" % SHA, "checked_at": "2026-10-18"}}
+        self.write_mem()
+
+    def absence_body(self, verification=True, boxes=True):
+        body = BODY.split("## Checklist")[0]
+        if not verification:
+            body = body.replace("- ran `pnpm vitest server/src/__tests__/session.test.ts`: 12 passed\n", "")
+        tail = "\n".join("- [x] " + b for b in self.SIX) if boxes else ""
+        return body + "## Checklist\n\n" + tail + "\n"
+
+    def live_lint_with(self, **kw):
+        api_get, fetch_file = self.stub_world(**kw)
+        with mock.patch.object(ul, "api_get", side_effect=api_get), \
+                mock.patch.object(ul, "fetch_file", side_effect=fetch_file):
+            return ul.lint(REPO, self.title, self.absence_body(), self.branch,
+                           self.commits, self.files, "first-push", self.mdir, False, True)
+
+    def test_l1_all_candidates_404_writes_absence_memory(self):
+        os.remove(ul.memory_path(REPO, self.mdir))
+        self.init_with(refresh=False)
+        mem = ul.load_memory(REPO, self.mdir)
+        tpl = mem["template"]
+        self.assertTrue(tpl.get("absent"))
+        self.assertEqual((tpl.get("path"), tpl.get("blob_sha")), ("", ""))
+        self.assertEqual(tpl.get("sections"), self.SEVEN)
+        self.assertEqual({ul.norm(b) for b in tpl.get("checkboxes", [])},
+                         {ul.norm(b) for b in self.SIX})
+        ev = mem.get("absence_evidence") or tpl.get("absence_evidence") or {}
+        cands = ev.get("candidates", [])
+        self.assertEqual(len(cands), 4, "per-candidate evidence required: %r" % ev)
+        for cand in cands:
+            self.assertIn("404", str(cand.get("outcome", "")))
+        self.assertIn("main@", str(ev.get("revision", "")))
+        self.assertIn("internal-minimum", json.dumps(mem))
+        self.assertFalse(mem["signoff"]["dco"] or mem["signoff"]["cla"])
+
+    def test_l2_unverifiable_candidate_refuses_and_memory_is_byte_identical(self):
+        for signal in ("403", "503", "timeout"):
+            with self.subTest(signal=signal):
+                before = self.mem_bytes()
+                with self.assertRaises(ul.Refused):
+                    self.init_with(refresh=True,
+                                   outcomes={".github/pull_request_template.md": signal})
+                self.assertEqual(self.mem_bytes(), before)
+
+    def test_l2_unverifiable_candidate_writes_no_new_memory(self):
+        os.remove(ul.memory_path(REPO, self.mdir))
+        with self.assertRaises(ul.Refused):
+            self.init_with(refresh=False,
+                           outcomes={"pull_request_template.md": "403"})
+        self.assertFalse(os.path.exists(ul.memory_path(REPO, self.mdir)))
+
+    def test_l3_non_file_candidate_is_never_recorded_as_absence(self):
+        before = self.mem_bytes()
+        with self.assertRaisesRegex(ul.Refused, "cannot verify PR template"):
+            self.init_with(refresh=True,
+                           outcomes={".github/PULL_REQUEST_TEMPLATE.md": "directory"})
+        self.assertEqual(self.mem_bytes(), before)
+        self.assertNotIn("absent", ul.load_memory(REPO, self.mdir)["template"])
+
+    def test_l4_unresolvable_repo_refuses_and_memory_is_untouched(self):
+        before = self.mem_bytes()
+        with self.assertRaises(ul.Refused):
+            self.init_with(refresh=True, repo_ok=False)
+        self.assertEqual(self.mem_bytes(), before)
+
+    def test_l5_live_template_after_absence_refuses_template_fresh(self):
+        self.write_absence_mem()
+        rep = self.live_lint_with(
+            outcomes={".github/pull_request_template.md": ("## New Template\n", "newblob")})
+        self.assertTrue(rep.refused, rep.items)
+        text = " ".join("%s %s" % (i, d) for _, i, d in rep.items)
+        self.assertIn("gained", text)
+
+    def test_l6_live_dco_marker_after_absence_refuses_until_refresh(self):
+        self.write_absence_mem()
+        rep = self.live_lint_with(
+            contributing="All commits need a Signed-off-by line",
+            listings={"/repos/%s/contents/.github/workflows" % REPO:
+                      [{"name": "dco.yml", "path": ".github/workflows/dco.yml"}]})
+        self.assertTrue(rep.refused, rep.items)
+        text = " ".join("%s %s" % (i, d) for _, i, d in rep.items).lower()
+        self.assertTrue("signoff" in text or "dco" in text, rep.items)
+
+    def test_l7_internal_minimum_body_passes_and_is_tagged_internal(self):
+        self.write_absence_mem()
+        self.body = self.absence_body()
+        rep = self.run_lint()
+        self.assertClean(rep)
+        tagged = [(s, i, d) for s, i, d in rep.items
+                  if "template(internal-minimum)" in i or "template(internal-minimum)" in d]
+        self.assertTrue(tagged, "PASS lines must name the internal minimum: %r" % rep.items)
+
+    def test_l8_empty_verification_on_absence_memory_fails_not_refuses(self):
+        self.write_absence_mem()
+        self.body = self.absence_body(verification=False)
+        rep = self.run_lint()
+        self.assertTrue(rep.failed, rep.items)
+        self.assertFalse(rep.refused, rep.items)
+        self.assertTrue(any(s == "FAIL" and "template" in i for s, i, _ in rep.items), rep.items)
+
+    def test_l9_deleted_checklist_on_absence_memory_fails(self):
+        self.write_absence_mem()
+        self.body = self.absence_body(boxes=False)
+        rep = self.run_lint()
+        self.assertTrue(rep.failed, rep.items)
+        self.assertTrue(any(s == "FAIL" and "template" in i for s, i, _ in rep.items), rep.items)
+
+    def test_l10_absence_memory_schema_and_repo_mismatch_refuse(self):
+        self.write_absence_mem()
+        self.body = self.absence_body()
+        loaded = ul.load_memory(REPO, self.mdir)
+        loaded["schema_version"] = 99
+        ul.save_memory(REPO, loaded, self.mdir)
+        self.assertTrue(self.run_lint().refused)
+        loaded["schema_version"] = 1
+        loaded["repo"] = "other/repo"
+        ul.save_memory(REPO, loaded, self.mdir)
+        self.assertTrue(self.run_lint().refused)
 
 
 class Stub(http.server.BaseHTTPRequestHandler):

@@ -17,6 +17,16 @@ fi
 if git grep -nIE 'BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY'; then
   echo "::error::private key material is committed"; rc=1
 fi
+# case_f3ff4554 (blocker-ledger 'security' class): provider-shaped secrets the
+# scan used to miss. Real shapes only — long numeric channel ids and long
+# tokens — so the short test-fixture canaries suites plant at runtime
+# (discord .../123/abc) never trip the scan.
+if git grep -nE 'discord(app)?\.com/api/webhooks/[0-9]{10,}/[A-Za-z0-9_-]{20,}'; then
+  echo "::error::a Discord-webhook-shaped URL is committed"; rc=1
+fi
+if git grep -nE '(sk_live_[A-Za-z0-9]{10,}|rk_live_[A-Za-z0-9]{10,})'; then
+  echo "::error::a Stripe-live-key-shaped string is committed"; rc=1
+fi
 # The .gitignore entries other steps and the tools depend on. Losing
 # one is silent until the day something lands in a commit.
 # __pycache__/ and *.pyc are on this list because the parse gate in

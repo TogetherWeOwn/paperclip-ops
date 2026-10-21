@@ -20,8 +20,9 @@ What it proves, in one throwaway database it creates and always drops:
      inflight, leak (a retry is preserved work, a fresh run is a leak),
      drain-marker (N|N for the drain's own startedAt only), rewake (latest
      skipped wake per agent+card, every ineligibility rule, a second pass is a
-     no-op), config (a pin change is drift, idle->running is not), fence and
-     orphans (zero on a clean copy, exact counts once seeded). With
+     no-op), config (a pin change is drift, idle->running is not), fence,
+     orphans and pending-decisions (zero on a clean copy, exact counts
+     once seeded; paused and terminated origins both counted). With
      --extra-migrations the same queries run again on the upgraded schema and
      must return identical output.
 
@@ -371,6 +372,7 @@ DRAIN_QUERIES = [
     ("config.sql", {}),
     ("fence.sql", {"since": FENCE_SINCE}),
     ("orphans.sql", {}),
+    ("pending-decisions.sql", {}),
 ]
 
 
@@ -559,6 +561,29 @@ def drain_sql_proof(conn, rcur):
     orph2 = kv(run_ro(rcur, "orphans.sql", {}))
     ok &= step(all(v == "1" for v in orph2.values()) and len(orph2) == 6,
                f"orphans.sql NEGATIVE CONTROL: one seeded orphan per check reads 1: {orph2}")
+
+    pend = kv(out["pending-decisions.sql"])
+    ok &= step(pend == {"pending_wake_origin_decisions": "0"},
+               f"pending-decisions.sql POSITIVE CONTROL: no seeded decisions read 0: {pend}")
+    # Seed: a pending continuation on paused A2 (counts), the same on
+    # active A1 (does not), and a non-pending one on A2 (does not).
+    cur.execute("SET session_replication_role = replica")
+    for agent, pending in (("A2", "true"), ("A1", "true"), ("A2", "false")):
+        insert_armed(cur, "decisions", {"company_id": q("C1"), "origin_agent_id": q(agent),
+                     "origin_issue_id": q("I1"), "origin_run_id": q("Rpre"),
+                     "continuation_policy": "'wake_origin_agent'",
+                     "metadata": f'\'{{"continuationPending":{pending}}}\'::jsonb'})
+    cur.execute("SET session_replication_role = DEFAULT")
+    conn.commit()
+    pend2 = kv(run_ro(rcur, "pending-decisions.sql", {}))
+    ok &= step(pend2 == {"pending_wake_origin_decisions": "1"},
+               f"pending-decisions.sql NEGATIVE CONTROL: only the paused-origin pending row counts: {pend2}")
+    # Terminated origins count too (the restore below returns A1 to idle).
+    cur.execute(f"UPDATE agents SET status = 'terminated' WHERE id = {q('A1')}")
+    conn.commit()
+    pend3 = kv(run_ro(rcur, "pending-decisions.sql", {}))
+    ok &= step(pend3 == {"pending_wake_origin_decisions": "2"},
+               f"pending-decisions.sql NEGATIVE CONTROL: terminated-origin pending row also counts: {pend3}")
     # Restore the fixture state the identity re-run expects.
     cur.execute(f"""UPDATE agents SET adapter_config = '{{"model":"m1"}}'::jsonb, status = 'idle' WHERE id IN ({q('A1')}, {q('A3')})""")
     conn.commit()

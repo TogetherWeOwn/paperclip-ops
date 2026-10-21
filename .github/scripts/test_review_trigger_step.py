@@ -98,6 +98,16 @@ class StepTest(unittest.TestCase):
                             % OUT_OF_SAMPLE_SHA in p for p in stub.posts))
         self.assertIn("label:review-ready", stub.posts)
 
+    def test_label_is_posted_before_comment(self):
+        # Label-first ordering avoids an orphan comment when the label
+        # write fails; the reviewer invocation tolerates either order at
+        # review time, but this repo always writes the label first.
+        stub = Stub(runs=green_runs())
+        self.assertEqual(run_with(stub), 0)
+        self.assertEqual(stub.posts[0], "label:review-ready")
+        self.assertIn("@togetherweown-reviewer review %s" % OUT_OF_SAMPLE_SHA,
+                      stub.posts[1])
+
     def test_existing_trigger_is_not_reposted(self):
         stub = Stub(runs=green_runs(), comments=[
             {"body": "@togetherweown-reviewer review %s\n\nready head"
@@ -160,6 +170,40 @@ class StepTest(unittest.TestCase):
             run_with(stub)
         self.assertIn("partial view", str(caught.exception))
         self.assertEqual(stub.posts, [])
+
+    def test_live_review_run_suppresses_the_post(self):
+        runs = green_runs() + [{"name": "Paperclip Review", "status": "in_progress",
+                                "conclusion": None}]
+        stub = Stub(runs=runs)
+        self.assertEqual(run_with(stub), 0)
+        self.assertEqual(stub.posts, [])
+
+    def test_error_outcome_still_posts_when_no_marker(self):
+        runs = green_runs() + [{"name": "Paperclip Review", "status": "completed",
+                                "conclusion": "action_required"}]
+        stub = Stub(runs=runs)
+        self.assertEqual(run_with(stub), 0)
+        self.assertTrue(any("@togetherweown-reviewer review %s"
+                            % OUT_OF_SAMPLE_SHA in p for p in stub.posts))
+
+    def test_second_overlapping_delivery_posts_no_second_trigger(self):
+        stub = Stub(runs=green_runs())
+        self.assertEqual(run_with(stub), 0)
+        first_posts = list(stub.posts)
+        self.assertTrue(any("@togetherweown-reviewer review %s"
+                            % OUT_OF_SAMPLE_SHA in p for p in first_posts))
+        # Delivery 2 overlaps delivery 1: its comment read predates delivery
+        # 1's post, but the review delivery 1 requested is now visible as a
+        # live check-run. One head, one trigger.
+        stub.comments = [c for c in stub.comments
+                         if "@togetherweown-reviewer review" not in c.get("body", "")]
+        stub.runs.append({"name": "Paperclip Review", "status": "in_progress",
+                          "conclusion": None})
+        self.assertEqual(run_with(stub), 0)
+        self.assertEqual(stub.posts, first_posts)
+
+    def test_same_head_guard_is_wired(self):
+        self.assertIsNotNone(step.review_dedup)
 
     def test_missing_env_fails_closed(self):
         old_api = step.api

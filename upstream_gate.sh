@@ -137,6 +137,16 @@ FORK_REPO_DEFAULT="TogetherWeOwn/paperclip"
 die()  { echo "$ME: $*" >&2; exit $EXIT_USAGE; }
 refuse() { echo "$ME: REFUSED: $*" >&2; exit $EXIT_REFUSED; }
 
+# Evaluator lines that already carry a space-separated REFUSED token pass
+# through verbatim (exact-token assertions); legacy TAB lines keep the old
+# prefix form so unenrolled-repo output is byte-identical.
+emit_refused() {
+  case "$1" in
+    "REFUSED "*) printf '%s\n' "$1";;
+    *) echo "REFUSED ${1#REFUSED}";;
+  esac
+}
+
 command -v jq >/dev/null 2>&1 || { echo "$ME: jq is required" >&2; exit $EXIT_USAGE; }
 command -v python3 >/dev/null 2>&1 || { echo "$ME: python3 is required" >&2; exit $EXIT_USAGE; }
 
@@ -316,7 +326,233 @@ fetch_pr_layout() { # repo number destdir
 #   <item>\t<pass|fail>\t<detail>
 # Missing/unparseable input is a REFUSAL (exit 2), never a fail, never a pass.
 
-eval_fork_ci() { # layoutdir
+# --- reviewed CI profiles (fail-closed registry) ------------------------------
+# ONE reviewed source of truth, co-located with this tool so suite copies run
+# standalone: upstream_ci_profiles.json next to this file (resolved via
+# SELFDIR, never CWD). Schema v1: {schema_version: 1, profiles:
+# {owner/repo: {fork_required, upstream_required, status, evidence}}}.
+# There is NO cross-repo fallback in fixture mode: a repo with no reviewed
+# entry, or a malformed registry, is REFUSED (exit 2). In live mode a repo
+# with no entry keeps today's hardcoded defaults (unenrolled-repo degradation:
+# the live FAKE/ACME stub worlds and unrelated filings are unaffected); a
+# present-but-unreviewed or malformed entry still refuses. A missing registry
+# file (old tool copies) also keeps today's behavior. See
+# docs/upstream/compatibility-contract.md for the full contract.
+CI_PROFILES_FILE="$SELFDIR/upstream_ci_profiles.json"
+# Repos whose REQUIRED lists keep review names verbatim (preserved defaults).
+CI_REVIEW_KEEPERS="TogetherWeOwn/paperclip|paperclipai/paperclip"
+
+# Resolve a profile entry: stdout is one JSON object
+# {required, manifest, policy_ref} on exit 0, a REFUSED TSV line on exit 2, or
+# the word LEGACY on exit 3 (live mode, unenrolled repo: use today's defaults).
+ci_profile_resolve() { # repo side mode(fixtures|live)
+  python3 - "$CI_PROFILES_FILE" "$1" "$2" "$3" <<'EOF'
+import json, sys
+reg_path, repo, side, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+keepers = {"TogetherWeOwn/paperclip", "paperclipai/paperclip"}
+try:
+    with open(reg_path, encoding="utf-8") as fh:
+        reg = json.load(fh)
+except (OSError, ValueError) as exc:
+    print("REFUSED malformed CI profile: registry unreadable (%s)" % exc); sys.exit(2)
+if not isinstance(reg, dict) or reg.get("schema_version") != 1 \
+        or not isinstance(reg.get("profiles"), dict):
+    print("REFUSED malformed CI profile: bad schema_version or profiles"); sys.exit(2)
+entry = reg["profiles"].get(repo)
+if entry is None:
+    # Unenrolled repo: fail-closed in fixtures, today's defaults live.
+    if mode == "fixtures":
+        print("REFUSED unknown/unreviewed CI profile for %s" % repo); sys.exit(2)
+    print("LEGACY"); sys.exit(3)
+if not isinstance(entry, dict) or entry.get("status") != "reviewed":
+    print("REFUSED unknown/unreviewed CI profile for %s" % repo); sys.exit(2)
+key = "fork_required" if side == "fork" else "upstream_required"
+required = entry.get(key)
+if not isinstance(required, list) or not required \
+        or any(not isinstance(n, str) or not n for n in required):
+    print("REFUSED malformed CI profile: bad %s for %s" % (key, repo)); sys.exit(2)
+for lst in ("fork_required", "upstream_required"):
+    v = entry.get(lst)
+    if not isinstance(v, list) or not v \
+            or any(not isinstance(n, str) or not n for n in v):
+        print("REFUSED malformed CI profile: bad %s for %s" % (lst, repo)); sys.exit(2)
+fork_names, up_names = entry["fork_required"], entry["upstream_required"]
+if repo not in keepers:
+    # A review must never be double-counted as CI: Paperclip Review is the
+    # fork-side independent gate (no profile may require it), and a check run
+    # named Greptile Review is only a legitimate upstream-side CI signal.
+    # (Greptile Review in upstream_required is the reviewed shape for repos
+    # where Greptile posts check runs.)
+    if "Paperclip Review" in fork_names or "Paperclip Review" in up_names \
+            or "Greptile Review" in fork_names:
+        print("REFUSED malformed CI profile: review check in *_required for %s" % repo); sys.exit(2)
+ev = entry.get("evidence")
+if not isinstance(ev, dict) or not isinstance(ev.get("policy_ref"), str) or not ev.get("policy_ref") \
+        or not isinstance(ev.get("workflows_manifest"), list) \
+        or not isinstance(ev.get("check_run_names"), list) \
+        or not isinstance(ev.get("checked_at"), str):
+    print("REFUSED malformed CI profile: bad evidence for %s" % repo); sys.exit(2)
+for m in ev["workflows_manifest"]:
+    if not isinstance(m, dict) or not isinstance(m.get("file"), str) or not m.get("file") \
+            or not isinstance(m.get("blob_sha"), str) or not m.get("blob_sha"):
+        print("REFUSED malformed CI profile: bad workflows_manifest for %s" % repo); sys.exit(2)
+print(json.dumps({"required": required, "manifest": ev["workflows_manifest"],
+                  "policy_ref": ev["policy_ref"]}))
+EOF
+}
+
+# Strict A.4 predicate over profiled required names. Argv: layoutdir label
+# required_json manifest_json provided_json("null" skips drift, "MALFORMED"
+# refuses) [strict_extra]. Prints one PASS/FAIL/REFUSED TSV line; exit 0
+# verdict, 2 refused. strict_extra=1 keeps the legacy rule for the preserved
+# paperclip entries: any BAD or unfinished non-required run also fails/pends.
+ci_profile_predicate() {
+  python3 - "$1" "$2" "$3" "$4" "$5" "${6:-0}" <<'EOF'
+import json, sys
+d, label, required, manifest, provided = (
+    sys.argv[1], sys.argv[2], json.loads(sys.argv[3]),
+    json.loads(sys.argv[4]), sys.argv[5])
+strict = len(sys.argv) > 6 and sys.argv[6] == "1"
+try:
+    runs = json.load(open(d + "/check_runs.json"))
+    cr = runs.get("check_runs", runs if isinstance(runs, list) else [])
+    pr = json.load(open(d + "/pr.json"))
+except Exception as e:
+    print("REFUSED cannot parse check_runs.json/pr.json: %s" % e); sys.exit(2)
+sha = (pr.get("head") or {}).get("sha", "") if isinstance(pr, dict) else ""
+if not isinstance(sha, str) or not sha:
+    print("REFUSED %s: pull request has no head.sha" % label); sys.exit(2)
+if manifest:
+    if provided == "null":
+        pass  # legacy layout without a pinned manifest: drift unchecked
+    elif provided == "MALFORMED":
+        print("REFUSED profile-stale: pinned workflows manifest did not parse"); sys.exit(2)
+    else:
+        try:
+            pinned = {e["file"]: e["blob_sha"] for e in json.loads(provided)}
+        except (ValueError, AttributeError, TypeError, KeyError):
+            print("REFUSED profile-stale: pinned workflows manifest did not parse"); sys.exit(2)
+        for m in manifest:
+            if pinned.get(m["file"]) != m["blob_sha"]:
+                print("REFUSED profile-stale: %s changed; refresh profile + fixtures" % m["file"]); sys.exit(2)
+latest = {}
+for r in cr:
+    name = r.get("name", "?")
+    run_id = r.get("id")
+    if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 0:
+        print("REFUSED check run has no numeric id for %s" % name); sys.exit(2)
+    key = (run_id, r.get("started_at") or r.get("completed_at") or "")
+    if name not in latest or key > latest[name][0]:
+        latest[name] = (key, r)
+if not latest:
+    print("REFUSED zero check runs observed for %s (not started, or denied)" % sha[:12]); sys.exit(2)
+# The check-runs API always returns head_sha; a payload where NO run carries
+# one predates head-pinning (legacy fixtures/stubs) and skips head comparison.
+# A required run without head_sha where others carry it is REFUSED, never passed.
+pinned_payload = any(isinstance(r.get("head_sha"), str) and r.get("head_sha")
+                     for _, r in latest.values())
+missing, pend, stale, failing = [], [], [], []
+for name in required:
+    if name not in latest:
+        missing.append(name); continue
+    r = latest[name][1]
+    hs = r.get("head_sha")
+    if not hs:
+        if pinned_payload:
+            print("REFUSED %s: required run %s has no head_sha (expected %s)" % (
+                label, name, sha[:12])); sys.exit(2)
+        # legacy payload: head assumed, status/conclusion still enforced
+    elif hs != sha:
+        stale.append("%s(head %s)" % (name, str(hs)[:12])); continue
+    if r.get("status") != "completed":
+        pend.append("%s:%s" % (name, r.get("status"))); continue
+    if r.get("conclusion") != "success":
+        failing.append("%s(%s id %s)" % (name, r.get("conclusion"), r.get("id")))
+# Preserved defaults keep the legacy rule: any completed run with a BAD
+# conclusion fails, and any unfinished run pends, whether required or not.
+# Other profiles watch only their required names (completed skipped/neutral
+# extras never block, matching legacy which only fails BAD conclusions).
+if strict:
+    required_names = set(required)
+    BAD_EXTRA = {"failure", "timed_out", "cancelled", "action_required", "startup_failure"}
+    for extra in sorted(latest):
+        if extra in required_names:
+            continue
+        rr = latest[extra][1]
+        if rr.get("status") != "completed":
+            pend.append("%s:%s" % (extra, rr.get("status")))
+        elif (rr.get("conclusion") or "") in BAD_EXTRA:
+            failing.append("%s(%s id %s)" % (extra, rr.get("conclusion"), rr.get("id")))
+if failing:
+    print("FAIL\t%s failing on %s: %s" % (label, sha[:12], ", ".join(failing))); sys.exit(0)
+if stale:
+    print("FAIL\t%s stale runs on %s: %s is stale [pending]" % (
+        label, sha[:12], ", ".join(stale))); sys.exit(0)
+if pend:
+    print("FAIL\t%s not concluded on %s: %s [pending]" % (
+        label, sha[:12], ", ".join(pend))); sys.exit(0)
+if missing:
+    print("FAIL\t%s missing required checks on %s: %s [pending]" % (
+        label, sha[:12], ", ".join(missing))); sys.exit(0)
+print("PASS\t%s green on %s: %d required checks, latest per name, incl. %s" % (
+    label, sha[:12], len(required), ", ".join(required)))
+EOF
+}
+
+# Dispatch: profiled evaluation for reviewed entries, legacy defaults for
+# unenrolled repos in live mode (or a missing registry file), refusal for
+# unenrolled/malformed entries in fixture mode. Argv: layoutdir repo side label fixtures
+profile_eval() {
+  local dir="$1" repo="$2" side="$3" label="$4" fixt="$5"
+  if [ ! -f "$CI_PROFILES_FILE" ]; then
+    if [ "$side" = "fork" ]; then eval_fork_ci_legacy "$dir"; else eval_upstream_ci_legacy "$dir"; fi
+    return $?
+  fi
+  local mode="live"; [ -n "$fixt" ] && mode="fixtures"
+  local res code required manifest policy provided
+  res="$(ci_profile_resolve "$repo" "$side" "$mode")"; code=$?
+  if [ "$code" -eq 3 ]; then
+    if [ "$side" = "fork" ]; then eval_fork_ci_legacy "$dir"; else eval_upstream_ci_legacy "$dir"; fi
+    return $?
+  fi
+  [ "$code" -eq 2 ] && { echo "$res"; return 2; }
+  [ "$code" -eq 0 ] || { echo "REFUSED cannot resolve CI profile for $repo"; return 2; }
+  required="$(jq -c '.required' <<<"$res")"
+  manifest="$(jq -c '.manifest' <<<"$res")"
+  policy="$(jq -r '.policy_ref' <<<"$res")"
+  if [ -n "$fixt" ]; then
+    if [ -f "$dir/workflows.json" ]; then
+      provided="$(jq -c '.' "$dir/workflows.json" 2>/dev/null)" || provided="MALFORMED"
+    else provided="null"; fi
+  elif [ "$manifest" = "[]" ]; then provided="null"
+  else
+    # Live drift re-resolution: the pinned blob SHAs must still match the
+    # policy branch head. Any mismatch or unreadable file refuses.
+    local branch="${policy%%@*}" n i file want out got c
+    [ -n "$branch" ] || { echo "REFUSED profile-stale: entry for $repo has no policy branch"; return 2; }
+    n="$(jq -r 'length' <<<"$manifest")"; provided="$manifest"
+    for i in $(seq 0 $((n-1))); do
+      file="$(jq -r ".[$i].file" <<<"$manifest")"
+      want="$(jq -r ".[$i].blob_sha" <<<"$manifest")"
+      out="$WORK/drift_${side}_${i}.json"
+      c="$(api_get "/repos/$repo/contents/.github/workflows/$file?ref=$branch" "$out")"
+      [ "$c" = "200" ] || { echo "REFUSED profile-stale: cannot re-resolve $file on $repo@$branch (HTTP $c); refresh profile + fixtures"; return 2; }
+      got="$(jq -r '.sha // empty' "$out")"
+      [ "$got" = "$want" ] || { echo "REFUSED profile-stale: $file changed on $repo@$branch; refresh profile + fixtures"; return 2; }
+    done
+  fi
+  # Preserved paperclip entries keep the legacy any-run strictness; every
+  # other reviewed profile watches only its required names.
+  local strict_extra=0
+  if grep -Eq "^(${CI_REVIEW_KEEPERS})$" <<<"$repo"; then strict_extra=1; fi
+  ci_profile_predicate "$dir" "$label" "$required" "$manifest" "$provided" "$strict_extra"
+}
+
+eval_fork_ci() { # layoutdir [repo] [fixtures]
+  profile_eval "$1" "${2:-$FORK_REPO_DEFAULT}" fork "fork-ci" "${3:-}"
+}
+
+eval_fork_ci_legacy() { # layoutdir (today's defaults, byte-identical)
   python3 - "$1" <<'EOF'
 import json, sys
 d = sys.argv[1]
@@ -504,7 +740,11 @@ print("PASS\tup-checklist: all 7 sections filled%s" % (
 EOF
 }
 
-eval_upstream_ci() { # layoutdir (upstream side)
+eval_upstream_ci() { # layoutdir [repo] [fixtures] (upstream side)
+  profile_eval "$1" "${2:-}" upstream "upstream-ci" "${3:-}"
+}
+
+eval_upstream_ci_legacy() { # layoutdir (today's defaults, byte-identical)
   python3 - "$1" <<'EOF'
 import json, sys
 d = sys.argv[1]
@@ -634,15 +874,16 @@ EOF
 # `publish`, which opens the upstream DRAFT while fork CI and our review run
 # beside Greptile. `ready` never sets it: nothing is pending when maintainers
 # are asked.
-run_gate_a() { # layoutdir -> prints item lines; exit 0 pass / 1 fail / 2 refused
-  local dir="$1" line item state fail=0 code
+run_gate_a() { # layoutdir [repo] [fixtures] -> prints item lines; exit 0 pass / 1 fail / 2 refused
+  local dir="$1" repo="${2:-$FORK_REPO_DEFAULT}" fixt="${3:-}" line item state fail=0 code
   GATE_PENDING_COUNT=0
   for ev in "eval_fork_ci fork-ci" "eval_our_review our-review" \
             "eval_checklist_inputs checklist" "eval_no_internal_ids no-internal-ids" \
             "eval_single_commit single-commit"; do
     set -- $ev
-    line="$($1 "$dir")"; code=$?
-    [ "$code" -eq 2 ] && { echo "REFUSED ${line#REFUSED}"; return 2; }
+    if [ "$1" = "eval_fork_ci" ]; then line="$("$1" "$dir" "$repo" "$fixt")"; code=$?
+    else line="$($1 "$dir")"; code=$?; fi
+    [ "$code" -eq 2 ] && { emit_refused "$line"; return 2; }
     [ "$code" -eq 0 ] || { echo "REFUSED $1 evaluator exited $code"; return 2; }
     case "$line" in
       FAIL*"[pending]"*)
@@ -839,7 +1080,7 @@ cmd_check() { # --mirror-pr N [--fork-repo R] [--fixtures D]
   fi
   local sha; sha="$(jq -r '.head.sha' "$dir/pr.json")"
   printf 'Gate A  %s#%s  @ %s\n' "$repo" "$num" "$sha"
-  run_gate_a "$dir"; local code=$?
+  run_gate_a "$dir" "$repo" "$fixtures"; local code=$?
   if [ "$code" -eq 0 ]; then printf 'GATE A: PASS\n'; return $EXIT_PASS; fi
   if [ "$code" -eq 2 ]; then printf 'GATE A: REFUSED\n'; return $EXIT_REFUSED; fi
   printf 'GATE A: FAIL\n'; return $EXIT_FAIL
@@ -872,7 +1113,7 @@ cmd_publish() { # --mirror-pr N --title T [--upstream-repo R] [--fork-repo R] [-
   # restores the old rule (everything green before the draft exists). The
   # maintainer ask, `ready`, never relaxes: all three must pass on one head.
   if [ "$serial" -eq 1 ]; then GATE_ALLOW_PENDING=0; else GATE_ALLOW_PENDING=1; fi
-  run_gate_a "$dir"; local gcode=$?
+  run_gate_a "$dir" "$repo" ""; local gcode=$?
   GATE_ALLOW_PENDING=0
   [ "$gcode" -eq 0 ] || { printf 'GATE A: %s — publish refused\n' \
     "$([ "$gcode" -eq 2 ] && echo REFUSED || echo FAIL)"; return $EXIT_FAIL; }
@@ -1023,15 +1264,20 @@ gate_state_of() {
   esac
 }
 
-# status_collect UDIR MDIR UPSTREAM -> $WORK/status.tsv: gate<TAB>state<TAB>detail
+# status_collect UDIR MDIR UPSTREAM [FORK] [FIXTURES] -> $WORK/status.tsv
 # The three parallel gates first, then what `ready` additionally requires.
 status_collect() {
-  local udir="$1" mdir="$2" upstream="$3" spec gate fn dir line code isdraft
+  local udir="$1" mdir="$2" upstream="$3" fork="${4:-$FORK_REPO_DEFAULT}" fixt="${5:-}"
+  local spec gate fn dir line code isdraft repo
   : > "$WORK/status.tsv"
   for spec in "fork-ci|eval_fork_ci|$mdir" "our-review|eval_our_review|$mdir" \
               "greptile|eval_greptile|$udir" "upstream-ci|eval_upstream_ci|$udir"; do
     IFS='|' read -r gate fn dir <<<"$spec"
-    line="$($fn "$dir")"; code=$?
+    case "$gate" in
+      fork-ci) line="$($fn "$dir" "$fork" "$fixt")" ;;
+      upstream-ci) line="$($fn "$dir" "$upstream" "$fixt")" ;;
+      *) line="$($fn "$dir")" ;;
+    esac; code=$?
     printf '%s\t%s\t%s\n' "$gate" "$(gate_state_of "$line" $code)" "${line#*	}" >> "$WORK/status.tsv"
   done
   isdraft="$(jq -r '.draft' "$udir/pr.json")"
@@ -1059,7 +1305,7 @@ cmd_status() { # --upstream-pr N --upstream-repo R [--mirror-pr M] [--fork-repo 
   [ -n "$num" ] || die "status needs --upstream-pr N"
   [ -n "$upstream" ] || die "status needs --upstream-repo owner/repo"
   load_pair "$upstream" "$num" "$mirror" "$repo" "$fixtures" || return $?
-  status_collect "$PAIR_UDIR" "$PAIR_MDIR" "$upstream"
+  status_collect "$PAIR_UDIR" "$PAIR_MDIR" "$upstream" "$repo" "$fixtures"
   local isdraft; isdraft="$(jq -r '.draft' "$PAIR_UDIR/pr.json")"
   # The three parallel gates decide the verdict; the rest is shown for the
   # next step (lint/reputation block `ready`, not the "all three" verdict).
@@ -1135,7 +1381,7 @@ cmd_reputation() { # --upstream-pr N --upstream-repo R [--reviewer-model M] [--p
   # verify as a real second-model pass (Paperclip Review 3/5 at f57ac32).
   if [ "$post" -eq 1 ] && [ -n "$resp" ]; then refuse "--response-file with --post-receipt is refused"; fi
   load_pair "$upstream" "$num" "$mirror" "$repo" "$fixtures" || return $?
-  status_collect "$PAIR_UDIR" "$PAIR_MDIR" "$upstream"
+  status_collect "$PAIR_UDIR" "$PAIR_MDIR" "$upstream" "$repo" "$fixtures"
   # The reviewer is shown what code measured, so a claim like "all CI green"
   # can be checked against the real state rather than taken on trust.
   { echo "head $PAIR_SHA"
@@ -1165,7 +1411,7 @@ cmd_receipts() { # --upstream-pr N --upstream-repo R [--mirror-pr M] [--fork-rep
   [ -n "$num" ] || die "receipts needs --upstream-pr N"
   [ -n "$upstream" ] || die "receipts needs --upstream-repo owner/repo"
   load_pair "$upstream" "$num" "$mirror" "$repo" "$fixtures" || return $?
-  status_collect "$PAIR_UDIR" "$PAIR_MDIR" "$upstream"
+  status_collect "$PAIR_UDIR" "$PAIR_MDIR" "$upstream" "$repo" "$fixtures"
   python3 - "$upstream" "$num" "$PAIR_SHA" "${PAIR_MIRROR:-}" "$repo" "$WORK/status.tsv" \
     "$PAIR_UDIR/pr.json" "$PAIR_MDIR/comments.json" "$SELFDIR" <<'EOF'
 import json, os, sys, datetime
@@ -1254,31 +1500,32 @@ cmd_ready() { # --upstream-pr N [--mirror-pr M] [--upstream-repo R] [--fork-repo
   nticks="$(tick_verified_boxes "$udir/pr.json" "$vdir/pr.json")" || refuse "cannot prepare the ready-state body"
   local fail=0 line code
   line="$(eval_upstream_checklist "$vdir" strict)"; code=$?
-  [ "$code" -eq 2 ] && { echo "REFUSED ${line#REFUSED}"; return $EXIT_REFUSED; }
+  [ "$code" -eq 2 ] && { emit_refused "$line"; return $EXIT_REFUSED; }
   [ "$code" -eq 0 ] || refuse "upstream checklist evaluator exited $code"
   echo "$line"; case "$line" in FAIL*) fail=1;; esac
   for ev in "eval_upstream_ci upstream-ci" "eval_greptile greptile"; do
     set -- $ev
-    line="$($1 "$udir")"; code=$?
-    [ "$code" -eq 2 ] && { echo "REFUSED ${line#REFUSED}"; return $EXIT_REFUSED; }
+    if [ "$1" = "eval_upstream_ci" ]; then line="$("$1" "$udir" "$upstream" "$fixtures")"; code=$?
+    else line="$($1 "$udir")"; code=$?; fi
+    [ "$code" -eq 2 ] && { emit_refused "$line"; return $EXIT_REFUSED; }
     [ "$code" -eq 0 ] || refuse "$1 evaluator exited $code"
     echo "$line"
     case "$line" in FAIL*) fail=1;; esac
   done
   echo "-- mirror Gate A still passing on $sha --"
-  GATE_ALLOW_PENDING=0 run_gate_a "$mdir"; local gcode=$?
+  GATE_ALLOW_PENDING=0 run_gate_a "$mdir" "$repo" "$fixtures"; local gcode=$?
   [ "$gcode" -eq 2 ] && { echo "REFUSED mirror Gate A unmeasurable"; return $EXIT_REFUSED; }
   [ "$gcode" -eq 0 ] || fail=1
   echo "-- case_214e61d3: pre-push lint and second-model reputation pass on the same head --"
   LINT_REPO="$upstream" LINT_STAGE=ready; [ -z "$fixtures" ] && LINT_LIVE=1
   line="$(eval_lint "$vdir")"; code=$?
   unset LINT_REPO LINT_STAGE LINT_LIVE
-  [ "$code" -eq 2 ] && { echo "REFUSED ${line#REFUSED}"; return $EXIT_REFUSED; }
+  [ "$code" -eq 2 ] && { emit_refused "$line"; return $EXIT_REFUSED; }
   [ "$code" -eq 0 ] || refuse "pre-push linter evaluator exited $code"
   echo "$line"; case "$line" in FAIL*) fail=1;; esac
   [ -f "$mdir/comments.json" ] || refuse "mirror layout has no comments.json (the reputation receipt cannot be read)"
   line="$(eval_reputation "$vdir" "$mdir/comments.json")"; code=$?
-  [ "$code" -eq 2 ] && { echo "REFUSED ${line#REFUSED}"; return $EXIT_REFUSED; }
+  [ "$code" -eq 2 ] && { emit_refused "$line"; return $EXIT_REFUSED; }
   [ "$code" -eq 0 ] || refuse "reputation evaluator exited $code"
   echo "$line"; case "$line" in FAIL*) fail=1;; esac
   if [ "$fail" -ne 0 ]; then printf 'READY: REFUSED — items above fail\n'; return $EXIT_FAIL; fi
@@ -1366,26 +1613,36 @@ cmd_audit() { # --upstream-pr N [--upstream-repo R] [--fork-repo R] [--fixtures 
     # An evaluator answers through its text (PASS/FAIL) and exits 0; any other
     # exit is "could not measure", never a blank passing item.
     if [ $code -ne 0 ]; then
-      line="REFUSED ${line#REFUSED}"; refused=1
+      line="$(emit_refused "$line")"; refused=1
       [ "$hard" -eq 1 ] && hard_refused=1
     fi
     items+=("$3: $line")
     case "$line" in FAIL*) fail=1;; esac
   }
-  collect eval_upstream_ci "$udir" "upstream-ci"
+  collect_ci() { # evaluator dir label repo fixtures [hard]
+    local hard="${6:-1}"
+    line="$($1 "$2" "$4" "$5")"; code=$?
+    if [ $code -ne 0 ]; then
+      line="$(emit_refused "$line")"; refused=1
+      [ "$hard" -eq 1 ] && hard_refused=1
+    fi
+    items+=("$3: $line")
+    case "$line" in FAIL*) fail=1;; esac
+  }
+  collect_ci eval_upstream_ci "$udir" "upstream-ci" "$upstream" "$fixtures"
   collect eval_greptile "$udir" "greptile"
   # Retrofit checklist is scored on the UPSTREAM body (the artifact
   # maintainers read). Mirror stubs predate this gate and are scored only
   # by `check`/`publish` for NEW work, where the mirror carries the proposal.
   line="$(eval_upstream_checklist "$udir")"; code=$?
-  [ $code -ne 0 ] && { line="REFUSED ${line#REFUSED}"; refused=1; hard_refused=1; }
+  [ $code -ne 0 ] && { line="$(emit_refused "$line")"; refused=1; hard_refused=1; }
   items+=("up-checklist: $line"); case "$line" in FAIL*) fail=1;; esac
   # Mergeable-null is the transient exception (hard=0): it blocks PASS but
   # never vetoes conversion of a measured FAIL.
   collect eval_mergeable "$udir" "mergeable" 0
   if [ -f "$mdir/pr.json" ]; then
     for ev in eval_fork_ci eval_our_review eval_no_internal_ids eval_single_commit; do
-      collect "$ev" "$mdir" "mirror"
+      collect_ci "$ev" "$mdir" "mirror" "$repo" "$fixtures"
     done
   else
     items+=("mirror: FAIL no fork PR holds head $sha (Gate A needs a mirror PR)"); fail=1
@@ -1416,7 +1673,7 @@ cmd_audit() { # --upstream-pr N [--upstream-repo R] [--fork-repo R] [--fixtures 
     if [ "$isdraft" != "true" ]; then
       if [ -f "$mdir/comments.json" ]; then
         line="$(eval_reputation "$udir" "$mdir/comments.json")"; code=$?
-        [ $code -ne 0 ] && { line="REFUSED ${line#REFUSED}"; refused=1; hard_refused=1; }
+        [ $code -ne 0 ] && { line="$(emit_refused "$line")"; refused=1; hard_refused=1; }
         items+=("reputation: $line"); case "$line" in FAIL*) fail=1;; esac
       else
         items+=("reputation: FAIL no mirror comments to read the receipt from"); fail=1

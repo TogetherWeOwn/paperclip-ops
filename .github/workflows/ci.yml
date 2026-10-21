@@ -6,7 +6,7 @@ name: CI
 # green badge anywhere: a CI that looks like it tests everything while testing
 # part of it is worse than one that says which part.
 #
-#   REPO SPLIT (C5e cutover): default restoration is immutable toolkit main-533c7ae2.
+#   REPO SPLIT (C5e cutover): default restoration is immutable toolkit main-d0324d0.
 #   Only 19 complete portable producers with exact-pin suite, dependency and
 #   hosted-command proof are removed from 247 accepted runnable suites steps.
 #   The 228 retained producers include private/diverged/unproved behavior;
@@ -70,6 +70,11 @@ name: CI
 #                                       and the disabled write gate — case_0d1b8a91
 #     test_host_ops_install.sh          the installer's service-identity, key and
 #                                       sudoers contracts — case_0d1b8a91
+#     test_host_ops_staging_preflight_carrier.py
+#                                       the disabled fixed-purpose staging-preflight
+#                                       carrier: request/manifest/artifact gates,
+#                                       one-shot replay refusal, fixed dispatch,
+#                                       and minimized receipts
 #     test_operator_runbook.sh          whether a capability-bound ask was
 #                                       filed as a decision, and whether the
 #                                       runbook still matches the live owner
@@ -604,7 +609,7 @@ jobs:
       # fails with `node: command not found` (case_2ef967e7; PR #667 job
       # 111515472918: 73 passed / 21 failed). Node 24 matches the sibling jobs
       # and the runtime the instance runs plugins on.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
       # case_23300ea2: hardened two-isolated runners (ci-node7b1ff338-iso) preinstall the
@@ -946,7 +951,7 @@ jobs:
       # '20' here skewed local (24) vs CI and produced "passes locally, fails
       # in CI" on node --test semantics. Change .nvmrc and this line together.
       #
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
 
@@ -997,6 +1002,19 @@ jobs:
       #
       - name: review routing contract holds
         run: ./test_review_route.sh
+
+      # Shell-substitution guard contract: the offline gate that refuses an
+      # unbounded `yes` inside `$(...)`/backticks before execution (the
+      # memcg OOM mechanism: substitution collects stdout until EOF and
+      # `yes` never sends EOF). A neutered always-clean stub fails the
+      # suite, so a vacuous gate cannot hide. Hermetic (argv/file/stdin
+      # fixtures only, never executes an unbounded producer), so it runs in
+      # the core area next to the other contract gates. Without this step
+      # the suite runs only in the full local verify-fast tier while CI runs
+      # --parse-only, so a gate regression would merge green.
+      - name: shell-subst guard suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_shell_subst_guard.sh
 
       - name: deploy-window wrapper and pin mutation suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
@@ -1162,6 +1180,16 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_host_ops_install.sh
 
+      # Disabled fixed-purpose staging-preflight carrier: request, manifest
+      # and artifact gates, one-shot replay refusal across processes, fixed
+      # argv/scrubbed-env dispatch, and minimized dispatch receipts. Offline:
+      # the suite stages fixture install roots under mktemp with a synthetic
+      # test-only adapter, a fake clock and a fake authority environment, so
+      # it never needs the host paths, network, or credentials.
+      - name: staging-preflight carrier suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 ./test_host_ops_staging_preflight_carrier.py
+
       # case_e8e49a02. Flap-guard offline proof (case_437d0846 spec
       # ops/case_658bf6b9/flap-guard.md, impl ops/case_658bf6b9/flap_guard.py):
       # headline case pins one page plus one digest for a flapping endpoint
@@ -1180,6 +1208,19 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 -m unittest -v test_flap_guard
 
+      # Quality-gate helper suites: floor guard (diff-scoped quality floor),
+      # pull_request_target refusal, subprocess-timeout backlog and
+      # mutmut-on-changed-lines gates. Hermetic unit/fixture suites: stdlib
+      # unittest plus fixture git repos under mktemp only; no network, no
+      # credentials, no writes outside the fixtures. Always run: they are
+      # fast and they pin the gates this repo inherits. Gate enforcement
+      # inside CI (a gates workflow) is a separate follow-up batch.
+      - name: quality-gate helper suites
+        run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target
+
+      - name: mutmut budget-kill fixture suite
+        run: bash ./test_mutmut_changed.sh
+
       # case_658bf6b9. Status-page pilot bundle: config shape, secret sweep,
       # fail-closed pushes, hermetic offline suite (no network/creds).
       - name: status-page pilot suite
@@ -1192,6 +1233,14 @@ jobs:
       # listener (no network beyond 127.0.0.1, no credentials).
       - name: TLS and Neon dependency probes suite
         run: ./test_case_60330d6f_dependency_probes.sh
+
+      # Registrar domain-expiry (RDAP expiration event) complement to the
+      # TLS certificate probe: warn/crit/down mapping, fail-closed on
+      # unverifiable RDAP, config refusals, token-off-argv, anchor mutants.
+      # Hermetic: one stub server for Gatus pushes and RDAP GETs on
+      # 127.0.0.1 (no network beyond loopback, no credentials).
+      - name: registrar domain-expiry probe suite
+        run: ./test_case_60330d6f_domain_expiry.sh
 
       # case_f3715a38. Router shadow-log freshness + window-landing gauge Gatus
       # module: fragment shape, secret sweep, fail-closed pushes, freshness
@@ -1209,6 +1258,19 @@ jobs:
       # sanitized receipt only. Hermetic fixture suite (no network/creds).
       - name: bounded shadow-reader suite
         run: ./test_case_a38f4d21_shadow_reader_bounded.sh
+
+      # Deferred execution-image packet, ported with a resolved non-root
+      # startup contract (final USER 1000:1000; the inherited entrypoint
+      # execs the application directly without root-only remap or volume
+      # repair). Hermetic source-only checks: manifest consistency, the
+      # fail-closed negative controls, and the Stage-B attestation-policy
+      # suite. No network, no credentials, no image build.
+      - name: execution-image source-only carrier suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: |
+          python3 -B execution-image/test_manifest.py
+          python3 -B execution-image/validate.py execution-image/manifest.json
+          python3 -B execution-image/test_verify_result_policy.py
 
       # case_56fff4c6. Monitoring of the monitor (parent case_66436e78 item 7):
       # off-host Gatus heartbeat probe + staging-only round-trip harness.
@@ -1288,6 +1350,11 @@ jobs:
       # (no network/creds).
       - name: queue forecast gatus module suite
         run: ./test_case_60330d6f_queue_forecast.sh
+      # case_658bf6b9. CI queue-age measurement and healthy/failing push
+      # contracts. Hermetic offline suite (no network/creds).
+      - name: queue age depth contract suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_queue_age_depth.sh
 
       # case_b24794c2. GARM pool-health module: strict per-pool evaluator
       # (absent fields fail closed) + endpoint renderer. Hermetic: synthetic
@@ -1355,7 +1422,7 @@ jobs:
       # Reconciler holds and hide-noop predicates, backlog-promoter, board-jobs, orphan-PRs and focus-gate fail-closed timeouts, PR-supply card text, flow-guard stages and host-pressure gate fail-closed contract. Offline: temp files and stubs.
       - name: review reconciler and ops guard suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile) && (cd ops/paperclip && python3 -m unittest -v test_focus_gate_bounds)
+        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes) && (cd ops/paperclip && python3 -m unittest -v test_focus_gate_bounds)
       # case_0d0fab73. reviewer-eval survival report atomic write: the eval
       # report persists through write_json_atomic (same-dir temp, fsync,
       # atomic rename) and a failing write exits non-zero with the previous
@@ -1541,6 +1608,17 @@ jobs:
       # the red/green mutants. Offline, stdlib only.
       - name: gatus module wiring gate
         run: python3 -m unittest -v test_module_wiring.py test_pr2_acceptance.py
+
+      # PR #6 acceptance: the freeze-list, toolkit-restore, runner-proof and
+      # ci-ok graph contracts test_pr6_acceptance pins must execute in CI.
+      # verify-fast.sh --parse-only (the CI fast tier) never reaches its
+      # full-tier registration, so it gets its own step like the pr2 suite
+      # above. Runs after the toolkit restore above, which this suite needs
+      # for its gate files. Offline, stdlib only.
+      - name: pr6 acceptance suite
+        env:
+          PR6_FREEZE_BASE: ${{ github.event.pull_request.base.sha }}
+        run: python3 -m unittest -v test_pr6_acceptance.py
 
       # case_e6def006. Balancer-silence notification binding Gatus module:
       # dedicated platform_balancer-silence key, fail-closed stale/missing,
@@ -1974,6 +2052,13 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_org_snapshot.sh
 
+      # verify-fast --parse-only exits before its local full-tier suites. Run
+      # receipt-only rejection regressions explicitly; fixtures need no root,
+      # database, credentials, network, or live operator queue.
+      - name: queue-packet reject offline suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_op_queue_reject.sh
+
       # case_1b34645a. A third question again: the first two ask who may decide and
       # whether the record survives, this one asks whether the REQUESTER ever
       # finds out. It also carries the containment half — that a failed or
@@ -2015,6 +2100,20 @@ jobs:
       - name: notification-transport suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_notify_transport.sh
+
+      # API base validation: every PAPERCLIP_API_KEY sender refuses a base
+      # that is not an http(s) URL with a bare host before any request is
+      # built. Hermetic (stub curl, env -i), no network, no credentials.
+      - name: api-base-validation suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_paperclip_api_base_validation.sh
+
+      # API base validation (Python senders): same malformed-base gate as
+      # the shell suite above, for the urllib senders. Hermetic (mocked
+      # urlopen), no network, no credentials.
+      - name: api-base-validation-python suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -B -m unittest -v test_paperclip_api_base_validation_py
 
       # case_acb41886. The capability gate — the sibling of the provisioning queue,
       # for asks whose object is a CAPABILITY rather than an org seat. It runs
@@ -2175,6 +2274,22 @@ jobs:
       - name: Beszel to Gatus bridge suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_beszel_gatus_bridge.sh
+
+      # case_f2010cb7 producer halves. The adapter is the only translator
+      # from Beszel-native records into the bridge contract: a wrong GiB
+      # factor, load divisor, or failed-services index would mis-score
+      # every host while looking healthy, and the forwarder is the only
+      # consumer of the Discord routing table (real Beszel title shapes +
+      # 500-char cap + https-only webhook never in argv). The fetch
+      # wrapper is the only handler of the hub password and token
+      # (0600 files, token charset gate, https-unless-loopback).
+      # Offline: native fixtures + stub curl.
+      - name: Beszel adapter and Discord forwarder suites
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: |
+          python3 -B test_beszel_adapter.py
+          python3 -B test_beszel_discord_forwarder.py
+          bash test_fetch_beszel_normalized.sh
 
       # case_c542accd. CI main-conclusion + job-runtime Gatus module: a script
       # that scores a red, slow, or unreadable main as healthy would
@@ -2357,6 +2472,19 @@ jobs:
       - name: review bot sandbox canary suite
         run: ./test_review_bot_sandbox_canary.sh
 
+      # Activation contract (paperclip-upgrade/activation.sh): one
+      # service-scoped deployment lock across drain phases, verify-only
+      # post-restart hardening with no reachable ownership change, and
+      # fail-closed identity/pressure/window bindings. Hermetic: stub
+      # docker and stub drain.sh over temp fixtures; no daemon, DB or
+      # network. Without this step the suite runs only in the full
+      # local verify-fast tier while CI runs --parse-only, so a lock or
+      # binding regression would merge green.
+      - name: activation contract suite
+        run: |
+          ./paperclip-upgrade/test-activation-offline.sh
+          python3 -m unittest -v test_reharden_relative_targets
+
       # case_9cc4c0ad: offline, recorded-model auth evidence. The real incident is
       # INSUFFICIENT; cross-model successes and pre-inference aborts are not
       # controls. Mutation kills require two named assertions, never errors.
@@ -2525,6 +2653,13 @@ jobs:
       - name: cold-start detector suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_cold_start_detector.sh
+
+      # The sibling-run guard is tracked in this repo (toolkit-tracked
+      # allowlist survivor), so its offline regression suite runs here
+      # against the tree, not the pinned toolkit bytes.
+      - name: sibling-run guard suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_sibling_guard.sh
 
       # case_e77a1e99. The measuring half of the watchdog red-main detector
       # (case_311c4d5b item 6): poll company-repo mains through the fail-closed
@@ -4728,6 +4863,21 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 test_staged_drift.py
 
+      # Shared migration safety gates (docs/migration-standard.md): the
+      # timeout-preamble injector, the squawk + file-standard gate, the
+      # prod-clone rehearsal driver and the ledger-vs-candidate drift gate,
+      # each with an offline suite. Fully hermetic: fixture files, fake
+      # provider CLIs by absolute path, no database, no network, no
+      # credentials. Root test_* fallthrough already wakes core; the pins
+      # in ci_changes.py record the intent.
+      - name: migration safety gates suites
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: |
+          ./test_migration_timeout_preamble.sh
+          ./test_migration_squawk.sh
+          ./test_migration_rehearsal.sh
+          python3 -m unittest -v test_migration_drift_gate
+
       # == area: runbook (was runbook-gates; runs only when runbook or full changed) ==
       - name: DLQ redrive CLI standalone suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
@@ -5836,7 +5986,7 @@ jobs:
           clean: true
       - name: Restore toolkit-vendored files
         run: bash scripts/sync-toolkit.sh
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
       - name: Run private mutation gates

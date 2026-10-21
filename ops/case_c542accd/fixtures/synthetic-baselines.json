@@ -1,0 +1,53 @@
+{
+  "fallback_s": 3600,
+  "repos": {
+    "TogetherWeOwn/.github": {
+      "jobs": {
+        "synthetic-job": {
+          "baseline_s": 60,
+          "seed": "synthetic"
+        }
+      }
+    },
+    "TogetherWeOwn/nntunev2": {
+      "jobs": {
+        "synthetic-job": {
+          "baseline_s": 60,
+          "seed": "synthetic"
+        }
+      }
+    },
+    "TogetherWeOwn/paperclip-ops": {
+      "jobs": {
+        "synthetic-job": {
+          "baseline_s": 60,
+          "seed": "synthetic"
+        }
+      }
+    },
+    "TogetherWeOwn/routeware-shadow-api": {
+      "jobs": {
+        "synthetic-job": {
+          "baseline_s": 60,
+          "seed": "synthetic"
+        }
+      }
+    },
+    "TogetherWeOwn/two-bot-next": {
+      "jobs": {
+        "synthetic-job": {
+          "baseline_s": 60,
+          "seed": "synthetic"
+        }
+      }
+    },
+    "TogetherWeOwn/two-web-next": {
+      "jobs": {
+        "synthetic-job": {
+          "baseline_s": 60,
+          "seed": "synthetic"
+        }
+      }
+    }
+  }
+}

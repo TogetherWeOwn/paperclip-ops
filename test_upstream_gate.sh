@@ -1365,6 +1365,38 @@ rm -f "$LIVE/fail"
 if [ "$RC" -ne 0 ] && ! grep -q '^pr create' "$LIVE/gh_calls.log"; then ok "a refused publish never calls gh pr create";
 else bad "a refused publish never calls gh pr create" "rc=$RC calls=$(cat "$LIVE/gh_calls.log")"; fi
 
+# G21/T1: the publish draft-plan path under a stub GH_BIN that hard-fails every
+# mutation. The guard must bite on a direct mutation, yet the offline draft
+# plan completes with zero mutation invocations (never a bare live dry-run).
+cat > "$LIVE/bin/gh-guard" <<'GHGUARD'
+#!/usr/bin/env bash
+case " $* " in
+  *" pr create "*|*" pr ready "*|*" pr merge "*|*" pr edit "*|*" pr close "*|*" pr comment "*|*" -X POST "*|*" -X PATCH "*|*" -X PUT "*|*" -X DELETE "*|*" --method POST "*|*" --method PATCH "*|*" --method PUT "*|*" --method DELETE "*)
+    printf 'MUTATION: %s\n' "$*" >> "${GH_GUARD_LOG:-/dev/null}"
+    echo "gh-guard: mutation refused: $*" >&2
+    exit 3 ;;
+esac
+exec "$(dirname "$0")/gh" "$@"
+GHGUARD
+chmod +x "$LIVE/bin/gh-guard"
+export GH_GUARD_LOG="$LIVE/gh_guard.log"; : > "$GH_GUARD_LOG"
+"$LIVE/bin/gh-guard" pr create --draft >/dev/null 2>&1; GUARD_RC=$?
+if [ "$GUARD_RC" -eq 3 ] && grep -q 'MUTATION: pr create' "$GH_GUARD_LOG"; then
+  ok "T1 stub GH_BIN hard-fails a direct pr create mutation"
+else bad "T1 stub GH_BIN hard-fails a direct pr create mutation" "rc=$GUARD_RC log=$(cat "$GH_GUARD_LOG")"; fi
+
+: > "$GH_GUARD_LOG"; : > "$LIVE/gh_calls.log"
+printf 'mirror_pending' > "$LIVE/fail"
+OUT="$(eval "$(mk_live_env) GH_BIN=$LIVE/bin/gh-guard $TOOL $PUB_ARGS --dry-run" 2>&1)"; RC=$?
+rm -f "$LIVE/fail"
+if [ "$RC" -eq 0 ] && grep -q "draft opens now" <<<"$OUT" && grep -q "PASS so far" <<<"$OUT"; then
+  ok "G21 parallel publish still emits a draft plan, never ready, while fork CI is not green"
+else bad "G21 parallel publish still emits a draft plan, never ready, while fork CI is not green" "rc=$RC out=$OUT"; fi
+if [ "$RC" -eq 0 ] && [ ! -s "$GH_GUARD_LOG" ] && ! grep -E -q '^(pr create|pr ready|pr merge|pr edit)' "$LIVE/gh_calls.log"; then
+  ok "T1 publish draft-plan completes offline with zero mutation invocations"
+else bad "T1 publish draft-plan completes offline with zero mutation invocations" "rc=$RC guard=$(cat "$GH_GUARD_LOG") calls=$(cat "$LIVE/gh_calls.log") out=$OUT"; fi
+unset GH_GUARD_LOG
+
 # An unresolved review thread on page 2 must block ready; page 1 has 100 resolved threads.
 : > "$LIVE/gh_calls.log"; : > "$LIVE/graphql.log"; printf 'threads-unresolved' > "$LIVE/fail"
 OUT="$(eval "$(mk_live_env) $TOOL ready --upstream-pr 15142 --upstream-repo FAKE/upstream --fork-repo FAKE/fork" 2>&1)"; RC=$?
@@ -1759,6 +1791,424 @@ else bad "ready writes the ticked body byte-for-byte (jq -j)" "ready_body line s
 printf '%s' '{"title":"t","body":"line\n"}' > "$WORK/nl_pr.json"
 if [ "$(jq -j '.body // ""' "$WORK/nl_pr.json" | od -An -tx1 | tr -d ' \n')" = "$(printf 'line\n' | od -An -tx1 | tr -d ' \n')" ]; then ok "jq -j preserves a trailing newline without adding one";
 else bad "jq -j preserves a trailing newline without adding one" "jq -j added or dropped a byte"; fi
+
+# ===========================================================================
+hdr "compat profiles: reviewed repo-specific CI profiles fail closed (G0-G31)"
+
+# The profile registry is co-located with the gate, so these cases run a copy
+# of the tool from a temp dir whose upstream_ci_profiles.json the suite owns.
+COMPAT="$WORK/compat-tool"; mkdir -p "$COMPAT"
+cp "$HERE/upstream_gate.sh" "$HERE/upstream_lint.py" "$HERE/upstream_reputation.py" "$COMPAT/"
+chmod +x "$COMPAT/upstream_gate.sh"
+CTOOL="$COMPAT/upstream_gate.sh"
+
+write_compat_profiles() { # variant: good|no-cli|upstream-pending|badjson|bad-schema|empty-required|nonstring|smuggled|drift
+  python3 - "$COMPAT/upstream_ci_profiles.json" "${1:-good}" <<'PYPROF'
+import json, sys
+path, variant = sys.argv[1], sys.argv[2]
+fork_names = ["build", "ensure-no-translator-changes", "close-when-agents-md-changed"]
+up_names = fork_names + ["Greptile Review"]
+def ev(policy):
+    return {"policy_ref": policy,
+            "workflows_manifest": [{"file": f, "blob_sha": "blob-" + f} for f in
+                                   ("pr-test-build.yml", "pr-path-guard.yml", "agents-md-guard.yml")],
+            "check_run_names": list(fork_names), "checked_at": "2026-10-18"}
+data = {"schema_version": 1, "profiles": {
+    "TogetherWeOwn/paperclip": {
+        "fork_required": ["ci / verify", "ci / e2e", "Paperclip Review"],
+        "upstream_required": ["ci / verify", "ci / e2e", "Greptile Review"],
+        "status": "reviewed", "evidence": ev("master@fixture")},
+    "paperclipai/paperclip": {
+        "fork_required": ["ci / verify", "ci / e2e", "Paperclip Review"],
+        "upstream_required": ["ci / verify", "ci / e2e", "Greptile Review"],
+        "status": "reviewed", "evidence": ev("alias-preserved@fixture")},
+    "TogetherWeOwn/CLIProxyAPI": {
+        "fork_required": fork_names, "upstream_required": up_names,
+        "status": "reviewed", "evidence": ev("dev@e9af1ba")},
+    "router-for-me/CLIProxyAPI": {
+        "fork_required": fork_names, "upstream_required": up_names,
+        "status": "reviewed", "evidence": ev("main@fixture")}}}
+cli = data["profiles"]["TogetherWeOwn/CLIProxyAPI"]
+if variant == "no-cli":
+    data["profiles"].pop("TogetherWeOwn/CLIProxyAPI")
+elif variant == "upstream-pending":
+    data["profiles"]["router-for-me/CLIProxyAPI"]["status"] = "pending-live-confirmation"
+elif variant == "bad-schema":
+    data["schema_version"] = 2
+elif variant == "empty-required":
+    cli["fork_required"] = []
+elif variant == "nonstring":
+    cli["fork_required"] = ["build", 42]
+elif variant == "smuggled":
+    cli["fork_required"] = fork_names + ["Paperclip Review"]
+elif variant == "drift":
+    cli["evidence"]["workflows_manifest"][0]["blob_sha"] = "stale-blob"
+elif variant == "badjson":
+    open(path, "w").write("{not json")
+    raise SystemExit
+json.dump(data, open(path, "w"))
+PYPROF
+}
+
+# Maintainer memory for the compat repos (same world the fixture bodies satisfy).
+python3 - "$HERE" "$UPSTREAM_MEMORY_DIR" <<'PYMEM2'
+import sys
+here, out = sys.argv[1], sys.argv[2]
+sys.path.insert(0, here)
+import upstream_lint as ul
+for repo in ("router-for-me/CLIProxyAPI", "TogetherWeOwn/CLIProxyAPI",
+               "TogetherWeOwn/paperclip"):
+    mem = ul.load_memory("paperclipai/paperclip", out)
+    mem["repo"] = repo
+    ul.save_memory(repo, mem, out)
+PYMEM2
+
+# Mirror fixture whose check runs carry the profiled rendered names, exact-head
+# sha and app provenance. Args: dir [mutation]
+mk_cli_mirror() {
+  local dir="$1" mut="${2:-good}"
+  mk_mirror "$dir"
+  python3 - "$dir/check_runs.json" "$SHA" "$mut" <<'PYRUNS'
+import json, sys
+path, sha, mut = sys.argv[1], sys.argv[2], sys.argv[3]
+def r(name, status, concl, i, hs="HEAD", app="github-actions", out=None, ts="2026-10-06T03:00:00Z"):
+    d = {"name": name, "status": status, "conclusion": concl,
+         "completed_at": ts, "started_at": ts, "id": i,
+         "app": {"slug": app}, "output": out or {"title": "", "summary": ""}}
+    if hs == "HEAD":
+        d["head_sha"] = sha
+    elif hs is not None:
+        d["head_sha"] = hs
+    return d
+runs = [r("build", "completed", "success", 11),
+        r("ensure-no-translator-changes", "completed", "success", 12),
+        r("close-when-agents-md-changed", "completed", "success", 13),
+        r("Paperclip Review", "completed", "success", 14,
+          out={"title": "5/5", "summary": "## Paperclip Review — 5/5"})]
+if mut == "missing-one":
+    runs = [x for x in runs if x["name"] != "ensure-no-translator-changes"]
+elif mut == "red-latest":
+    runs.append(r("build", "completed", "failure", 21, ts="2026-10-06T04:00:00Z"))
+elif mut == "queued":
+    runs[0] = r("build", "queued", None, 21, ts="2026-10-06T04:00:00Z")
+elif mut == "queued-no-time":
+    q = r("build", "queued", None, 21)
+    q["completed_at"] = None; q["started_at"] = None
+    runs[0] = q
+elif mut == "in-progress":
+    runs[0] = r("build", "in_progress", None, 21, ts="2026-10-06T04:00:00Z")
+elif mut == "zero":
+    runs = []
+elif mut == "skipped":
+    runs[0] = r("build", "completed", "skipped", 11)
+elif mut == "neutral":
+    runs[0] = r("build", "completed", "neutral", 11)
+elif mut == "empty-conclusion":
+    runs[0] = r("build", "completed", "", 11)
+elif mut == "unknown-conclusion":
+    runs[0] = r("build", "completed", "mystery", 11)
+elif mut == "stale-head":
+    runs[0] = r("build", "completed", "success", 11, hs="a" * 40)
+elif mut == "optional-skipped":
+    runs.append(r("[code]smith", "completed", "skipped", 31, app="blacksmith-sh"))
+elif mut == "run-no-headsha":
+    runs[0] = r("build", "completed", "success", 11, hs=None)
+elif mut == "review-no-score":
+    runs[3] = r("Paperclip Review", "completed", "success", 14,
+                out={"title": "reviewed", "summary": "looks fine"})
+elif mut == "bad-extra":
+    runs.append(r("docs-link-check", "completed", "failure", 31, ts="2026-10-06T04:00:00Z"))
+json.dump({"total_count": len(runs), "check_runs": runs}, open(path, "w"))
+PYRUNS
+  if [ "$mut" = "pr-no-headsha" ]; then
+    jq 'del(.head.sha)' "$dir/pr.json" > "$dir/pr.json.tmp" && mv "$dir/pr.json.tmp" "$dir/pr.json"
+  fi
+  # The pinned workflow manifest the live side resolves against (fixture form).
+  cat > "$dir/workflows.json" <<'JSONWF'
+[{"file": "pr-test-build.yml", "blob_sha": "blob-pr-test-build.yml"},
+ {"file": "pr-path-guard.yml", "blob_sha": "blob-pr-path-guard.yml"},
+ {"file": "agents-md-guard.yml", "blob_sha": "blob-agents-md-guard.yml"}]
+JSONWF
+}
+
+# Overwrite an upstream fixture's check runs with the profiled upstream names.
+mk_cli_upstream_runs() { # dir mutation
+  python3 - "$1/check_runs.json" "$SHA" "${2:-good}" <<'PYRUNS'
+import json, sys
+path, sha, mut = sys.argv[1], sys.argv[2], sys.argv[3]
+def r(name, status, concl, i, hs="HEAD", ts="2026-10-06T03:00:00Z"):
+    d = {"name": name, "status": status, "conclusion": concl,
+         "completed_at": ts, "started_at": ts, "id": i,
+         "app": {"slug": "github-actions"}, "output": {"title": "", "summary": ""}}
+    d["head_sha"] = sha if hs == "HEAD" else hs
+    return d
+runs = [r("build", "completed", "success", 41),
+        r("ensure-no-translator-changes", "completed", "success", 42),
+        r("close-when-agents-md-changed", "completed", "success", 43),
+        r("Greptile Review", "completed", "success", 44)]
+if mut == "missing-one":
+    runs = [x for x in runs if x["name"] != "close-when-agents-md-changed"]
+elif mut == "red-latest":
+    runs.append(r("build", "completed", "failure", 51, ts="2026-10-06T04:00:00Z"))
+elif mut == "skipped":
+    runs[1] = r("ensure-no-translator-changes", "completed", "skipped", 42)
+elif mut == "stale-head":
+    runs[0] = r("build", "completed", "success", 41, hs="b" * 40)
+json.dump({"total_count": len(runs), "check_runs": runs}, open(path, "w"))
+PYRUNS
+}
+
+run_compat_check() { OUT="$("$CTOOL" check --mirror-pr 52 --fork-repo TogetherWeOwn/CLIProxyAPI --fixtures "$1" 2>&1)"; RC=$?; }
+run_compat_ready() { OUT="$("$CTOOL" ready --upstream-pr 15142 --upstream-repo router-for-me/CLIProxyAPI --mirror-pr 52 --fork-repo TogetherWeOwn/CLIProxyAPI --fixtures "$1" --dry-run 2>&1)"; RC=$?; }
+run_compat_audit() { OUT="$("$CTOOL" audit --upstream-pr 15142 --upstream-repo router-for-me/CLIProxyAPI --fixtures "$1" 2>&1)"; RC=$?; }
+expect() { # label want_rc patterns...
+  local label="$1" want="$2"; shift 2
+  local p
+  if [ "$RC" -ne "$want" ]; then bad "$label" "rc=$RC want=$want out=$OUT"; return; fi
+  for p in "$@"; do
+    if ! grep -q -- "$p" <<<"$OUT"; then bad "$label" "missing pattern [$p] rc=$RC out=$OUT"; return; fi
+  done
+  ok "$label"
+}
+
+write_compat_profiles good
+
+# G0 controls: the profiled world passes on its own rendered names.
+M="$WORK/c_good"; mk_cli_mirror "$M" good
+run_compat_check "$M"
+expect "G0 profiled mirror passes Gate A on CLIProxyAPI check names" 0 "GATE A: PASS"
+
+F="$WORK/c_ready_good"; mkdir -p "$F/mirror" "$F/upstream"
+mk_cli_mirror "$F/mirror" good; mk_upstream "$F/upstream"; mk_cli_upstream_runs "$F/upstream" good
+run_compat_ready "$F"
+expect "G0 profiled upstream world is ready" 0 "READY"
+
+# G1-G10 fork-side predicate.
+M="$WORK/c_g1"; mk_cli_mirror "$M" missing-one; run_compat_check "$M"
+expect "G1 missing profiled fork check fails fork-ci [pending]" 1 "FAIL.*fork-ci" "\[pending\]"
+
+M="$WORK/c_g2"; mk_cli_mirror "$M" red-latest; run_compat_check "$M"
+expect "G2 red latest run fails fork-ci (latest wins)" 1 "FAIL.*fork-ci"
+
+M="$WORK/c_g3"; mk_cli_mirror "$M" queued; run_compat_check "$M"
+expect "G3 queued profiled check fails fork-ci [pending]" 1 "FAIL.*fork-ci" "\[pending\]"
+
+M="$WORK/c_g3b"; mk_cli_mirror "$M" queued-no-time; run_compat_check "$M"
+expect "G3 queued profiled check with null timestamps fails fork-ci [pending]" 1 "FAIL.*fork-ci" "\[pending\]"
+
+M="$WORK/c_g3c"; mk_cli_mirror "$M" in-progress; run_compat_check "$M"
+expect "G3 in-progress profiled check fails fork-ci [pending]" 1 "FAIL.*fork-ci" "\[pending\]"
+
+M="$WORK/c_g4"; mk_cli_mirror "$M" zero; run_compat_check "$M"
+expect "G4 zero check runs refuses (exit 2)" 2 "REFUSED"
+
+M="$WORK/c_g5"; mk_cli_mirror "$M" skipped; run_compat_check "$M"
+expect "G5 skipped required check fails fork-ci, never passes" 1 "FAIL.*fork-ci"
+
+M="$WORK/c_g6"; mk_cli_mirror "$M" neutral; run_compat_check "$M"
+expect "G6 neutral required check fails fork-ci, never passes" 1 "FAIL.*fork-ci"
+
+M="$WORK/c_g7"; mk_cli_mirror "$M" empty-conclusion; run_compat_check "$M"
+expect "G7 empty conclusion on required check fails fork-ci" 1 "FAIL.*fork-ci"
+
+M="$WORK/c_g7b"; mk_cli_mirror "$M" unknown-conclusion; run_compat_check "$M"
+expect "G7 unknown conclusion on required check fails fork-ci" 1 "FAIL.*fork-ci"
+
+M="$WORK/c_g8"; mk_cli_mirror "$M" stale-head; run_compat_check "$M"
+expect "G8 success on a stale head fails fork-ci stale [pending]" 1 "FAIL.*fork-ci" "stale" "\[pending\]"
+
+M="$WORK/c_g9"; mk_cli_mirror "$M" run-no-headsha; run_compat_check "$M"
+expect "G9 required run without head_sha refuses (exit 2)" 2 "REFUSED"
+
+M="$WORK/c_g9b"; mk_cli_mirror "$M" pr-no-headsha; run_compat_check "$M"
+expect "G9 pr.json without head sha refuses (exit 2)" 2 "REFUSED"
+
+M="$WORK/c_g10"; mk_cli_mirror "$M" optional-skipped; run_compat_check "$M"
+expect "G10 optional skipped check never fails a green profiled set" 0 "GATE A: PASS"
+
+# G11-G13 registry refusals.
+M="$WORK/c_good"
+write_compat_profiles no-cli; run_compat_check "$M"
+expect "G11 repo without a reviewed profile refuses" 2 "REFUSED unknown/unreviewed CI profile"
+
+write_compat_profiles badjson; run_compat_check "$M"
+expect "G12 unparseable profile file refuses as malformed" 2 "REFUSED malformed CI profile"
+
+write_compat_profiles bad-schema; run_compat_check "$M"
+expect "G12 bad schema_version refuses as malformed" 2 "REFUSED malformed CI profile"
+
+write_compat_profiles empty-required; run_compat_check "$M"
+expect "G12 empty required list refuses as malformed" 2 "REFUSED malformed CI profile"
+
+write_compat_profiles nonstring; run_compat_check "$M"
+expect "G12 non-string required entry refuses as malformed" 2 "REFUSED malformed CI profile"
+
+write_compat_profiles smuggled; run_compat_check "$M"
+expect "G12 review check smuggled into fork_required refuses as malformed" 2 "REFUSED malformed CI profile"
+
+write_compat_profiles drift; run_compat_check "$M"
+expect "G13 workflow blob drift refuses as profile-stale" 2 "REFUSED profile-stale"
+
+write_compat_profiles good
+
+# G14 review independence: a green profile cannot rescue a scoreless review.
+M="$WORK/c_g14"; mk_cli_mirror "$M" review-no-score; run_compat_check "$M"
+expect "G14 Paperclip Review success without 5/5 still fails our-review" 1 "FAIL.*our-review"
+
+# G15-G20 ready-side gates in the profiled world.
+mk_compat_ready_world() { # dir upstream-mutation upstream-runs-mutation
+  local f="$1"; shift
+  mkdir -p "$f/mirror" "$f/upstream"
+  mk_cli_mirror "$f/mirror" good
+  # shellcheck disable=SC2086
+  mk_upstream "$f/upstream" $1
+  mk_cli_upstream_runs "$f/upstream" "${2:-good}"
+}
+
+F="$WORK/c_g15"; mk_compat_ready_world "$F" stale-score; run_compat_ready "$F"
+expect "G15 Greptile 5/5 on an old head blocks ready (stale)" 1 "FAIL.*greptile"
+
+F="$WORK/c_g16"; mk_compat_ready_world "$F" score-4; run_compat_ready "$F"
+expect "G16 Greptile 4/5 blocks ready" 1 "FAIL.*greptile"
+
+F="$WORK/c_g17"; mk_compat_ready_world "$F" open-thread; run_compat_ready "$F"
+expect "G17 unresolved thread blocks ready despite Greptile 5/5" 1 "FAIL.*greptile"
+
+F="$WORK/c_g18"; mk_compat_ready_world "$F" no-link; run_compat_ready "$F"
+expect "G18 Greptile score without reviewed-commit link blocks ready" 1 "FAIL.*greptile"
+
+F="$WORK/c_g19"; mk_compat_ready_world "$F" unchecked-boxes; run_compat_ready "$F"
+if [ "$RC" -eq 1 ] && { grep -q "FAIL.*up-checklist" <<<"$OUT" || grep -q "FAIL.*lint" <<<"$OUT"; }; then
+  ok "G19 ready refused when lint@ready fails on an unticked non-pending box"
+else bad "G19 ready refused when lint@ready fails on an unticked non-pending box" "rc=$RC out=$OUT"; fi
+
+F="$WORK/c_g20"; mk_compat_ready_world "$F" edit-after-pass; run_compat_ready "$F"
+expect "G20 stale reputation text hash blocks ready" 1 "FAIL.*reputation"
+
+# G11 status arm: an unreviewed upstream profile refuses ready, never passes.
+write_compat_profiles upstream-pending
+F="$WORK/c_ready_good"; run_compat_ready "$F"
+expect "G11 pending-live-confirmation upstream profile refuses ready" 2 "REFUSED unknown/unreviewed CI profile"
+write_compat_profiles good
+
+# G22 audit backstop in the profiled world.
+F="$WORK/c_g22"; mkdir -p "$F/mirror" "$F/upstream"
+mk_cli_mirror "$F/mirror" good; mk_upstream "$F/upstream" published v2 no-reputation; mk_cli_upstream_runs "$F/upstream" good
+run_compat_audit "$F"
+expect "G22 audit flags a non-draft profiled head with no passing record for draft conversion" 1 "convert to draft now"
+
+# G23 upstream-side mirror of G1/G2/G5/G8 against upstream-ci.
+F="$WORK/c_g23a"; mk_compat_ready_world "$F" "" missing-one; run_compat_ready "$F"
+expect "G23 missing profiled upstream check fails upstream-ci [pending]" 1 "FAIL.*upstream-ci" "\[pending\]"
+
+F="$WORK/c_g23b"; mk_compat_ready_world "$F" "" red-latest; run_compat_ready "$F"
+expect "G23 red latest upstream run fails upstream-ci (latest wins)" 1 "FAIL.*upstream-ci"
+
+F="$WORK/c_g23c"; mk_compat_ready_world "$F" "" skipped; run_compat_ready "$F"
+expect "G23 skipped required upstream check fails upstream-ci" 1 "FAIL.*upstream-ci"
+
+F="$WORK/c_g23d"; mk_compat_ready_world "$F" "" stale-head; run_compat_ready "$F"
+expect "G23 upstream success on a stale head fails upstream-ci stale [pending]" 1 "FAIL.*upstream-ci" "stale" "\[pending\]"
+
+# Keeper-repo mirror: the preserved TogetherWeOwn/paperclip profile keeps
+# the legacy any-run strictness for extras (strict_extra). Args: dir [mutation]
+mk_keeper_mirror() {
+  local dir="$1" mut="${2:-good}"
+  mk_mirror "$dir"
+  python3 - "$dir/check_runs.json" "$SHA" "$mut" <<'PYRUNS'
+import json, sys
+path, sha, mut = sys.argv[1], sys.argv[2], sys.argv[3]
+def r(name, status, concl, i, hs="HEAD", app="github-actions", out=None, ts="2026-10-06T03:00:00Z"):
+    d = {"name": name, "status": status, "conclusion": concl,
+         "completed_at": ts, "started_at": ts, "id": i,
+         "app": {"slug": app}, "output": out or {"title": "", "summary": ""}}
+    if hs == "HEAD":
+        d["head_sha"] = sha
+    elif hs is not None:
+        d["head_sha"] = hs
+    return d
+runs = [r("ci / verify", "completed", "success", 11),
+        r("ci / e2e", "completed", "success", 12),
+        r("Paperclip Review", "completed", "success", 13,
+          out={"title": "5/5", "summary": "## Paperclip Review — 5/5"})]
+if mut == "bad-extra":
+    runs.append(r("docs-link-check", "completed", "failure", 31, ts="2026-10-06T04:00:00Z"))
+elif mut == "pending-extra":
+    runs.append(r("docs-link-check", "queued", None, 31, ts="2026-10-06T04:00:00Z"))
+elif mut == "skipped-extra":
+    runs.append(r("docs-link-check", "completed", "skipped", 31, ts="2026-10-06T04:00:00Z"))
+json.dump({"total_count": len(runs), "check_runs": runs}, open(path, "w"))
+PYRUNS
+  # Same pinned workflow manifest the keeper evidence carries (fixture form).
+  cat > "$dir/workflows.json" <<'JSONWF'
+[{"file": "pr-test-build.yml", "blob_sha": "blob-pr-test-build.yml"},
+ {"file": "pr-path-guard.yml", "blob_sha": "blob-pr-path-guard.yml"},
+ {"file": "agents-md-guard.yml", "blob_sha": "blob-agents-md-guard.yml"}]
+JSONWF
+}
+run_keeper_check() { OUT="$("$CTOOL" check --mirror-pr 52 --fork-repo TogetherWeOwn/paperclip --fixtures "$1" 2>&1)"; RC=$?; }
+
+# G24-G28 preserved keepers: a failed extra fails, an unfinished extra
+# pends, a skipped extra passes, and a non-keeper ignores the same extra.
+write_compat_profiles good
+K="$WORK/c_k24"; mk_keeper_mirror "$K" good; run_keeper_check "$K"
+expect "G24 keeper mirror passes Gate A with no extras" 0 "GATE A: PASS"
+
+K="$WORK/c_k25"; mk_keeper_mirror "$K" bad-extra; run_keeper_check "$K"
+expect "G25 keeper fails fork-ci on a failed extra run" 1 "FAIL.*fork-ci" "docs-link-check"
+
+K="$WORK/c_k26"; mk_keeper_mirror "$K" pending-extra; run_keeper_check "$K"
+expect "G26 keeper fails fork-ci [pending] on an unfinished extra run" 1 "FAIL.*fork-ci" "\[pending\]"
+
+K="$WORK/c_k27"; mk_keeper_mirror "$K" skipped-extra; run_keeper_check "$K"
+expect "G27 keeper passes Gate A with a skipped extra" 0 "GATE A: PASS"
+
+M="$WORK/c_k28"; mk_cli_mirror "$M" bad-extra; run_compat_check "$M"
+expect "G28 non-keeper ignores the same failed extra" 0 "GATE A: PASS"
+
+# Keeper upstream mirror: the preserved paperclipai/paperclip profile keeps
+# the legacy any-run strictness for extras on the upstream-ci side.
+# Overwrites an upstream fixture's check runs with the keeper upstream
+# names on the exact head. Args: dir [mutation]
+mk_keeper_upstream_runs() {
+  python3 - "$1/check_runs.json" "$SHA" "${2:-good}" <<'PYRUNS'
+import json, sys
+path, sha, mut = sys.argv[1], sys.argv[2], sys.argv[3]
+def r(name, status, concl, i, ts="2026-10-06T03:00:00Z"):
+    return {"name": name, "status": status, "conclusion": concl,
+            "completed_at": ts, "started_at": ts, "id": i,
+            "head_sha": sha, "app": {"slug": "github-actions"},
+            "output": {"title": "", "summary": ""}}
+runs = [r("ci / verify", "completed", "success", 41),
+        r("ci / e2e", "completed", "success", 42),
+        r("Greptile Review", "completed", "success", 43)]
+if mut == "bad-extra":
+    runs.append(r("docs-link-check", "completed", "failure", 51, ts="2026-10-06T04:00:00Z"))
+elif mut == "pending-extra":
+    runs.append(r("docs-link-check", "queued", None, 51, ts="2026-10-06T04:00:00Z"))
+json.dump({"total_count": len(runs), "check_runs": runs}, open(path, "w"))
+PYRUNS
+}
+mk_keeper_ready_world() { # dir upstream-runs-mutation
+  local f="$1"
+  mkdir -p "$f/mirror" "$f/upstream"
+  mk_keeper_mirror "$f/mirror" good
+  mk_upstream "$f/upstream"
+  mk_keeper_upstream_runs "$f/upstream" "${2:-good}"
+}
+run_keeper_ready() { OUT="$("$CTOOL" ready --upstream-pr 15142 --upstream-repo paperclipai/paperclip --mirror-pr 52 --fork-repo TogetherWeOwn/paperclip --fixtures "$1" --dry-run 2>&1)"; RC=$?; }
+
+# G29-G31 preserved upstream keeper: a failed extra fails upstream-ci, an
+# unfinished extra pends it, and the world is ready with no extras.
+write_compat_profiles good
+F="$WORK/c_k29"; mk_keeper_ready_world "$F" good; run_keeper_ready "$F"
+expect "G29 keeper upstream world is ready with no extras" 0 "READY"
+
+F="$WORK/c_k30"; mk_keeper_ready_world "$F" bad-extra; run_keeper_ready "$F"
+expect "G30 keeper fails upstream-ci on a failed extra run" 1 "FAIL.*upstream-ci" "docs-link-check"
+
+F="$WORK/c_k31"; mk_keeper_ready_world "$F" pending-extra; run_keeper_ready "$F"
+expect "G31 keeper fails upstream-ci [pending] on an unfinished extra run" 1 "FAIL.*upstream-ci" "\[pending\]"
 
 # ===========================================================================
 hdr "dispatch: unmeasured runs never pass"

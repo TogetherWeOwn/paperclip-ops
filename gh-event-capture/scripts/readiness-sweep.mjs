@@ -1,17 +1,17 @@
 #!/usr/bin/env node
-// Readiness sweep: one host-side pass of the PR readiness reconcile duty.
+// Readiness sweep: one pass of the PR readiness reconcile duty.
 //
-// Parent: case_2eafff8f (case_4b213922 follow-up). The duty lives in
-// ../src/readiness-reconcile.js (pure decisions + reconciler) and the GitHub
-// surface in ../src/github-adapter.js; this script is the only production
-// caller that constructs them. It performs ONE pass and exits: no repeating
-// scheduler lives here — the systemd timer is the only driver (an
-// unconditional loop is forbidden: it would act without a supervisor
+// The duty lives in ../src/readiness-reconcile.js (pure decisions +
+// reconciler) and the GitHub surface in ../src/github-adapter.js; this
+// script is the only production caller that constructs them. It performs ONE
+// pass and exits: no repeating scheduler lives here — the Actions workflow
+// (.github/workflows/readiness-sweep.yml, event-driven) is the only driver
+// (an unconditional loop is forbidden: it would act without a supervisor
 // deadline and hide stalls).
 //
 // Fail-closed: a bad policy, a refused credential, an unreadable PR list, or
 // any per-PR error is counted and loud (exit 1 on run errors; exit 2 on
-// usage, policy or credential failure). Records stream one journal line each
+// usage, policy or credential failure). Records stream one log line each
 // as their repo finishes: fixed words plus validated repo/number/head only —
 // bodies, titles and label names are never echoed (fork-controlled text).
 //
@@ -21,16 +21,27 @@
 // The default is flag-off everywhere: an empty scan list exits 0 having
 // touched nothing, and repos in scanRepositories but absent from
 // enabledRepositories log would-act and change nothing. Rollback is the
-// flag: remove the repo. The Operator provisions the live file; the repo
-// ships only readiness-policy.example.json.
+// flag: remove the repo. The repo ships readiness-policy.example.json (shape
+// reference) plus the live readiness-policy.json (flag-off until a reviewed
+// flag-on PR lists a repo); the workflow installs the live file 0600 into
+// job-private temp before invoking this script.
 //
 // Credential (review R1): GitHub is reached ONLY through the absolute,
-// operator-pinned `ghExecutable` — never a PATH-resolved `gh` — with
-// inherited GH_TOKEN/GITHUB_TOKEN refused, a per-pass isolated empty
-// GH_CONFIG_DIR (no stored personal login is reachable), and a startup `auth
-// status` preflight that exits 2 when no credential is present. The unit
-// strips the token env vars as the first lock; this script is the second.
-// The pinned executable must be HOME-independent: the child inherits no HOME.
+// policy-pinned `ghExecutable` — never a PATH-resolved `gh` — with a
+// per-pass isolated empty GH_CONFIG_DIR (no stored personal login is
+// reachable) and a startup `auth status` preflight that exits 2 when no
+// credential is present. The ONLY admitted credential is the workflow's
+// ephemeral per-job token: READINESS_JOB_TOKEN=1 plus exactly GH_TOKEN (see
+// resolveSweepToken — an ambient token without the flag, or two token
+// sources at once, fails closed). The child inherits no HOME, so the pinned
+// executable must be HOME-independent. No PEM, no mint, no key custody:
+// the host-PEM wrapper path was retired and must not be reintroduced.
+//
+// Fork-context guard: the workflow sets READINESS_READ_ONLY=1 when the
+// triggering event is a fork pull_request (whose job token GitHub already
+// limits to read-only). A read-only pass keeps its scan but reconciles with
+// an empty enabled set, so every decision lands as would-act instead of
+// erroring per PR.
 
 import { constants } from 'node:fs'
 import { open, rm } from 'node:fs/promises'
@@ -38,7 +49,7 @@ import { fileURLToPath } from 'node:url'
 
 import { createGithubAdapter } from '../src/github-adapter.js'
 import { createReconciler, emptyCounters, readinessPolicy } from '../src/readiness-reconcile.js'
-import { GH_PIN_CODE, createPinnedRunner, preflightGh, prepareIsolatedGhConfig, refuseInheritedTokens } from '../src/gh-pinned.js'
+import { GH_PIN_CODE, createPinnedRunner, isReadOnlyPass, preflightGh, prepareIsolatedGhConfig, resolveSweepToken } from '../src/gh-pinned.js'
 
 const POLICY_LIMIT = 8 * 1024
 const POLICY_CODE = 'READINESS_SWEEP_POLICY'
@@ -147,19 +158,25 @@ export function recordLine(record) {
 // One supervised pass. `github` is injectable only so tests can run without
 // credentials or network; production always builds the real adapter over the
 // pinned runner, whose allowlist is exactly the scanned set. `env` is
-// injectable so tests can drive the token refusal without mutating process
-// state. `onRecord` streams each record the moment its PR is reconciled, so
-// a pass the supervisor SIGKILLs at the deadline loses at most the in-flight
-// PR (writes are idempotent; only unflushed lines would be lost). `config` is
-// injectable so tests can prove the prepare/remove lifecycle through a real
-// pass without touching the filesystem: with fakes injected, preparation runs
-// even for doubles, and removal in `finally` is what the lifecycle test
-// asserts — deleting the `finally` fails that test. Production always uses
-// the defaults (real per-pass directory, real removal).
-export async function runSweep({ policyPath, github = null, nowMs = Date.now(), env = process.env, onRecord = null, config = null } = {}) {
+// injectable so tests can drive the token posture and the read-only guard
+// without mutating process state. `exec` is injectable only so tests can prove
+// the production token wiring without network: with a recording `exec` double
+// and no `github` double, the production createPinnedRunner line below
+// executes and the test asserts the admitted token reached the child —
+// dropping the jobToken argument fails that test (the github-double tests
+// never execute this line). `onRecord` streams each record the moment
+// its PR is reconciled, so a pass the supervisor SIGKILLs at the deadline
+// loses at most the in-flight PR (writes are idempotent; only unflushed
+// lines would be lost). `config` is injectable so tests can prove the
+// prepare/remove lifecycle through a real pass without touching the
+// filesystem: with fakes injected, preparation runs even for doubles, and
+// removal in `finally` is what the lifecycle test asserts — deleting the
+// `finally` fails that test. Production always uses the defaults (real
+// per-pass directory, real removal, real exec).
+export async function runSweep({ policyPath, github = null, nowMs = Date.now(), env = process.env, onRecord = null, config = null, exec = undefined } = {}) {
   const prepare = config?.prepare ?? prepareIsolatedGhConfig
   const remove = config?.remove ?? removeIsolatedGhConfig
-  refuseInheritedTokens(env)
+  const jobToken = resolveSweepToken(env)
   const policy = await loadSweepPolicy(policyPath)
   // Flag-off is a clean no-op: an empty scan exits 0 having touched nothing
   // — in particular it never constructs the adapter (which requires a
@@ -176,12 +193,17 @@ export async function runSweep({ policyPath, github = null, nowMs = Date.now(), 
   // reaping owns those.
   const configDir = github && !config ? null : await prepare()
   try {
-    const runner = github ? null : createPinnedRunner({ executable: policy.ghExecutable, configDir })
+    const runner = github ? null : createPinnedRunner({ executable: policy.ghExecutable, configDir, jobToken, exec })
     const adapter = github ?? createGithubAdapter({ allowedRepositories: policy.scanRepositories, run: runner })
     if (!github) await preflightGh(runner)
+    // Fork-context guard: a read-only pass keeps its scan (reads still prove
+    // the wiring) but reconciles with an empty enabled set, so every decision
+    // lands as would-act instead of erroring per PR against a read-only
+    // token. The flag is set only by the sweep workflow (see header).
+    const readOnly = isReadOnlyPass(env)
     const reconciler = createReconciler({
       github: adapter,
-      policy: { enabledRepositories: policy.enabledRepositories, holdLabels: policy.holdLabels },
+      policy: { enabledRepositories: readOnly ? [] : policy.enabledRepositories, holdLabels: policy.holdLabels },
       nowMs: () => nowMs,
     })
     const records = []

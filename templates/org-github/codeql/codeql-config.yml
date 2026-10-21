@@ -1,0 +1,13 @@
+# Shared CodeQL config staged for TogetherWeOwn/.github (case_f3ff4554).
+#
+# One config for every repo: the standard `security-extended` query suite,
+# no custom query paths (custom queries arrive per language once the
+# foundation rollout, case_e9259c75, owns the central repo and the per-repo
+# language matrix). Per-repo caller workflow (codeql-analysis.yml, PR
+# trigger, autobuild or explicit build steps) references this file with
+# `config-file:` so the suite choice stays defined once at org level.
+# Report-only first: findings are advisory until the FP rate per language
+# measures under 5% over 20 PRs, mirroring the tier-0 rollout rule.
+name: togetherweown-shared-codeql
+queries:
+  - uses: security-extended

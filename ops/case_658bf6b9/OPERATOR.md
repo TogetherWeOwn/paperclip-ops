@@ -38,6 +38,7 @@ locations also belong in the protected environment, not in this repository.
 */5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-ci-queue-age.sh
 */5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-neon-reachability.sh
 17 4 * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-tls-expiry.sh
+0 */6 * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-domain-expiry.sh
 */5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-workers-error-rate.sh
 */5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-github-rate-limit.sh
 */5 * * * * root set -a; . /root/.config/paperclip/case_60330d6f.env && exec /opt/status-page/current/ops/case_658bf6b9/push-discord-bot.sh
@@ -74,6 +75,13 @@ Run `bash test_case_60330d6f_status_pilot.sh` and the module-specific offline
 suites from the repository root. The invariant helper's deployment fallback is
 `/opt/status-page/current`; an authorized acceptance check must exercise an arm
 such as `paperclip-inv agents-error-10m`, without printing its database URL.
+An authorized acceptance check must also exercise the monitor self-health
+helper (`monitor-health.sh`, installed beside `ro-shell.sh` by the authorized
+deployment): `monitor-health beszel` must print `beszel: up` and
+`monitor-health gatus` must print `gatus: up` when healthy. The helper probes
+only the public unauthenticated localhost health routes and prints a fixed
+up/DOWN line, never the upstream body; the authenticated monitor APIs stay
+refused without a separately credentialed slice.
 A source test is not proof of a host deployment or credential access.
 
 For an alert, inspect its THRESHOLD, OWNER and RUNBOOK fields and the producing

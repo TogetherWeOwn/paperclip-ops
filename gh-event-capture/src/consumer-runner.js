@@ -12,6 +12,10 @@ import { runSweepCycle, sweepLimits } from './sweep-cycle.js'
 import { loadPassSchedule, savePassSchedule } from './pass-schedule.js'
 import { refreshPrTaskIndex } from './pr-task-index-source.js'
 import { closeoutShadowSettings, createShadowReviewHook } from './closeout-shadow-wiring.js'
+import { closeoutDisarmSettings, createDisarmShadowHook, DisarmShadowDeferred } from './closeout-disarm-wiring.js'
+import { closeoutRedmainSettings, createRedmainShadowHook, RedmainShadowDeferred } from './closeout-redmain-wiring.js'
+import { closeoutDeploySettings, createDeployShadowHook, DeployShadowDeferred } from './closeout-deploy-wiring.js'
+import { closeoutDeployFailSettings, createDeployFailShadowHook, DeployFailShadowDeferred } from './closeout-deployfail-wiring.js'
 
 // execFile's abort callback can fire before child close. Await close explicitly;
 // a SIGTERM-ignoring gh process must not survive this pass's deadline.
@@ -129,7 +133,22 @@ export async function runProductPass({ config, captureToken, boardToken, runId =
   const namespace = receiptNamespace(config)
   // Optional S3c shadow review: absent block = null = the unchanged sweep. A bad block refuses before any effect.
   const shadow = closeoutShadowSettings(config)
+  const disarmSettings = closeoutDisarmSettings(config)
+  const redmainSettings = closeoutRedmainSettings(config)
+  const deploySettings = closeoutDeploySettings(config)
+  const deployFailSettings = closeoutDeployFailSettings(config)
   const budget = createPassBudget({ ...limits, signal, ...clock })
+  let disarmShadow = null
+  let redmainShadow = null
+  let deployShadow = null
+  let deployFailShadow = null
+  const disarmReferences = disarmSettings === null ? null : []
+  const observation = () => ({
+    ...(disarmShadow === null ? {} : { disarmShadow: disarmShadow.summary() }),
+    ...(redmainShadow === null ? {} : { redmainShadow: redmainShadow.summary() }),
+    ...(deployShadow === null ? {} : { deployShadow: deployShadow.summary() }),
+    ...(deployFailShadow === null ? {} : { deployFailShadow: deployFailShadow.summary() }),
+  })
   let events = null
   let sweeps = null
   let shadowIndex = null
@@ -140,6 +159,95 @@ export async function runProductPass({ config, captureToken, boardToken, runId =
       fetchImpl: transport, pageSize: limits.pageSize, maxPages: limits.maxPages })
     const github = createGithubAdapter({ ...scoped,
       run: budget.run((_file, args, options) => run(githubExecutable, args, options)), maxPages: limits.maxPages })
+    if (disarmSettings !== null) {
+      // Scheduled refs are collected before mapping, but reads wait until both
+      // primary streams and S3c/index work settle. Unknown event/review fanout
+      // cannot steal primary requests or pin observation to one stream/repo.
+      // The same counter/deadline admits only surplus. No mutators escape.
+      const reader = createGithubAdapter({ ...scoped, maxPages: limits.maxPages,
+        run: budget.run((_file, args, options) => run(githubExecutable, args, options)) })
+      disarmShadow = createDisarmShadowHook({ settings: disarmSettings, check: budget.check, log,
+        stopReason: () => budget.snapshot().reason,
+        getCloseoutSnapshot: (...args) => {
+          budget.check()
+          if (budget.snapshot().requests >= limits.maxRequests) throw new DisarmShadowDeferred()
+          return reader.getCloseoutSnapshot(...args)
+        } })
+    }
+    if (redmainSettings !== null) {
+      let admissionError = null
+      const execute = budget.run((_file, args, options) => run(githubExecutable, args, options))
+      const reader = createGithubAdapter({ ...scoped, maxPages: limits.maxPages,
+        run: (...args) => {
+          // getMainHeadChecks reads both the head and branch protection. Guard
+          // EACH transport admission, not just the outer method's first call.
+          budget.check()
+          if (budget.snapshot().requests >= limits.maxRequests) {
+            admissionError = new RedmainShadowDeferred()
+            throw admissionError
+          }
+          return execute(...args)
+        } })
+      redmainShadow = createRedmainShadowHook({ settings: redmainSettings, check: budget.check, log,
+        stopReason: () => budget.snapshot().reason,
+        getMainHeadChecks: async (...args) => {
+          admissionError = null
+          try { return await reader.getMainHeadChecks(...args) }
+          // The adapter sanitizes transport errors. Preserve only our local
+          // admission sentinel across that boundary, never provider text.
+          catch (error) { throw admissionError ?? error }
+        } })
+    }
+    if (deploySettings !== null) {
+      let admissionError = null
+      const execute = transport
+      const reader = createCaptureAdapter({ ...scoped, baseUrl: config.captureOrigin, queryToken: captureToken,
+        fetchImpl: (url, init) => {
+          // listDeliveries pages and each body read each admit separately:
+          // guard EVERY transport admission, not just the outer call.
+          budget.check()
+          if (budget.snapshot().requests >= limits.maxRequests) {
+            admissionError = new DeployShadowDeferred()
+            throw admissionError
+          }
+          return execute(url, init)
+        }, pageSize: limits.pageSize, maxPages: limits.maxPages })
+      const guarded = (method) => async (...args) => {
+        admissionError = null
+        try { return await reader[method](...args) }
+        // The adapter sanitizes transport errors. Preserve only our local
+        // admission sentinel across that boundary, never provider text.
+        catch (error) { throw admissionError ?? error }
+      }
+      deployShadow = createDeployShadowHook({ settings: deploySettings, check: budget.check, log,
+        stopReason: () => budget.snapshot().reason,
+        capture: { listDeliveries: guarded('listDeliveries'), getDelivery: guarded('getDelivery') } })
+    }
+    if (deployFailSettings !== null) {
+      let admissionError = null
+      const execute = transport
+      const reader = createCaptureAdapter({ ...scoped, baseUrl: config.captureOrigin, queryToken: captureToken,
+        fetchImpl: (url, init) => {
+          // listDeliveries pages and each body read each admit separately:
+          // guard EVERY transport admission, not just the outer call.
+          budget.check()
+          if (budget.snapshot().requests >= limits.maxRequests) {
+            admissionError = new DeployFailShadowDeferred()
+            throw admissionError
+          }
+          return execute(url, init)
+        }, pageSize: limits.pageSize, maxPages: limits.maxPages })
+      const guarded = (method) => async (...args) => {
+        admissionError = null
+        try { return await reader[method](...args) }
+        // The adapter sanitizes transport errors. Preserve only our local
+        // admission sentinel across that boundary, never provider text.
+        catch (error) { throw admissionError ?? error }
+      }
+      deployFailShadow = createDeployFailShadowHook({ settings: deployFailSettings, check: budget.check, log,
+        stopReason: () => budget.snapshot().reason,
+        capture: { listDeliveries: guarded('listDeliveries'), getDelivery: guarded('getDelivery') } })
+    }
     const board = createPaperclipAdapter({ ...scoped, baseUrl: config.boardOrigin, token: boardToken,
       companyId: config.companyId, runId, fetchImpl: transport })
     const consumer = createConsumer({ ...scoped, github, board, capture, mode: MODE })
@@ -147,6 +255,10 @@ export async function runProductPass({ config, captureToken, boardToken, runId =
     // One lock and one total budget. Persist the next starting stream BEFORE
     // work so an exhausted/crashed capture pass cannot starve reconciliation.
     // schedule.json holds only fairness hints, separate from success receipts.
+    // Declared outside the lock callback: the post-callback containment read
+    // must see whether the drain was entered, and a callback-local binding
+    // would throw ReferenceError on the success path (a cycle-failed outage).
+    let shadowDrained = false
     await withReceiptStore({ directory: config.stateDirectory, namespace,
       maxReceipts: limits.maxReceipts, maxBytes: limits.maxReceiptBytes }, async (receipts) => {
       budget.check()
@@ -193,6 +305,9 @@ export async function runProductPass({ config, captureToken, boardToken, runId =
               isStopped: () => budget.snapshot().reason !== null,
               afterRepository: schedule.sweepCursor,
               beforeRepository: async repository => { schedule.sweepCursor = repository; await saveSchedule() },
+              beforeReconcile: disarmShadow === null ? null : async (reference) => {
+                disarmReferences.push(reference)
+              },
               // Shadow only: no board, no claim save, no comment credential reach this hook.
               closeoutReview: shadowIndex?.index == null ? null : createShadowReviewHook({ settings: shadow, namespace,
                 directory: config.stateDirectory, github, index: shadowIndex.index, log,
@@ -207,15 +322,55 @@ export async function runProductPass({ config, captureToken, boardToken, runId =
         // A long drain can still exhaust the whole pass, after production ran.
         if (indexTask !== null) await indexTask
       }
+      // Bounded by maxSweepItems; no persistent queue, replay or extra listing.
+      // Keep the receipt lock and await every read through existing drainage.
+      // The pre-drain check pins containment to stops that start INSIDE the
+      // drain: an S3c index overrun that already stopped the pass (the finally
+      // drain above holds the lock with no budget check) fails here exactly as
+      // with the shadow OFF, instead of being hidden by observation.
+      if (disarmShadow !== null || redmainShadow !== null || deployShadow !== null || deployFailShadow !== null) {
+        budget.check()
+        shadowDrained = true
+        if (disarmShadow !== null) {
+          for (const reference of disarmReferences) await disarmShadow.observe(reference)
+        }
+        if (redmainShadow !== null) {
+          for (const repository of redmainSettings.enabledRepositories) await redmainShadow.observe(repository)
+        }
+        if (deployShadow !== null) {
+          for (const repository of deploySettings.enabledRepositories) await deployShadow.observe(repository)
+        }
+        if (deployFailShadow !== null) {
+          for (const repository of deployFailSettings.enabledRepositories) await deployFailShadow.observe(repository)
+        }
+      }
     })
-    budget.check()
+    // A deadline stop observed here arose from the post-primary shadow drain
+    // (the pre-drain check threw earlier for anything already stopped), so it
+    // keeps the primary outcome: the summary still emits and the pass stays
+    // OK. External cancellation still stops the pass, as does a stop with no
+    // shadow. Request-budget cannot trip inside the drain: admission defers at
+    // requests >= maxRequests before reserve(), so it is never contained.
+    const drainStop = budget.snapshot().reason
+    const shadowContained = shadowDrained && drainStop === 'deadline'
+    if (!shadowContained) budget.check()
     const ok = events.ok && sweeps.ok
+    for (const hook of [disarmShadow, redmainShadow, deployShadow, deployFailShadow]) {
+      if (hook === null) continue
+      if (shadowContained) hook.emit({ ignoreStop: true })
+      else { hook.emit(); budget.check() }
+    }
     return { ok, mode: MODE, reason: ok ? null : events.ok ? 'sweeps-incomplete' : 'incomplete',
-      requests: budget.snapshot().requests, events, sweeps }
+      requests: budget.snapshot().requests, events, sweeps, ...observation() }
   } catch {
     // Only fixed reason labels escape. Even local filesystem errors can contain
     // a credential path; adapters/provider errors must not enter service logs.
+    for (const hook of [disarmShadow, redmainShadow, deployShadow, deployFailShadow]) {
+      if (budget.snapshot().reason === null && hook !== null) {
+        try { hook.emit() } catch { /* Its check can discover a whole-pass deadline. */ }
+      }
+    }
     return { ok: false, mode: MODE, reason: budget.snapshot().reason ?? 'cycle-failed',
-      requests: budget.snapshot().requests, events, sweeps }
+      requests: budget.snapshot().requests, events, sweeps, ...observation() }
   } finally { budget.close() }
 }

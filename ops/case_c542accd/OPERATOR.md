@@ -9,7 +9,10 @@ with positive fallback/job durations and auditable seeds. Missing input refuses
 before any health claim; offline behavior tests supply explicit synthetic data.
 
 Review an immutable bundle, endpoint identities, GitHub read scope, configured
-`GH_REPOS` and runner-unit scope before an independent deployment. Store
+`GH_REPOS` and runner-unit scope before an independent deployment. Entries in
+`GH_REPOS` must map to distinct endpoint slugs: dots and slashes both become
+dashes, so `o/a.b` and `o/a-b` would share one key — the run refuses instead
+of letting the last write mask a red main. Store
 `GATUS_URL`, `GATUS_EXTERNAL_TOKEN` and authentication in protected configuration.
 Export env-file assignments and refuse execution if sourcing fails. The source
 schedule is five minutes against a ten-minute heartbeat; it is not evidence that

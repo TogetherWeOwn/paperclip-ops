@@ -25,8 +25,15 @@ set -uo pipefail
 #        (needs actions:read; the workflow already grants it, read-only).
 # Requires curl and jq. The token travels in a header FILE, never in argv —
 # /proc/*/cmdline is world-readable and this host is shared (case_3d790dcb).
-# On redirect the log endpoint answers 302 to pre-signed storage; curl -L is
-# the documented way to follow it.
+# REDIRECT SCOPING: the log endpoint answers 302 to pre-signed storage and
+# curl -L follows it — but -L re-sends the header file's Authorization to
+# wherever the 302 points, so validating only the initial api.github.com host
+# is insufficient scoping. The credential's exposure is the whole redirect
+# chain, and that chain is chosen by the server, not by us. Accepted here
+# because GH_TOKEN is actions:read-scoped and short-lived and the chain is
+# server-chosen storage; any future host allowlist for this script must cover
+# redirect targets (manual redirect handling or --proto-redir), not just the
+# initial host. Do not copy this -L+auth pattern to a wider-scoped bearer.
 # Every curl call below carries --connect-timeout/--max-time (case_e107fefc): a
 # hung endpoint must refuse (exit 3, HTTP 000 reads as a failed measurement),
 # never print "no failures found" over an unmeasured job list.
@@ -176,7 +183,8 @@ for jid in $FAILED_IDS; do
     CURL_RC=0
     CODE="$(curl -sS -L --connect-timeout 10 --max-time 60 -o "$TMP/$jid.log" -w '%{http_code}' -H @"$HDR" -H 'Accept: application/vnd.github+json' "$LOGURL" 2>"$TMP/curl-$jid.err")" || CURL_RC=$?
     [[ "$CURL_RC" -eq 0 ]] || refuse "downloading the log for failed job $jid ($JNAME): curl transport failure (exit $CURL_RC)"
-    # The log endpoint answers 302 to pre-signed storage; -L follows it to 200.
+    # The log endpoint answers 302 to pre-signed storage; -L follows it to 200 —
+    # re-sending Authorization to the redirect target (see REDIRECT SCOPING).
     [[ "$CODE" == "200" ]] || refuse "downloading the log for failed job $jid ($JNAME) returned HTTP $CODE"
     SRC="$TMP/$jid.log"
   fi

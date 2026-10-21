@@ -15,11 +15,16 @@ Operator applies these files there after this PR merges.
 | `tier-0/semgrep-rules/generic-secrets-in-code.yaml` | `semgrep-rules/generic-secrets-in-code.yaml` (live rule) |
 | `tier-0/semgrep-rules/template-authz-helper.yaml` | `semgrep-rules/template-authz-helper.yaml` (disabled template) |
 | `tier-0/semgrep-rules/template-check-then-write.yaml` | `semgrep-rules/template-check-then-write.yaml` (disabled template) |
+| `tier-0/semgrep-rules/security-ssrf-redirect.yaml` | `semgrep-rules/security-ssrf-redirect.yaml` (live rule, post-pin addition — see `tier-0/PORT-ADDITIONS.md`) |
+| `tier-0/semgrep-rules/security-secrets-extended.yaml` | `semgrep-rules/security-secrets-extended.yaml` (live rule, post-pin addition — see `tier-0/PORT-ADDITIONS.md`) |
+| `tier-0/PORT-ADDITIONS.md` | `semgrep-rules/PORT-ADDITIONS.md` (post-pin additions manifest + coverage gain; the drift gate exempts listed files) |
+| `codeql/codeql-config.yml` | `codeql/codeql-config.yml` (shared `security-extended` suite config) |
 | `pull-request-template/SELF-REVIEW-CHECKLIST.md` | merged into `.github/pull_request_template.md` as a `### Self-review (10 buckets)` subsection (see the file's Operator merge note) |
 | `rulesets/tier0-report-only.json` | org ruleset payload, stage 1 (`evaluate`); applied via `gh api`, not copied |
 | `rulesets/tier0-required.json` | org ruleset payload, stage 2 (`active`, no earlier than 24h after stage 1); applied via `gh api`, not copied |
 | `rulesets/OPERATOR-RUNBOOK.md` | reference only (stays here; exact admin commands, placeholders, rollback) |
 | `tests/test_tier0_org_template.sh` | reference only (stays here; structural contract for everything above) |
+| `tests/test_security_rules.sh` | reference only (stays here; pins the case_f3ff4554 security pack + local scan rollout) |
 | `tier-0/SOURCE` | reference only (stays here; recorded source pin the drift gate diffs against) |
 | `check-staged-drift.sh` | reference only (stays here; offline staged-vs-source drift gate, wired into `verify-fast`) |
 | `CI-STANDARD.md` | `CI-STANDARD.md` (repo root) |
@@ -33,6 +38,14 @@ Operator applies these files there after this PR merges.
 | `tests/test_policy_checkout.py` | reference only (real pinned checkout action; symlink regression plus normal-directory control) |
 | `scripts/ci_policy.py` | `.github/scripts/ci_policy.py` (warn mode; wired into `pr-lint`, needs no ruleset change) |
 | `tests/test_ci_policy.py` | `.github/scripts/test_ci_policy.py` (unit tests, run beside the lint) |
+| `pull-request-template/AX-BLOCK.md` | merged into `.github/pull_request_template.md` as a `## Agent Experience (AX)` section after `## Attestation` (see the file's Operator merge note) |
+| `repo-template/AGENTS.md` | `repo-template/AGENTS.md` (new-repo seed; provisioning copies it to each new repo root — see the file's seeding note) |
+| `ax-lint/ax-lint.yml` | `.github/workflows/ax-lint.yml` (reusable `workflow_call`, advisory warn default) |
+| `ax-lint/ax_lint.py` | `ax-lint/ax_lint.py` (the lint the workflow checks out at the invoked ref) |
+| `ax-metrics/ax-metrics.yml` | PRIVATE ops repo `.github/workflows/ax-metrics.yml` (weekly schedule; cost/card data stays internal — see the file's header) |
+| `ax-metrics/ax_metrics.py` | PRIVATE ops repo `ax-metrics/ax_metrics.py` (ships with the workflow above) |
+| `review/AX-DIMENSION.md` | reference only (stays here; exact AX dimension text for the host-side review owner to install) |
+| `tests/test_ax_org_template.py` | reference only (stays here; structural contract for everything above) |
 
 > `scripts/ci_policy.py` + `tests/test_ci_policy.py` are a verbatim copy of
 > `paperclip-ops@4fb40122` (PR #656, warn mode). Do not edit the copy:
@@ -43,13 +56,27 @@ Operator applies these files there after this PR merges.
 > `paperclip-ops@61754d9dd4` (PR #824, case_5789b2d5), unmerged at stage
 > time — the staged header names the source commit. Tag `tier0-source/61754d9d`
 > keeps the pin reachable after #824 rebases or merges. Do not hand-edit the
-> port: fix upstream in #824, then re-port. The Operator re-syncs this copy
+> port: fix upstream in #824, then re-port — except post-pin org additions
+> listed in `tier-0/PORT-ADDITIONS.md`, which the drift gate exempts by name.
+> The Operator re-syncs this copy
 > after #824 merges and before applying it to the org repo. The recorded pin
 > (`tier-0/SOURCE`) plus `check-staged-drift.sh` (wired into `verify-fast`)
 > fail on any hand-edit or pin bump without a re-port; pass an explicit ref
 > to check the staged copy against a newer source head instead of the pin. The ruleset
 > payloads are never copied as files; a human org admin applies them with
 > the runbook (ruleset writes are 403 for the GitHub App).
+
+## Security-rule fixture verification
+
+`tests/test_security_rules.sh` runs the staged rules with Semgrep (verified
+at 1.138.0 and the gate pin 1.128.1). This repo's CI does not install Semgrep
+or run that suite; run it locally with `SEMGREP` set to the absolute path of
+an existing binary (not via a venv on `PATH`, so the suite retains system
+Python/PyYAML). When the suite is invoked with `CI` set, a missing binary is
+fatal; local runs without it explicitly skip engine fixtures. The
+drift-exemption cases are pinned on every CI run by
+`python3 test_staged_drift.py` (SyntheticDrift), so they do not depend on
+this suite's engine fixtures or on the recorded source pin.
 
 ## Operator adoption wiring (required, not delivered by copying scripts)
 
@@ -161,6 +188,7 @@ PYTHONPATH=templates/org-github/scripts \
   python3 -m unittest discover -s templates/org-github/tests -p 'test_ci_policy.py'
 ./templates/org-github/tests/test_tier0_org_template.sh
 ./templates/org-github/check-staged-drift.sh
+python3 -m unittest discover -s templates/org-github/tests -p 'test_ax_org_template.py'
 ```
 
 Covers 65 matcher fixtures/controls, 22 actual-workflow tests and five template

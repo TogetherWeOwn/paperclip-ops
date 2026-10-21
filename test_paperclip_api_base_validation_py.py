@@ -5,8 +5,9 @@
 #
 # Every sender below derives its base from PAPERCLIP_API_URL/--api-url and
 # attaches the run/board bearer to it. A base that is not an http(s) URL
-# with a non-empty bare host -- wrong scheme, userinfo, whitespace -- must
-# be refused BEFORE any request is built, so the bearer is never sent to a
+# with a non-empty bare host -- wrong scheme, userinfo, whitespace,
+# query/fragment, curl-glob hosts, empty or non-numeric ports -- must be
+# refused BEFORE any request is built, so the bearer is never sent to a
 # base we refused to trust. A well-formed hostile host still passes by
 # design (that needs an operator-owned host allowlist); this gate pins the
 # malformed-env layer, mirroring test_paperclip_api_base_validation.sh.
@@ -50,6 +51,8 @@ CANARY = "pc_CANARY_base_validation_key"
 COMPANY = "co-stub"
 GOOD = "https://paperclip.invalid/api"
 
+# Kept identical to MALFORMED in test_paperclip_api_base_validation.sh:
+# both gates refuse the same set.
 MALFORMED = [
     "ftp://board.invalid/api",
     "file:///etc/passwd",
@@ -58,6 +61,17 @@ MALFORMED = [
     "https://board.invalid/api with space",
     "http:///no-host",
     "https://paperclip.invalid/api\nheader = \"X: injected\"",
+    "https://:8080/api",
+    "http://?q",
+    "http://#frag",
+    "https://host.invalid/api?x=1",
+    "https://host.invalid/api#frag",
+    "http://{127.0.0.1,127.0.0.2}/api",
+    "http://127.0.0.[1-2]/api",
+    "https://host:badport/api",
+    "http://ho,st.invalid/api",
+    "https://host:/x",
+    "http://host:80:90/",
 ]
 
 
@@ -294,7 +308,7 @@ class ValidatorParity(unittest.TestCase):
                     self.assertFalse(gate(base), base[:48])
                 for base in (GOOD, "https://paperclip.invalid",
                              "http://127.0.0.1:9", "https://host:8443/base",
-                             "https://evil.invalid/api"):
+                             "http://[::1]:9", "https://evil.invalid/api"):
                     self.assertTrue(gate(base), base[:48])
 
 

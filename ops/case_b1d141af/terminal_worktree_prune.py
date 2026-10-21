@@ -89,6 +89,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "case_b5184419"))
@@ -120,19 +121,45 @@ class SafetyRefusal(RuntimeError):
 
 def _valid_api_base(base):
     # BASE host validation: the bearer below is sent ONLY to this base.
-    # Refuse a base that is not an http(s) URL with a non-empty bare host --
+    # Refuse a base that is not an http(s) URL with a non-empty bare host:
     # no userinfo (`user@host` misdirects the credential), no whitespace (a
-    # newline would inject a request directive). A well-formed hostile host
-    # still passes; blocking that needs an operator-owned host allowlist,
-    # not a per-script guess.
+    # newline would inject a request directive), no query or fragment (the
+    # appended /api path would be swallowed into them), a real hostname (an
+    # empty `:port`-only authority is not a host), a numeric port, and no
+    # `{`/`}` anywhere (curl expands `{a,b}` globs, so one base is one host
+    # -- parity with the shell gate). A well-formed hostile host still
+    # passes; blocking that needs an operator-owned host allowlist, not a
+    # per-script guess.
     if not base.startswith(("http://", "https://")):
-        return False
-    host = base.split("://", 1)[1].split("/", 1)[0]
-    if not host:
         return False
     if "@" in base:
         return False
-    return not any(char in " \t\n\r\x0b\x0c" for char in base)
+    if any(char in " \t\n\r\x0b\x0c" for char in base):
+        return False
+    if "{" in base or "}" in base:
+        return False
+    try:
+        parts = urllib.parse.urlsplit(base)
+    except ValueError:
+        return False
+    if parts.username or parts.password:
+        return False
+    if parts.query or parts.fragment:
+        return False
+    host = parts.hostname or ""
+    if not host:
+        return False
+    if any(char in "[]{}," for char in host):
+        return False
+    if not parts.netloc.startswith("[") and parts.netloc.count(":") > 1:
+        return False
+    try:
+        port = parts.port
+    except ValueError:
+        return False
+    if port is None and parts.netloc.endswith(":"):
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------

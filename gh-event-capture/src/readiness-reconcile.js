@@ -205,13 +205,15 @@ export function emptyCounters() {
 
 /**
  * Dependencies (and deliberately NOTHING else):
- * github.getCloseoutSnapshot, github.getRulesetRequiredChecks,
+ * github.getReadinessSnapshot (or the stricter legacy getCloseoutSnapshot),
+ * github.getRulesetRequiredChecks,
  * github.updatePullRequestBody, github.markReadyForReview,
  * github.convertToDraft, github.enableAutoMerge. There is no merge, no close
  * and no comment call path in this module to mistake for one of these.
  */
 export function createReconciler({ github, policy, nowMs = () => Date.now() }) {
-  requireValue(github && typeof github.getCloseoutSnapshot === 'function' &&
+  const readSnapshot = github?.getReadinessSnapshot ?? github?.getCloseoutSnapshot
+  requireValue(github && typeof readSnapshot === 'function' &&
     typeof github.getRulesetRequiredChecks === 'function' &&
     typeof github.updatePullRequestBody === 'function' &&
     typeof github.markReadyForReview === 'function' &&
@@ -266,7 +268,7 @@ export function createReconciler({ github, policy, nowMs = () => Date.now() }) {
 
       let snapshot
       try {
-        snapshot = await github.getCloseoutSnapshot(ref.repository, ref.number, { nowMs: now })
+        snapshot = await readSnapshot.call(github, ref.repository, ref.number, { nowMs: now })
       } catch {
         records.push({ ...ref, headSha: null, decision: 'none', reason: 'snapshot-read-failed',
           log: logLine(ref.repository, ref.number, 'unknown', 'none', 'snapshot-read-failed'),

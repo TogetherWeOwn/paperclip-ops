@@ -168,7 +168,14 @@ function normalizeCheck(node) {
   throw new Error('GitHub check entry type is unknown')
 }
 
-function normalizeSnapshot(pr, repository, number, nowMs) {
+// Readiness does not use push age. Duplicate names can come from separate
+// push/PR workflows: a failure wins over pending, and pending wins over pass.
+function readinessCheckRank(check) {
+  if (check.status !== 'completed') return 1
+  return ['success', 'neutral', 'skipped'].includes(check.conclusion) ? 0 : 2
+}
+
+function normalizeSnapshot(pr, repository, number, nowMs, readiness = false) {
   requireValue(pr && pr.number === number && pr.baseRepository?.nameWithOwner === repository &&
     pr.url === `https://github.com/${repository}/pull/${number}`, 'GitHub PR identity is incomplete or mismatched')
   requireValue(typeof pr.headRefOid === 'string' && /^[a-f0-9]{40}$/.test(pr.headRefOid) &&
@@ -191,7 +198,7 @@ function normalizeSnapshot(pr, repository, number, nowMs) {
     'GitHub PR commits are missing')
   const head = pr.commits.nodes.find((n) => n?.commit?.oid === pr.headRefOid)
   requireValue(head, 'GitHub head commit is outside the snapshot window; the PR moved during the read')
-  const headPushedMs = parseTime(head.commit.pushedDate, 'GitHub head push time is missing or invalid')
+  const headPushedMs = readiness ? null : parseTime(head.commit.pushedDate, 'GitHub head push time is missing or invalid')
   // A null rollup means no checks have ever reported, not a failed read: it
   // becomes an empty set, which closeout reports as missing after its grace
   // period. Inventing entries here would be the silent direction.
@@ -201,17 +208,20 @@ function normalizeSnapshot(pr, repository, number, nowMs) {
     (Array.isArray(rollup.contexts?.nodes) && rollup.contexts.pageInfo?.hasNextPage === false))),
   'GitHub check rollup is incomplete or truncated')
   const checks = []
-  const seen = new Set()
+  const seen = new Map()
   for (const node of rollup?.contexts?.nodes ?? []) {
     const check = normalizeCheck(node)
-    // One entry per name: the rollup already carries the latest per context.
-    // Two entries would make "which one counts" a coin flip on array order.
-    requireValue(!seen.has(check.name), 'GitHub check rollup has duplicate check names')
-    seen.add(check.name)
+    if (seen.has(check.name)) {
+      requireValue(readiness, 'GitHub check rollup has duplicate check names')
+      const index = seen.get(check.name)
+      if (readinessCheckRank(check) > readinessCheckRank(checks[index])) checks[index] = check
+      continue
+    }
+    seen.set(check.name, checks.length)
     checks.push(check)
   }
   requireValue(Number.isInteger(nowMs) && nowMs >= 0 && nowMs <= MS_LIMIT, 'snapshot clock is invalid')
-  requireValue(nowMs >= headPushedMs, 'snapshot clock precedes the head push')
+  if (!readiness) requireValue(nowMs >= headPushedMs, 'snapshot clock precedes the head push')
   // The body is advisory readiness payload, not closeout evidence: fixtures
   // that predate it (and a PR with no description, which GitHub returns as
   // null) read as null, and the readiness duty treats null as undecidable
@@ -225,7 +235,7 @@ function normalizeSnapshot(pr, repository, number, nowMs) {
     autoMerge: pr.autoMergeRequest !== null,
     labels: pr.labels.nodes.map((l) => l.name),
     mergeableState: pr.mergeStateStatus.toLowerCase(),
-    reviewDecision: pr.reviewDecision, headPushedMs, nowMs, checks,
+    reviewDecision: pr.reviewDecision, ...(!readiness ? { headPushedMs } : {}), nowMs, checks,
   }
 }
 
@@ -276,7 +286,7 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
     return normalize(repo.pullRequest, repository, number)
   }
 
-  async function getCloseoutSnapshot(repository, number, options = {}) {
+  async function readSnapshot(repository, number, options, readiness) {
     requireValue(prNumber(number), 'GitHub PR number is invalid')
     // One authoritative read per flush (design §5.1). No polling, no retries:
     // a read that cannot complete throws and the caller leaves its cursor
@@ -284,7 +294,17 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
     const { nowMs = Date.now() } = options ?? {}
     const repo = await query(repository, SNAPSHOT_QUERY, ['-F', `number=${number}`])
     requireValue(typeof repo.isPrivate === 'boolean', 'GitHub repository visibility is missing')
-    return { ...normalizeSnapshot(repo.pullRequest, repository, number, nowMs), isPrivate: repo.isPrivate }
+    return { ...normalizeSnapshot(repo.pullRequest, repository, number, nowMs, readiness), isPrivate: repo.isPrivate }
+  }
+
+  function getCloseoutSnapshot(repository, number, options = {}) {
+    return readSnapshot(repository, number, options, false)
+  }
+
+  // GitHub may return null pushedDate. Readiness needs current-head checks,
+  // not age; closeout still requires a real push time for its grace windows.
+  function getReadinessSnapshot(repository, number, options = {}) {
+    return readSnapshot(repository, number, options, true)
   }
 
   async function disableAutoMerge(repository, number) {
@@ -567,7 +587,7 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
     }
   }
 
-  return { getPullRequest, listOpenPullRequests, getCloseoutSnapshot, getRequiredChecks,
+  return { getPullRequest, listOpenPullRequests, getCloseoutSnapshot, getReadinessSnapshot, getRequiredChecks,
     getRulesetRequiredChecks, updatePullRequestBody, markReadyForReview, convertToDraft,
     enableAutoMerge, disableAutoMerge, getMainHeadChecks }
 }

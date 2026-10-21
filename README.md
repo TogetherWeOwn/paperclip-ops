@@ -56,6 +56,10 @@ execution or deployment checklist; inspect each utility's usage and prerequisite
 before running it. `cliproxy_seam_extract.py` is an exempt one-shot forensic
 parser, not a standing operator command. Test entry points begin with `test_`.
 
+For `host_db_backup.sh`, see the [publication receipt contract](docs/host-db-backup.md)
+for offline discovery, no-write planning, machine outcomes and fixture checks.
+This documentation does not authorize running a backup or changing a host.
+
 | Tool |
 | --- |
 | `public_snapshot_test_support.py` (test-only private-artifact boundary; not a runtime policy or operator command) |

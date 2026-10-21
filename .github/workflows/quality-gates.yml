@@ -52,7 +52,7 @@ env:
   # absent). Unversioned upstream URL: digest-pinned and verified before
   # execution so a changed bootstrap fails closed. Refresh with the new
   # digest if the fallback ever trips on a hash mismatch.
-  GET_PIP_SHA256: "fb24e693bab954209a063d90953621412ccad4a500905a726286e038f508ddf6"
+  GET_PIP_SHA256: "f4448a01e3ab2914c65f4ca59d4cacba6b2dbde19a483fbac46587f8bbaff424"
 
 jobs:
   quality-gates:

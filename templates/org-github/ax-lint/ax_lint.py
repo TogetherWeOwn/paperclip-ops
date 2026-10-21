@@ -118,6 +118,47 @@ def _flag_literal(flag):
     return r"(?<![\w-])[\"']?%s[\"']?(?![\w-])" % re.escape(flag)
 
 
+# `usage:` certifies only as the advertised form: the first thing on the
+# line after an optional comment marker, quote, or echo/print command.
+USAGE_RE = re.compile(
+    r"^\s*(?:#+|//|;)?\s*"
+    r"(?:(?:echo|printf|print|puts)\s+(?:-\w+\s+)*)?"
+    r"[\"'(]*\s*usage:", re.IGNORECASE)
+
+
+def _string_content_mask(code):
+    """Per-char flag: True where *code* sits inside a string literal.
+
+    Delimiters themselves are False, so a match that starts on an opening
+    quote is outside any enclosing literal. Handles ``\\`` escapes and
+    triple quotes; an unbalanced quote errs toward "inside a literal",
+    which warns rather than certifies.
+    """
+    mask = [False] * len(code)
+    i, n = 0, len(code)
+    while i < n:
+        ch = code[i]
+        if ch not in ("'", '"'):
+            i += 1
+            continue
+        delim = code[i:i + 3] if code[i:i + 3] in ("'''", '"""') else ch
+        i += len(delim)
+        while i < n and not code.startswith(delim, i):
+            if code[i] == "\\" and i + 1 < n:
+                mask[i] = mask[i + 1] = True
+                i += 2
+                continue
+            mask[i] = True
+            i += 1
+        i += len(delim)
+    return mask
+
+
+def _code_match(pattern, code, in_literal):
+    """True if *pattern* matches at a position outside string literals."""
+    return any(not in_literal[m.start()] for m in re.finditer(pattern, code))
+
+
 def _certified_surface_flags(text):
     """Machine flags with advertised top-level support.
 
@@ -132,7 +173,7 @@ def _certified_surface_flags(text):
     certified = set()
     lines = text.splitlines()
     for line in lines:
-        if "usage:" in line.lower():
+        if USAGE_RE.match(line):
             for flag in MACHINE_FLAGS:
                 if re.search(_flag_literal(flag), line):
                     certified.add(flag)
@@ -140,14 +181,16 @@ def _certified_surface_flags(text):
         return certified
     code_lines = [_strip_comment(line) for line in lines]
     code = "\n".join(code_lines)
+    in_literal = _string_content_mask(code)
     for flag in MACHINE_FLAGS:
         if flag in certified:
             continue
-        if re.search(r"add_argument\s*\([^)]*(['\"])%s\1"
-                     % re.escape(flag), code):
+        if _code_match(
+                r"add_argument\s*\(\s*(?:(['\"])-[^'\"\s]*\1\s*,\s*)*"
+                r"(['\"])%s\2" % re.escape(flag), code, in_literal):
             certified.add(flag)
-        elif re.search(r"['\"]%s['\"]\s+in\s+[^\n]*\bargv\b"
-                       % re.escape(flag), code):
+        elif _code_match(r"['\"]%s['\"]\s+in\s+[^\n]*\bargv\b"
+                         % re.escape(flag), code, in_literal):
             certified.add(flag)
         elif _shell_flag_comparison(code_lines, flag):
             certified.add(flag)
@@ -167,7 +210,15 @@ def _blank_quoted(line):
     """
     out = []
     quote = None
-    for ch in line:
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "\\" and quote != "'" and i + 1 < len(line):
+            # Escaped char: never opens/closes a quote. Blank both inside
+            # a quoted span; keep them outside (offsets stay aligned).
+            out.append("  " if quote else line[i:i + 2])
+            i += 2
+            continue
         if quote is None and ch in ("'", '"'):
             quote = ch
             out.append(ch)
@@ -178,6 +229,7 @@ def _blank_quoted(line):
             out.append(ch)
         else:
             out.append(" ")
+        i += 1
     return "".join(out)
 
 
@@ -213,22 +265,32 @@ def _shell_case_branch(code_lines, flag):
     Only ``case`` statements switching on a positional parameter count:
     ``case "$FORMAT" in --json)`` matches a *value*, not a CLI flag.
     """
-    in_case = False
+    depth = 0
+    expect_label = False
     for line in code_lines:
-        if not in_case:
-            match = re.match(r"^\s*case\s+(.*?)\s+in\s*$", line)
-            if match and re.search(_POS_PARAM_RE, match.group(1)):
-                in_case = True
+        opens = re.match(r"^\s*case\s+(.*?)\s+in\s*$", line)
+        if depth == 0:
+            if opens and re.search(_POS_PARAM_RE, opens.group(1)):
+                depth, expect_label = 1, True
+            continue
+        if opens:
+            depth += 1
             continue
         if re.match(r"^\s*esac\b", line):
-            in_case = False
+            depth -= 1
             continue
-        segments = line.split(")", 1)
-        if len(segments) < 2:
+        if depth > 1:
             continue
-        for alt in segments[0].split("|"):
-            if alt.strip().strip("\"'") == flag:
-                return True
+        # Only a line where a label is expected can be a branch label;
+        # body lines (e.g. a child command's `--json)` continuation) can't.
+        if expect_label and ")" in line:
+            head, rest = line.split(")", 1)
+            for alt in head.strip().lstrip("(").split("|"):
+                if alt.strip().strip("\"'") == flag:
+                    return True
+            expect_label = ";;" in rest or ";&" in rest
+        elif ";;" in line or ";&" in line:
+            expect_label = True
     return False
 
 
@@ -292,7 +354,13 @@ def _strip_comment(line):
     # Conservative: cut at the first '#' outside single/double quotes.
     out = []
     quote = None
-    for ch in line:
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "\\" and quote != "'" and i + 1 < len(line):
+            out.append(line[i:i + 2])
+            i += 2
+            continue
         if quote is None and ch in ("'", '"'):
             quote = ch
         elif ch == quote:
@@ -300,6 +368,7 @@ def _strip_comment(line):
         elif ch == "#" and quote is None:
             break
         out.append(ch)
+        i += 1
     return "".join(out)
 
 
@@ -400,7 +469,9 @@ def _scan_dispatch(relpath, lines):
         i += 1
         # Collect the workflow_dispatch block, then find `inputs:` in it.
         block_start = i
-        while i < total and (not lines[i].strip() or _indent_of(lines[i]) > base_indent):
+        while i < total and (not lines[i].strip()
+                             or lines[i].lstrip().startswith("#")
+                             or _indent_of(lines[i]) > base_indent):
             i += 1
         block = lines[block_start:i]
         inputs_at = [k for k, ln in enumerate(block)
@@ -429,14 +500,15 @@ def _scan_dispatch(relpath, lines):
         rest = block[inputs_at[0] + 1:]
         # Input entries are the shallowest indented lines under `inputs:`.
         child_indents = [_indent_of(ln) for ln in rest
-                         if ln.strip() and _indent_of(ln) > inputs_indent]
+                         if ln.strip() and not ln.lstrip().startswith("#")
+                         and _indent_of(ln) > inputs_indent]
         if not child_indents:
             continue
         entry_indent = min(child_indents)
         entries = []
         current = None
         for lineno_offset, ln in enumerate(rest):
-            if not ln.strip():
+            if not ln.strip() or ln.lstrip().startswith("#"):
                 if current is not None:
                     current[2].append(ln)
                 continue
@@ -456,6 +528,8 @@ def _scan_dispatch(relpath, lines):
                     "unknown",
                     "workflow_dispatch input entry uses an unsupported "
                     "flow style; entry not type-checked"))
+                # Its child lines must not be absorbed by the prior entry.
+                current = None
             elif current is not None and _indent_of(ln) > entry_indent:
                 current[2].append(ln)
         for entry_name, entry_lineno, entry_lines in entries:

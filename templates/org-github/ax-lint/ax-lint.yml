@@ -12,8 +12,11 @@
 # its warnings are triaged; there is no org-wide enforce date.
 #
 # The lint script is checked out from this same repo at the invoked
-# ref (parsed from github.workflow_ref), so the script version always
-# matches the workflow version with no placeholder to fill.
+# SHA (job.workflow_sha), so the script version always matches the
+# workflow version with no placeholder to fill. The job.* identity
+# contexts describe the CALLED workflow; the github context would
+# describe the caller and must not be used here. Requires github.com:
+# job.workflow_* is unavailable on GitHub Enterprise Server.
 
 name: ax-lint (reusable, advisory)
 
@@ -50,20 +53,32 @@ jobs:
       - name: Resolve ax-lint source ref
         id: source-ref
         env:
-          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_REPO: ${{ job.workflow_repository }}
         run: |
           set -euo pipefail
-          ref="${WORKFLOW_REF##*@}"
-          if ! [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::ax-lint must be invoked at a full commit SHA (got: $ref)"
+          if [[ "$WORKFLOW_REPO" != "TogetherWeOwn/.github" ]]; then
+            echo "::error::ax-lint must run from TogetherWeOwn/.github (got: $WORKFLOW_REPO)"
             exit 1
           fi
-          echo "sha=$ref" >> "$GITHUB_OUTPUT"
+          if ! [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::ax-lint source is not a full commit SHA (got: $WORKFLOW_SHA)"
+            exit 1
+          fi
+          # A SHA-pinned invocation resolves the called ref to that SHA;
+          # a tag or branch invocation does not, so the contract fails.
+          expected="TogetherWeOwn/.github/.github/workflows/ax-lint.yml@$WORKFLOW_SHA"
+          if [[ "$WORKFLOW_REF" != "$expected" ]]; then
+            echo "::error::ax-lint must be invoked at a full commit SHA (got: $WORKFLOW_REF)"
+            exit 1
+          fi
+          echo "sha=$WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Check out ax-lint source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          repository: TogetherWeOwn/.github
+          repository: ${{ job.workflow_repository }}
           ref: ${{ steps.source-ref.outputs.sha }}
           path: .ax-source
           persist-credentials: false

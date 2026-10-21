@@ -113,7 +113,16 @@ class RepoTemplateAgentsTest(unittest.TestCase):
     def test_placeholders_documented(self):
         agents = read("repo-template/AGENTS.md")
         self.assertIn("<REPO>", agents)
+        self.assertIn("<FAST COMMAND>", agents)
+        self.assertIn("<DEPLOY DOC>", agents)
+        self.assertIn("<REPO SKILLS>", agents)
         self.assertIn("Operator seeding note", agents)
+
+    def test_no_dangling_map_references(self):
+        agents = read("repo-template/AGENTS.md")
+        top_map = agents.split("## Agent Experience (AX) rules")[0]
+        self.assertNotIn("below", top_map)
+        self.assertNotIn("docs/deploy.md", top_map)
 
 
 class AxLintWorkflowTest(unittest.TestCase):
@@ -133,8 +142,17 @@ class AxLintWorkflowTest(unittest.TestCase):
         text = read("ax-lint/ax-lint.yml")
         self.assertEqual(text.count(CHECKOUT_PIN), 2)
         self.assertNotIn("secrets.", text)
-        self.assertIn("github.workflow_ref", text)
         self.assertIn("persist-credentials: false", text)
+
+    def test_called_workflow_identity(self):
+        # The pin guard must use the job.* contexts (called workflow),
+        # never github.workflow_ref (the caller). See CodeRabbit round 1.
+        text = read("ax-lint/ax-lint.yml")
+        self.assertIn("job.workflow_ref", text)
+        self.assertIn("job.workflow_sha", text)
+        self.assertIn("job.workflow_repository", text)
+        self.assertNotIn("github.workflow_ref", text)
+        self.assertIn("TogetherWeOwn/.github", text)
         workflow = yaml.safe_load(text)
         for trigger, config in triggers(workflow).items():
             if isinstance(config, dict):
@@ -321,6 +339,75 @@ class AxMetricsComputeTest(unittest.TestCase):
             ax_metrics.compute_tokens_per_pr(1000, 4), 250.0)
         self.assertIsNone(ax_metrics.compute_tokens_per_pr(None, 4))
         self.assertIsNone(ax_metrics.compute_tokens_per_pr(1000, 0))
+
+    def test_fetch_merged_prs_reports_total_count(self):
+        payload = {
+            "total_count": 45,
+            "items": [{"number": n, "closed_at": "2026-10-20T00:00:00Z"}
+                      for n in range(1, 46)],
+        }
+        real_get = ax_metrics._http_get_json
+        ax_metrics._http_get_json = lambda url, headers: payload
+        try:
+            sample, truncated, total = ax_metrics.fetch_merged_prs(
+                "Example/a", "2026-10-13T00:00:00Z", "token")
+        finally:
+            ax_metrics._http_get_json = real_get
+        self.assertEqual(total, 45)
+        self.assertEqual(len(sample), ax_metrics.MAX_PRS_PER_REPO)
+        self.assertTrue(truncated)
+
+    def test_fetch_merged_prs_small_window_not_truncated(self):
+        payload = {
+            "total_count": 2,
+            "items": [{"number": 7, "closed_at": "2026-10-20T00:00:00Z"},
+                      {"number": 8, "closed_at": None}],
+        }
+        real_get = ax_metrics._http_get_json
+        ax_metrics._http_get_json = lambda url, headers: payload
+        try:
+            sample, truncated, total = ax_metrics.fetch_merged_prs(
+                "Example/a", "2026-10-13T00:00:00Z", "token")
+        finally:
+            ax_metrics._http_get_json = real_get
+        self.assertEqual(total, 2)
+        self.assertEqual([pr["number"] for pr in sample], [7, 8])
+        self.assertFalse(truncated)
+
+    def test_combine_commit_state(self):
+        combine = ax_metrics.combine_commit_state
+        # Legacy-only evidence still works.
+        self.assertEqual(
+            combine({"state": "success", "total_count": 1}, []), "success")
+        self.assertEqual(
+            combine({"state": "failure", "total_count": 2}, []), "failure")
+        # Actions-only commit: empty pending legacy plus check runs.
+        self.assertEqual(
+            combine({"state": "pending", "total_count": 0},
+                    [{"conclusion": "success", "status": "completed"}]),
+            "success")
+        self.assertEqual(
+            combine({"state": "success", "total_count": 1},
+                    [{"conclusion": "failure", "status": "completed"}]),
+            "failure")
+        # Every non-success conclusion fails, including the quiet ones.
+        for conclusion in ("timed_out", "cancelled", "stale",
+                           "startup_failure", "action_required"):
+            self.assertEqual(
+                combine({"state": "success", "total_count": 1},
+                        [{"conclusion": conclusion,
+                          "status": "completed"}]),
+                "failure", f"conclusion {conclusion} should fail")
+        # Neutral/skipped carry no signal; in-progress votes pending.
+        self.assertEqual(
+            combine({"state": "pending", "total_count": 0},
+                    [{"conclusion": None, "status": "in_progress"},
+                     {"conclusion": "skipped", "status": "completed"}]),
+            "pending")
+        # No evidence anywhere returns None.
+        self.assertIsNone(
+            combine({"state": "pending", "total_count": 0}, []))
+        self.assertIsNone(combine(None, None))
 
     def test_from_file_report_shape(self):
         fixture = {

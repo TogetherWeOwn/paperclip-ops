@@ -11,6 +11,9 @@
 # Operator provisioning (not delivered by copying files):
 # - `METRICS_GITHUB_TOKEN`: read-only token covering the repos in
 #   repos.txt (the automatic GITHUB_TOKEN cannot read other repos).
+#   Fine-grained: grant "Commit statuses: read" and "Checks: read",
+#   since first-commit state reads both the legacy status rollup and
+#   the check-runs list.
 # - `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY`, `PAPERCLIP_COMPANY_ID`:
 #   optional; without them the Paperclip-backed metrics report null
 #   with a reason instead of failing the run.

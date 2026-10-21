@@ -5,8 +5,9 @@ Collects the three AX outcome metrics over a trailing window and
 prints one JSON report to stdout:
 
 * ``first_push_green_rate`` — merged PRs whose FIRST commit already
-  had green combined status, over merged PRs with any status. A v0
-  proxy for first-attempt success, from the GitHub API.
+  had green combined status and check runs, over merged PRs with any
+  status or check run. A v0 proxy for first-attempt success, from
+  the GitHub API.
 * ``tokens_per_merged_pr`` — Paperclip cost-window tokens over merged
   PRs. Experimental: reported only when Paperclip credentials are
   present; otherwise null with a reason.
@@ -48,7 +49,14 @@ def _github_headers(token):
 
 
 def fetch_merged_prs(repo, since_iso, token):
-    """Merged PRs in window: [{number, merged_at}]. Truncated, flagged."""
+    """Merged PRs in window: (sample, truncated, total).
+
+    ``sample`` holds up to MAX_PRS_PER_REPO [{number, merged_at}] for
+    first-commit status sampling; ``total`` is the search response's
+    total_count, which drives the merged_prs metric so windows over
+    30 PRs are not undercounted. (Search caps total_count at 1000;
+    weekly windows stay far below that.)
+    """
     query = f"repo:{repo} is:pr is:merged merged:>={since_iso[:10]}"
     url = ("https://api.github.com/search/issues?q="
            + urllib.parse.quote(query) + "&per_page=100")
@@ -60,12 +68,55 @@ def fetch_merged_prs(repo, since_iso, token):
     prs = [{"number": it["number"],
             "merged_at": (it.get("closed_at") or "")}
            for it in items if "number" in it]
-    truncated = len(prs) > MAX_PRS_PER_REPO
-    return prs[:MAX_PRS_PER_REPO], truncated
+    total = data.get("total_count", len(prs))
+    if not isinstance(total, int):
+        total = len(prs)
+    sample = prs[:MAX_PRS_PER_REPO]
+    return sample, total > len(sample), total
+
+
+def combine_commit_state(status_payload, check_runs):
+    """Merge legacy combined status with check runs into one state.
+
+    The legacy /status endpoint rolls up commit statuses only: a
+    commit whose CI runs purely on Actions reports ``pending`` with
+    no statuses. Check runs carry the real signal there, so any
+    non-success conclusion (failure, timed_out, cancelled, stale,
+    startup_failure, action_required, or future values) is a
+    failure vote; neutral/skipped cast no vote; queued or
+    in-progress runs vote pending. Failure wins, success needs a
+    unanimous ballot, and no evidence at all returns None.
+    """
+    status_payload = status_payload or {}
+    votes = []
+    legacy = status_payload.get("state")
+    if legacy in ("success", "failure", "error"):
+        votes.append("success" if legacy == "success" else "failure")
+    elif legacy == "pending" and status_payload.get("total_count"):
+        votes.append("pending")
+    for run in check_runs or []:
+        conclusion = run.get("conclusion")
+        if conclusion == "success":
+            votes.append("success")
+        elif conclusion in ("neutral", "skipped"):
+            continue
+        elif conclusion is not None:
+            votes.append("failure")
+        elif (run.get("status") or "") in ("queued", "in_progress",
+                                           "waiting", "pending",
+                                           "requested"):
+            votes.append("pending")
+    if "failure" in votes:
+        return "failure"
+    if votes and all(v == "success" for v in votes):
+        return "success"
+    if votes:
+        return "pending"
+    return None
 
 
 def fetch_first_commit_state(repo, pr_number, token):
-    """Combined status state of the PR's first commit, or None."""
+    """First-commit state from legacy status plus check runs, or None."""
     commits_url = (f"https://api.github.com/repos/{repo}/pulls/"
                    f"{pr_number}/commits?per_page=1")
     try:
@@ -75,8 +126,11 @@ def fetch_first_commit_state(repo, pr_number, token):
         sha = commits[0]["sha"]
         status_url = (f"https://api.github.com/repos/{repo}/commits/"
                       f"{sha}/status")
+        runs_url = (f"https://api.github.com/repos/{repo}/commits/"
+                    f"{sha}/check-runs?per_page=100")
         status = _http_get_json(status_url, _github_headers(token))
-        return status.get("state")
+        runs = _http_get_json(runs_url, _github_headers(token))
+        return combine_commit_state(status, runs.get("check_runs", []))
     except Exception as exc:
         raise RuntimeError(f"github status failed for {repo}#{pr_number}: {exc}")
 
@@ -179,9 +233,9 @@ def build_report(github_rows, cost_tokens, issues, window_start, window_days,
             "first_push_green_rate": {
                 "value": green,
                 "definition": "merged PRs green on their first commit / "
-                              "merged PRs with any commit status (v0 proxy "
-                              "for first-attempt success)",
-                "provenance": "github commit status",
+                              "merged PRs with any commit status or check "
+                              "run (v0 proxy for first-attempt success)",
+                "provenance": "github commit status + check runs",
             },
             "tokens_per_merged_pr": {
                 "value": tpp,
@@ -207,11 +261,11 @@ def collect_live(args, window_start):
         raise RuntimeError(f"missing github token env {args.github_token_env}")
     github_rows = []
     for repo in args.repos:
-        prs, truncated = fetch_merged_prs(repo, window_start, token)
+        prs, truncated, total = fetch_merged_prs(repo, window_start, token)
         states = [fetch_first_commit_state(repo, pr["number"], token)
                   for pr in prs]
         github_rows.append({
-            "repo": repo, "merged_prs": len(prs),
+            "repo": repo, "merged_prs": total,
             "truncated": truncated, "first_commit_states": states,
         })
     base = os.environ.get(args.paperclip_url_env, "")

@@ -1,9 +1,9 @@
 # <REPO> — agent start here
 
 Build/test: `<FAST COMMAND>` (fast tier, hermetic; CI runs the same).
-Deploy: `docs/deploy.md` (staging first, then production).
+Deploy: `<DEPLOY DOC>` (staging first, then production).
 Review: run the author self-review before marking a PR ready; fix every FAIL.
-Skills: `agent-experience` for anything agents consume; repo skills below.
+Skills: `agent-experience` for anything agents consume; `<REPO SKILLS>`.
 
 ## Agent Experience (AX) rules
 
@@ -19,5 +19,6 @@ Skills: `agent-experience` for anything agents consume; repo skills below.
 
 Destination: `repo-template/AGENTS.md` in the org `.github` repo, plus
 new-repo provisioning that copies it to the root of every new repo as
-`AGENTS.md` with `<REPO>` and `<FAST COMMAND>` filled in. Rollback:
-stop seeding; already-seeded copies are ordinary repo files.
+`AGENTS.md` with `<REPO>`, `<FAST COMMAND>`, `<DEPLOY DOC>` and
+`<REPO SKILLS>` filled in. Rollback: stop seeding; already-seeded
+copies are ordinary repo files.

@@ -414,6 +414,24 @@ HEALTH_AGE_HOURS="null"
 HEALTH_LATEST="not_reported"
 if (( CHECK_HEALTH == 1 )) && [[ -n "${PAPERCLIP_API_URL:-}" ]] && command -v curl >/dev/null 2>&1; then
   base="${PAPERCLIP_API_URL%/}"; base="${base%/api}"
+  # BASE host validation: the bearer below is sent ONLY to this base. A base
+  # that is not an http(s) URL with a non-empty bare host — userinfo
+  # (`user@host` misdirects the credential), whitespace (a newline would
+  # inject a curl-config directive) — skips this corroboration read, with a
+  # warning. Skipping is fail-closed here: the stall verdict never depended
+  # on this read, and the bearer is never sent to a base we refused to trust.
+  # A well-formed hostile host still passes; blocking that needs an
+  # operator-owned host allowlist, not a per-script guess.
+  base_ok=1
+  case "$base" in http://*|https://*) ;; *) base_ok=0;; esac
+  if (( base_ok == 1 )); then
+    _base_host="${base#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%/*}"
+    [[ -n "$_base_host" ]] || base_ok=0
+    case "$base" in *@*|*[[:space:]]*) base_ok=0;; esac
+  fi
+  if (( base_ok == 0 )); then
+    echo "db_backup_stall: WARNING: PAPERCLIP_API_URL is not a clean http(s) base; skipping health corroboration" >&2
+  fi
   # The UNAUTHENTICATED /api/health returns databaseBackup.status but omits
   # latestBackup entirely; only an authenticated call includes it. Send the
   # bearer when we have one so `latest`/`age` are real values rather than a
@@ -429,7 +447,7 @@ if (( CHECK_HEALTH == 1 )) && [[ -n "${PAPERCLIP_API_URL:-}" ]] && command -v cu
   health_cfg_dir=""
   cleanup_health_cfg() { [[ -n "$health_cfg_dir" ]] && rm -rf "$health_cfg_dir"; return 0; }
   health_config_args=()
-  if [[ -n "${PAPERCLIP_API_KEY:-}" ]]; then
+  if (( base_ok == 1 )) && [[ -n "${PAPERCLIP_API_KEY:-}" ]]; then
     health_cfg_dir="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/db_backup_stall.XXXXXXXX")" \
       || { echo "ERROR: could not create a private temp directory" >&2; exit 2; }
     trap 'cleanup_health_cfg' EXIT
@@ -441,7 +459,7 @@ if (( CHECK_HEALTH == 1 )) && [[ -n "${PAPERCLIP_API_URL:-}" ]] && command -v cu
     printf 'header = "Authorization: Bearer %s"\n' "${PAPERCLIP_API_KEY}" > "$health_cfg"
     health_config_args=(--config "$health_cfg")
   fi
-  if health_json="$(curl -sS --max-time 20 "${health_config_args[@]}" "$base/api/health" 2>/dev/null)"; then
+  if (( base_ok == 1 )) && health_json="$(curl -sS --max-time 20 "${health_config_args[@]}" "$base/api/health" 2>/dev/null)"; then
     if command -v python3 >/dev/null 2>&1; then
       eval "$(printf '%s' "$health_json" | python3 -c '
 import json,sys
@@ -458,7 +476,10 @@ print("HEALTH_LATEST=" + sh(lb.get("name") or "null"))
 ' 2>/dev/null)" || HEALTH_STATUS="unparseable"
     fi
   else
-    HEALTH_STATUS="unreachable"
+    # Skipped by base validation reads as not_checked (never attempted), not
+    # unreachable (attempted and failed): the two mean different things to the
+    # reader of the verdict.
+    if (( base_ok == 1 )); then HEALTH_STATUS="unreachable"; else HEALTH_STATUS="not_checked"; fi
   fi
   # The call is over: the bearer must not sit on disk for the rest of the run.
   # The directory itself is removed by the EXIT trap above.

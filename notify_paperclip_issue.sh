@@ -93,6 +93,16 @@ command -v jq >/dev/null || { echo "jq required" >&2; exit 69; }
 
 BASE="${PAPERCLIP_API_URL%/}"; BASE="${BASE%/api}"
 
+# BASE host validation: the bearer below is sent ONLY to this base. Refuse a
+# base that is not an http(s) URL with a non-empty bare host — no userinfo
+# (`user@host` misdirects the credential), no whitespace (a newline would
+# inject a curl-config directive). A well-formed hostile host still passes;
+# blocking that needs an operator-owned host allowlist, not a per-script guess.
+case "$BASE" in http://*|https://*) ;; *) echo "refusing: PAPERCLIP_API_URL is not an http(s) URL" >&2; exit 65;; esac
+_base_host="${BASE#http://}"; _base_host="${_base_host#https://}"; _base_host="${_base_host%%/*}"
+[[ -n "$_base_host" ]] || { echo "refusing: PAPERCLIP_API_URL has an empty host" >&2; exit 65; }
+case "$BASE" in *@*|*[[:space:]]*) echo "refusing: PAPERCLIP_API_URL carries userinfo or whitespace" >&2; exit 65;; esac
+
 RID="$(jq -r '.requestId'       <<<"$PAYLOAD")"
 STATUS="$(jq -r '.decision // .status // empty' <<<"$PAYLOAD")"
 ROLE="$(jq -r '.recipientRole'  <<<"$PAYLOAD")"

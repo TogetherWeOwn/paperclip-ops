@@ -81,7 +81,7 @@ def build_plan(inventory, root, tier=None):
             for name in names
         ]
         actions = list((entry.get("preparation") or {}).get("actions") or [])
-        suites.append({
+        planned = {
             "id": entry.get("id"),
             "command": entry.get("command"),
             "tier": entry.get("tier"),
@@ -90,7 +90,10 @@ def build_plan(inventory, root, tier=None):
                 "required": bool(actions) and any(not p["ready"] for p in prereqs),
                 "actions": actions,
             },
-        })
+        }
+        if entry.get("description"):
+            planned["description"] = entry["description"]
+        suites.append(planned)
     return {"schema_version": inventory.get("schema_version", 1), "suites": suites}, cache
 
 

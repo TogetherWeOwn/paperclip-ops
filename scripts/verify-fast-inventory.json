@@ -1,5 +1,5 @@
 {
-  "_maintainer_note": "Single repo-owned suite inventory for scripts/verify-fast.sh (bundle verification-plan). --list, --plan/--dry-run JSON and the fast-tier execution selection all derive from this file so commands cannot silently diverge. When adding, removing or rewording a suite command in verify-fast.sh, update the matching entry here in the same commit. Prerequisite probes are read-only (PATH lookup or local check, no network, no writes).",
+  "_maintainer_note": "Single repo-owned suite inventory for scripts/verify-fast.sh (bundle verification-plan). --list and --plan/--dry-run output are generated from this file; fast-tier execution runs the same suite selection, held in correspondence by the paired first-token test. When adding, removing or rewording a suite command in verify-fast.sh, update the matching entry here in the same commit. Prerequisite probes are read-only (PATH lookup or local check, no network, no writes).",
   "schema_version": 1,
   "prerequisite_catalog": {
     "bash": {"probe": {"which": "bash"}},
@@ -10,10 +10,10 @@
     "typescript@5.9.3": {"probe": {"argv": ["node", "-e", "require.resolve('typescript/bin/tsc')"]}}
   },
   "suites": [
-    {"id": "parse-bash", "tier": "parse", "prerequisites": ["bash"], "preparation": {"actions": []}, "command": "bash -n *.sh lib/*.sh mcp/deploy/*.sh omniroute/*.sh host-ops/*.sh scripts/*.sh templates/org-github/*.sh templates/org-github/tests/*.sh ops/productivity/*.sh verification/private-mutation-gates.sh"},
-    {"id": "parse-node", "tier": "parse", "prerequisites": ["node"], "preparation": {"actions": []}, "command": "node --check *.js scripts/*.js"},
-    {"id": "parse-python", "tier": "parse", "prerequisites": ["python3"], "preparation": {"actions": []}, "command": "python3 -m py_compile omniroute/*.py *.py + ast.parse over ops/productivity, ops/lib, ops/paperclip, ops/pr-hygiene, ops/case_af881f62, ops/case_0b2823ef, ops/case_629b4da2, ops/case_0ce22efa, ops/case_f2010cb7"},
-    {"id": "parse-esm", "tier": "parse", "prerequisites": ["node"], "preparation": {"actions": []}, "command": "node --check --input-type=module < mcp/*.mjs mcp/test/*.mjs"},
+    {"id": "parse-bash", "tier": "parse", "prerequisites": ["bash"], "preparation": {"actions": []}, "command": "for f in *.sh lib/*.sh mcp/deploy/*.sh omniroute/*.sh host-ops/*.sh scripts/*.sh templates/org-github/*.sh templates/org-github/tests/*.sh ops/productivity/*.sh verification/private-mutation-gates.sh; do bash -n \"$f\"; done"},
+    {"id": "parse-node", "tier": "parse", "prerequisites": ["node"], "preparation": {"actions": []}, "command": "for f in *.js scripts/*.js; do node --check \"$f\"; done"},
+    {"id": "parse-python", "tier": "parse", "prerequisites": ["python3"], "preparation": {"actions": []}, "command": "for f in omniroute/*.py *.py; do python3 -m py_compile \"$f\"; done", "description": "Plus two python3 -c ast.parse passes over ops/productivity, ops/lib, ops/paperclip, ops/pr-hygiene and ops/case_* (exact file lists live in the verify-fast.sh parse gate); no single argv covers this suite."},
+    {"id": "parse-esm", "tier": "parse", "prerequisites": ["node"], "preparation": {"actions": []}, "command": "for f in mcp/*.mjs mcp/test/*.mjs; do node --check --input-type=module < \"$f\"; done"},
     {"id": "vendored-tracked-gate", "tier": "parse", "prerequisites": ["bash", "git"], "preparation": {"actions": []}, "command": ["bash", "scripts/check-toolkit-vendored-tracked.sh"]},
     {"id": "external-disclosure", "tier": "fast", "prerequisites": ["node", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["node", "--test", "test/external-disclosure.test.mjs"]},
     {"id": "muse-stop-guard", "tier": "fast", "prerequisites": ["node", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["node", "--test", "hooks/muse-stop-guard/muse-stop-guard.test.mjs"]},

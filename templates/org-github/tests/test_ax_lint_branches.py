@@ -62,6 +62,25 @@ class ShellComparison(CertifyMixin, unittest.TestCase):
         ):
             self.assertFalse(self.certifies(body), body)
 
+    def test_heredoc_body_does_not_certify(self):
+        for opener in ("<<'EOF'", "<<EOF", '<<"EOF"', "<<-EOF"):
+            body = ("cat > /tmp/consumer.sh %s\n"
+                    '[ "$1" = --json ]\nEOF\n--target x\n' % opener)
+            self.assertFalse(self.certifies(body), body)
+        # Tab-indented terminator with `<<-` still ends the span.
+        self.assertFalse(self.certifies(
+            "cat > /tmp/consumer.sh <<-EOF\n"
+            '[ "$1" = --json ]\n\tEOF\n--target x\n'))
+
+    def test_heredoc_guards(self):
+        # A real comparison after the heredoc still certifies.
+        self.assertTrue(self.certifies(
+            "cat > /tmp/c.sh <<'EOF'\nnote --target\nEOF\n"
+            '[ "$1" = --json ]\n'))
+        # A quoted `<<` never opens a span.
+        self.assertTrue(self.certifies(
+            'echo "<<" bogus\n[ "$1" = --json ]\n'))
+
 
 class ShellCase(CertifyMixin, unittest.TestCase):
     def test_positive(self):
@@ -82,6 +101,28 @@ class ShellCase(CertifyMixin, unittest.TestCase):
             'case "$1" in\n  --target)\n    out=$(run \\\n'
             '    --json)\n    ;;\nesac\n'))
 
+    def test_quoted_terminator_does_not_rearm(self):
+        for term in (";;", ";&"):
+            self.assertFalse(self.certifies(
+                'case "$1" in\n  --target)\n    msg="done%s ok"\n'
+                '    out=$(run \\\n      --json)\n    ;;\nesac\n' % term))
+
+    def test_nested_one_liner_does_not_rearm(self):
+        self.assertFalse(self.certifies(
+            'case "$1" in\n  --target)\n'
+            '    case "$F" in --json) deep;; esac\n    out=$(run \\\n'
+            '      --json)\n    ;;\nesac\n'))
+        # The one-liner alone warns (no top-level --json branch).
+        self.assertFalse(self.certifies(
+            'case "$1" in\n  --target)\n'
+            '    case "$F" in --json) deep;; esac\n    ;;\nesac\n'
+            '--target\n'))
+
+    def test_heredoc_case_does_not_certify(self):
+        self.assertFalse(self.certifies(
+            "cat > /tmp/consumer.sh <<'EOF'\n"
+            'case "$1" in\n  --json) go ;;\nesac\nEOF\n--target x\n'))
+
 
 class UsageLine(CertifyMixin, unittest.TestCase):
     def test_positive(self):
@@ -94,6 +135,14 @@ class UsageLine(CertifyMixin, unittest.TestCase):
                      "# TODO: usage: --json (not implemented)\n--target\n",
                      "# see usage: --json elsewhere\n--target\n"):
             self.assertFalse(self.certifies(body), body)
+
+    def test_call_forms_certify(self):
+        for body in ('print("usage: tool --json")\n',
+                     'puts("usage: tool --json")\n',
+                     'printf("usage: tool --json")\n',
+                     'print"usage: tool --json"\n',
+                     'print ("usage: tool --json")\n'):
+            self.assertTrue(self.certifies(body), body)
 
 
 class PythonShapes(CertifyMixin, unittest.TestCase):
@@ -145,6 +194,23 @@ class DispatchScan(unittest.TestCase):
         findings, cov = dispatch(
             "on:\n  workflow_dispatch:\n    inputs:\n      first:\n"
             "        description: d\n      second: &a\n"
+            "        type: string\n")
+        self.assertEqual(1, len(findings))
+        self.assertIn("'first'", findings[0]["message"])
+        self.assertEqual(1, len(cov["unknown"]))
+
+    def test_quoted_entry_is_unknown_covered(self):
+        for name in ('"second"', "'second'"):
+            findings, cov = dispatch(
+                "on:\n  workflow_dispatch:\n    inputs:\n      %s:\n"
+                "        description: d\n" % name)
+            self.assertEqual([], findings)
+            self.assertEqual(1, len(cov["unknown"]), name)
+
+    def test_quoted_entry_does_not_hide_prior_missing_type(self):
+        findings, cov = dispatch(
+            "on:\n  workflow_dispatch:\n    inputs:\n      first:\n"
+            "        description: d\n      \"second\":\n"
             "        type: string\n")
         self.assertEqual(1, len(findings))
         self.assertIn("'first'", findings[0]["message"])

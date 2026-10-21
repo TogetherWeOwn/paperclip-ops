@@ -120,9 +120,11 @@ def _flag_literal(flag):
 
 # `usage:` certifies only as the advertised form: the first thing on the
 # line after an optional comment marker, quote, or echo/print command.
+# The command may use the call form (`print("usage: ...")`), not just a
+# space after the verb: `print "..."` is a syntax error in Python 3.
 USAGE_RE = re.compile(
     r"^\s*(?:#+|//|;)?\s*"
-    r"(?:(?:echo|printf|print|puts)\s+(?:-\w+\s+)*)?"
+    r"(?:(?:echo|printf|print|puts)\s*\(?\s*(?:-\w+\s+)*)?"
     r"[\"'(]*\s*usage:", re.IGNORECASE)
 
 
@@ -233,6 +235,39 @@ def _blank_quoted(line):
     return "".join(out)
 
 
+_HEREDOC_OPEN_RE = re.compile(r"<<(-?)\s*['\"]?([A-Za-z0-9_]+)")
+
+
+def _heredoc_body_lines(code_lines):
+    """Indexes of lines inside `<<word ... word` heredoc bodies.
+
+    Heredoc bodies are generated text, not executed code: a `$1`
+    comparison or `case` statement inside one must not certify the
+    generator script. The opener is matched on the raw line (a quoted
+    delimiter such as `<<'EOF'` is blanked away) but accepted only when
+    its `<<` survives quote-blanking, so `echo "<<"` never opens a span.
+    `<<-` allows tab-indented terminators, otherwise the terminator must
+    match exactly. An unterminated opener skips to end of file (bash
+    rejects it anyway).
+    """
+    skip = set()
+    term, tabs = None, False
+    for idx, line in enumerate(code_lines):
+        if term is not None:
+            skip.add(idx)
+            body = line.lstrip("\t") if tabs else line
+            if body == term:
+                term = None
+            continue
+        bare = _blank_quoted(line)
+        for found in _HEREDOC_OPEN_RE.finditer(line):
+            if bare[found.start():found.start() + 2] == "<<":
+                tabs = found.group(1) == "-"
+                term = found.group(2)
+                break
+    return skip
+
+
 def _shell_flag_comparison(code_lines, flag):
     """A positional-parameter equality test against the flag certifies it.
 
@@ -251,7 +286,10 @@ def _shell_flag_comparison(code_lines, flag):
         var, lit, lit, var)
     opener = re.compile(r"\[\[\s*|\[\s+")
     test = re.compile(operands + r"(?=[^\n\]]*(?:\]\]|\]))")
-    for line in code_lines:
+    skip = _heredoc_body_lines(code_lines)
+    for idx, line in enumerate(code_lines):
+        if idx in skip:
+            continue
         bare = _blank_quoted(line)
         for match in opener.finditer(bare):
             if test.match(line, match.end()):
@@ -267,7 +305,10 @@ def _shell_case_branch(code_lines, flag):
     """
     depth = 0
     expect_label = False
-    for line in code_lines:
+    skip = _heredoc_body_lines(code_lines)
+    for idx, line in enumerate(code_lines):
+        if idx in skip:
+            continue
         opens = re.match(r"^\s*case\s+(.*?)\s+in\s*$", line)
         if depth == 0:
             if opens and re.search(_POS_PARAM_RE, opens.group(1)):
@@ -279,17 +320,33 @@ def _shell_case_branch(code_lines, flag):
         if re.match(r"^\s*esac\b", line):
             depth -= 1
             continue
+        if re.match(r"^\s*case\b", line):
+            bare_open = _blank_quoted(line)
+            if re.match(r"^\s*case\b[^)]*\bin\b", bare_open):
+                if re.search(r"\besac\b", bare_open):
+                    # One-line nested case: open and close cancel out,
+                    # so skip the line before its own `;;` can re-arm
+                    # label parsing.
+                    continue
+                # Nested opener with trailing content: still a nested
+                # case, tracked so its labels and `;;` stay fenced.
+                depth += 1
+                continue
         if depth > 1:
             continue
         # Only a line where a label is expected can be a branch label;
         # body lines (e.g. a child command's `--json)` continuation) can't.
+        # Terminators are read off the quote-blanked line so a quoted
+        # `;;` inside a branch body can't re-arm label parsing.
+        bare = _blank_quoted(line)
         if expect_label and ")" in line:
             head, rest = line.split(")", 1)
             for alt in head.strip().lstrip("(").split("|"):
                 if alt.strip().strip("\"'") == flag:
                     return True
-            expect_label = ";;" in rest or ";&" in rest
-        elif ";;" in line or ";&" in line:
+            bare_rest = _blank_quoted(rest)
+            expect_label = ";;" in bare_rest or ";&" in bare_rest
+        elif ";;" in bare or ";&" in bare:
             expect_label = True
     return False
 
@@ -529,6 +586,19 @@ def _scan_dispatch(relpath, lines):
                     "workflow_dispatch input entry uses an unsupported "
                     "flow style; entry not type-checked"))
                 # Its child lines must not be absorbed by the prior entry.
+                current = None
+            elif _indent_of(ln) == entry_indent:
+                # Quoted names (`"second":`) and any other shape
+                # neither pattern recognizes: unknown, never silently
+                # dropped; reset so their children can't be absorbed
+                # into the previous entry.
+                unknown.append(_coverage(
+                    relpath,
+                    block_start + inputs_at[0] + 1 + lineno_offset + 1,
+                    "unknown",
+                    "workflow_dispatch input entry uses an unrecognized "
+                    "shape (quoted name or flow style); entry not "
+                    "type-checked"))
                 current = None
             elif current is not None and _indent_of(ln) > entry_indent:
                 current[2].append(ln)

@@ -78,6 +78,54 @@ function doubles(snapshots, { rulesets = null, fail = [] } = {}) {
 
 const ops = (call) => call[0]
 
+// Live draft CI can report ci-ok success while suites is skipped. The arm
+// must not mistake a later review pass for evidence that heavy CI ran.
+const liveRequired = ['ci-ok', 'pr-lint', 'public-safety', 'Paperclip Review']
+const completedCheck = (name, conclusion = 'success') => ({
+  name, status: 'completed', conclusion, completedMs: 1,
+})
+const liveChecks = () => ['ci-ok', 'pr-lint', 'public-safety'].map((name) => completedCheck(name))
+
+for (const shape of ['skipped', 'missing']) {
+  test(`live required checks: draft ci-ok plus review cannot arm with ${shape} heavy evidence`, () => {
+    const checks = [...liveChecks(), completedCheck('Paperclip Review')]
+    if (shape === 'skipped') checks.push(completedCheck('suites', 'skipped'))
+    const snap = snapshot(80, { draft: false, checks })
+    const decision = decideReadinessActions({ snapshot: snap, body: snap.body,
+      requiredChecks: liveRequired, nowMs: NOW }, on)
+    assert.ok(!decision.actions.includes('enable-automerge'),
+      `ci-ok success with ${shape} suites is not post-draft heavy-CI evidence`)
+  })
+}
+
+test('live required checks: comment-triggered review after sweep-ready cannot unlock standing draft CI', async () => {
+  const checks = [...liveChecks(), completedCheck('suites', 'skipped')]
+  const snapshots = new Map([[`${repo}#81`, snapshot(81, { checks })]])
+  const rulesets = new Map([[repo, liveRequired]])
+  const { github, calls } = doubles(snapshots, { rulesets })
+  const reconciler = createReconciler({ github, policy: on })
+  const references = [{ repository: repo, number: 81 }]
+
+  const first = await reconciler.runReconcile({ references, nowMs: NOW })
+  assert.deepEqual(first.records[0].actions, ['update-body', 'mark-ready'])
+  const body = calls.find((call) => call[0] === 'update-body')[3]
+
+  // Only draft state, body, and review change; the CI verdict is untouched.
+  snapshots.set(`${repo}#81`, snapshot(81, { draft: false, body,
+    checks: [...checks, completedCheck('Paperclip Review')] }))
+  await reconciler.runReconcile({ references, nowMs: NOW + 3600000 })
+  assert.equal(calls.filter((call) => call[0] === 'enable-automerge').length, 0,
+    'a later edit/label wake must not arm on the standing draft CI verdict')
+})
+
+test('live required checks: completed heavy suites plus review permits exact-head arm', () => {
+  const snap = snapshot(82, { draft: false,
+    checks: [...liveChecks(), completedCheck('suites'), completedCheck('Paperclip Review')] })
+  const decision = decideReadinessActions({ snapshot: snap, body: snap.body,
+    requiredChecks: liveRequired, nowMs: NOW }, on)
+  assert.ok(decision.actions.includes('enable-automerge'))
+})
+
 // --- pure decide -----------------------------------------------------------
 
 test('green draft with no block appends the block and marks ready', () => {

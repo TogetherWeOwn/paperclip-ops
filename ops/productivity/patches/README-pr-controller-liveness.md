@@ -13,6 +13,8 @@ its inventory, classification, review, merge, capacity, hold, or live-run rules.
   controller-managed deadline is attributed to the board so it is stretched once.
   Legacy controller notes are recognized because earlier controller writes
   retained assignee attribution. An absent review monitor is still created.
+  The existing `timeoutAt` is parsed tolerantly (HH:MM or HH:MM:SS, with or
+  without `Z`); an unparseable value is preserved and never crashes a pass.
 - `pr-controller-wakes.patch`: wires request/claim acknowledgement into the
   initial-event and stale-reminder paths. All existing admission/hold guards stay.
 - `../pr_controller_wakes.py`: correlates the comment id with the server's

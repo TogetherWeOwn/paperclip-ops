@@ -13,7 +13,7 @@ import tempfile
 import time
 import types
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 HERE = Path(__file__).resolve().parent
 PATCH = HERE / 'patches/pr-controller-backstop.patch'
@@ -32,6 +32,10 @@ def parse(value):
 def patched_source():
     if os.environ.get('PR_CONTROLLER_SOURCE'):
         return Path(os.environ['PR_CONTROLLER_SOURCE']).read_text()
+    return patched_fixture_source()
+
+
+def patched_fixture_source():
     with tempfile.TemporaryDirectory() as directory:
         target = Path(directory) / 'ops/productivity/pr_controller.py'
         target.parent.mkdir(parents=True)
@@ -141,6 +145,49 @@ class BackstopTest(unittest.TestCase):
                 self.run_backstop()
                 self.api.assert_not_called()
 
+    def test_minute_precision_timeout_far_future_is_preserved(self):
+        # Live timeoutAt values can be minute precision ('...T13:43Z'); the
+        # pre-fix [:19] + 'Z' splice double-appended 'Z' and crashed the pass.
+        self.assignee_monitor()
+        self.next_at = NOW + 10 * 3600
+        self.mon.update(timeoutAt=stamp(NOW + 48 * 3600)[:16] + 'Z')
+        self.run_backstop()
+        self.api.assert_called_once()
+        monitor = self.api.call_args.args[2]['executionPolicy']['monitor']
+        self.assertEqual(self.mon['timeoutAt'], monitor['timeoutAt'])
+
+    def test_minute_precision_timeout_soon_after_target_is_cleared(self):
+        self.assignee_monitor()
+        self.next_at = NOW + 10 * 3600
+        # 12h30m lands inside target + 1h (target = NOW + 12h).
+        minute = (NOW + 12 * 3600 + 1800) // 60 * 60
+        self.mon.update(timeoutAt=stamp(minute)[:16] + 'Z')
+        self.run_backstop()
+        self.api.assert_called_once()
+        monitor = self.api.call_args.args[2]['executionPolicy']['monitor']
+        self.assertIsNone(monitor['timeoutAt'])
+
+    def test_timeout_without_z_suffix_is_accepted(self):
+        self.assignee_monitor()
+        self.next_at = NOW + 10 * 3600
+        for timeout in (stamp(NOW + 48 * 3600)[:-1], stamp(NOW + 48 * 3600)[:16]):
+            with self.subTest(timeout=timeout):
+                self.mon.update(timeoutAt=timeout)
+                self.api.reset_mock()
+                self.run_backstop()
+                self.api.assert_called_once()
+                monitor = self.api.call_args.args[2]['executionPolicy']['monitor']
+                self.assertEqual(timeout, monitor['timeoutAt'])
+
+    def test_unparseable_timeout_is_preserved_not_crashed(self):
+        self.assignee_monitor()
+        self.next_at = NOW + 10 * 3600
+        self.mon.update(timeoutAt='not-a-time')
+        self.run_backstop()
+        self.api.assert_called_once()
+        monitor = self.api.call_args.args[2]['executionPolicy']['monitor']
+        self.assertEqual('not-a-time', monitor['timeoutAt'])
+
     def test_due_assignee_monitor_is_not_postponed(self):
         self.assignee_monitor()
         self.next_at = NOW - 1
@@ -175,6 +222,31 @@ class BackstopTest(unittest.TestCase):
         self.env['SHADOW'] = True
         self.run_backstop()
         self.api.assert_not_called()
+
+
+class BackstopPatchOffsetTest(unittest.TestCase):
+    def test_offset_check_is_independent_of_staged_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            staged = Path(directory) / 'staged_controller.py'
+            staged.write_text('# full staged controller\n' + patched_source())
+            with patch.dict(os.environ, {'PR_CONTROLLER_SOURCE': str(staged)}):
+                self.test_backstop_patch_applies_at_live_offset_without_fuzz()
+
+    def test_backstop_patch_applies_at_live_offset_without_fuzz(self):
+        # The live controller carries ensure_backstop near line 349 (base
+        # header -349,22). A hunk anchored at line 1 cannot float down with
+        # --fuzz=0, so the patch must also apply embedded after prefix lines,
+        # installing the byte-identical function the BOF round-trip exercises.
+        prefix = ''.join(f'# live controller prefix line {i}\n' for i in range(1, 349))
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'ops/productivity/pr_controller.py'
+            target.parent.mkdir(parents=True)
+            target.write_text(prefix + FIXTURE.read_text())
+            result = subprocess.run(['patch', '--batch', '--fuzz=0', '-p1', '-i', str(PATCH)],
+                                    cwd=directory, capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            offset_patched = target.read_text()
+        self.assertEqual(patched_fixture_source(), offset_patched[len(prefix):])
 
 
 class PacketImportTest(unittest.TestCase):

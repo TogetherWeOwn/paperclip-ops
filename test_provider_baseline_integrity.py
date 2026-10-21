@@ -108,6 +108,13 @@ if fault == "close_failure":
     def _flaky_close(fd):
         raise OSError("injected post-rename directory close failure")
     os.close = _flaky_close
+if fault == "dir_open_failure":
+    _real_open = os.open
+    def _flaky_open(path, *args, **kwargs):
+        if path_of(path) == root:
+            raise OSError("injected directory open failure")
+        return _real_open(path, *args, **kwargs)
+    os.open = _flaky_open
 sys.argv = [script] + argv
 runpy.run_path(script, run_name="__main__")
 '''
@@ -490,6 +497,15 @@ class ProviderBaselineIntegrityTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         stored = json.loads(self.baseline.read_text())
         self.assertEqual(stored["operations"]["create"]["count"], 20)
+
+    def test_directory_open_failure_fails_publication_without_writes(self):
+        before = self.snapshot()
+        proc = self.cli("record", "--json", fault="dir_open_failure")
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        doc = self.outcome(proc, "record")
+        self.assertEqual(doc["code"], "publish_failed")
+        self.assertTrue(doc["retryable"])
 
     def test_cli_help_exposes_json_and_dry_run_without_writes(self):
         before = self.snapshot()

@@ -466,10 +466,13 @@ def _publish_json(path, doc):
     first record does not lock out other readers; a fresh baseline keeps
     mkstemp's 0600 default. Contents are fsynced before the rename and the
     directory entry after it, so a crash cannot leave a torn baseline.
+    The directory is opened before the rename, so an unopenable directory
+    fails the publication instead of reporting success without durability.
     """
     directory = os.path.dirname(os.path.abspath(path)) or "."
     fd, tmp = tempfile.mkstemp(prefix=".baseline-", suffix=".tmp",
                                dir=directory)
+    dir_fd = None
     try:
         try:
             os.fchmod(fd, os.stat(path).st_mode & 0o7777)
@@ -480,17 +483,21 @@ def _publish_json(path, doc):
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
+        # The fd refers to the directory itself, so opening it before the
+        # rename still lets the later fsync cover the new entry.
+        dir_fd = os.open(directory, os.O_RDONLY)
         os.rename(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)
         except OSError:
             pass
+        if dir_fd is not None:
+            try:
+                os.close(dir_fd)
+            except OSError:
+                pass
         raise
-    try:
-        dir_fd = os.open(directory, os.O_RDONLY)
-    except OSError:
-        return
     try:
         os.fsync(dir_fd)
     except OSError:

@@ -1027,6 +1027,31 @@ PY
     pass "semgrep behavioural fixtures pin every rule"
 fi
 
+# Self-pin: the missing-semgrep branch above must stay a hard FAIL when
+# CI is set, never decay into a SKIP. Re-run this suite once with no
+# semgrep and CI set; the child must exit non-zero naming the branch.
+# Guarded against recursion via SECURITY_RULES_NO_SELF_PIN. The child is
+# invoked by its canonical in-repo path (never $0) so the pin runs no
+# matter how this suite was invoked; if the suite file itself is missing,
+# print an explicit SKIP naming the unrun pin instead of passing silently.
+# Placed before the drift regression: that section exits early where the
+# recorded source pin is absent, which would skip a trailing pin.
+SELF="$ROOT/templates/org-github/tests/test_security_rules.sh"
+if [[ -z "${SECURITY_RULES_NO_SELF_PIN:-}" ]]; then
+    if [[ -f "$SELF" ]]; then
+        # Absolute path: resolves regardless of cwd and of the parent's
+        # own $0 shape.
+        probe_out="$(SEMGREP=/nonexistent/semgrep-binary CI=true GITHUB_ACTIONS=true \
+            SECURITY_RULES_NO_SELF_PIN=1 bash "$SELF" 2>&1)" \
+            && fail "self-pin: missing semgrep with CI set must fail hard, child exited 0"
+        grep -qF "semgrep unavailable with CI set" <<<"$probe_out" \
+            || fail "self-pin: child failure did not name the missing-semgrep branch"
+        pass "missing semgrep fails hard with CI set (self-pin)"
+    else
+        echo "SKIP: self-pin not run (suite missing at $SELF)"
+    fi
+fi
+
 # Regression: the drift gate visits PORT-ADDITIONS.md-exempt names even
 # when they exist on neither side, so a listed file deleted from staging
 # fails (missing-staged) and a listed file since merged upstream fails

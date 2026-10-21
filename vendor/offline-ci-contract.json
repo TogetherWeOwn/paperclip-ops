@@ -1444,7 +1444,7 @@
     },
     {
       "name": "Prove the suite rejects each tempting simplification",
-      "definition_sha256": "daab40cb177c5d1b468350902a86792ef3d9a6d7315bad1b05cbb14106ed0fb1",
+      "definition_sha256": "7bee64d7c7030048d2e8126c8d51d002897a9eeef74bbfa7d0f4024f8d5ee29a",
       "id": "Prove the suite rejects each tempting simplification:1"
     },
     {

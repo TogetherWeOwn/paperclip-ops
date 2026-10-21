@@ -10,10 +10,22 @@ Read-only, stdlib only, no credentials. Reads JSON-lines rows shaped like
 per minute, plus the sibling .state.json for context.
 
 Exit codes:
-  0  the last row is newer than --max-age-min (fresh)
+  0  the last row is newer than --max-age-min (fresh), or the log is stale
+     but --retirement-file names an explicit valid retirement (retired)
   1  the last row is older than --max-age-min (stale: the balancer is quiet)
   2  unmeasurable: log missing, empty, or with no parseable row; a bad --now
      or --max-age-min. Unmeasurable is never reported as fresh.
+
+An explicitly retired producer is not a live outage: when the log would
+otherwise read stale, a valid retirement file converts the verdict to
+RETIRED (exit 0). The file must be JSON naming {"retired": true, the
+producer id, a successor, an approver and an approval instant at or before
+--now. A missing, unreadable, malformed, future-dated or mismatched file
+is ignored with a stderr note and the stale verdict stands: mere
+inactivity is never healthy. A live log stays FRESH and an unmeasurable
+log stays UNMEASURABLE regardless of the file, which is only consulted on
+the stale path. The guard never restarts, re-enables or writes to the
+producer, the model roster or any routing state.
 
 Every gap longer than the threshold inside the trailing --window-h hours is
 printed with the model and reason on each side, so a replay shows the
@@ -31,6 +43,8 @@ LOG_DEFAULT = "/paperclip/shared/host-bridge/fleet-quota-balancer.log"
 STATE_DEFAULT = "/paperclip/shared/host-bridge/fleet-quota-balancer.state.json"
 MAX_AGE_MIN_DEFAULT = 10.0
 WINDOW_H_DEFAULT = 24.0
+PRODUCER_ID = "fleet-quota-balancer"
+REQUIRED_RETIREMENT_FIELDS = ("producer", "successor", "approved_by", "approved_at")
 
 
 class Unmeasurable(RuntimeError):
@@ -73,7 +87,7 @@ def load_rows(path):
         try:
             entry = json.loads(line)
             moment = parse_instant(entry.get("at"))
-        except (ValueError, AttributeError, TypeError):
+        except (ValueError, AttributeError, TypeError, RecursionError):
             skipped += 1
             continue
         model = entry.get("model")
@@ -96,7 +110,7 @@ def read_state(path):
             state = json.load(handle)
     except FileNotFoundError:
         return "state: missing (context only; the log is the signal)"
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         return f"state: unreadable ({type(exc).__name__}; context only)"
     if not isinstance(state, dict):
         return "state: unreadable (not an object; context only)"
@@ -107,6 +121,45 @@ def read_state(path):
         stamp = "?"
     model = state.get("model")
     return f"state: evaluated_at={stamp} model={model if model else '?'}"
+
+
+def read_retirement(path, producer, now):
+    """Check explicit retirement evidence; never raises.
+
+    Return (True, detail) only when the file is a JSON object with
+    {"retired": true}, the expected producer id, a non-empty successor,
+    approver and approval instant, and the approval is at or before now.
+    Every other shape returns (False, reason): a bad file is ignored
+    evidence, never a healthy verdict and never a fatal error.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            marker = json.load(handle)
+    except FileNotFoundError:
+        return False, "retirement file missing"
+    except (OSError, ValueError, RecursionError) as exc:
+        return False, f"retirement file unreadable ({type(exc).__name__})"
+    if not isinstance(marker, dict):
+        return False, "retirement file is not an object"
+    if marker.get("retired") is not True:
+        return False, "retired is not true"
+    for field in REQUIRED_RETIREMENT_FIELDS:
+        value = marker.get(field)
+        if not isinstance(value, str) or not value.strip():
+            return False, f"retirement field {field!r} missing"
+    if marker["producer"] != producer:
+        return False, "retirement producer mismatch"
+    try:
+        approved_at = parse_instant(marker["approved_at"])
+    except ValueError:
+        return False, "retirement approved_at unparseable"
+    if approved_at > now:
+        return False, "retirement approved_at is in the future"
+    return True, (
+        f"producer={marker['producer']} successor={marker['successor']} "
+        f"approved_by={marker['approved_by']} "
+        f"approved_at={approved_at.isoformat()}"
+    )
 
 
 def find_gaps(rows, threshold_s, window_start):
@@ -128,6 +181,9 @@ def parse_args(argv):
     ap.add_argument("--window-h", type=float, default=WINDOW_H_DEFAULT)
     ap.add_argument("--now", default=None,
                     help="ISO-8601 instant to measure against (default: now)")
+    ap.add_argument("--retirement-file", default=None,
+                    help="JSON file with explicit retirement evidence; "
+                    "consulted only when the log would otherwise read stale")
     return ap.parse_args(argv)
 
 
@@ -177,6 +233,15 @@ def main(argv=None):
         f"last row {last[0].isoformat()} (model={last[1]} reason={last[2]}) "
         f"age={age_min:.1f} min threshold={args.max_age_min:g} min")
     if age_min > args.max_age_min:
+        if args.retirement_file is not None:
+            ok, note = read_retirement(args.retirement_file, PRODUCER_ID, now)
+            if ok:
+                print(f"retirement: {note}")
+                print(
+                    f"RETIRED: {PRODUCER_ID} explicitly retired; "
+                    f"last row {last[0].isoformat()} age={age_min:.1f} min")
+                return 0  # retired-approved
+            print(f"note: {note} (retirement ignored)", file=sys.stderr)
         print(f"STALE: balancer quiet for {age_min:.1f} min")
         return 1
     print("FRESH: balancer log is current")

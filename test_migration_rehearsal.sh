@@ -325,6 +325,29 @@ else
   bad "guard refuses a not-found reply for another branch without mutation"
 fi
 
+# The guard binds the database too: a not-found reply naming the requested
+# branch in another database must not confirm absence either.
+export REC="$WORK/rec-show-dbmismatch"; mkdir -p "$REC"
+set +e
+FAKE_PSCALE_SHOW_OUTPUT="Error: branch rehearsal-guard-003 does not exist in database other-db (organization: fake)" \
+FAKE_PSCALE_SHOW_RC=1 env \
+  REHEARSAL_PSCALE_ORG=fake REHEARSAL_PSCALE_DB=fake \
+  PLANETSCALE_SERVICE_TOKEN_ID= PLANETSCALE_SERVICE_TOKEN= \
+  PSCALE_BIN="$WORK/bin/fake-pscale" \
+  "$GATE" run --migrations-dir "$WORK/migs" --provider planetscale \
+    --branch "rehearsal-guard-003" --out "$WORK/guard-dbmismatch.json" \
+    >"$WORK/guard-dbmismatch-output" 2>&1
+guard_dbmismatch_rc=$?
+set -e
+guard_dbmismatch_out="$(cat "$WORK/guard-dbmismatch-output")"
+if [[ "$guard_dbmismatch_rc" -eq 2 ]] && grep -q "could not confirm" <<< "$guard_dbmismatch_out" \
+    && ! grep -q '^create$' "$REC/pscale.argv" \
+    && ! grep -q '^delete$' "$REC/pscale.argv"; then
+  ok "guard refuses a not-found reply for another database without mutation"
+else
+  bad "guard refuses a not-found reply for another database without mutation"
+fi
+
 FAKE_PSCALE_MISSING_DELETE=1 REHEARSAL_PSCALE_ORG=fake REHEARSAL_PSCALE_DB=fake \
   PLANETSCALE_SERVICE_TOKEN_ID= PLANETSCALE_SERVICE_TOKEN= \
   PSCALE_BIN="$WORK/bin/fake-pscale" \
@@ -420,6 +443,18 @@ if [[ "$marker_fail_rc" -ne 0 ]] && [[ -e "$MARKER_FAIL" ]]; then
 else
   bad "cleanup marker is retained when branch delete fails"
 fi
+
+# The reusable workflow owns the marker-left-behind path: its sweeper step
+# must stay an always(), planetscale-only, marker-gated cleanup that runs
+# `clean` and removes the marker on success.
+SWEEP_STEP="$(sed -n '/Clean up abandoned PlanetScale clone/,/Upload rehearsal evidence/p' \
+  "$HERE/.github/workflows/reusable-migration-rehearsal.yml")"
+grep -q "if: always() && inputs.provider == 'planetscale'" <<< "$SWEEP_STEP" \
+  && grep -qF '[[ -e "$REHEARSAL_CLEANUP_MARKER" ]] || { echo "No interrupted clone to clean."; exit 0; }' <<< "$SWEEP_STEP" \
+  && grep -q 'migration_rehearsal.sh clean' <<< "$SWEEP_STEP" \
+  && grep -q 'rm -f "$REHEARSAL_CLEANUP_MARKER"' <<< "$SWEEP_STEP" \
+  && ok "workflow sweeper is an always() marker-gated planetscale cleanup" \
+  || bad "workflow sweeper is an always() marker-gated planetscale cleanup"
 
 # 7. --only filters the pending set but applies it in migration filename order;
 # unknown tags are refused.

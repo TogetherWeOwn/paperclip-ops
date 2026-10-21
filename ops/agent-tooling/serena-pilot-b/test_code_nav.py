@@ -155,6 +155,37 @@ class ConfigSeedTest(unittest.TestCase):
             self.seed()
         self.assertEqual(c.exception.code, 2)
 
+    def test_parse_failure_does_not_echo_config_contents(self):
+        # Parser errors can quote source lines (str input) or values; whatever
+        # they carry, the secret must not reach stderr or agent logs.
+        self.dest.write_text("auth_secret: synthetic-test-value\nprojects: [\n")
+        for exc in (yaml.YAMLError("in line 1: auth_secret: synthetic-test-value"),
+                    ValueError("synthetic-test-value"),
+                    OSError("synthetic-test-value")):
+            with self.subTest(exc=type(exc).__name__), \
+                    mock.patch.object(code_nav.yaml, "safe_load", side_effect=exc), \
+                    contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as c:
+                self.seed()
+            self.assertEqual(c.exception.code, 2)
+            self.assertIn("cannot parse config: %s" % self.dest, err.getvalue())
+            self.assertNotIn("synthetic-test-value", err.getvalue())
+
+    def test_non_regular_or_writable_config_file_refused(self):
+        real = self.home / "real.yml"
+        real.write_text(yaml.safe_dump(self.valid_config()))
+        self.dest.symlink_to(real)
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as c:
+            self.seed()
+        self.assertEqual(c.exception.code, 2)
+        self.assertIn("unsafe config file", err.getvalue())
+        self.dest.unlink()
+        self.dest.write_text(yaml.safe_dump(self.valid_config()))
+        self.dest.chmod(0o666)
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as c:
+            self.seed()
+        self.assertEqual(c.exception.code, 2)
+        self.assertIn("unsafe config file", err.getvalue())
+
 
 class DispatchTest(RootRelTest):
     def test_exact_tool_and_argument_mapping(self):
@@ -262,6 +293,17 @@ class RunOnceTest(unittest.TestCase):
         self.assertEqual(c.exception.code, 2)
         self.mcp_class.assert_not_called()
         self.assertFalse((self.root / "state").exists())
+
+    def test_home_in_paperclip_or_with_placeholder_refused(self):
+        # $ placeholders would make the pre-created folder differ from the one
+        # Serena resolves, reviving the repo .serena fallback.
+        for home in ("/paperclip", "/paperclip/state", str(Path(self.tmp.name) / "$projectDir")):
+            with self.subTest(home=home), mock.patch.dict(os.environ, {"SERENA_HOME": home}), \
+                    contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as c:
+                self.run_once()
+            self.assertEqual(c.exception.code, 2)
+            self.assertIn("SERENA_HOME must be outside", err.getvalue())
+            self.mcp_class.assert_not_called()
 
     def test_tool_error_exits_nonzero_and_closes(self):
         self.mcp.tool.return_value = {"isError": True, "content": [{"type": "text", "text": "failed outline"}]}

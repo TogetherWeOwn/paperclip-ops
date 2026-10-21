@@ -39,6 +39,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -155,7 +156,58 @@ def propose(
     return records
 
 
+def _valid_api_base(base):
+    # BASE host validation: the bearer below is sent ONLY to this base.
+    # Refuse a base that is not an http(s) URL with a non-empty bare host:
+    # no userinfo (`user@host` misdirects the credential), no control
+    # characters or DEL -- raw anywhere, or %-encoded in the authority
+    # (urllib decodes those before the transport, which then raises outside
+    # the module's error contract) -- no query or fragment (the appended
+    # /api path would be swallowed into them), a real hostname (an
+    # empty `:port`-only authority is not a host), a numeric port, and no
+    # `{`/`}` anywhere (curl expands `{a,b}` globs, so one base is one host
+    # -- parity with the shell gate). A well-formed hostile host still
+    # passes; blocking that needs an operator-owned host allowlist, not a
+    # per-script guess.
+    if not base.startswith(("http://", "https://")):
+        return False
+    if "@" in base:
+        return False
+    if any(ord(char) < 0x21 or ord(char) == 0x7f for char in base):
+        return False
+    if "{" in base or "}" in base:
+        return False
+    try:
+        parts = urllib.parse.urlsplit(base)
+    except ValueError:
+        return False
+    if parts.username or parts.password:
+        return False
+    if parts.query or parts.fragment:
+        return False
+    decoded_netloc = urllib.parse.unquote(parts.netloc)
+    if any(ord(char) < 0x21 or ord(char) == 0x7f for char in decoded_netloc):
+        return False
+    host = parts.hostname or ""
+    if not host:
+        return False
+    if any(char in "[]{}," for char in host):
+        return False
+    if not parts.netloc.startswith("[") and parts.netloc.count(":") > 1:
+        return False
+    try:
+        port = parts.port
+    except ValueError:
+        return False
+    if port is None and parts.netloc.endswith(":"):
+        return False
+    return True
+
+
 def api_get(base_url: str, api_key: str, path: str) -> Any:
+    if not _valid_api_base(base_url):
+        raise RuntimeError(
+            "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
     request = urllib.request.Request(
         base_url + path,
         headers={"Authorization": f"Bearer {api_key}"},

@@ -82,6 +82,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 PLUGIN_ACTOR_ID = "00000000-0000-4000-8000-000000000143"
@@ -486,6 +487,54 @@ def render_plan_table(plan):
 # truncated, secret-free message. No token is ever printed, logged or stored.
 # ---------------------------------------------------------------------------
 
+def _valid_api_base(base):
+    # BASE host validation: the bearer below is sent ONLY to this base.
+    # Refuse a base that is not an http(s) URL with a non-empty bare host:
+    # no userinfo (`user@host` misdirects the credential), no control
+    # characters or DEL -- raw anywhere, or %-encoded in the authority
+    # (urllib decodes those before the transport, which then raises outside
+    # the module's error contract) -- no query or fragment (the appended
+    # /api path would be swallowed into them), a real hostname (an
+    # empty `:port`-only authority is not a host), a numeric port, and no
+    # `{`/`}` anywhere (curl expands `{a,b}` globs, so one base is one host
+    # -- parity with the shell gate). A well-formed hostile host still
+    # passes; blocking that needs an operator-owned host allowlist, not a
+    # per-script guess.
+    if not base.startswith(("http://", "https://")):
+        return False
+    if "@" in base:
+        return False
+    if any(ord(char) < 0x21 or ord(char) == 0x7f for char in base):
+        return False
+    if "{" in base or "}" in base:
+        return False
+    try:
+        parts = urllib.parse.urlsplit(base)
+    except ValueError:
+        return False
+    if parts.username or parts.password:
+        return False
+    if parts.query or parts.fragment:
+        return False
+    decoded_netloc = urllib.parse.unquote(parts.netloc)
+    if any(ord(char) < 0x21 or ord(char) == 0x7f for char in decoded_netloc):
+        return False
+    host = parts.hostname or ""
+    if not host:
+        return False
+    if any(char in "[]{}," for char in host):
+        return False
+    if not parts.netloc.startswith("[") and parts.netloc.count(":") > 1:
+        return False
+    try:
+        port = parts.port
+    except ValueError:
+        return False
+    if port is None and parts.netloc.endswith(":"):
+        return False
+    return True
+
+
 class PaperclipClient:
     def __init__(self, base_url, api_key, company_id, run_id=None):
         base = (base_url or "").rstrip("/")
@@ -496,6 +545,9 @@ class PaperclipClient:
                 "PAPERCLIP_API_URL, PAPERCLIP_API_KEY and PAPERCLIP_COMPANY_ID "
                 "must all be set for live modes."
             )
+        if not _valid_api_base(base):
+            raise CleanupError(
+                "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
         self.base = base
         self.key = api_key
         self.company = company_id

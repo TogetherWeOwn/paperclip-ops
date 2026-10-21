@@ -89,11 +89,13 @@ success` (`skipped`, `neutral`, empty or unknown conclusions on a
 required check FAIL, never pass); a success on a stale head FAILs
 `stale [pending]`. Extra non-required runs never fail the gate, with
 one exception: the preserved `TogetherWeOwn/paperclip` and
-`paperclipai/paperclip` entries keep the legacy strictness (any
-completed run with a `failure`/`timed_out`/`cancelled`/`action_required`/
-`startup_failure` conclusion fails, any unfinished run pends, required
-or not), so their behavior stays byte-identical to the pre-profile
-evaluators. Completed `skipped`/`neutral` extras never block anywhere.
+`paperclipai/paperclip` entries keep the legacy any-run rule for extras
+(any completed run with a `failure`/`timed_out`/`cancelled`/
+`action_required`/`startup_failure` conclusion fails, any unfinished
+run pends, required or not) *plus* the exact-head predicate above
+(stale success FAILs, missing/malformed head REFUSEs) — a strict
+superset of the pre-profile evaluators, which compare no heads.
+Completed `skipped`/`neutral` extras never block anywhere.
 Unreadable payloads and zero observed runs are REFUSED. Provenance
 (run id, head, app) is quoted in the output. The check-runs API always
 returns `head_sha`; a payload where no run carries one predates

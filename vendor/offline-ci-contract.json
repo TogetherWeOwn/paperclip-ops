@@ -309,9 +309,17 @@
     "migration safety gates suites:1",
     "queue age depth contract suite:1",
     "pr6 acceptance suite:1",
+    "quality-gate helper suites:1",
+    "mutmut budget-kill fixture suite:1",
     "registrar domain-expiry probe suite:1",
     "Beszel adapter and Discord forwarder suites:1",
     "activation contract suite:1",
+    "execution-image source-only carrier suite:1",
+    "shell-subst guard suite:1",
+    "queue-packet reject offline suite:1",
+    "staging-preflight carrier suite:1",
+    "api-base-validation suite:1",
+    "api-base-validation-python suite:1",
     "code-nav read-only and resource guard suite:1"
   ],
   "retained": [
@@ -507,7 +515,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "56960f13fcb0e61a69901a9690ebf786e1f0eff4d5232c5d8effc80b997ea30c",
+      "definition_sha256": "27ac44120e09f66eb760b819f40612ea5afd7a9185518e26439f0de1d9ee32e2",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1742,13 +1750,53 @@
     },
     {
       "name": "activation contract suite",
-      "definition_sha256": "d3b4541f93b61ebe7cbba7cb1ed7bc82d721b6974c8a888f42bb8d35a413d203",
+      "definition_sha256": "0e8edc955f16ef68eef06e2ef8dfd4dbb631c7e05216e25d560f721c1d331ebf",
       "id": "activation contract suite:1"
     },
     {
       "name": "sibling-run guard suite",
       "definition_sha256": "cc22f4f858562b90e61f70a77b2a11d6fc1d0e2adae556d6c569a5515a148beb",
       "id": "sibling-run guard suite:1"
+    },
+    {
+      "name": "quality-gate helper suites",
+      "definition_sha256": "68b4abdbd85871ca024089f0ce025a71292090ad4ee86f0f4389a1fa4e8d5d80",
+      "id": "quality-gate helper suites:1"
+    },
+    {
+      "name": "mutmut budget-kill fixture suite",
+      "definition_sha256": "f1490420e91646453b29b63d75c62ef6939cb9eee789bf6fb0bf9f1b93c55edd",
+      "id": "mutmut budget-kill fixture suite:1"
+    },
+    {
+      "name": "execution-image source-only carrier suite",
+      "definition_sha256": "357caeb599d4c9fa89b47735c764caa49ae756d86fd539d88e9d901da83a97e0",
+      "id": "execution-image source-only carrier suite:1"
+    },
+    {
+      "name": "shell-subst guard suite",
+      "definition_sha256": "86e903744e363c48addcac51ee9cad3caf5828eb818261ace6bf25550632419a",
+      "id": "shell-subst guard suite:1"
+    },
+    {
+      "name": "queue-packet reject offline suite",
+      "definition_sha256": "0de2526e8cce1f4d0899b4e430b123344ef961efd0fd9855c6874ba09252595e",
+      "id": "queue-packet reject offline suite:1"
+    },
+    {
+      "name": "staging-preflight carrier suite",
+      "definition_sha256": "ff33fab7ad096ca46d69786740c6873b40c8bdeb8ec59e2370a3d660f563dd12",
+      "id": "staging-preflight carrier suite:1"
+    },
+    {
+      "name": "api-base-validation suite",
+      "definition_sha256": "7e30b54dc00c4dfbaa85b27c196949c3121114d6c1fd6b2c5504e09911ad0fcb",
+      "id": "api-base-validation suite:1"
+    },
+    {
+      "name": "api-base-validation-python suite",
+      "definition_sha256": "2a8399fe0cbc1e8d57ee3a482f7cc5ed1fa9df2045dd18a28579609545b2e33d",
+      "id": "api-base-validation-python suite:1"
     },
     {
       "name": "code-nav read-only and resource guard suite",

@@ -1,0 +1,44 @@
+--- a/ops/productivity/pr_controller.py
++++ b/ops/productivity/pr_controller.py
+@@ -39,2 +39,3 @@
+ import review_error_rerequest as rr  # noqa: E402  (psql, gh_env, comment, card_hold, pr_url_patterns, live_run_guard)
++from pr_controller_wakes import post_wake, reconcile_wake  # noqa: E402
+ from pr_supply import REPOS as SUPPLY_REPOS  # noqa: E402
+@@ -500,11 +501,10 @@
+             continue
+         text = (f"**Reminder: still {cur.replace('_', ' ')} after {since_h}h on the same head.** "
+                 + wake_text(full, pr, cur, detail) + "\n\nFix and push once now; don't merge main unless conflict/main-red.")
+-        code = rr.comment(iid, text)
+-        log(f'RE-woke {ident} for {key}: {cur} @ {pr["headRefOid"][:8]} unchanged {since_h}h HTTP {code}')
++        rec = state.get(key) or {}
++        code = post_wake(rec, wkey, iid, text, api)
++        log(f'posted RE-wake {ident} for {key}: {cur} @ {pr["headRefOid"][:8]} unchanged {since_h}h HTTP {code}')
+         if code.startswith('2'):
+-            rec = state.get(key) or {}
+-            rec.setdefault('rewake', {})[wkey] = ts()
+             state[key] = rec
+             save(state)
+     return done
+@@ -651,6 +651,9 @@
+             if cur == 'ci_red' and detail.get('pending') and (NOW - parse(rec['red_since'])) / 60 < RED_SETTLE_MIN:
+                 continue
+             wkey = f'{cur}@{head}'
++            if cards and reconcile_wake(rec, wkey, cards[0][0], wake_text(full, pr, cur, detail),
++                                        rr.psql, ts) == 'pending':
++                continue
+             if rec.get('woke') == wkey and cards:
+                 name_l = full.split('/')[-1].lower()
+                 stale_h = STALE_H_DRAFT if cur == 'draft_idle' else (STALE_H_FOCUS if name_l in FOCUS_REPOS else STALE_H_OTHER)
+@@ -689,10 +692,9 @@
+                 text += ("\n\nThis card is parked (`blocked` or waiting on its own unblock action) and this is a new PR "
+                          "event on it. If your parking reason no longer applies, set the card to `in_progress` and act on "
+                          "this head; if it still applies, say why in one line and leave it parked.")
+-            code = rr.comment(iid, text)
+-            log(f'woke {ident} for {key}: {cur} @ {head[:8]} HTTP {code}')
++            code = post_wake(rec, wkey, iid, text, api)
++            log(f'posted wake {ident} for {key}: {cur} @ {head[:8]} HTTP {code}')
+             if code.startswith('2'):
+-                rec['woke'] = wkey
+                 save(state)
+     rewakes = rewake_stale(state, rewake_cand, pressure)
+     save(state)  # transitions are recorded before the slow closeout phase

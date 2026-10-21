@@ -47,8 +47,12 @@ PREPARATION_ENTRYPOINT = "prepare-first-install.sh"
 # along silently. This manifest tool lists itself here: it is the same kind
 # of offline CLI (reads reviewed bytes, emits a review artifact, runs only
 # in the test gate and reviewer hands), and self-listing keeps the
-# ride-along refusal total -- a future unlisted file still refuses.
-OFFLINE_TOOLS = ("spool_carrier.py", "spool_mapping.py", "install_manifest.py")
+# ride-along refusal total -- a future unlisted file still refuses. The
+# staging-preflight carrier lists here on the same terms: a standalone
+# disabled CLI imported only by its offline conformance suite, never
+# staged, never installed, never imported by the installer path.
+OFFLINE_TOOLS = ("spool_carrier.py", "spool_mapping.py", "install_manifest.py",
+                 "staging_preflight_carrier.py")
 # Export members that are not journaled install destinations: the staged
 # rollback helpers (exact set the transaction publishes into the journal),
 # the config seed the installer copies when no operator config exists, the

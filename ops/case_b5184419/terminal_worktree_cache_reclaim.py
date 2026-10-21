@@ -104,6 +104,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
@@ -487,12 +488,64 @@ def nested_repo(run, path):
     return False
 
 
+def _valid_api_base(base):
+    # BASE host validation: the bearer below is sent ONLY to this base.
+    # Refuse a base that is not an http(s) URL with a non-empty bare host:
+    # no userinfo (`user@host` misdirects the credential), no control
+    # characters or DEL -- raw anywhere, or %-encoded in the authority
+    # (urllib decodes those before the transport, which then raises outside
+    # the module's error contract) -- no query or fragment (the appended
+    # /api path would be swallowed into them), a real hostname (an
+    # empty `:port`-only authority is not a host), a numeric port, and no
+    # `{`/`}` anywhere (curl expands `{a,b}` globs, so one base is one host
+    # -- parity with the shell gate). A well-formed hostile host still
+    # passes; blocking that needs an operator-owned host allowlist, not a
+    # per-script guess.
+    if not base.startswith(("http://", "https://")):
+        return False
+    if "@" in base:
+        return False
+    if any(ord(char) < 0x21 or ord(char) == 0x7f for char in base):
+        return False
+    if "{" in base or "}" in base:
+        return False
+    try:
+        parts = urllib.parse.urlsplit(base)
+    except ValueError:
+        return False
+    if parts.username or parts.password:
+        return False
+    if parts.query or parts.fragment:
+        return False
+    decoded_netloc = urllib.parse.unquote(parts.netloc)
+    if any(ord(char) < 0x21 or ord(char) == 0x7f for char in decoded_netloc):
+        return False
+    host = parts.hostname or ""
+    if not host:
+        return False
+    if any(char in "[]{}," for char in host):
+        return False
+    if not parts.netloc.startswith("[") and parts.netloc.count(":") > 1:
+        return False
+    try:
+        port = parts.port
+    except ValueError:
+        return False
+    if port is None and parts.netloc.endswith(":"):
+        return False
+    return True
+
+
 class ApiClient:
     """Minimal Paperclip control-plane reader (issues, workspaces, runs)."""
 
     def __init__(self, base_url, company_id, api_key):
-        self.base = base_url.rstrip("/") + "/api/companies/" + company_id
-        self.plain = base_url.rstrip("/") + "/api"
+        base = (base_url or "").rstrip("/")
+        if not _valid_api_base(base):
+            raise ReclaimError(
+                "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
+        self.base = base + "/api/companies/" + company_id
+        self.plain = base + "/api"
         self.headers = {"Authorization": "Bearer " + api_key}
 
     def _get(self, url, timeout=120):

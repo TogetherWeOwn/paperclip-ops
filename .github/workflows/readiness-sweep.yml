@@ -16,10 +16,17 @@ name: Readiness Sweep
 # anything. No secret is printed, persisted, or placed on argv on any path.
 #
 # WHY EVENT-DRIVEN, NOT SCHEDULED. The gate must re-evaluate when (a) a PR
-# changes, (b) a required check completes, or (c) a hold label flips. Polling
-# would burn runner minutes around the clock to re-prove an unchanged rollup;
-# these triggers fire exactly on state changes. There is deliberately NO
-# `schedule:` trigger.
+# changes, (b) a gating Actions workflow completes, or (c) a hold label flips.
+# Polling would burn runner minutes around the clock to re-prove an unchanged
+# rollup; these triggers fire exactly on state changes. There is deliberately
+# NO `schedule:` trigger, and deliberately NO `check_suite:` trigger: GitHub
+# does not fire check_suite when the suite was created by Actions or the head
+# SHA is associated with Actions, which covers every PR head in this repo, so
+# that trigger would be dead for exactly the state change it claims to cover.
+# Completion wakes arrive as workflow_run over the named gating workflows
+# below. workflow_run has no wildcard, so the list must name every workflow
+# that posts PR checks — the contract test derives that set from the sibling
+# workflow files and fails if one is added without naming it here.
 #
 # EVENT CONTRACT (read before flag-on). Writes made with GITHUB_TOKEN do NOT
 # re-fire workflows: GitHub suppresses token-triggered events (dispatch events
@@ -36,23 +43,36 @@ name: Readiness Sweep
 #     that is a fresh security review, not an edit to this file.
 #
 # FORK CONTEXT. A job triggered by pull_request on a fork PR already carries a
-# read-only token (GitHub-enforced). READINESS_READ_ONLY=1 tells the sweep to
-# reconcile those passes as would-act everywhere instead of erroring per PR.
-# Jobs triggered by check_suite / workflow_dispatch run in base context with
-# the full job permissions and may act on any enabled PR.
+# read-only token (GitHub-enforced). workflow_run jobs run base code with base
+# permissions even when the completed run was fork-head, so fork origin is
+# re-derived from the event (pull_request.head.repo.fork or
+# workflow_run.head_repository.fork): either fork case sets
+# READINESS_READ_ONLY=1, telling the sweep to reconcile as would-act everywhere
+# instead of erroring per PR (PR forks) or writing from a fork-timed wake
+# (workflow_run forks). Jobs from any other context run with the full job
+# permissions and may act on any enabled PR.
 #
-# CONCURRENCY. Fork (read-only) and base-context (write-capable) passes queue
-# separately (see group below): only the latest pending run per group is kept,
-# so a shared group would let a fork pass evict a pending write-capable pass.
-# Overlapping base-context passes converge because every mutation is
-# idempotent (byte-identical bodies skip, in-state transitions are no-ops).
+# CONCURRENCY. Exactly two queues: fork (read-only) and base (write-capable).
+# The group keys ONLY on fork/read-only separation — never on the event name —
+# so write-capable passes from pull_request, workflow_run and workflow_dispatch
+# serialize behind each other: body/ready writes carry no head precondition
+# (only auto-merge binds the head), so overlapping passes would let a stale
+# snapshot overwrite newer state or mark an unevaluated head ready. Sequential
+# passes converge because every mutation is idempotent (byte-identical bodies
+# skip, in-state transitions are no-ops). The fork queue stays separate so a
+# flood of fork-triggered passes cannot head-of-line-block pending
+# write-capable passes.
 #
 # PWN-REQUEST GUARD. The checkout below pins `ref:` to the reviewed base tree
 # (the PR's base SHA for pull_request events, the default branch otherwise) —
 # PR-head code NEVER executes beside the job token, so a fork PR cannot
-# smuggle code into this job. Consequence: sweep and policy changes (including
-# the flag-on change itself) take effect after merge; acceptance runs against
-# the merged tree.
+# smuggle code into this job. workflow_run passes execute default-branch code
+# by platform design, which agrees with the pin (default branch for every
+# non-PR event); the triggering run's head_sha/head_branch are never checked
+# out or executed (forbidden by the contract test), which is what closes the
+# workflow_run untrusted-head threat. Consequence: sweep and policy changes
+# (including the flag-on change itself) take effect after merge; acceptance
+# runs against the merged tree.
 #
 # FLAG-OFF DEFAULT. gh-event-capture/readiness-policy.json ships with an
 # empty enabledRepositories: passes authenticate, scan, and log would-act
@@ -63,16 +83,19 @@ name: Readiness Sweep
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]
-  check_suite:
+  # zizmor: ignore[dangerous-triggers] reason="wake-only trigger: base-tree checkout pin (never head_sha/head_branch) + fork read-only, both pinned by readiness-job-token.test.mjs"
+  workflow_run:
+    workflows: [CI, docs-fast-path, PR lint, public-safety, test-guard]
     types: [completed]
   workflow_dispatch:
 
 permissions: {}
 
 concurrency:
-  # Fork (read-only) and base-context passes queue separately (see header).
-  # Non-PR events render an empty fork segment and share the base queue.
-  group: readiness-sweep-${{ github.event_name }}-${{ github.event.pull_request.head.repo.fork }}
+  # ONE base queue for every write-capable pass plus a separate fork queue
+  # (see header): the group keys ONLY on fork/read-only separation, never on
+  # the event name, so passes from every event type serialize.
+  group: readiness-sweep-${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) || (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.fork)) && 'fork' || 'base' }}
   cancel-in-progress: false
 
 jobs:
@@ -115,7 +138,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           READINESS_JOB_TOKEN: '1'
-          READINESS_READ_ONLY: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && '1' || '' }}
+          READINESS_READ_ONLY: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) || (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.fork)) && '1' || '' }}
         run: |
           set -euo pipefail
           if [ "${READINESS_READ_ONLY:-}" = '1' ]; then

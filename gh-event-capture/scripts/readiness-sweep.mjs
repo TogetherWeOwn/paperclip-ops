@@ -159,7 +159,12 @@ export function recordLine(record) {
 // credentials or network; production always builds the real adapter over the
 // pinned runner, whose allowlist is exactly the scanned set. `env` is
 // injectable so tests can drive the token posture and the read-only guard
-// without mutating process state. `onRecord` streams each record the moment
+// without mutating process state. `exec` is injectable only so tests can prove
+// the production token wiring without network: with a recording `exec` double
+// and no `github` double, the production createPinnedRunner line below
+// executes and the test asserts the admitted token reached the child —
+// dropping the jobToken argument fails that test (the github-double tests
+// never execute this line). `onRecord` streams each record the moment
 // its PR is reconciled, so a pass the supervisor SIGKILLs at the deadline
 // loses at most the in-flight PR (writes are idempotent; only unflushed
 // lines would be lost). `config` is injectable so tests can prove the
@@ -167,8 +172,8 @@ export function recordLine(record) {
 // filesystem: with fakes injected, preparation runs even for doubles, and
 // removal in `finally` is what the lifecycle test asserts — deleting the
 // `finally` fails that test. Production always uses the defaults (real
-// per-pass directory, real removal).
-export async function runSweep({ policyPath, github = null, nowMs = Date.now(), env = process.env, onRecord = null, config = null } = {}) {
+// per-pass directory, real removal, real exec).
+export async function runSweep({ policyPath, github = null, nowMs = Date.now(), env = process.env, onRecord = null, config = null, exec = undefined } = {}) {
   const prepare = config?.prepare ?? prepareIsolatedGhConfig
   const remove = config?.remove ?? removeIsolatedGhConfig
   const jobToken = resolveSweepToken(env)
@@ -188,7 +193,7 @@ export async function runSweep({ policyPath, github = null, nowMs = Date.now(), 
   // reaping owns those.
   const configDir = github && !config ? null : await prepare()
   try {
-    const runner = github ? null : createPinnedRunner({ executable: policy.ghExecutable, configDir, jobToken })
+    const runner = github ? null : createPinnedRunner({ executable: policy.ghExecutable, configDir, jobToken, exec })
     const adapter = github ?? createGithubAdapter({ allowedRepositories: policy.scanRepositories, run: runner })
     if (!github) await preflightGh(runner)
     // Fork-context guard: a read-only pass keeps its scan (reads still prove

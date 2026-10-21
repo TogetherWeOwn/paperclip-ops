@@ -288,9 +288,11 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
 
   async function disableAutoMerge(repository, number) {
     requireValue(prNumber(number), 'GitHub PR number is invalid')
-    // S6b disarm-only duty (design §2 + §12): the ONLY merge mutation this
-    // adapter performs. It never arms (`--auto`) and never merges: there is
-    // no arm or merge call path in this module to mistake it for. Scoped to
+    // S6b disarm-only duty (design §2 + §12): this duty's ONLY merge
+    // mutation. It never arms (`--auto`) and never merges immediately: the
+    // module's only other `gh pr merge` call path is the reconcile duty's
+    // `enableAutoMerge` arm below, and neither performs an immediate merge.
+    // Scoped to
     // the allowlist like every other call; a failure throws and the caller
     // leaves its cursor unadvanced. Disabling twice is safe (idempotent), so
     // the repair sweep may repeat it.
@@ -547,7 +549,9 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
   async function enableAutoMerge(repository, number, headSha) {
     requireValue(prNumber(number), 'GitHub PR number is invalid')
     // The reconcile duty's ONLY arm path (design: readiness-handler.md). It
-    // never merges: there is no merge call path in this module. Scoped to the
+    // never merges immediately: the module's only other `gh pr merge` call
+    // path is the S6b `disableAutoMerge` disarm above, and neither performs
+    // an immediate merge. Scoped to the
     // allowlist like every other call; a failure throws and the caller records
     // it. Arming twice is safe (idempotent), so the sweep may repeat it. The
     // head SHA binds the arm to the exact head the gate evaluated

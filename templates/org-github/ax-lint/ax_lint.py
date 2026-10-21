@@ -164,9 +164,10 @@ def _shell_flag_comparison(code_lines, flag):
 
     Matches ``[[ "$1" == "--json" ]]``, ``[ "$1" = --dry-run ]`` and the
     reversed operand order. Deliberately excludes ``!=`` (a negative test
-    advertises nothing) and non-positional variables (``$FLAGS``).
+    advertises nothing), non-positional variables (``$FLAGS``), and
+    single-quoted parameters (``'$1'`` compares a literal, not the argument).
     """
-    var = r"[\"']?%s[\"']?" % _POS_PARAM_RE
+    var = r"\"?%s\"?" % _POS_PARAM_RE
     lit = _flag_literal(flag)
     compare = re.compile(
         r"%s\s*(?:==|=)\s*%s|%s\s*(?:==|=)\s*%s" % (var, lit, lit, var))

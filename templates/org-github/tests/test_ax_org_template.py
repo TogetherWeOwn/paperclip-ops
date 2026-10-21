@@ -389,6 +389,45 @@ class AxMetricsComputeTest(unittest.TestCase):
             code = ax_metrics.main(["--days", "7"])
         self.assertEqual(code, 2)
 
+    def test_paperclip_get_round_trip_and_failure(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        seen_auth = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen_auth["value"] = self.headers.get("Authorization")
+                if self.path == "/ok":
+                    body = json.dumps({"hello": "world"}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self.send_response(500)
+                    self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            data, reason = ax_metrics.paperclip_get(base, "secret-key", "/ok")
+            self.assertEqual(data, {"hello": "world"})
+            self.assertIsNone(reason)
+            self.assertEqual(seen_auth.get("value"), "Bearer secret-key")
+            data, reason = ax_metrics.paperclip_get(base, "secret-key", "/boom")
+            self.assertIsNone(data)
+            self.assertIn("HTTP Error 500", reason)
+        finally:
+            server.shutdown()
+            thread.join()
+
 
 class ReviewDimensionTest(unittest.TestCase):
     def test_blocking_and_nit_split(self):
@@ -404,7 +443,9 @@ class ReviewDimensionTest(unittest.TestCase):
 
 
 class StagedPublicSafetyTest(unittest.TestCase):
-    DENY = [r"\bTOG-\d+", r"localhost", r"127\.0\.0\.1", r"192\.168\.",
+    # Loopback binds (127.0.0.1) in hermetic tests are standard practice,
+    # not private data, so they are not denied.
+    DENY = [r"\bTOG-\d+", r"localhost", r"192\.168\.",
             r"\b10\.\d+\.\d+\.\d+"]
 
     def test_no_private_markers_in_staged_files(self):

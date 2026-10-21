@@ -84,9 +84,7 @@ def fetch_first_commit_state(repo, pr_number, token):
 def paperclip_get(base_url, api_key, path):
     """Defensive Paperclip GET: (parsed JSON or None, reason or None)."""
     url = base_url.rstrip("/") + path
-    req = urllib.request.Request(
-        url, headers={"Authorization": "Bearer REDACTED"})
-    # Build the real request without ever logging the key.
+    # The key travels in the header only; it is never logged or echoed.
     req = urllib.request.Request(
         url, headers={"Authorization": f"Bearer {api_key}"})
     try:

@@ -209,7 +209,8 @@ LONG_EXPECTED="error: $(printf 'A%.0s' {1..293})"
 assert $? "the truncated cause is the head of the source line" \
   "truncation took the wrong 300 chars; the head names the breakage"
 
-[[ -s "$JSON" ]] && ! jq -r '.jobs[].cause' "$JSON" 2>/dev/null | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z'
+[[ -s "$JSON" ]] && CAUSES="$(jq -r '.jobs[].cause' "$JSON" 2>/dev/null)" \
+  && ! grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z' <<<"$CAUSES"
 assert $? "causes carry no Actions timestamp prefix" \
   "the timestamp strip was skipped; every cause doubles in width"
 

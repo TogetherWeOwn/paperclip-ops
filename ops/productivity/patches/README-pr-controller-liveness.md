@@ -137,11 +137,9 @@ required CI and Paperclip Review 5/5. Never install this entire public snapshot.
    controller tests. Compare the complete candidate diff: unrelated
    classification, hold, review and merge code must be unchanged. Compile the
    candidate without executing its `main`.
-4. Atomically install the helper first, then the candidate, preserving host file
-   ownership/mode. Use the existing scheduled invocation; this packet requires no
-   Paperclip, database, or model-proxy restart, agent config change, or gate change.
-5. Apply the pump skip on the host (the pump file itself is host-only and is
-   not part of this packet). In `pr_pump.py` `main()`, inside the
+4. Apply and verify the pump skip before installing the controller (the pump
+   file itself is host-only and is not part of this packet). In `pr_pump.py`
+   `main()`, inside the
    `for key, rec in act:` loop, immediately after the per-(card, PR, state,
    head) signature-dedup `continue` and before the `full, num` split, insert:
    ```python
@@ -161,6 +159,10 @@ required CI and Paperclip Review 5/5. Never install this entire public snapshot.
    it; dry-run the pump (no `--apply`) and confirm a suppressed record no
    longer appears as `would pump` while a genuinely actionable `ci_red`
    still does.
+5. Only after the pump skip is verified, atomically install the helper first,
+   then the candidate, preserving host file ownership/mode. Use the existing
+   scheduled invocation; this packet requires no Paperclip, database, or
+   model-proxy restart, agent config change, or gate change.
 6. Record exact public head, before/after hashes, commands and verification receipt.
    Observe a real backstop trigger with no intervening re-arm and a skipped event
    followed by a claimed run. Offline green alone does not satisfy live acceptance.
@@ -168,7 +170,7 @@ required CI and Paperclip Review 5/5. Never install this entire public snapshot.
 Rollback: atomically restore the preserved controller and any previous helper.
 Retain state and pending acknowledgements; never roll back or edit database rows,
 remove holds, alter wake configuration, cancel runs, or force a review/merge.
-If step 5 was applied, remove the inserted pump block and restore the preserved
+If step 4 was applied, remove the inserted pump block and restore the preserved
 pump file the same way.
 
 ## CI-policy packet installation (rerun-once / 3-round cap)

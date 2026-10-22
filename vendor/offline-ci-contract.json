@@ -322,6 +322,7 @@
     "api-base-validation-python suite:1",
     "provider baseline integrity suite:1",
     "review report input integrity holds:1",
+    "test-missing gate suites:1",
     "orphan-suite ratchet fixtures suite:1",
     "assignment host-source bundle suite:1",
     "stop-guard landing suite:1",
@@ -526,7 +527,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "6d1d0efe63459f3caabc2a1d7b9888b4343b65754f8cf416d9b60b3ee3679f8c",
+      "definition_sha256": "3a637f05f20c51e3beab1bafc44b8dce56732560767b3f672c4d7005b451393a",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1818,6 +1819,11 @@
       "name": "review report input integrity holds",
       "definition_sha256": "bffa19729a879126ad09b2eba97c28fddbdc6f4fa5e10afa5a536bb291c9dfc4",
       "id": "review report input integrity holds:1"
+    },
+    {
+      "name": "test-missing gate suites",
+      "definition_sha256": "a245dc744b32a853deac2e14fcb7d52b9582f7862154f7ae954800a7da67dc3a",
+      "id": "test-missing gate suites:1"
     },
     {
       "name": "orphan-suite ratchet fixtures suite",

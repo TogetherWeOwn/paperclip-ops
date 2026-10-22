@@ -42,6 +42,40 @@ could not be checked. The command prints only the literal `yes` or `no` on a
 successful decision; unavailable details are explicit and non-zero so callers
 cannot mistake an evidence failure for a negative classification.
 
+## Residual `unavailable` fallback
+
+`unavailable` never authorizes a rerun by itself. The literal-`yes` rule above
+is unchanged: only a `yes` verdict permits the one agent-initiated rerun, and
+any proposal to weaken that rule needs security review first.
+
+When the ledger stays `unavailable` and no code fix exists for the red check,
+escalate instead of rerunning:
+
+1. **Who decides.** The agent holding the red build cannot self-authorize a
+   rerun. Open a decision card to the CEO with the evidence below; the CEO
+   grants or denies a one-time exception. Rerun authorization never comes from
+   the red build's owner.
+2. **What evidence.** The exception request carries: the exact `is_flaky`
+   command plus verbatim `unavailable` output; proof the run is still attempt 1
+   on the same head; the failing step and why no file in the diff can influence
+   it; multi-branch coincidence (same step, same window, run ids) or a
+   same-branch flip when available; a local reproduction of the failure
+   signature when feasible; and recovery evidence for any external dependency
+   involved.
+3. **Attempt bound.** At most one same-head failed-jobs rerun per granted
+   exception, executed by the Operator after re-verifying head and attempt 1.
+   A repeat same-step failure is real: open a fix card, no further exception.
+   Gates are unchanged: required checks green plus review on that exact head
+   before merge.
+4. **Ledger repair.** Every granted exception files a follow-up to restore the
+   ledger evidence. Backfill the matching row until it has at least five
+   valid, non-ambiguous observations, then record future fail-then-pass pairs
+   with `record_flake`. Do not claim that the next identical failure resolves
+   to a real verdict until that threshold is met.
+
+Record the decision (real / escalated with decision link) on the red-build
+card, so every red build still has a recorded decision.
+
 ## Automatic host rerun of PR checks
 
 The host PR controller consumes the ladder's one permitted rerun itself on

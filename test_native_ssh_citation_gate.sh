@@ -200,6 +200,16 @@ run_seam_absent_case() {
 }
 run_seam_absent_case
 
+# Forbidden-file contract: a seam symbol added to ssh.ts must fail even though the
+# required file still holds all three symbols. Without this case a regression that
+# stops scanning ssh.ts would stay green. Appended at EOF so no anchor shifts.
+mut_seam_in_forbidden_file() {
+  local d="$1"
+  local f="$d/app/packages/adapter-utils/src/ssh.ts"
+  printf '\nconst hostExecutor = null;\n' >> "$f"
+}
+run_case "seam_in_forbidden_file_fails" 1 "unexpectedly_present_in_ssh" mut_seam_in_forbidden_file
+
 # Negative control: a mutation the gate should IGNORE. Editing an unrelated region
 # must stay green, otherwise the gate is just detecting "file changed" and every red
 # above is uninformative.

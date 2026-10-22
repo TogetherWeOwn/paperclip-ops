@@ -371,8 +371,12 @@ Rollback immediately on any of: unexpected shared uid/namespace/cgroup, agent-re
 2. Stop all agent scopes and signer; verify no descendants remain.
 3. Restore prior service unit/image and numeric ownership/ACL pre-image.
 4. Restore database only if the schema changed; otherwise retain new audit records.
-5. Restart the prior server with native SSH still blocked by the preserved core candidate.
-6. Re-run the hostile-identity audit. Rollback is complete only when the prior state is explicitly measured and all partial new identities/sockets/keys are accounted for.
+5. Verify that the restored prior image contains the preserved core candidate by commit and tree hash,
+   or verify that an independent native-SSH disablement control is active. If neither condition is
+   met, keep the server stopped and issuance disabled.
+6. Restart the prior server only after the fail-closed condition is verified. Re-run the
+   hostile-identity audit. Rollback is complete only when the prior state is explicitly measured and
+   all partial new identities/sockets/keys are accounted for.
 
 Do not delete the new key or ledger until rollback evidence is captured; revoke/disable access first, then archive or destroy under the credential rotation procedure.
 

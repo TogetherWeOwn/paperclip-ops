@@ -62,6 +62,10 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
         "test_cliproxy_seam_extract.py",
         "garm_provider_latency_baseline.py",
         "test_garm_provider_latency_baseline.py",
+        # provider-baseline-integrity: the integrity suite runs as its own
+        # suites step next to its sibling; pin it so a change to the suite
+        # wakes the suites job at PR time.
+        "test_provider_baseline_integrity.py",
         "kofra_preview_parity.py",
         "test_kofra_preview_parity.py",
         "upstream_draft_pin_audit.sh",

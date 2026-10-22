@@ -626,17 +626,27 @@ def main(argv=None, run=None, api=None, env=None):
                     "a clean http(s) base: the bearer would misdirect")
             raise PruneError(
                 "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
-        # Quiet pre-check: ApiClient below owns the log + counter, so a
-        # shadow mismatch warns once per send, not twice.
-        try:
-            check_api_base_allowed(base.rstrip("/"),
-                                   sender="terminal_worktree_prune",
-                                   quiet=True)
-        except AllowlistRefused as exc:
-            if opts.apply:
-                raise SafetyRefusal(str(exc)) from exc
-            raise PruneError(str(exc)) from exc
-        api = reclaim.ApiClient(base, company, key)
+        # Host-delegated verdict (see run-worktree-prune.sh): this module runs
+        # inside the container, where the operator file does not exist. The
+        # wrapper rendered the verdict on the host and forwarded the exact
+        # checked base; honor it only on exact string equality, else fail
+        # closed through the normal check.
+        checked_base = env.get("PAPERCLIP_API_ALLOWLIST_CHECKED_BASE", "")
+        delegated = bool(checked_base) and checked_base == base
+        if not delegated:
+            # Quiet pre-check: ApiClient below owns the log + counter, so a
+            # shadow mismatch warns once per send, not twice.
+            try:
+                check_api_base_allowed(base.rstrip("/"),
+                                       sender="terminal_worktree_prune",
+                                       quiet=True)
+            except AllowlistRefused as exc:
+                if opts.apply:
+                    raise SafetyRefusal(str(exc)) from exc
+                raise PruneError(str(exc)) from exc
+        api = reclaim.ApiClient(base, company, key,
+                                allowlist_checked_base=checked_base
+                                if delegated else None)
     try:
         summary = run_tool(opts, run, api, env)
     except SafetyRefusal:

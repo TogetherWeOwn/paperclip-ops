@@ -58,6 +58,7 @@ from terminal_worktree_cache_reclaim import (  # noqa: E402
     summarize,
     terminal_gate,
     unpushed_after_proof,
+    ApiClient,
     SafetyRefusal,
     ReclaimError,
 )
@@ -1951,6 +1952,43 @@ class ArgvDefaultTests(unittest.TestCase):
                 with self.assertRaises(ReclaimError):
                     main(argv=["--out-dir", out],
                          run=lambda *a, **k: (0, ""), api=None)
+
+
+class ApiClientDelegationTests(unittest.TestCase):
+    # Mutant: ApiClient ignores allowlist_checked_base (container runs fail
+    # closed on the missing host file) or honors a merely similar base.
+    # Hermetic via the hatch: HATCH=1 with a non-test base refuses before any
+    # file read, so only the exact-match skip constructs — no /etc state is
+    # consulted either way.
+    BASE = "https://board.example.com"
+
+    def test_exact_match_skips_the_check(self):
+        with mock.patch.dict(os.environ,
+                             {"PAPERCLIP_API_ALLOWLIST_TEST": "1"}):
+            client = ApiClient(self.BASE, "c", "k",
+                               allowlist_checked_base=self.BASE)
+        self.assertTrue(client.base.startswith(self.BASE + "/api/"))
+
+    def test_mismatch_runs_the_normal_check(self):
+        with mock.patch.dict(os.environ,
+                             {"PAPERCLIP_API_ALLOWLIST_TEST": "1"}):
+            with self.assertRaises(ReclaimError) as raised:
+                ApiClient(self.BASE, "c", "k",
+                          allowlist_checked_base="https://other.example.com")
+        self.assertIn("hatch", str(raised.exception))
+
+    def test_default_none_runs_the_normal_check(self):
+        with mock.patch.dict(os.environ,
+                             {"PAPERCLIP_API_ALLOWLIST_TEST": "1"}):
+            with self.assertRaises(ReclaimError):
+                ApiClient(self.BASE, "c", "k")
+
+    def test_trailing_slash_is_not_equal(self):
+        with mock.patch.dict(os.environ,
+                             {"PAPERCLIP_API_ALLOWLIST_TEST": "1"}):
+            with self.assertRaises(ReclaimError):
+                ApiClient(self.BASE + "/", "c", "k",
+                          allowlist_checked_base=self.BASE)
 
 
 if __name__ == "__main__":

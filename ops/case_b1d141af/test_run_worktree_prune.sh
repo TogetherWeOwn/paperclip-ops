@@ -58,6 +58,8 @@ make_release() {
   cat > "$dir/lib/paperclip_api_allowlist.py" <<'PY'
 MARK = "allowlist-imported"
 PY
+  # The host-side verdict runs for real: the wrapper sources this lib.
+  cp "$REPO/lib/paperclip_api_allowlist.sh" "$dir/lib/paperclip_api_allowlist.sh"
   cat > "$dir/ops/lib/atomic_state.py" <<'PY'
 MARK = "lib-imported"
 PY
@@ -77,6 +79,7 @@ print(json.dumps({
     "dir": here,
     "dir_mode": stat.S_IMODE(os.stat(os.path.join(here, "..", "..")).st_mode),
     "main": __name__,
+    "checked_base": os.environ.get("PAPERCLIP_API_ALLOWLIST_CHECKED_BASE"),
 }))
 sys.exit($code)
 PY
@@ -101,6 +104,9 @@ BASE=(
   PAPERCLIP_API_URL=http://paperclip.invalid:3100
   PAPERCLIP_API_KEY=secret-value-never-on-argv
   PAPERCLIP_COMPANY_ID=company-1
+  # The host-side verdict runs for real; the suite base is .invalid, so every
+  # success path opts into the test hatch explicitly.
+  PAPERCLIP_API_ALLOWLIST_TEST=1
 )
 
 without() { # BASE minus one NAME
@@ -176,6 +182,14 @@ else
   fail "missing allowlist lib not refused: rc=$rc"
 fi
 
+make_release "$WORK/no-sh-allowlist" 0; rm "$WORK/no-sh-allowlist/lib/paperclip_api_allowlist.sh"
+rc=0; RELEASE="$WORK/no-sh-allowlist" run_wrapper "$WORK/o6d" "${BASE[@]}" || rc=$?
+if [[ $rc -eq 2 ]] && grep -q "shell allowlist lib is missing" "$WORK/o6d.err" && [[ ! -s "$WORK/docker.log" ]]; then
+  ok "a release without the shell allowlist lib is refused"
+else
+  fail "missing shell allowlist lib not refused: rc=$rc"
+fi
+
 rc=0; run_wrapper "$WORK/o7" "${BASE[@]}" \
   PAPERCLIP_WORKTREE_PRUNE_ENGINE="$WORK/no-such-docker" || rc=$?
 if [[ $rc -eq 2 ]] && grep -q "container engine is not executable" "$WORK/o7.err"; then
@@ -219,18 +233,21 @@ if grep -q "secret-value-never-on-argv" "$WORK/docker.log"; then
 else
   ok "the API key value never appears on the engine argv"
 fi
-python3 - "$WORK/docker.log" <<'PY' && ok "podman exec forwards the three API variables by bare name" || fail "-e forms are wrong"
+python3 - "$WORK/docker.log" <<'PY' && ok "podman exec forwards the API variables plus the checked-base delegation by bare name" || fail "-e forms are wrong"
 import json, sys
 argv = json.loads(open(sys.argv[1]).readline())
 assert argv[:4] == ["exec", "-i", "-u", "node"], argv[:4]
 pairs = [(argv[i], argv[i + 1]) for i in range(len(argv) - 1) if argv[i] == "-e"]
-assert sorted(v for _, v in pairs) == ["PAPERCLIP_API_KEY", "PAPERCLIP_API_URL", "PAPERCLIP_COMPANY_ID"], pairs
+assert sorted(v for _, v in pairs) == ["PAPERCLIP_API_ALLOWLIST_CHECKED_BASE", "PAPERCLIP_API_KEY", "PAPERCLIP_API_URL", "PAPERCLIP_COMPANY_ID"], pairs
+assert "PAPERCLIP_API_ALLOWLIST_TEST" not in [v for _, v in pairs], "hatch must never be forwarded"
 assert "paperclip-server" in argv
 PY
-python3 - "$WORK/a1" <<'PY' && ok "the container sees the three API variables and nothing else forwarded" || fail "inner env wrong"
+# The inner env carries the forwarded four plus the hatch, which the fake
+# engine mirrors in (harness-only bridge for section 7; never on the -e argv).
+python3 - "$WORK/a1" <<'PY' && ok "the container sees the forwarded variables (hatch mirrored by the harness only)" || fail "inner env wrong"
 import json, sys
 env = json.load(open(sys.argv[1]))["env"]
-assert env == ["PAPERCLIP_API_KEY", "PAPERCLIP_API_URL", "PAPERCLIP_COMPANY_ID"], env
+assert env == ["PAPERCLIP_API_ALLOWLIST_CHECKED_BASE", "PAPERCLIP_API_ALLOWLIST_TEST", "PAPERCLIP_API_KEY", "PAPERCLIP_API_URL", "PAPERCLIP_COMPANY_ID"], env
 PY
 
 # ---- 4. the kill switch variable is forwarded only when set -------------
@@ -247,6 +264,29 @@ else fail "kill switch not forwarded"; fi
 python3 - "$WORK/a1" <<'PY' && ok "an unset kill switch is not invented" || fail "kill switch leaked"
 import json, sys
 assert "WORKTREE_PRUNE_DISABLED" not in json.load(open(sys.argv[1]))["env"]
+PY
+
+# ---- 4b. the host-side allowlist verdict renders before anything runs ----
+# Hatch + non-test base: the verdict refuses. Hermetic: the hatch refusal
+# precedes the host-file read, so no /etc state is consulted.
+rc=0; run_wrapper "$WORK/v1" "${BASE[@]}" PAPERCLIP_API_URL=https://board.example.com || rc=$?
+if [[ $rc -eq 2 ]] && grep -q "host allowlist verdict" "$WORK/v1.err" && [[ ! -s "$WORK/docker.log" ]]; then
+  ok "a hatch-plus-non-test base is refused on the host before the engine runs"
+else
+  fail "host verdict refusal wrong: rc=$rc err=$(cat "$WORK/v1.err")"
+fi
+# The forwarded delegation is the checked base, byte for byte ...
+python3 - "$WORK/a1" <<'PY' && ok "the container receives the checked base verbatim as the delegation" || fail "delegation value wrong"
+import json, sys
+r = json.load(open(sys.argv[1]))
+assert r["checked_base"] == "http://paperclip.invalid:3100", r["checked_base"]
+PY
+# ... even when the outer environment presets a different value.
+rc=0; run_wrapper "$WORK/v3" "${BASE[@]}" PAPERCLIP_API_ALLOWLIST_CHECKED_BASE=https://evil.example.com || rc=$?
+python3 - "$WORK/v3" <<'PY' && ok "an outer CHECKED_BASE preset is overwritten with the checked base" || fail "outer preset survived"
+import json, sys
+r = json.load(open(sys.argv[1]))
+assert r["checked_base"] == "http://paperclip.invalid:3100", r["checked_base"]
 PY
 
 # ---- 5. the code that runs in the container -----------------------------

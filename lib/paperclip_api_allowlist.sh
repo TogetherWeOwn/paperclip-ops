@@ -206,9 +206,11 @@ if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]]; then
     base="$1"; shift
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --sender) sender="${2:-}"; shift 2;;
-        --file) file="${2:-}"; shift 2;;
-        --mode) PAPERCLIP_API_ALLOWLIST_MODE="${2:-}"; shift 2;;
+        # A dangling flag (no value) must refuse, not spin: an unconditional
+        # `shift 2` on one word fails without consuming, looping forever.
+        --sender) [[ $# -ge 2 ]] || { echo "missing value: $1" >&2; return 2; }; sender="$2"; shift 2;;
+        --file) [[ $# -ge 2 ]] || { echo "missing value: $1" >&2; return 2; }; file="$2"; shift 2;;
+        --mode) [[ $# -ge 2 ]] || { echo "missing value: $1" >&2; return 2; }; PAPERCLIP_API_ALLOWLIST_MODE="$2"; shift 2;;
         *) echo "unknown argument: $1" >&2; return 2;;
       esac
     done

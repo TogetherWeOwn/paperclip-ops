@@ -23,9 +23,21 @@
 # world-readable. `podman exec -e NAME` (no value) forwards the variable named
 # from THIS process's environment.
 #
-# Refusal contract: a missing container, credential or module, or an invalid
-# cap, aborts LOUDLY (exit 2) before anything runs. A run that measured nothing
-# must never read as a clean bill of health.
+# WHY THE ALLOWLIST VERDICT IS RENDERED HERE, ON THE HOST. The pruner runs
+# inside the container, where /etc/paperclip/allowed-api-hosts does not exist
+# and the shared helper fails closed in every mode. So this wrapper checks the
+# exact base it is about to forward against the host file BEFORE streaming
+# (a missing file, malformed line, or enforce-mode mismatch refuses here,
+# exit 2), then forwards the checked base verbatim as
+# PAPERCLIP_API_ALLOWLIST_CHECKED_BASE. The in-container pruner honors that
+# verdict only on exact string equality with the base it reads; anything else
+# runs the normal check and fails closed. The value is always assigned here
+# after a passing check, so an outer preset can never smuggle an unchecked
+# base past the gate.
+#
+# Refusal contract: a missing container, credential or module, an invalid
+# cap, or a host allowlist refusal aborts LOUDLY (exit 2) before anything
+# runs. A run that measured nothing must never read as a clean bill of health.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
@@ -34,6 +46,7 @@ TOOL_REL="ops/case_b1d141af/terminal_worktree_prune.py"
 CORE_REL="ops/case_b5184419/terminal_worktree_cache_reclaim.py"
 LIB_REL="ops/lib/atomic_state.py"
 ALLOWLIST_REL="lib/paperclip_api_allowlist.py"
+ALLOWLIST_SH_REL="lib/paperclip_api_allowlist.sh"
 # The host runs the Paperclip server container under podman (README, runbooks).
 ENGINE="${PAPERCLIP_WORKTREE_PRUNE_ENGINE:-/usr/bin/podman}"
 # Backstop inside the container: an exec that outlives its client keeps running.
@@ -48,6 +61,7 @@ refuse() {
 [[ -f "$RELEASE_ROOT/$CORE_REL" ]] || refuse "reclaim core is missing: $RELEASE_ROOT/$CORE_REL"
 [[ -f "$RELEASE_ROOT/$LIB_REL" ]] || refuse "atomic-state lib is missing: $RELEASE_ROOT/$LIB_REL"
 [[ -f "$RELEASE_ROOT/$ALLOWLIST_REL" ]] || refuse "allowlist lib is missing: $RELEASE_ROOT/$ALLOWLIST_REL"
+[[ -f "$RELEASE_ROOT/$ALLOWLIST_SH_REL" ]] || refuse "shell allowlist lib is missing: $RELEASE_ROOT/$ALLOWLIST_SH_REL"
 [[ -x "$ENGINE" ]] || refuse "container engine is not executable: $ENGINE"
 [[ -n "${PAPERCLIP_WORKTREE_PRUNE_CONTAINER:-}" ]] \
   || refuse "PAPERCLIP_WORKTREE_PRUNE_CONTAINER is unset (env file not loaded?)"
@@ -62,6 +76,16 @@ MAX_REMOVE="${PAPERCLIP_WORKTREE_PRUNE_MAX_REMOVE:-0}"
   || refuse "PAPERCLIP_WORKTREE_PRUNE_MAX_REMOVE='$MAX_REMOVE' is not a non-negative integer"
 [[ "$BOUND_SECONDS" =~ ^[1-9][0-9]*$ ]] \
   || refuse "PAPERCLIP_WORKTREE_PRUNE_BOUND_SECONDS='$BOUND_SECONDS' is not a positive integer"
+
+# Host-side allowlist verdict (see header): the container cannot read the
+# operator file, so the verdict is rendered here, on the exact forwarded base.
+# Placed after the cheap local validations, still before anything runs.
+source "$RELEASE_ROOT/$ALLOWLIST_SH_REL"
+paperclip_allowlist_check "$PAPERCLIP_API_URL" "run-worktree-prune" \
+  || refuse "API base refused by the host allowlist verdict (see log above)"
+# The forwarded delegation is always the just-checked base; an outer preset of
+# this variable is overwritten here and can never reach the container.
+export PAPERCLIP_API_ALLOWLIST_CHECKED_BASE="$PAPERCLIP_API_URL"
 
 # Runs in the container under `python3 -c`. Reads a tar of exactly the four
 # reviewed modules from stdin, writes them into a private temp dir, runs the
@@ -101,7 +125,7 @@ TOOL_ARGS=(
 
 # The kill switch variable is forwarded only when the env file defines it
 # (`-e NAME` with no value sets nothing when NAME is unset here).
-ENV_ARGS=(-e PAPERCLIP_API_URL -e PAPERCLIP_API_KEY -e PAPERCLIP_COMPANY_ID)
+ENV_ARGS=(-e PAPERCLIP_API_URL -e PAPERCLIP_API_KEY -e PAPERCLIP_COMPANY_ID -e PAPERCLIP_API_ALLOWLIST_CHECKED_BASE)
 [[ -n "${WORKTREE_PRUNE_DISABLED:-}" ]] && ENV_ARGS+=(-e WORKTREE_PRUNE_DISABLED)
 
 # A deterministic tar (sorted, fixed owner and mtime) of the four modules only.

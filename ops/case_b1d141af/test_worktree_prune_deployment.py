@@ -29,6 +29,7 @@ WRAPPER = ROOT / "ops" / "case_b1d141af" / "run-worktree-prune.sh"
 
 PAYLOAD = [
     "lib/paperclip_api_allowlist.py",
+    "lib/paperclip_api_allowlist.sh",
     "ops/case_b1d141af/run-worktree-prune.sh",
     "ops/case_b1d141af/terminal_worktree_prune.py",
     "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
@@ -42,6 +43,7 @@ PAYLOAD = [
 # verified but never installed).
 INSTALLED = [
     "lib/paperclip_api_allowlist.py",
+    "lib/paperclip_api_allowlist.sh",
     "ops/lib/atomic_state.py",
     "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
     "ops/case_b1d141af/run-worktree-prune.sh",
@@ -409,7 +411,10 @@ class InstallMechanism(unittest.TestCase):
                "PAPERCLIP_WORKTREE_PRUNE_ENGINE": str(engine),
                "PAPERCLIP_WORKTREE_PRUNE_CONTAINER": "paperclip",
                "PAPERCLIP_API_URL": "http://x.invalid", "PAPERCLIP_API_KEY": "k",
-               "PAPERCLIP_COMPANY_ID": "c"}
+               "PAPERCLIP_COMPANY_ID": "c",
+               # The installed wrapper renders the host verdict for real; the
+               # fixture base is .invalid, so opt into the hatch explicitly.
+               "PAPERCLIP_API_ALLOWLIST_TEST": "1"}
         r = subprocess.run([str(wrapper)], env=env, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         with tarfile.open(capture) as tar:

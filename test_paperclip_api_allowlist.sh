@@ -163,6 +163,12 @@ out="$("${RUN_ENV[@]}" "$HERE/lib/paperclip_api_allowlist.sh" --check "https://b
   && ok "malformed file refuses rc 1" || bad "malformed file refuses rc 1" "rc=$rc out=$out"
 out="$("${RUN_ENV[@]}" "$HERE/lib/paperclip_api_allowlist.sh" --bogus 2>/dev/null)"; rc=$?
 [[ "$rc" -eq 2 ]] && ok "usage error rc 2" || bad "usage error rc 2" "rc=$rc"
+# A dangling flag must refuse, not spin: `timeout` bounds the regression.
+for flag in --sender --file --mode; do
+  out="$(timeout 10 "${RUN_ENV[@]}" "$HERE/lib/paperclip_api_allowlist.sh" --check "https://board.example.invalid" --file "$GOOD" "$flag" 2>"$WORK/err.txt")"; rc=$?
+  [[ "$rc" -eq 2 ]] && grep -q "missing value" "$WORK/err.txt" \
+    && ok "dangling $flag refuses rc 2" || bad "dangling $flag refuses rc 2" "rc=$rc"
+done
 
 printf '\nallowlist shell: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

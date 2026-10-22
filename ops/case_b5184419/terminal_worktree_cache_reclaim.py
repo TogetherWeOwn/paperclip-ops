@@ -543,15 +543,22 @@ def _valid_api_base(base):
 class ApiClient:
     """Minimal Paperclip control-plane reader (issues, workspaces, runs)."""
 
-    def __init__(self, base_url, company_id, api_key):
+    def __init__(self, base_url, company_id, api_key,
+                 allowlist_checked_base=None):
         base = (base_url or "").rstrip("/")
         if not _valid_api_base(base):
             raise ReclaimError(
                 "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
-        try:
-            check_api_base_allowed(base, sender="terminal_worktree_cache_reclaim")
-        except AllowlistRefused as exc:
-            raise ReclaimError(str(exc)) from exc
+        # Container delegation (see run-worktree-prune.sh): the host wrapper
+        # rendered the allowlist verdict on this exact base string, because
+        # the container cannot read the operator file. Honor it only on exact
+        # string equality with the base in use; unset, empty, or merely
+        # similar values run the normal check and fail closed.
+        if allowlist_checked_base is None or allowlist_checked_base != base_url:
+            try:
+                check_api_base_allowed(base, sender="terminal_worktree_cache_reclaim")
+            except AllowlistRefused as exc:
+                raise ReclaimError(str(exc)) from exc
         self.base = base + "/api/companies/" + company_id
         self.plain = base + "/api"
         self.headers = {"Authorization": "Bearer " + api_key}

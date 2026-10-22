@@ -122,7 +122,9 @@ def main(argv=None):
         summary.error('read_or_log_failed')
         summary.finish()
         raise
-    return summary.finish()
+    # Preserve the imported caller's historic successful None return; the CLI
+    # still exits zero, while failures carry a nonzero status.
+    return summary.finish() or None
 
 
 def promote(args, summary):

@@ -612,6 +612,96 @@ class CapacityEvidenceContract(unittest.TestCase):
             self.assertIn(term, result.stdout)
         self.assertIn("test_capacity_evidence_contract", result.stdout)
 
+    def test_duplicate_json_completeness_key_is_refused_before_last_value_wins(self):
+        # A normal JSON decoder would silently replace false with true.
+        text = json.dumps(sample())
+        self.assertEqual(text.count('"complete": true'), 1)
+        text = text.replace('"complete": true', '"complete": false, "complete": true', 1)
+        fixture = self.inputs / "duplicate-completeness.json"
+        fixture.write_text(text)
+        before = fixture.read_bytes()
+        result = self.invoke(["--jobs", str(fixture), "--json"])
+        self.wire(result, "ERROR", "INVALID_JOBS", exit_code=2)
+        self.assertNotIn("Traceback", result.stdout + result.stderr)
+        self.assertEqual(fixture.read_bytes(), before)
+
+    def test_in_progress_status_alone_excludes_otherwise_finished_intervals(self):
+        data = sample()
+        for row in data["jobs"]:
+            row["status"] = "completed"
+            if row["runner_name"].startswith("coolify") and row["id"] != 109:
+                # Keep valid clocks AND a terminal conclusion: only status is bad.
+                row["status"] = "in_progress"
+        body = self.wire(self.report(data, machine=True), "INCONCLUSIVE", "INSUFFICIENT_EVIDENCE")
+        self.assertEqual(body["counts"]["input_rows"], 20)
+        self.assertEqual(body["counts"]["excluded_clock"], 9)
+        self.assertEqual(body["counts"]["malformed_rows"], 0)
+        self.assertEqual(body["counts"]["accepted_rows"], 11)
+        self.assertEqual(body["arms"]["coolify"]["matched_attempts"], 1)
+        self.assertEqual(body["arms"]["garm"]["matched_attempts"], 10)
+        self.assertIs(body["evidence_complete"], False)
+        self.assertIs(body["capacity"]["residual_headroom_known"], False)
+        self.assertIsNone(body["capacity"]["combined_peak"])
+
+    def test_repeated_value_flags_refuse_even_when_last_value_would_allow_go(self):
+        data = sample(attempts=9)
+        # Prove that last-value-wins could weaken an actual adequacy boundary.
+        self.wire(self.report(data, "--min-attempts", "10", machine=True),
+                  "INCONCLUSIVE", "INSUFFICIENT_EVIDENCE")
+        self.wire(self.report(data, "--min-attempts", "9", machine=True),
+                  "GO", "MEASURED_FIT")
+        first = self.inputs / "first-valid.json"
+        second = self.inputs / "second-valid.json"
+        for fixture in (first, second):
+            fixture.write_text(json.dumps(data))
+        before = {p: p.read_bytes() for p in (first, second)}
+        values = {
+            "--jobs": (str(first), str(second)),
+            "--node7b1ff338-max": ("2", "3"),
+            "--node575e13db-max": ("4", "5"),
+            "--min-hours": ("24", "25"),
+            "--min-attempts": ("10", "9"),
+        }
+        for flag in VALUE_FLAGS:
+            with self.subTest(flag=flag):
+                left, right = values[flag]
+                args = [] if flag == "--jobs" else ["--jobs", str(first)]
+                result = self.invoke([*args, flag, left, flag, right, "--json"])
+                self.wire(result, "ERROR", "INVALID_OPTION_VALUE", exit_code=2)
+                self.assertNotIn("Traceback", result.stdout + result.stderr)
+        self.assertEqual({p: p.read_bytes() for p in (first, second)}, before)
+
+    def test_idless_copy_of_identified_interval_is_a_duplicate_not_new_compute(self):
+        data = sample()
+        repeated = copy.deepcopy(data["jobs"][0])  # job 100, not a repeated ID
+        repeated.pop("id")
+        data["jobs"].append(repeated)
+        body = self.wire(self.report(data, machine=True), "INCONCLUSIVE", "INSUFFICIENT_EVIDENCE")
+        self.assertEqual(body["counts"]["input_rows"], 21)
+        self.assertEqual(body["counts"]["duplicate_rows"], 1)
+        self.assertEqual(body["counts"]["accepted_rows"], 20)
+        self.assertEqual(body["counts"]["malformed_rows"], 0)
+        for arm in ("coolify", "garm"):
+            self.assertEqual(body["arms"][arm]["matched_attempts"], 10)
+        self.assertEqual(body["job_ids"].count(100), 1)
+        self.assertIs(body["evidence_complete"], False)
+        self.assertIs(body["capacity"]["residual_headroom_known"], False)
+        self.assertIsNone(body["capacity"]["combined_peak"])
+
+    def test_truthy_non_boolean_completeness_does_not_assert_literal_true(self):
+        for value in (1, "true"):
+            with self.subTest(complete=value):
+                data = sample()
+                data["evidence"]["complete"] = value
+                body = self.wire(self.report(data, machine=True), "INCONCLUSIVE", "INSUFFICIENT_EVIDENCE")
+                self.assertEqual(body["counts"]["accepted_rows"], 20)
+                for arm in ("coolify", "garm"):
+                    self.assertEqual(body["arms"][arm]["matched_attempts"], 10)
+                    self.assertIs(body["arms"][arm]["adequate"], True)
+                self.assertIs(body["evidence_complete"], False)
+                self.assertIsNone(body["capacity"]["combined_peak"])
+                self.assertIs(body["capacity"]["residual_headroom_known"], False)
+
 
 if __name__ == "__main__":
     unittest.main()

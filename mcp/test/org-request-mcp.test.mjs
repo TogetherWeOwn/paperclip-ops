@@ -390,6 +390,13 @@ test("cmd_inbox fails closed when its reader/parser fails, never as an empty inb
   const dir = scratch();
   const queueFile = path.join(dir, "queue.jsonl");
   writeFileSync(queueFile, "");
+  // The queue script exits at SOURCE time unless PROV names an executable
+  // sibling, and the mutation-gate staging copy has no org_provisioner.sh
+  // sibling — without this the harness dies inside `source` (its output
+  // swallowed by design) and the test fails with an empty stderr. The stub is
+  // never executed on the inbox path; it only satisfies the load-time check.
+  // Same seam the real-queue acceptance below uses.
+  const prov = writeProvisionerStub(dir);
   const harness = path.join(dir, "inbox-harness.sh");
   // The harness sources the REAL queue script, so cmd_inbox under test is the
   // shipped function, not a copy. `reader-fail` stubs notify_states as failing
@@ -413,7 +420,7 @@ cmd_inbox --for "ffffffff-ffff-4fff-8fff-ffffffffffff" --json
     ["malformed", "inbox output could not be parsed"],
   ]) {
     const { code, stdout, stderr } = await runQuiet(
-      harness, [REAL_QUEUE, queueFile, mode], { env: { ...process.env, COMPANY_ID: COMPANY } },
+      harness, [REAL_QUEUE, queueFile, mode], { env: { ...process.env, COMPANY_ID: COMPANY, PROV: prov } },
     );
     // The reverted piped form exits 0 with empty stdout here — an empty inbox
     // the operator cannot distinguish from "nothing to decide". Either half

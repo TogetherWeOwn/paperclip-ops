@@ -20,7 +20,7 @@ BATCH = int(sys.argv[sys.argv.index('--batch') + 1]) if '--batch' in sys.argv el
 
 src = open(f'{ROOT}/ops/paperclip/focus_gate.py').read()
 gate = {}
-exec(src[:src.index('def tick():')], gate)  # constants + db/api/allowed_sql only; no side effects
+exec(src[:src.index('def tick(')], gate)  # constants + db/api/allowed_sql only; no side effects
 db = gate['db']
 
 

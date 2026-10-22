@@ -319,7 +319,9 @@
     "queue-packet reject offline suite:1",
     "staging-preflight carrier suite:1",
     "api-base-validation suite:1",
-    "api-base-validation-python suite:1"
+    "api-base-validation-python suite:1",
+    "review report input integrity holds:1",
+    "host backup publication receipt contract (offline):1"
   ],
   "retained": [
     {
@@ -514,7 +516,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "51065c430d3fd0cc7414da37bb69ee30b7021d687e15e656bca1ca2323385fc9",
+      "definition_sha256": "98de5a55dfcc8431981b8c388420268f28e8da4d53506445318f6f1464965ed4",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1796,6 +1798,16 @@
       "name": "api-base-validation-python suite",
       "definition_sha256": "2a8399fe0cbc1e8d57ee3a482f7cc5ed1fa9df2045dd18a28579609545b2e33d",
       "id": "api-base-validation-python suite:1"
+    },
+    {
+      "name": "review report input integrity holds",
+      "definition_sha256": "bffa19729a879126ad09b2eba97c28fddbdc6f4fa5e10afa5a536bb291c9dfc4",
+      "id": "review report input integrity holds:1"
+    },
+    {
+      "name": "host backup publication receipt contract (offline)",
+      "definition_sha256": "f3220047635007807b551238df97e65b3db9b784bcafb35829fa009c51e3f5f4",
+      "id": "host backup publication receipt contract (offline):1"
     }
   ],
   "removed": [

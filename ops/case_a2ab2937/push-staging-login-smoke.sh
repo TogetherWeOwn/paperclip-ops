@@ -25,7 +25,7 @@ mark_aborted() {
 finish() {
   local rc=$?
   # Signals supersede even a journey whose final Gatus delivery was interrupted.
-  [[ "$rc" != 130 && "$rc" != 143 ]] || mark_aborted
+  [[ "$rc" != 129 && "$rc" != 130 && "$rc" != 143 ]] || mark_aborted
   [[ -z "$TMPD" ]] || rm -rf "$TMPD"
   if [[ "$JSON" == true ]]; then
     python3 - "$KEY" "$OUTCOME" "$ERROR_CODE" "$RETRYABLE" "$NEXT_ACTION" "$PLAN" "${STEPS[@]}" >&"$RESULT_FD" <<'PY'
@@ -57,8 +57,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 # HUP must also exit through finish: an untrapped fatal signal while curl
 # runs with redirected stderr kills the shell without the EXIT trap, leaking
-# the private temp dir and yielding no result. Exit 129 keeps the uncoded
-# post-preflight default (mark_aborted), never a false refusal or success.
+# the private temp dir and yielding no result. Finish supersedes exit 129 to
+# an abort like 130/143, never a false refusal or success.
 trap 'exit 129' HUP
 seen_json=false
 for flag in "$@"; do

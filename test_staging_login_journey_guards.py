@@ -8,11 +8,12 @@ It pins behaviors that contract intentionally leaves open: cookie attribute
 edge cases, duplicate response evidence, the ambient curl-config guard,
 abort/push-failure outcomes and response size bounds.
 
-The adapter is derived from the immutable ADAPTER string with exactly two
-deltas: curl argv recording (to pin -q-first on every staging call) and a
-blocking mode (so signal tests can interrupt a known step). Every patch
-anchor is verified at import, and each delta is self-validating: its tests
-fail if the delta is absent.
+The adapter is derived from the immutable ADAPTER string with exactly three
+deltas: curl argv recording (to pin -q-first on every staging call), parsed
+max-filesize recording (to pin the streaming size cap the same way), and a
+blocking mode (so signal tests can interrupt a known step, including
+preflight mktemp). Every patch anchor is verified at import, and each delta
+is self-validating: its tests fail if the delta is absent.
 """
 
 import ctypes
@@ -58,6 +59,19 @@ def _derive_adapter():
          '        record(kind="blocked", step=step)\n'
          '        time.sleep(30)\n'
          '    sys.stdout.write(str(code) + " " + str(seconds))\n'),
+        # Pin the streaming size cap on every staging call: record the parsed
+        # max-filesize value (a bound, never a credential) in the http event.
+        # Applies after the argv delta above, so the anchor carries argv=args.
+        ('    record(kind="http", argv=args, step=step, attempt=attempt + 1 if step == "login" else 1,\n',
+         '    record(kind="http", argv=args, step=step, attempt=attempt + 1 if step == "login" else 1,\n'
+         '           curl_max_filesize=(entries.get("max-filesize") or [None])[-1],\n'),
+        # Preflight blocking mode: hold mktemp when the scenario names it, so
+        # a signal test can interrupt before the post-preflight abort default.
+        ("        local(paths[0])\n",
+         "        local(paths[0])\n"
+         '        if scenario.get("block_step") == "mktemp":\n'
+         '            record(kind="blocked", step="mktemp")\n'
+         "            time.sleep(30)\n"),
     ]
     for old, new in patches:
         if adapter.count(old) != 1:
@@ -340,6 +354,25 @@ trap '__offline_guard "$BASH_COMMAND"' DEBUG
         for event in logins:
             self.assertEqual(event["argv"][0], "-q")
 
+    def test_every_staging_call_carries_the_streaming_size_cap(self):
+        result = self.run_probe()
+        self.assertEqual(result["rc"], 0)
+        calls = self.http(result)
+        self.assertEqual([e["step"] for e in calls], STEP_IDS)
+        for event in calls:
+            with self.subTest(step=event["step"]):
+                self.assertEqual(event["curl_max_filesize"], "65536",
+                                 "streaming max-filesize cap must reach every staging call")
+
+    def test_retry_calls_keep_the_streaming_size_cap(self):
+        result = self.run_probe({"login_attempts": [
+            {"status": 429, "headers": ["Retry-After: 0"]}, {"status": 429}]})
+        self.assertEqual(result["rc"], 0)
+        logins = self.http(result, "login")
+        self.assertEqual(len(logins), 2)
+        for event in logins:
+            self.assertEqual(event["curl_max_filesize"], "65536")
+
     # --- abort and push-failure outcomes ---
 
     def test_empty_gatus_url_fails_a_successful_journey(self):
@@ -369,6 +402,12 @@ trap '__offline_guard "$BASH_COMMAND"' DEBUG
 
     def test_sighup_reports_an_uncoded_post_preflight_exit_as_aborted(self):
         result = self.run_probe(flags=("--json",), block_step="login",
+                                deliver_signal=signal.SIGHUP)
+        self.assertEqual(result["rc"], 129)
+        self.failed_document(result, "probe_aborted")
+
+    def test_sighup_before_the_preflight_default_reports_aborted(self):
+        result = self.run_probe(flags=("--json",), block_step="mktemp",
                                 deliver_signal=signal.SIGHUP)
         self.assertEqual(result["rc"], 129)
         self.failed_document(result, "probe_aborted")

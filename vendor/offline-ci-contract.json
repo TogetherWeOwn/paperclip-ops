@@ -331,7 +331,8 @@
     "settings-bind rehearsal suite:1",
     "host backup publication receipt contract (offline):1",
     "native-ssh citation gate suite:1",
-    "sdlc review-carry suite:1"
+    "sdlc review-carry suite:1",
+    "verify-fast plan suites:1"
   ],
   "retained": [
     {
@@ -556,7 +557,7 @@
     },
     {
       "name": "staging login-smoke probe suite",
-      "definition_sha256": "00e0dda681157127078945f992899071099bfa097dcb7fafbb02570a1a5e14e1",
+      "definition_sha256": "74896b139efb11ffcedb06a4d90192eb99732132f8fbfe82d18802ab71dbecea",
       "id": "staging login-smoke probe suite:1"
     },
     {
@@ -1868,6 +1869,11 @@
       "name": "sdlc review-carry suite",
       "definition_sha256": "4cc0a1b7421746981ba556684ba8d20bc0d9d06de46e69d5c78b33a48b763100",
       "id": "sdlc review-carry suite:1"
+    },
+    {
+      "name": "verify-fast plan suites",
+      "definition_sha256": "e1b1d3d318e2dff53a23c79b891d4bbab267c426e0d16a9c8dcf8fbef9f8074d",
+      "id": "verify-fast plan suites:1"
     }
   ],
   "removed": [

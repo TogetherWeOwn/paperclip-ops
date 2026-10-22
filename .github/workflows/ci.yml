@@ -1075,6 +1075,18 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_public_comment_hygiene_gate.sh
 
+      # verify-fast plan/list/no-prepare contract: the acceptance suite plus the
+      # strict inventory-to-execution drift check and the --no-prepare guard
+      # check. Offline: stdlib unittest, synthetic PATH stubs, no network or
+      # credentials. Without this step the suites run only in the full local
+      # verify-fast tier while CI runs --parse-only (which never invokes the
+      # planner nor compiles scripts/*.py), so a planner or guard regression
+      # would merge green. scripts/verify-fast* and the two test files classify
+      # to the core area through the root fallthrough.
+      - name: verify-fast plan suites
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -B -m unittest -v test_verify_fast_plan test_verify_fast_plan_gates
+
       - name: Syntax check every script
         run: ./scripts/verify-fast.sh --parse-only
 
@@ -1684,7 +1696,10 @@ jobs:
       # probe bundle; no network or credentials.
       - name: staging login-smoke probe suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: ./test_case_00b2eb59_probe.sh
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_staging_login_journey
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_staging_login_journey_guards
+          ./test_case_00b2eb59_probe.sh
 
       # case_71e7a4e9. Runner-disk Gatus module (host / + inodes, LXD pool
       # used/total, per-VM root disks; warn 80 / crit 90): fragment shape,

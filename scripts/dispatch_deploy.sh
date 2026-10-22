@@ -124,6 +124,7 @@ refuse_code_for_message() {
     "deployment record is corrupt"*) printf 'corrupt_record';;
     "recorded deployedSha is no longer"*) printf 'pin_gone';;
     "recorded previousSha is no longer"*) printf 'pin_gone';;
+    "live HEAD moved during smoke"*) printf 'head_moved_during_smoke';;
     "target HEAD is not resolvable"*) printf 'unresolvable_head';;
     "post-deploy HEAD verification failed"*) printf 'post_deploy_verification_failed';;
     *) printf 'refused';;
@@ -132,7 +133,7 @@ refuse_code_for_message() {
 
 refuse_retryable_for_code() {
   case "$1" in
-    smoke_failed|smoke_timeout|lock_contention|dirty_tree|interrupted|cleanup_failed|worktree_stage_failed) printf 'true';;
+    smoke_failed|smoke_timeout|lock_contention|dirty_tree|interrupted|cleanup_failed|worktree_stage_failed|head_moved_during_smoke) printf 'true';;
     *) printf 'false';;
   esac
 }
@@ -156,6 +157,7 @@ refuse_next_action_for_code() {
     no_record|corrupt_record) printf 'deploy once to establish the record, then use status';;
     pin_gone) printf 'redeploy a reachable commit to re-anchor the record';;
     no_rollback_anchor) printf 'pass an explicit --commit to rollback';;
+    head_moved_during_smoke) printf 'confirm live state with status, then retry';;
     unresolvable_head) printf 'inspect the target checkout, then retry';;
     post_deploy_verification_failed) printf 'inspect HEAD, anchors and record immediately; do not retry blindly';;
     internal_error) printf 'check disk space and temp directory permissions, then retry';;
@@ -258,6 +260,9 @@ acquire_transaction_lock() {
   if [[ -n "${LOCK_HELD:-}" ]]; then
     return 0
   fi
+  # Checked lazily (not in the startup command sweep) so status and
+  # --dry-run keep working on systems without flock; they never lock.
+  command -v flock >/dev/null || refuse "required command missing: flock"
   STAGE="lock"
   exec {LOCK_FD}>"$LOCK_FILE" || refuse "cannot create transaction lock file: $LOCK_FILE"
   # NOTE: never add 2>/dev/null to these bare exec closes: a redirection on
@@ -375,6 +380,9 @@ do_deploy() {
   STAGE="mutate"
   require_clean_tree
   require_commit_object "$target_sha"
+  local rechecked_head
+  rechecked_head=$(git -C "$TARGET" rev-parse HEAD)
+  [[ "$rechecked_head" == "$previous_sha" ]] || refuse "live HEAD moved during smoke (was $previous_sha, now $rechecked_head); refusing to overwrite an out-of-band checkout"
 
   # Anchor both endpoints against gc BEFORE moving live HEAD, so a crash
   # between here and the checkout below can never leave the new commit
@@ -389,7 +397,9 @@ do_deploy() {
   resulting_head=$(git -C "$TARGET" rev-parse HEAD)
   [[ "$resulting_head" == "$target_sha" ]] || refuse "post-deploy HEAD verification failed: expected $target_sha, got $resulting_head"
   require_clean_tree
-  MUTATING=0
+  # MUTATING stays set through record publication and the epilogue:
+  # do_deploy is the last action before exit, so once live mutation may
+  # have happened an interrupt must say "inspect", never "unchanged".
 
   STAGE="record"
   local deployed_at smoke_tail
@@ -656,7 +666,7 @@ esac
 RECORD="$TARGET.deployment.json"
 LOCK_FILE="${TARGET}.dispatch-deploy.lock"
 
-for command in git python3 mktemp mv date flock; do
+for command in git python3 mktemp mv date; do
   command -v "$command" >/dev/null || refuse "required command missing: $command"
 done
 

@@ -14,8 +14,10 @@ two-web-next/two-bot-next, plus identifiers in STATE/allow.txt, then closed over
 and open transitive blockers (infra/review cards a TWO card waits on are TWO work).
 Runs with no issue are allowed only for the CEO.
 
-Active only while STATE/ACTIVE exists. Usage: focus_gate.py [--apply] [--loop SECONDS]
-Lift: rm STATE/ACTIVE, then focus_gate.py --rewake --apply (re-wakes recorded cards still open).
+Historical policy, scoped to the configured company CID; source repair does not authorize
+activation of historical focus restrictions contrary to current owner priorities.
+Active only while STATE/ACTIVE exists. Preview by default; --help describes the contract.
+See docs/operator/focus-gate.md before any separately authorized operation.
 
 Every docker/API subprocess call below is bounded (FOCUS_GATE_DB_TIMEOUT_S /
 FOCUS_GATE_API_TIMEOUT_S, env-overridable; curl keeps its own -m 60 with the
@@ -23,6 +25,7 @@ process backstop above it). A timeout is unmeasured, never a cancel: it logs
 event="error" and the loop keeps going. A db timeout returns (None, 0) so a
 one-shot run prints "unmeasured" instead of a measured zero.
 """
+import argparse
 import json, os, subprocess, sys, time, urllib.request
 
 CID = "00000000-0000-4000-8000-000000000004"
@@ -60,7 +63,7 @@ PLATFORM_TOPIC_PROJECTS = ("00000000-0000-4000-8000-000000000005",  # Ops Toolin
 STATE = os.path.expanduser("~/.local/state/paperclip-focus")
 REPO = "/home/ubuntu/paperclip-enterprise-company"
 API = "http://127.0.0.1:3100/api"
-APPLY = "--apply" in sys.argv
+APPLY = False  # CLI flags are validated in main(), never at import time.
 
 
 def _seconds(name, default):
@@ -95,10 +98,13 @@ def api(method, path, body=None):
            "-o", "/tmp/focus-gate-resp.json", "-w", "%{http_code}", API + path]
     if body is not None:
         cmd[1:1] = ["--data-binary", json.dumps(body)]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=API_TIMEOUT_S).stdout
+    out = subprocess.run(cmd, capture_output=True, text=True, timeout=API_TIMEOUT_S)
+    return out.stdout if out.returncode == 0 else "000"
 
 
 def log(**kw):
+    if not os.path.isdir(STATE):
+        return  # A preview must not create enforcement state.
     kw["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with open(f"{STATE}/gate.jsonl", "a") as f:
         f.write(json.dumps(kw) + "\n")
@@ -148,36 +154,86 @@ blk as (select id from up union
   where r.type='blocks' and x.status not in ('done','cancelled'))"""
 
 
-def tick():
+def result_summary():
+    return {"version": 1, "company_id": CID, "dry_run": not APPLY,
+            "measurement": "inactive", "error_code": None,
+            "counts": {"candidates": 0, "refused": 0, "confirmed": 0},
+            "runs": [], "next_action": "leave_inactive"}
+
+
+def tick(summary=None):
+    # Optional result sink; existing callers still receive the same two-tuple.
+    if summary is None:
+        summary = result_summary()
+    summary.update(measurement="unmeasured", next_action="inspect_query_failure")
     try:
         rows = db(f"""{allowed_sql()}
 , q as (select r.id, r.agent_id, r.company_id, r.context_snapshot->>'issueId' iid, r.context_snapshot->>'wakeReason' why
         from heartbeat_runs r where r.status='queued')
-select q.id, q.agent_id, coalesce(q.iid,'-'), coalesce(i.identifier,'-'), coalesce(q.why,'-'), coalesce(i.status,'-')
+select q.id, q.agent_id, coalesce(q.iid,'-'), coalesce(i.identifier,'-'), coalesce(q.why,'-'), coalesce(i.status,'-'), q.company_id
 from q left join issues i on i.id::text=q.iid
-where not (q.company_id='{CID}' and (
-  (q.iid is null and q.agent_id='{CEO}') or q.iid in (select id::text from blk)));""")
+where q.company_id='{CID}' and not (
+  (q.iid is null and q.agent_id='{CEO}') or q.iid in (select id::text from blk));""")
     except subprocess.TimeoutExpired:
-        # Unmeasured tick: the queue was never read, so nothing may be cancelled.
-        # Return None (not 0) so a one-shot run cannot mistake this for a
-        # measured all-clear; main() prints an explicit unmeasured line.
+        summary["error_code"] = "query_timeout"
         log(event="error", error=f"db timeout after {DB_TIMEOUT_S:g}s; unmeasured, nothing cancelled")
         return None, 0
-    cancelled = 0
-    for run_id, agent, iid, ident, why, istatus in rows:
+    except Exception:
+        summary["error_code"] = "query_failed"
+        raise  # Preserve the direct tick() caller's existing failure contract.
+    summary.update(measurement="measured", next_action="none")
+    for row in rows:
+        # Legacy adapters supply six already-scoped columns. The live SQL now
+        # projects company_id as column seven (including an empty NULL field).
+        if len(row) == 6:
+            row = [*row, CID]
+        company = row[6] if len(row) == 7 else None
+        entry = {"run_id": row[0] if row else None, "company_id": company,
+                 "decision": "refused", "scope_code": "inconsistent_company",
+                 "error_code": None, "next_action": "inspect_candidate_adapter"}
+        summary["runs"].append(entry)
+        if len(row) != 7 or not company:
+            entry["error_code"] = "inconsistent_row"
+        elif company != CID:
+            entry.update(scope_code="foreign_company", error_code="company_mismatch")
+        else:
+            entry.update(decision="candidate", scope_code="configured_company_excluded",
+                         next_action="review_current_policy_before_apply")
+        # Refuse even an inconsistent adapter result before calling a mutation.
+        if entry["decision"] == "refused":
+            summary["counts"]["refused"] += 1
+            continue
+        run_id, agent, iid, ident, why, istatus, _ = row
+        summary["counts"]["candidates"] += 1
         try:
             code = api("POST", f"/heartbeat-runs/{run_id}/cancel") if APPLY else "dry"
-        except subprocess.TimeoutExpired:
-            # Unmeasured row: the cancel never got an answer, so it is not recorded.
+        except (subprocess.TimeoutExpired, OSError):
+            entry.update(decision="unknown", error_code="cancel_transport_unknown",
+                         next_action="verify_run_state_before_retry")
             log(event="error", run=run_id, agent=agent, issue=iid, ident=ident,
-                error=f"api timeout after {API_TIMEOUT_S:g}s; unmeasured, nothing cancelled")
+                error="api outcome unknown; not recorded as cancelled")
             continue
         log(event="cancel", run=run_id, agent=agent, issue=iid, ident=ident, why=why, issueStatus=istatus, code=code)
         if code == "200":
-            cancelled += 1
+            entry.update(decision="confirmed", next_action="none")
+            summary["counts"]["confirmed"] += 1
             with open(f"{STATE}/cancelled.tsv", "a") as f:
                 f.write("\t".join([time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), run_id, agent, iid, ident, why]) + "\n")
-    return len(rows), cancelled
+        elif APPLY:
+            if isinstance(code, str) and len(code) == 3 and code.isdigit() and code.startswith("4"):
+                entry.update(decision="refused", error_code="cancel_refused",
+                             next_action="inspect_refusal_no_credential_retry")
+                summary["counts"]["refused"] += 1
+            else:
+                entry.update(decision="unknown", error_code="cancel_response_unknown",
+                             next_action="verify_run_state_before_retry")
+    if any(r["decision"] == "unknown" for r in summary["runs"]):
+        summary["next_action"] = "verify_run_state_before_retry"
+    elif summary["counts"]["refused"]:
+        summary["next_action"] = "inspect_refusals"
+    elif not APPLY and summary["counts"]["candidates"]:
+        summary["next_action"] = "review_current_policy_before_apply"
+    return summary["counts"]["candidates"], summary["counts"]["confirmed"]
 
 
 def rewake():
@@ -190,7 +246,7 @@ def rewake():
             continue
         seen.add(iid)
         try:
-            st = db(f"select status, coalesce(assignee_agent_id::text,'') from issues where id='{iid}'")
+            st = db(f"select status, coalesce(assignee_agent_id::text,'') from issues where id='{iid}' and company_id='{CID}'")
         except subprocess.TimeoutExpired:
             log(event="error", issue=iid, ident=ident,
                 error=f"db timeout after {DB_TIMEOUT_S:g}s; rewake unmeasured, skipped")
@@ -208,32 +264,72 @@ def rewake():
         log(event="rewake", ident=ident, agent=agent, code=code)
 
 
+def arguments():
+    parser = argparse.ArgumentParser(
+        description="Historical focus gate: only the configured company CID is in scope. "
+                    "Company restriction precedes the existing focus exclusion; foreign or "
+                    "inconsistent company rows are refused before cancellation.",
+        epilog="This does not authorize activation of historical focus restrictions "
+               "contrary to current owner priorities. No host, DB or cross-company authority "
+               "is granted by this source change. See docs/operator/focus-gate.md.\n\n"
+               "Offline check: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover "
+               "-s ops/paperclip -p 'test_focus*.py'",
+        formatter_class=argparse.RawDescriptionHelpFormatter, allow_abbrev=False)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="apply only separately authorized operations")
+    mode.add_argument("--dry-run", action="store_true", help="preview only (default); never cancel or wake")
+    parser.add_argument("--format", choices=("text", "json"), default="text",
+                        help="text (compatible default) or version 1 JSON summary per tick")
+    parser.add_argument("--loop", type=int, default=0, metavar="SECONDS", help="repeat at this positive interval")
+    parser.add_argument("--rewake", action="store_true", help="preview recorded open cards; requires --apply to wake")
+    args = parser.parse_args()
+    if args.loop < 0:
+        parser.error("--loop must be zero (one shot) or a positive interval")
+    if args.rewake and args.format == "json":
+        parser.error("--format json describes cancellation candidates, not --rewake")
+    return args
+
+
 def main():
-    os.makedirs(STATE, exist_ok=True)
-    if "--rewake" in sys.argv:
-        rewake()
-        return
-    interval = int(sys.argv[sys.argv.index("--loop") + 1]) if "--loop" in sys.argv else 0
-    while True:
-        if os.path.exists(f"{STATE}/ACTIVE"):
-            try:
-                n, cancelled = tick()
-                if n is None:
-                    # Unmeasured tick (db timeout): never print a measured
-                    # zero. One-shot runs say so visibly; loop mode stays
-                    # quiet (the error is in gate.jsonl) and keeps going.
-                    if not interval:
-                        print(f"{time.strftime('%H:%M:%SZ', time.gmtime())} unmeasured (db timeout; nothing cancelled)",
-                              flush=True)
-                elif n or not interval:
-                    outcome = f"cancelled: {cancelled}" if APPLY else "dry run"
-                    print(f"{time.strftime('%H:%M:%SZ', time.gmtime())} non-focus queued: {n} ({outcome})", flush=True)
-            except Exception as e:  # keep the loop alive through DB/API blips
-                log(event="error", error=str(e)[:300])
-        if not interval:
-            break
-        time.sleep(interval)
+    global APPLY
+    args = arguments()  # Validate all flags before filesystem, DB or API effects.
+    previous_apply = APPLY
+    APPLY = False if args.dry_run else args.apply or APPLY
+    try:
+        if APPLY:
+            os.makedirs(STATE, exist_ok=True)
+        if args.rewake:
+            rewake()
+            return 0
+        while True:
+            summary = result_summary()
+            if os.path.exists(f"{STATE}/ACTIVE"):
+                try:
+                    n, cancelled = tick(summary)
+                    if args.format == "text":
+                        if n is None:
+                            if not args.loop:
+                                print(f"{time.strftime('%H:%M:%SZ', time.gmtime())} unmeasured (db timeout; nothing cancelled)",
+                                      flush=True)
+                        elif n or not args.loop:
+                            outcome = f"cancelled: {cancelled}" if APPLY else "dry run"
+                            print(f"{time.strftime('%H:%M:%SZ', time.gmtime())} non-focus queued: {n} ({outcome})", flush=True)
+                except Exception:  # keep the loop alive, without leaking raw subprocess errors
+                    summary.update(measurement="unmeasured",
+                                   error_code=summary["error_code"] or "query_or_processing_failed",
+                                   next_action="inspect_failure_before_retry")
+                    log(event="error", error=summary["error_code"])
+                    if args.format == "text" and not args.loop:
+                        print("unmeasured (query or processing failed; inspect diagnostic log)", flush=True)
+            if args.format == "json":
+                print(json.dumps(summary, sort_keys=True), flush=True)
+            if not args.loop:
+                return int(bool(summary["error_code"] or summary["counts"]["refused"] or
+                                any(r["decision"] == "unknown" for r in summary["runs"])))
+            time.sleep(args.loop)
+    finally:
+        APPLY = previous_apply
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -152,7 +152,11 @@ export function recordLine(record) {
   const detail = record.decision === 'acted' || record.decision === 'error'
     ? (record.actions ?? []).join('+')
     : (record.reason ?? 'n/a')
-  return `readiness ${record.repository}#${record.number}@${record.headSha}: ${record.decision} (${detail})`
+  const facts = record.snapshotFacts
+  const diagnostic = facts
+    ? ` headPushTime=${facts.headPushTime} repeatedNames=${facts.repeatedNames} repeatedEntries=${facts.repeatedEntries}`
+    : record.snapshotFailure ? ` snapshotFailure=${record.snapshotFailure}` : ''
+  return `readiness ${record.repository}#${record.number}@${record.headSha}: ${record.decision} (${detail})${diagnostic}`
 }
 
 // One supervised pass. `github` is injectable only so tests can run without

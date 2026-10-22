@@ -178,3 +178,11 @@ condition = "AND"
 paths = ['''(^|/)test_two_bot_staging_precheck\.py$''']
 regexTarget = "secret"
 regexes = ['''^ghp_12345678$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Synthetic credential-shape sentinel in AX metrics no-echo acceptance test; asserts reports never echo secrets, not a live credential."
+condition = "AND"
+paths = ['''(^|/)templates/org\-github/tests/test_ax_paperclip_window\.py$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ \ \ \ \ secret\ =\ "synthetic\-secret\-xyz\-789"$''']

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Immutable acceptance contract: resolve-outdated never resolves on incomplete evidence.
 
-M12.2 acceptance (TOG-37163) for the paired build card (TOG-37168).
+M12.2 acceptance for the paired build card.
 IMMUTABLE: the Builder builds on this card's branch and must never edit this file.
-If a case is wrong, corrections return to TOG-37163; the Builder does not fix them here.
+If a case is wrong, corrections return to the Test Author card; the Builder does not fix them here.
 
 What this pins (observable via run() only -- internal reader signatures are the
 Builder's choice; never call open_prs()/review_evidence() directly from these tests):

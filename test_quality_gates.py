@@ -113,7 +113,14 @@ class TestWorkflowComparisonBase(unittest.TestCase):
         # bare version-pinned arguments (whose transitive trees pip would
         # resolve fresh from PyPI on every run). Reverting the install step
         # to floating direct installs must turn this suite red.
-        self.assertIn("--require-hashes", workflow)
+        # The flag must appear on code lines, not just in prose comments:
+        # deleting both pip flags while leaving the comments must fail.
+        code_lines = [
+            line
+            for line in workflow.splitlines()
+            if not line.strip().startswith("#")
+        ]
+        self.assertEqual(sum("--require-hashes" in line for line in code_lines), 2)
         self.assertIn("-r scripts/quality-gates-requirements.txt", workflow)
         for bare in ("ruff==", "semgrep==", "mutmut[patch]==", "zizmor=="):
             self.assertNotIn(bare, workflow)

@@ -129,7 +129,7 @@ echo "=== verify-fast: fast unit/contract gates ==="
 if ! (
   work="$(mktemp -d "${TMPDIR:-/tmp}/backup-observation.XXXXXXXX")" || exit 1
   trap 'rm -rf -- "$work"' EXIT
-  TMPDIR="$work" PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_backup_observation_contract
+  TMPDIR="$work" PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_backup_observation_contract test_backup_observation_regressions
 ); then
   fail "backup observation contract failed"
 fi

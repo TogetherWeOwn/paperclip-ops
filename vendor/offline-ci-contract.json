@@ -1801,7 +1801,7 @@
     },
     {
       "name": "database backup observation contract",
-      "definition_sha256": "a64fd8e7feb4204bf4a38dcf22309c198bbd6b554b66c83cab7ffe813a150aa8",
+      "definition_sha256": "138acfb905a66fbb8105ea71d473653f39778fb06ac1f306a047df30d20b904c",
       "id": "database backup observation contract:1"
     },
     {

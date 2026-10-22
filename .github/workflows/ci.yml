@@ -1691,6 +1691,17 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_dispatch_deploy.sh
 
+      # dispatch-staged-lifecycle. Behavioral acceptance for bounded staged
+      # smoke (deadline, TERM-to-kill escalation, bounded output), owned
+      # worktree cleanup on failure/timeout/INT/TERM, per-target transaction
+      # serialization, and versioned --json/--dry-run outcomes. Same hermetic
+      # fixture discipline as the shell suite above: fabricated repos under a
+      # run-owned root with DISPATCH_DEPLOY_TEST_MODE=1, outer watchdogs, and
+      # a fail-closed guard on the live default target.
+      - name: dispatch staged-lifecycle acceptance suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_dispatch_staged_lifecycle
+
       - name: dispatch_deploy.sh suite is not vacuous (mutation-gated)
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./verification/case_a30ea521-dispatch-deploy-mutation-gate.sh

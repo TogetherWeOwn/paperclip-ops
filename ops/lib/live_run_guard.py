@@ -7,12 +7,18 @@ import subprocess
 _UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 
 
+def live_work_predicate(issue_sql):
+    """Shared SQL policy for heartbeat_runs h; issue_sql is a trusted SQL expression."""
+    return ("coalesce(h.context_snapshot->>'issueId', h.context_snapshot->>'taskId')="
+            f"{issue_sql} and h.status in ('queued','running','scheduled_retry')")
+
+
 def issue_has_live_work(issue_id):
     """True if the issue has a queued, running or scheduled_retry run, due or not. Fail-closed: errors count as live."""
     if not issue_id or not _UUID.fullmatch(str(issue_id)):
         return True
-    q = ("select exists(select 1 from heartbeat_runs h where coalesce(h.context_snapshot->>'issueId', "
-         "h.context_snapshot->>'taskId')='%s' and h.status in ('queued','running','scheduled_retry'))" % issue_id)
+    predicate = live_work_predicate("'%s'" % issue_id)
+    q = f"select exists(select 1 from heartbeat_runs h where {predicate})"
     try:
         out = subprocess.run(['docker', 'exec', '-i', 'paperclip-db', 'psql', '-U', 'paperclip', '-d', 'paperclip', '-At', '-c', q],
                              capture_output=True, text=True, timeout=30).stdout.strip()

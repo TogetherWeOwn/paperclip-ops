@@ -61,6 +61,14 @@ class Classify(unittest.TestCase):
         self.assertFalse(r["full"])
         self.assertEqual({a for a in cc.AREAS if r[a]}, {"core"})
 
+    def test_migration_standard_doc_wakes_only_core(self):
+        # DocsCanonicalTest in test_migration_evidence_ax.py scores the JSON
+        # contract in docs/migration-standard.md, so a docs-only edit there
+        # must wake the suites job's core area and nothing else.
+        r = self.result("docs/migration-standard.md")
+        self.assertFalse(r["full"])
+        self.assertEqual({a for a in cc.AREAS if r[a]}, {"core"})
+
     def test_acceptance_transport_changes_wake_core(self):
         for path in ("acceptance_transport.sh", "test_acceptance_transport.sh"):
             with self.subTest(path=path):
@@ -482,6 +490,14 @@ class Classify(unittest.TestCase):
         # suites job. A change to the suite must wake the suites job at PR
         # time without latching a full run.
         r = self.result("test_watchdog_writer_compat.py")
+        self.assertTrue(r["core"])
+        self.assertFalse(r["full"])
+
+    def test_provider_baseline_integrity_wakes_core(self):
+        # provider-baseline-integrity: the integrity suite runs as its own
+        # suites step next to its sibling. A change to the suite must wake
+        # the suites job at PR time without latching a full run.
+        r = self.result("test_provider_baseline_integrity.py")
         self.assertTrue(r["core"])
         self.assertFalse(r["full"])
 

@@ -64,6 +64,17 @@ case "$1" in
       pg_dump)
         rc="${FAKE_PGDUMP_RC:-0}"
         if [[ "$rc" != 0 ]]; then exit "$rc"; fi
+        if [[ -n "${FAKE_MID_DUMP_FINAL_DIR:-}" ]]; then
+          # Late collision: a second producer lands the destination after this
+          # cycle's pre-publication existence check, while the dump streams.
+          for partial in "$FAKE_MID_DUMP_FINAL_DIR"/.paperclip-*.partial; do
+            [[ -e "$partial" ]] || continue
+            base="${partial##*/}"
+            ts="${base#.paperclip-}"
+            ts="${ts%-hostcron.*}"
+            printf 'second producer owns these bytes' > "$FAKE_MID_DUMP_FINAL_DIR/paperclip-${ts}-hostcron.sql.gz"
+          done
+        fi
         cat "${FAKE_DUMP_SQL_FILE:?FAKE_DUMP_SQL_FILE not set}"
         ;;
       *) exit 2 ;;
@@ -96,7 +107,8 @@ run() {
 
 reset_env() {
   unset FAKE_CONTAINER_EXISTS_RC FAKE_POSTGRES_USER FAKE_POSTGRES_DB \
-        FAKE_ACTIVE_DUMPS FAKE_PGDUMP_RC FAKE_DUMP_SQL_FILE
+        FAKE_ACTIVE_DUMPS FAKE_PGDUMP_RC FAKE_DUMP_SQL_FILE \
+        FAKE_MID_DUMP_FINAL_DIR
 }
 
 # The podman stub runs as a separate process (found via $PATH), so its
@@ -186,6 +198,113 @@ run
 (( RC == 1 )) && ok "pg_dump failure exits 1" || bad "expected exit 1, got $RC"
 survivors=$(find "$WORK/backups" -maxdepth 1 -type f | wc -l)
 (( survivors == 0 )) && ok "no file left behind when pg_dump itself fails" || bad "a file survived a failed pg_dump"
+
+# --- 5b. publication and verifier regression pins ---------------------------
+# Each guard below survived a single-line revert in a scratch copy with the
+# rest of the suite green, so each gets a committed test that fails on that
+# revert: no-clobber publication, terminal-footer invalidation for plain
+# trailing data, restrict/unrestrict pairing, and CREATE TABLE outside COPY.
+hdr "A destination created mid-dump is never overwritten"
+reset_env
+rm -f "$WORK/backups"/* "$WORK/backups"/.paperclip-*.partial
+old_kept="$WORK/backups/paperclip-20200101-000000-hostcron.sql.gz"
+head -c 2048 /dev/zero | gzip -c > "$old_kept"
+touch -d '10 days ago' "$old_kept" 2>/dev/null || touch -t 202001010000 "$old_kept"
+FAKE_DUMP_SQL_FILE="$GOOD_DUMP"
+FAKE_MID_DUMP_FINAL_DIR="$WORK/backups"
+run
+(( RC == 1 )) && ok "late destination collision exits 1" || bad "expected exit 1 on late collision, got $RC ($OUT)"
+grep -q "host_db_backup=PASS" <<<"$OUT" && bad "reported PASS despite failed publication" || ok "no PASS after failed publication"
+sentinel_ok=0
+dump_landed=0
+while IFS= read -r landed_candidate; do
+  grep -q "second producer owns these bytes" "$landed_candidate" 2>/dev/null && sentinel_ok=1
+  gzip -dc "$landed_candidate" 2>/dev/null | cmp -s - "$GOOD_DUMP" && dump_landed=1
+done < <(find "$WORK/backups" -maxdepth 1 -type f -name 'paperclip-*-hostcron.sql.gz')
+(( sentinel_ok == 1 )) && ok "the late-created destination keeps its original bytes" || bad "the late-created destination was overwritten or is missing"
+(( dump_landed == 0 )) && ok "this cycle's dump lands nowhere after failed publication" || bad "this cycle's dump was published despite the collision"
+[[ -f "$old_kept" ]] && ok "retention never starts after failed publication" || bad "retention pruned after failed publication"
+grep -qi "publish" <<<"$OUT" && ok "reports a publication failure" || bad "no publication failure in output: $OUT"
+
+hdr "Plain data after the completion footer is rejected, not landed"
+reset_env
+TRAILING="$WORK/trailing.sql"
+{
+  echo "-- PostgreSQL database dump"
+  echo "CREATE TABLE issues (id integer);"
+  head -c 4096 /dev/urandom | base64 | sed 's/^/-- padding /'
+  echo "-- PostgreSQL database dump complete"
+  echo "SELECT 1;"
+} > "$TRAILING"
+FAKE_DUMP_SQL_FILE="$TRAILING"
+rm -f "$WORK/backups"/*
+run
+(( RC == 1 )) && ok "trailing-data dump exits 1" || bad "expected exit 1, got $RC"
+survivors=$(find "$WORK/backups" -maxdepth 1 -type f | wc -l)
+(( survivors == 0 )) && ok "no file left behind when data trails the footer" || bad "a file survived a trailing-data dump"
+grep -qi "trailer" <<<"$OUT" && ok "reports an invalid terminal trailer" || bad "no trailer diagnosis: $OUT"
+
+hdr "A restrict header without its matching unrestrict is rejected, not landed"
+reset_env
+MISSING_UNRESTRICT="$WORK/missing_unrestrict.sql"
+{
+  printf '%s\n' '\restrict fixturetoken1'
+  echo "-- PostgreSQL database dump"
+  echo "CREATE TABLE issues (id integer);"
+  head -c 4096 /dev/urandom | base64 | sed 's/^/-- padding /'
+  echo "--"
+  echo "-- PostgreSQL database dump complete"
+  echo "--"
+} > "$MISSING_UNRESTRICT"
+FAKE_DUMP_SQL_FILE="$MISSING_UNRESTRICT"
+rm -f "$WORK/backups"/*
+run
+(( RC == 1 )) && ok "missing-unrestrict dump exits 1" || bad "expected exit 1, got $RC"
+survivors=$(find "$WORK/backups" -maxdepth 1 -type f | wc -l)
+(( survivors == 0 )) && ok "no file left behind when unrestrict is missing" || bad "a file survived a missing-unrestrict dump"
+grep -qi "trailer" <<<"$OUT" && ok "reports an invalid terminal trailer" || bad "no trailer diagnosis: $OUT"
+
+hdr "An unrestrict with the wrong key is rejected, not landed"
+reset_env
+MISMATCHED_UNRESTRICT="$WORK/mismatched_unrestrict.sql"
+{
+  printf '%s\n' '\restrict fixturetoken1'
+  echo "-- PostgreSQL database dump"
+  echo "CREATE TABLE issues (id integer);"
+  head -c 4096 /dev/urandom | base64 | sed 's/^/-- padding /'
+  echo "--"
+  echo "-- PostgreSQL database dump complete"
+  echo "--"
+  echo '\unrestrict wrongtoken'
+} > "$MISMATCHED_UNRESTRICT"
+FAKE_DUMP_SQL_FILE="$MISMATCHED_UNRESTRICT"
+rm -f "$WORK/backups"/*
+run
+(( RC == 1 )) && ok "mismatched-unrestrict dump exits 1" || bad "expected exit 1, got $RC"
+survivors=$(find "$WORK/backups" -maxdepth 1 -type f | wc -l)
+(( survivors == 0 )) && ok "no file left behind when the unrestrict key mismatches" || bad "a file survived a mismatched-unrestrict dump"
+grep -qi "trailer" <<<"$OUT" && ok "reports an invalid terminal trailer" || bad "no trailer diagnosis: $OUT"
+
+hdr "A CREATE TABLE row inside COPY data is not a table, rejected not landed"
+reset_env
+COPYONLY="$WORK/create_only_in_copy.sql"
+{
+  echo "-- PostgreSQL database dump"
+  head -c 4096 /dev/urandom | base64 | sed 's/^/-- padding /'
+  echo "COPY public.sample (value) FROM stdin;"
+  echo "CREATE TABLE injected (id integer);"
+  echo '\.'
+  echo "--"
+  echo "-- PostgreSQL database dump complete"
+  echo "--"
+} > "$COPYONLY"
+FAKE_DUMP_SQL_FILE="$COPYONLY"
+rm -f "$WORK/backups"/*
+run
+(( RC == 1 )) && ok "COPY-only-CREATE dump exits 1" || bad "expected exit 1, got $RC"
+survivors=$(find "$WORK/backups" -maxdepth 1 -type f | wc -l)
+(( survivors == 0 )) && ok "no file left behind when CREATE TABLE is only COPY data" || bad "a file survived a COPY-only-CREATE dump"
+grep -q "CREATE TABLE" <<<"$OUT" && ok "reports the missing-table outcome" || bad "no missing-table diagnosis: $OUT"
 
 # --- 6. concurrency: courtesy check and self-lock ---------------------------
 hdr "A live COPY in pg_stat_activity causes a clean skip, not a stacked dump"

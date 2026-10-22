@@ -74,7 +74,7 @@ parser, not a standing operator command. Test entry points begin with `test_`.
 | `ci_required_checks_ownership.py` |
 | `claude_countdown.py` |
 | `codex_countdown.py` |
-| `coolify_capacity_headroom.sh` ([offline evidence contract](docs/capacity-evidence.md); keep its `.py` sibling) |
+| `coolify_capacity_headroom.sh` and `coolify_capacity_headroom.py` ([offline evidence contract](docs/capacity-evidence.md); keep these siblings together) |
 | `credential_chain_audit.sh` |
 | `credential_chain_lockdown.sh` |
 | `db_backup_stall.sh` |

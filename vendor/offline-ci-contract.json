@@ -319,7 +319,8 @@
     "queue-packet reject offline suite:1",
     "staging-preflight carrier suite:1",
     "api-base-validation suite:1",
-    "api-base-validation-python suite:1"
+    "api-base-validation-python suite:1",
+    "capacity evidence and CLI refusal contract:1"
   ],
   "retained": [
     {
@@ -1796,6 +1797,11 @@
       "name": "api-base-validation-python suite",
       "definition_sha256": "2a8399fe0cbc1e8d57ee3a482f7cc5ed1fa9df2045dd18a28579609545b2e33d",
       "id": "api-base-validation-python suite:1"
+    },
+    {
+      "name": "capacity evidence and CLI refusal contract",
+      "definition_sha256": "e9a220734a881e501043a8136282204e7683ef1f7857cfe160c3c02d68e12248",
+      "id": "capacity evidence and CLI refusal contract:1"
     }
   ],
   "removed": [

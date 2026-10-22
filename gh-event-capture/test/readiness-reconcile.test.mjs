@@ -289,7 +289,7 @@ test('a failed write records the step and counts the error without blinding the 
   assert.equal(counters.markedReady, 0)
 })
 
-test('the duty never merges, never closes and never comments', async () => {
+test('the duty has no direct merge, close or comment dependency', async () => {
   const reviewPass = { name: 'Paperclip Review', status: 'completed', conclusion: 'success', completedMs: 1 }
   const snapshots = new Map([
     [`${repo}#6`, snapshot(6, { draft: false, checks: [...greenChecks(), reviewPass] })],

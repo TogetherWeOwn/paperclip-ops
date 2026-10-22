@@ -1,9 +1,9 @@
-"""TOG-37162: immutable acceptance contract for pr-supply listing-bound refusal.
+"""Immutable acceptance contract for pr-supply listing-bound refusal.
 
-M12.1 paired acceptance (Builder: TOG-37167). The Builder builds on this
-card's branch and NEVER edits this file.
+Paired acceptance: the implementation builds on this test branch and
+NEVER edits this file.
 
-Scheme decided by this card (per TOG-37137 roadmap M12.1): single-call
+Listing-bound scheme: single-call
 limit+1 probe. `list_prs` calls `gh pr list --limit 101` (BOUND+1) once per
 repo. BOUND = 100.
 

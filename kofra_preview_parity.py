@@ -385,9 +385,12 @@ def refuse_dry_run(subcommand):
     # output means parity was measured; `--config` is the offline
     # equivalent for pre-checks. Text-only refusal on purpose: no verdict
     # and no JSON on stdout, so no caller can mistake it for measured
-    # parity. Names --dry-run, the refusal and usage on stderr.
-    print("usage: %s %s --config FILE --allowlist FILE [--json]"
-          % (ME, subcommand), file=sys.stderr)
+    # parity. Names --dry-run, the refusal and usage on stderr. The usage
+    # suffix tracks flag registration: --json exists only on check, so
+    # surface must not advertise it.
+    json_suffix = " [--json]" if subcommand == "check" else ""
+    print("usage: %s %s --config FILE --allowlist FILE%s"
+          % (ME, subcommand, json_suffix), file=sys.stderr)
     print("REFUSED %s :: --dry-run is refused: any exit-0 output means "
           "parity was measured, and there is no plan mode (use --config "
           "for working-tree pre-checks)" % ME, file=sys.stderr)

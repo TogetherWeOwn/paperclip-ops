@@ -372,7 +372,11 @@ test('readiness snapshot merges duplicate checks conservatively without push age
     const { adapter, calls } = fake([snapEnvelope(payload)])
     const snapshot = await adapter.getReadinessSnapshot(repository, 42, { nowMs: pushedMs + 1 })
     assert.deepEqual(snapshot.checks, [survived[winner]])
-    assert.ok(!Object.hasOwn(snapshot, 'headPushedMs'))
+    // An explicit null pushedDate stays null: documented, not absent, and
+    // never borrowed from a check, the clock, or zero.
+    assert.ok(Object.hasOwn(snapshot, 'headPushedMs'))
+    assert.equal(snapshot.headPushedMs, null)
+    for (const forbidden of [pushedMs, pushedMs + 1, 0]) assert.notEqual(snapshot.headPushedMs, forbidden)
     assert.equal(calls.length, 1)
     // The same payload stays unreadable to closeout: duplicates and a null
     // push time are both outside its strict contract.

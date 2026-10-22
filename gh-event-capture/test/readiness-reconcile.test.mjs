@@ -326,15 +326,21 @@ test('policy defaults to flag-off everywhere and rejects bad repos', () => {
 })
 
 test('readiness-only reader reconciles a snapshot without push age', async () => {
-  // Readiness snapshots carry no headPushedMs (GitHub may return a null
-  // pushedDate). With only getReadinessSnapshot present, the reconciler
+  // Readiness snapshots carry headPushedMs: null for an explicit null
+  // pushedDate. With only getReadinessSnapshot present, the reconciler
   // must use it and reconcile instead of recording snapshot-read-failed.
-  const snap = snapshot(1)
-  delete snap.headPushedMs
+  const snap = snapshot(1, { headPushedMs: null })
   const snapshots = new Map([[`${repo}#1`, snap]])
   const { github, calls } = doubles(snapshots)
-  github.getReadinessSnapshot = github.getCloseoutSnapshot
+  // The shared double already defines ONLY getReadinessSnapshot; older
+  // doubles define ONLY getCloseoutSnapshot. Normalize to readiness-only
+  // without clobbering the reader, and pin the legacy reader absent.
+  if (typeof github.getReadinessSnapshot !== 'function') {
+    github.getReadinessSnapshot = github.getCloseoutSnapshot
+  }
   delete github.getCloseoutSnapshot
+  assert.equal(typeof github.getReadinessSnapshot, 'function')
+  assert.equal(github.getCloseoutSnapshot, undefined)
   const { records, counters } = await createReconciler({ github, policy: on })
     .runReconcile({ references: [{ repository: repo, number: 1 }], nowMs: NOW })
   assert.equal(records[0].decision, 'acted')

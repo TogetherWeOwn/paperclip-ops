@@ -276,6 +276,7 @@ class IdleWaiterBounds(unittest.TestCase):
         log = mock.Mock()
         out = io.StringIO()
         with mock.patch.object(w, 'psql', side_effect=fake_psql), \
+                mock.patch.object(w.live_run_guard, 'issue_has_live_work', return_value=False), \
                 mock.patch.object(w, 'log', log), \
                 mock.patch.object(w.subprocess, 'run',
                                   side_effect=subprocess.TimeoutExpired('curl', 90)), \

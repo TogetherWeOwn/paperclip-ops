@@ -16,12 +16,15 @@
 # ===========================================================================
 import ast
 import importlib
+import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -293,6 +296,146 @@ class RewakeBounds(Harness):
             focus_gate.main()
         output.assert_called_once()
         self.assertIn('non-focus queued: 2 (cancelled: 0)', output.call_args.args[0])
+
+
+class QueryFailedCodePreserved(Harness):
+    # main()'s handler must not overwrite the specific error_code tick() set:
+    # docs/operator/focus-gate.md lists query_failed as a distinct code, so the
+    # CLI must emit it (not the generic query_or_processing_failed) when the
+    # tick query fails. The generic code remains the fallback for errors that
+    # set no specific code.
+    def test_json_carries_query_failed_not_generic(self):
+        Path(self.tmp.name, 'ACTIVE').touch()
+
+        def boom(sql):
+            raise subprocess.CalledProcessError(1, ['docker'], stderr='connection refused')
+
+        buf = io.StringIO()
+        with mock.patch.object(focus_gate, 'APPLY', False), \
+                mock.patch.object(focus_gate.sys, 'argv', ['focus_gate.py', '--format', 'json']), \
+                mock.patch.object(focus_gate, 'db', side_effect=boom):
+            with redirect_stdout(buf):
+                rc = focus_gate.main()
+        summary = json.loads(buf.getvalue())
+        self.assertEqual(summary['error_code'], 'query_failed')
+        self.assertEqual(summary['measurement'], 'unmeasured')
+        self.assertEqual(summary['counts']['confirmed'], 0)
+        self.assertEqual(self.cancelled(), '')
+        self.assertNotEqual(rc, 0)
+
+    def test_unclassified_processing_error_keeps_generic_code(self):
+        Path(self.tmp.name, 'ACTIVE').touch()
+        row = ('run-9', 'agent-9', 'issue-9', 'case_99999999', 'wake', 'todo', focus_gate.CID)
+        buf = io.StringIO()
+        with mock.patch.object(focus_gate, 'APPLY', True), \
+                mock.patch.object(focus_gate.sys, 'argv', ['focus_gate.py', '--format', 'json']), \
+                mock.patch.object(focus_gate, 'db', return_value=[list(row)]), \
+                mock.patch.object(focus_gate, 'api', side_effect=RuntimeError('boom')):
+            with redirect_stdout(buf):
+                rc = focus_gate.main()
+        summary = json.loads(buf.getvalue())
+        self.assertEqual(summary['error_code'], 'query_or_processing_failed')
+        self.assertNotEqual(rc, 0)
+
+
+class RewakeCompanyScope(Harness):
+    # The rewake lookup must stay scoped to the configured company: a
+    # cancelled.tsv row pointing at a foreign open issue must never wake a
+    # foreign-company agent, even if recorded by the pre-fix gate or tampered
+    # state. The SQL-honoring stub below exposes the foreign row only when the
+    # lookup omits the company_id predicate, so the refusal test goes red if
+    # the predicate is ever dropped.
+    def write_cancelled(self, agent='agent-f', iid='issue-f', ident='TOG-F'):
+        Path(self.tmp.name, 'cancelled.tsv').write_text(
+            f'2026-10-12T00:00:00Z\trun-f\t{agent}\t{iid}\t{ident}\twake\n')
+
+    def test_rewake_lookup_scopes_company(self):
+        self.write_cancelled()
+        seen = {}
+
+        def fake_db(sql):
+            seen['sql'] = sql
+            return []
+
+        with mock.patch.object(focus_gate, 'db', side_effect=fake_db):
+            focus_gate.rewake()
+        self.assertIn('sql', seen, 'rewake() must look up via db()')
+        self.assertIn(f"company_id='{focus_gate.CID}'", seen['sql'])
+
+    def test_rewake_ignores_foreign_open_issue(self):
+        self.write_cancelled()
+        foreign_open = [['in_progress', 'agent-f']]  # status, assignee match the wake criteria
+
+        def fake_db(sql):
+            if f"company_id='{focus_gate.CID}'" in sql:
+                return []  # scoped lookup finds no local row
+            return [list(r) for r in foreign_open]
+
+        with mock.patch.object(focus_gate, 'db', side_effect=fake_db), \
+                mock.patch.object(focus_gate, 'api') as api:
+            focus_gate.rewake()
+        api.assert_not_called()
+        self.assertEqual([e['event'] for e in self.gate_log()], ['rewake_skip'])
+
+
+class PreviewCreatesNoState(unittest.TestCase):
+    # A default preview must not create the state directory (docs contract):
+    # run the real CLI in a subprocess with a fresh HOME and no ACTIVE file.
+    def test_default_preview_creates_no_state_dir(self):
+        home = tempfile.mkdtemp(prefix='fg-preview-')
+        self.addCleanup(shutil.rmtree, home, True)
+        env = dict(os.environ, HOME=home)
+        p = subprocess.run([sys.executable, 'focus_gate.py'], cwd=HERE,
+                           env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(
+            home, '.local', 'state', 'paperclip-focus')),
+            'a preview must not create the state directory')
+
+
+class MainExitCodes(Harness):
+    # Refusals, unknown results and query failures exit nonzero; inactive and
+    # clean previews exit zero (docs/operator/focus-gate.md). main()'s return
+    # value is the pin: reverting it to a constant keeps every output-only
+    # test green.
+    def run_main_rc(self, argv, rows=(), apply=False, api_result='200',
+                    active=True, db_side_effect=None):
+        if active:
+            Path(self.tmp.name, 'ACTIVE').touch()
+        db_patch = (mock.patch.object(focus_gate, 'db', side_effect=db_side_effect)
+                    if db_side_effect is not None
+                    else mock.patch.object(focus_gate, 'db',
+                                           return_value=[list(r) for r in rows]))
+        buf = io.StringIO()
+        with mock.patch.object(focus_gate, 'APPLY', apply), \
+                mock.patch.object(focus_gate.sys, 'argv', argv), \
+                db_patch, \
+                mock.patch.object(focus_gate, 'api', return_value=api_result):
+            with redirect_stdout(buf):
+                return focus_gate.main()
+
+    def test_refused_preview_exits_nonzero(self):
+        foreign = ('run-f', 'agent-f', 'issue-f', 'case_ffffffff', 'wake', 'todo',
+                   '00000000-0000-4000-8000-00000000ffff')
+        self.assertNotEqual(
+            self.run_main_rc(['focus_gate.py', '--format', 'json'], rows=[foreign]), 0)
+
+    def test_unknown_preview_exits_nonzero(self):
+        local = ('run-l', 'agent-l', 'issue-l', 'case_11111111', 'wake', 'todo', focus_gate.CID)
+        self.assertNotEqual(
+            self.run_main_rc(['focus_gate.py'], rows=[local], apply=True, api_result='500'), 0)
+
+    def test_query_failure_exits_nonzero(self):
+        def boom(sql):
+            raise subprocess.CalledProcessError(1, ['docker'], stderr='refused')
+
+        self.assertNotEqual(self.run_main_rc(['focus_gate.py'], db_side_effect=boom), 0)
+
+    def test_inactive_exits_zero(self):
+        self.assertEqual(self.run_main_rc(['focus_gate.py'], active=False), 0)
+
+    def test_clean_preview_exits_zero(self):
+        self.assertEqual(self.run_main_rc(['focus_gate.py'], rows=[]), 0)
 
 
 if __name__ == '__main__':

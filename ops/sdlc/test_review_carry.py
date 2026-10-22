@@ -7,6 +7,7 @@ sdlc_lib is absent from the repo (host-only), so it is stubbed in
 sys.modules before import; docs_lane is stubbed the same way. Exit codes
 and degraded-outcome strings are pinned; human-readable text is not.
 """
+import importlib
 import os
 import sys
 import tempfile
@@ -30,7 +31,7 @@ class _StubLib:
 sys.modules.setdefault("sdlc_lib", _StubLib())
 
 sys.path.insert(0, HERE)
-import review_carry as rc  # noqa: E402
+rc = importlib.import_module("review_carry")
 
 
 HEAD = "a" * 40

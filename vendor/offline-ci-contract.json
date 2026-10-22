@@ -322,6 +322,13 @@
     "api-base-validation-python suite:1",
     "provider baseline integrity suite:1",
     "review report input integrity holds:1",
+    "orphan-suite ratchet fixtures suite:1",
+    "assignment host-source bundle suite:1",
+    "stop-guard landing suite:1",
+    "warn-first inventory suite:1",
+    "regen dry-run receipt suite:1",
+    "pr-tracker suite:1",
+    "settings-bind rehearsal suite:1",
     "host backup publication receipt contract (offline):1",
     "native-ssh citation gate suite:1"
   ],
@@ -1810,6 +1817,41 @@
       "name": "review report input integrity holds",
       "definition_sha256": "bffa19729a879126ad09b2eba97c28fddbdc6f4fa5e10afa5a536bb291c9dfc4",
       "id": "review report input integrity holds:1"
+    },
+    {
+      "name": "orphan-suite ratchet fixtures suite",
+      "definition_sha256": "6a78bd74cf80ae987f05bdf0de08f83fd58cbc9b94d89517c714db382c093835",
+      "id": "orphan-suite ratchet fixtures suite:1"
+    },
+    {
+      "name": "assignment host-source bundle suite",
+      "definition_sha256": "ca3888d1e7ca664228f085cb9bdce9ea8338184849a2bfe9c50da0ac7898323f",
+      "id": "assignment host-source bundle suite:1"
+    },
+    {
+      "name": "stop-guard landing suite",
+      "definition_sha256": "00cac3c8a7eb04bfd64d386f096695c1c95c99cce6b7fafc9e2af84eb4ebbb64",
+      "id": "stop-guard landing suite:1"
+    },
+    {
+      "name": "warn-first inventory suite",
+      "definition_sha256": "9b7f38337b97884c46ab9ccbaaa639e0bfac67046f92defd79e4896e0ddbd16c",
+      "id": "warn-first inventory suite:1"
+    },
+    {
+      "name": "regen dry-run receipt suite",
+      "definition_sha256": "dc5d726ee40872397c5d9d4f72ccc035bfb7f571fbca24ddadb6b338591eee5d",
+      "id": "regen dry-run receipt suite:1"
+    },
+    {
+      "name": "pr-tracker suite",
+      "definition_sha256": "43f5da6f262e2c3e8fd380c20fcdd78127a99992b60d39bb808a2dc4c8011425",
+      "id": "pr-tracker suite:1"
+    },
+    {
+      "name": "settings-bind rehearsal suite",
+      "definition_sha256": "bb309c4b15965281fffe7f9190063f90688cd4a7cb1c00f659918423a5bde7fd",
+      "id": "settings-bind rehearsal suite:1"
     },
     {
       "name": "host backup publication receipt contract (offline)",

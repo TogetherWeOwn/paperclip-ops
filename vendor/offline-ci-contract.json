@@ -320,7 +320,8 @@
     "staging-preflight carrier suite:1",
     "api-base-validation suite:1",
     "api-base-validation-python suite:1",
-    "review report input integrity holds:1"
+    "review report input integrity holds:1",
+    "host backup publication receipt contract (offline):1"
   ],
   "retained": [
     {
@@ -515,7 +516,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "271132ad8bead2316895f4645188a6257b18c86d2239023c86b78d6d812811ee",
+      "definition_sha256": "50e90678736ba6e549ad23f510ab1c593ac131fa70edfb0e509e3f96788d6833",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1802,6 +1803,11 @@
       "name": "review report input integrity holds",
       "definition_sha256": "bffa19729a879126ad09b2eba97c28fddbdc6f4fa5e10afa5a536bb291c9dfc4",
       "id": "review report input integrity holds:1"
+    },
+    {
+      "name": "host backup publication receipt contract (offline)",
+      "definition_sha256": "f3220047635007807b551238df97e65b3db9b784bcafb35829fa009c51e3f5f4",
+      "id": "host backup publication receipt contract (offline):1"
     }
   ],
   "removed": [

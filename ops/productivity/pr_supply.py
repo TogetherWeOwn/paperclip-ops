@@ -63,6 +63,14 @@ non-zero exit, empty stdout, invalid or non-list JSON, or an empty GH_TOKEN the 
 the other repos. An empty token refuses before `gh` is called. A tick with any failed listing
 leaves merge-ready-held.txt unchanged. If every repo's listing fails in one tick the script exits
 non-zero (never a healthy empty run).
+Over-bound detection: `gh pr list` asks for PR_SUPPLY_LIST_BOUND+1 rows (101) in one call. When the
+probe row arrives the repo holds more open PRs than the bound: list_prs returns the first 100 and
+logs `pr-supply: list incomplete for <repo>: bound 100 observed 101+`, and an --apply tick records
+`<repo>:list-incomplete` {bound, observed, at} in state for the next tick (dry-run stays zero-write).
+The bounded set is still
+reconciled within MAX_ACTIONS/MAX_NEW_CARDS; the summary counts bounded PRs only and
+merge-ready-held.txt stays unchanged, exactly as on a failed listing. A later complete listing
+clears the marker.
 """
 import calendar
 import json
@@ -82,6 +90,7 @@ LOG = ROOT / 'ops/worker-vps/operator-actions.log'
 APPLY = '--apply' in sys.argv
 MAX_ACTIONS = 20
 MAX_NEW_CARDS = 6
+PR_SUPPLY_LIST_BOUND = 100  # per-repo listing cap; `gh pr list` probes with BOUND+1 to detect over-bound repos
 MIN_AGE_MIN = 30
 CREATE_RECHECK_MIN = 30  # a timed-out card create is looked up by title this long before it is retried
 CREATE_LOOKUP_SKEW_S = 60  # title-lookup bound sits this far before the create attempt began
@@ -256,18 +265,37 @@ def log(msg):
             f.write(line + '\n')
 
 
+class _BoundedListing(list):
+    """list_prs result: at most PR_SUPPLY_LIST_BOUND rows plus the probe verdict.
+
+    Behaves as a plain list (equality, len, iteration); `incomplete` is True
+    when the probe row arrived and was dropped, i.e. the repo holds more open
+    PRs than the bound. main() turns the flag into the `:list-incomplete`
+    state marker the next tick can see.
+    """
+
+    def __init__(self, rows, incomplete):
+        super().__init__(rows)
+        self.incomplete = incomplete
+
+
 def list_prs(full, env):
     """Open-PR listing for one repo, or None when the listing failed.
 
-    On timeout, non-zero exit, empty stdout or an empty GH_TOKEN the failure is
+    Probes with `--limit BOUND+1` in a single call. On timeout, non-zero exit,
+    empty stdout, invalid or non-list JSON, or an empty GH_TOKEN the failure is
     logged as `pr-supply: list failed for <repo>: <reason>` and the caller makes
     zero writes for that repo. An empty token refuses before `gh` is called.
+    When the probe row arrives the repo is over the bound: the first BOUND rows
+    are returned with `incomplete` set and one line
+    `pr-supply: list incomplete for <repo>: bound <B> observed <B+1>+` is logged.
     """
     if not (env or {}).get('GH_TOKEN'):
         log(f'list failed for {full}: empty token')
         return None
     try:
-        r = subprocess.run(['gh', 'pr', 'list', '-R', full, '--state', 'open', '--limit', '100', '--json',
+        r = subprocess.run(['gh', 'pr', 'list', '-R', full, '--state', 'open', '--limit',
+                            str(PR_SUPPLY_LIST_BOUND + 1), '--json',
                             'number,title,url,isDraft,mergeStateStatus,headRefOid,statusCheckRollup,createdAt'],
                            capture_output=True, text=True, env=env, timeout=PR_SUPPLY_GH_TIMEOUT_S)
     except subprocess.TimeoutExpired:
@@ -287,7 +315,10 @@ def list_prs(full, env):
     if not isinstance(prs, list):
         log(f'list failed for {full}: invalid JSON')
         return None
-    return prs
+    if len(prs) > PR_SUPPLY_LIST_BOUND:
+        log(f'list incomplete for {full}: bound {PR_SUPPLY_LIST_BOUND} observed {PR_SUPPLY_LIST_BOUND + 1}+')
+        return _BoundedListing(prs[:PR_SUPPLY_LIST_BOUND], True)
+    return _BoundedListing(prs, False)
 
 
 def main():
@@ -305,12 +336,23 @@ def main():
     projects = {r[0]: r[1] for r in rr.psql(f"select name, id from projects where company_id='{rr.CID}' and archived_at is null")}
     todo = []
     list_failed = 0
+    list_incomplete = 0
+    markers_dirty = False
     for repo, (who, proj, rank) in REPOS.items():
         full = f'TogetherWeOwn/{repo}'
         prs = list_prs(full, env)
         if prs is None:
             list_failed += 1
             continue
+        if getattr(prs, 'incomplete', False):
+            list_incomplete += 1
+            if APPLY:
+                state[f'{full}:list-incomplete'] = {
+                    'bound': PR_SUPPLY_LIST_BOUND, 'observed': PR_SUPPLY_LIST_BOUND + 1,
+                    'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+                markers_dirty = True
+        elif APPLY and state.pop(f'{full}:list-incomplete', None) is not None:
+            markers_dirty = True
         for p in prs:
             need = classify(p)
             if not need or p['title'].startswith('chore(main): release'):
@@ -319,6 +361,8 @@ def main():
             if age_min < MIN_AGE_MIN:
                 continue
             todo.append((rank, p['createdAt'], repo, full, who, proj, p, need))
+    if markers_dirty:
+        save_state(state)
     if REPOS and list_failed == len(REPOS):
         print('pr-supply: all repo listings failed; no healthy empty run', file=sys.stderr)
         raise SystemExit(1)
@@ -543,11 +587,16 @@ def main():
             c = owning_card(full.lower(), p['number'])
             if c and c[2] == 'blocked':
                 held.append(f"{full}#{p['number']} card {c[1]}: {root_blocker(c[0])}")
-    if APPLY and not list_failed:
+    if APPLY and not list_failed and not list_incomplete:
         HELD.write_text(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()) + ' merge-ready PRs held by blocked cards '
                         '(root blocker last):\n' + ''.join(h + '\n' for h in held))
     elif APPLY:
-        log(f'merge-ready-held.txt kept unchanged: {list_failed} repo listing(s) failed this tick')
+        parts = []
+        if list_failed:
+            parts.append(f'{list_failed} failed')
+        if list_incomplete:
+            parts.append(f'{list_incomplete} incomplete')
+        log(f"merge-ready-held.txt kept unchanged: {', '.join(parts)} repo listing(s) this tick")
     print(f'{len(todo)} actionable open PRs; {actions} actions this run')
 
 

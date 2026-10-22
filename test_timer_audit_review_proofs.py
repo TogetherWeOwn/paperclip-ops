@@ -342,6 +342,19 @@ class CaptureAvailableType(ProofCase):
         self.assertEqual(code, 2, combined)
         self.assertTrue(any(r["code"] == "malformed-capture" for r in doc["results"]), doc)
 
+    def test_missing_available_is_malformed(self):
+        cap = self.write_raw_capture(json.dumps(
+            {"scopes": {"user": {"timers": []},
+                        "system": {"available": True, "timers": []}}}))
+        code, out = self.check([live_entry("usr-foo", "user")], capture=cap)
+        self.assertEqual(code, 2, out)
+        self.assertIn("scopes.user.available must be a boolean", out)
+        code, doc, combined = self.run_json(
+            registry=self.write_registry([live_entry("usr-foo", "user")]), capture=cap)
+        self.assert_valid_envelope(doc)
+        self.assertEqual(code, 2, combined)
+        self.assertTrue(any(r["code"] == "malformed-capture" for r in doc["results"]), doc)
+
 
 class MalformedRowNoTraceback(ProofCase):
     """malformed-row-traceback: bad rows diagnose, never crash."""
@@ -353,8 +366,13 @@ class MalformedRowNoTraceback(ProofCase):
         "purpose": {"purpose": []},
         "writes": {"writes": [42]},
         "supersededBy": {"supersededBy": ["x"]},
+        "supersededBy_empty": {"supersededBy": []},
         "retiredWith": {"retiredWith": {"x": 1}},
         "source.timer": {"source": {"type": "repo", "timer": []}},
+        "schedule.jobs": {"kind": "plugin-job", "role": "detector", "writes": [],
+                          "source": {"type": "repo",
+                                     "manifest": "plugins/x/src/manifest.ts"},
+                          "schedule": {"jobs": 42}},
     }
 
     def test_each_sink_is_controlled_text(self):

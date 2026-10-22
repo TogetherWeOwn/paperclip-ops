@@ -347,7 +347,7 @@ def validate_capture(capture):
         timers = entry.get("timers", [])
         if not isinstance(timers, list):
             raise ValueError(f"capture: scopes.{scope}.timers must be a list")
-        if "available" in entry and not isinstance(entry["available"], bool):
+        if not isinstance(entry.get("available"), bool):
             raise ValueError(f"capture: scopes.{scope}.available must be a boolean")
         if entry.get("available") is True:
             for row in timers:
@@ -483,7 +483,7 @@ def check_schema(entries, findings):
             _schema_add(findings, eid, scope, f"{eid}: purpose must be a string")
         for key in ("supersededBy", "redundancyOf", "retiredWith"):
             ref = entry.get(key)
-            if ref and not isinstance(ref, str):
+            if ref is not None and not isinstance(ref, str):
                 _schema_add(findings, eid, scope,
                             f"{eid}: {key} must be an entry id string")
         source = entry.get("source")
@@ -501,6 +501,11 @@ def check_schema(entries, findings):
                 and not isinstance(source["timer"], str):
             _schema_add(findings, eid, scope,
                         f"{eid}: source.timer must be a string")
+        if entry["kind"] == "plugin-job" and "jobs" in schedule:
+            jobs = schedule["jobs"]
+            if not isinstance(jobs, list) or any(not isinstance(job, str) for job in jobs):
+                _schema_add(findings, eid, scope,
+                            f"{eid}: schedule.jobs must be a list of strings")
         if entry["role"] == "detector" and writes:
             _schema_add(findings, eid, scope,
                         f"{eid}: a detector must not write ({writes}); declare it a writer")
@@ -667,7 +672,10 @@ def check_plugin_jobs(entries, findings, root):
         if not isinstance(source, dict) or not isinstance(schedule, dict):
             continue
         if source.get("type") == "repo" and isinstance(source.get("manifest"), str):
-            declared.setdefault(source["manifest"], []).extend(schedule.get("jobs", []) or [])
+            jobs = schedule.get("jobs", [])
+            if not isinstance(jobs, list):
+                continue  # schema already flagged the malformed jobs value
+            declared.setdefault(source["manifest"], []).extend(jobs)
     manifests = sorted({str(p.relative_to(root)) for pat in ("plugins/*/src/manifest.ts",
                                                               "plugins/*/dist/manifest.js")
                         for p in root.glob(pat)})

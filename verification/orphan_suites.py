@@ -462,6 +462,12 @@ def code_text(text, python=False):
     kept = []
     for line in lines:
         if not _has_command_sep(line):
+            if line.rstrip().endswith("\\"):
+                # Backslash-continued reminder: the next line belongs to
+                # this echo/print (logical_text joins them). Stripping
+                # now would orphan the continuation as a bare command.
+                kept.append(line)
+                continue
             if not python and ECHO_ONLY_RE.match(line):
                 continue
             if python and PRINT_ONLY_RE.match(line):
@@ -488,8 +494,14 @@ def parse_tier_text(text, source):
     return text[:match.start()]
 
 
-def _step_working_dir(lines, i, run_indent):
-    """``working-directory:`` of the step owning the ``run:`` at ``i``."""
+def _step_working_dir(lines, i, run_indent, forward_from=None):
+    """``working-directory:`` of the step owning the ``run:`` at ``i``.
+
+    YAML key order in a step is free, so the key is searched both before
+    the ``run:`` line and after the run body (``forward_from``: first line
+    past a block body, else the line after ``run:``), stopping at the next
+    step entry with the same indent rules either way.
+    """
     j = i - 1
     while j >= 0 and i - j <= 25:
         text = lines[j]
@@ -510,7 +522,74 @@ def _step_working_dir(lines, i, run_indent):
                     return None
                 return value
         j -= 1
+    k = forward_from if forward_from is not None else i + 1
+    while k < len(lines) and k - i <= 25:
+        text = lines[k]
+        stripped = text.lstrip()
+        if not stripped or stripped.startswith("#"):
+            k += 1
+            continue
+        indent = len(text) - len(stripped)
+        if indent < run_indent:
+            break
+        if stripped.startswith("- ") and indent <= run_indent + 2:
+            break
+        if indent in (run_indent, run_indent + 2):
+            wd = re.match(r"working-directory\s*:\s*(.+?)\s*$", stripped)
+            if wd is not None:
+                value = wd.group(1).strip("\"'")
+                if not value or value.startswith("$"):
+                    return None
+                return value
+        k += 1
     return None
+
+
+def _has_job_defaults_wd(text):
+    """Whether the workflow sets ``defaults.run.working-directory``.
+
+    Either a job-level or a workflow-level ``defaults:`` block with a
+    ``run:`` child naming ``working-directory:`` shifts every step's cwd
+    that lacks its own key. The detector does not resolve that cwd, so
+    callers fail closed for affected steps.
+    """
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if re.match(r"defaults\s*:\s*(?:#.*)?$", stripped) is None:
+            continue
+        def_indent = len(line) - len(stripped)
+        j = idx + 1
+        while j < len(lines):
+            cand = lines[j]
+            cand_stripped = cand.lstrip()
+            if not cand_stripped or cand_stripped.startswith("#"):
+                j += 1
+                continue
+            cand_indent = len(cand) - len(cand_stripped)
+            if cand_indent <= def_indent:
+                break
+            if re.match(r"run\s*:\s*(?:#.*)?$",
+                        cand_stripped) is not None:
+                run_indent = cand_indent
+                k = j + 1
+                while k < len(lines):
+                    sub = lines[k]
+                    sub_stripped = sub.lstrip()
+                    if not sub_stripped or sub_stripped.startswith("#"):
+                        k += 1
+                        continue
+                    sub_indent = len(sub) - len(sub_stripped)
+                    if sub_indent <= run_indent:
+                        break
+                    if re.match(r"working-directory\s*:",
+                                sub_stripped) is not None:
+                        return True
+                    k += 1
+            j += 1
+    return False
 
 
 def run_bodies(text):
@@ -518,12 +597,17 @@ def run_bodies(text):
 
     Captures inline bodies (``run: ./foo.sh``) and indented block bodies
     (``run: |`` followed by more-indented lines). Comment lines can never
-    open a block. A step's ``working-directory:`` is prepended as a
-    ``cd`` so relative ``discover -s`` directories resolve against it;
-    unresolvable (variable) directories are left alone.
+    open a block. A step's ``working-directory:`` (before or after
+    ``run:``) is prepended as a ``cd`` so relative ``discover -s``
+    directories resolve against it; unresolvable (variable) directories
+    are left alone. When the workflow sets a job-level
+    ``defaults.run.working-directory`` and the step names none of its
+    own, the step's cwd is unresolved, so its body is dropped (fail
+    closed: it wires nothing) rather than resolved against the repo root.
     """
     bodies = []
     lines = text.splitlines()
+    job_wd = _has_job_defaults_wd(text)
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -545,16 +629,22 @@ def run_bodies(text):
                         block.append(lines[j])
                         j += 1
                     body = textwrap.dedent("\n".join(block))
-                    wd = _step_working_dir(lines, i, indent)
+                    wd = _step_working_dir(lines, i, indent,
+                                           forward_from=j)
                     if wd is not None:
                         body = "cd \"%s\"\n" % wd + body
-                    bodies.append(body)
+                        bodies.append(body)
+                    elif not job_wd:
+                        bodies.append(body)
                     i = j - 1
                 elif inline:
-                    wd = _step_working_dir(lines, i, indent)
+                    wd = _step_working_dir(lines, i, indent,
+                                           forward_from=i + 1)
                     if wd is not None:
                         inline = "cd \"%s\" && %s" % (wd, inline)
-                    bodies.append(inline)
+                        bodies.append(inline)
+                    elif not job_wd:
+                        bodies.append(inline)
         i += 1
     return bodies
 

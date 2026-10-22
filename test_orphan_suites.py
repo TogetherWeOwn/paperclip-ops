@@ -1216,6 +1216,63 @@ class OrphanRatchetTest(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("ops/zz/test_zz.py", errors[0])
 
+    def test_working_directory_after_run_scopes_discover(self):
+        root = repo_with_steps(
+            "      - name: probe\n"
+            "        run: python3 -m unittest discover -p 'test_*.py'\n"
+            "        working-directory: other\n",
+            suites=["other/test_zz_wd_after.py",
+                    "test_zz_wd_after_root.py"])
+        errors = ratchet.check(root, {})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("test_zz_wd_after_root.py", errors[0])
+
+    def test_job_defaults_working_directory_fails_closed(self):
+        root = make_repo({
+            ".github/workflows/ci.yml": (
+                "name: CI\non:\n  pull_request:\njobs:\n  suites:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    defaults:\n"
+                "      run:\n"
+                "        working-directory: pkg\n"
+                "    steps:\n"
+                "      - name: probe\n"
+                "        run: bash ./test_zz_jd.sh\n"),
+            "scripts/verify-fast.sh": VERIFY_FAST.format(body="echo ok"),
+            "test_zz_jd.sh": "#!/usr/bin/env bash\necho fixture\n",
+        })
+        errors = ratchet.check(root, {})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("test_zz_jd.sh", errors[0])
+
+    def test_step_working_directory_overrides_job_defaults(self):
+        root = make_repo({
+            ".github/workflows/ci.yml": (
+                "name: CI\non:\n  pull_request:\njobs:\n  suites:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    defaults:\n"
+                "      run:\n"
+                "        working-directory: pkg\n"
+                "    steps:\n"
+                "      - name: probe\n"
+                "        working-directory: .\n"
+                "        run: bash ./test_zz_jd2.sh\n"),
+            "scripts/verify-fast.sh": VERIFY_FAST.format(body="echo ok"),
+            "test_zz_jd2.sh": "#!/usr/bin/env bash\necho fixture\n",
+        })
+        self.assertEqual(ratchet.check(root, {}), [])
+
+    def test_echo_backslash_continuation_does_not_wire(self):
+        root = repo_with_steps(
+            "      - name: probe\n"
+            "        run: |\n"
+            "          echo \"note: proof lives in\" \\\n"
+            "            ./test_zz_bs_cont.sh\n",
+            suites=["test_zz_bs_cont.sh"])
+        errors = ratchet.check(root, {})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("test_zz_bs_cont.sh", errors[0])
+
     def test_env_dash_u_invocation_wires(self):
         root = repo_with(
             runs="env -u BASH_ENV ./test_zz_env.sh",
@@ -1675,6 +1732,24 @@ class OrphanRatchetJsTest(unittest.TestCase):
         errors = ratchet.check(root, {})
         self.assertEqual(len(errors), 1)
         self.assertIn("zz_a.test.mjs", errors[0])
+
+    def test_working_directory_after_run_scopes_npm(self):
+        root = make_repo({
+            ".github/workflows/ci.yml": (
+                "name: CI\non:\n  pull_request:\njobs:\n  suites:\n"
+                "    runs-on: ubuntu-latest\n    steps:\n"
+                "      - name: package suite\n"
+                "        run: npm test\n"
+                "        working-directory: pkg\n"),
+            "scripts/verify-fast.sh": VERIFY_FAST.format(body="echo ok"),
+            "pkg/package.json": json.dumps(
+                {"scripts": {
+                    "test": "node --test test/zz_after.test.mjs"}},
+                indent=2) + "\n",
+            "pkg/test/zz_after.test.mjs":
+                "import test from 'node:test';\n",
+        })
+        self.assertEqual(ratchet.check(root, {}), [])
 
     def test_npm_run_check_does_not_wire(self):
         root = repo_with_npm(

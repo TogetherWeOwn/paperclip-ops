@@ -320,8 +320,10 @@
     "staging-preflight carrier suite:1",
     "api-base-validation suite:1",
     "api-base-validation-python suite:1",
+    "provider baseline integrity suite:1",
     "review report input integrity holds:1",
-    "host backup publication receipt contract (offline):1"
+    "host backup publication receipt contract (offline):1",
+    "native-ssh citation gate suite:1"
   ],
   "retained": [
     {
@@ -511,12 +513,12 @@
     },
     {
       "name": "guard state fail-closed suites",
-      "definition_sha256": "e2a9927bc5def107f7280a8d0673f31718926a45a28cff6a4e64790ebecabbc3",
+      "definition_sha256": "cc4f8a604969e0c70933c2fff7b461c71ae4ae29645bc2e34e3df8f4fa45498f",
       "id": "guard state fail-closed suites:1"
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "50e90678736ba6e549ad23f510ab1c593ac131fa70edfb0e509e3f96788d6833",
+      "definition_sha256": "206ceb67ff4f9faa65021220bde31f4ccadaa05c72c431e49e1e760478e58862",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1441,12 +1443,12 @@
     },
     {
       "name": "org-request-mcp regression suite",
-      "definition_sha256": "6a37e701118978e49e914ea7f43137fb9231f77ca7931038db102951bf952db6",
+      "definition_sha256": "70cacf39bc8b9ab3ad16703a6f67d24d5606b0aa7f8a5e55a61c58da9e5599c2",
       "id": "org-request-mcp regression suite:1"
     },
     {
       "name": "Prove the suite rejects each tempting simplification",
-      "definition_sha256": "daab40cb177c5d1b468350902a86792ef3d9a6d7315bad1b05cbb14106ed0fb1",
+      "definition_sha256": "7bee64d7c7030048d2e8126c8d51d002897a9eeef74bbfa7d0f4024f8d5ee29a",
       "id": "Prove the suite rejects each tempting simplification:1"
     },
     {
@@ -1800,6 +1802,11 @@
       "id": "api-base-validation-python suite:1"
     },
     {
+      "name": "provider baseline integrity suite",
+      "definition_sha256": "a61a574a93f9aa493c38694fb68c4c43a4df905ac3721442d5547cf09a665dcd",
+      "id": "provider baseline integrity suite:1"
+    },
+    {
       "name": "review report input integrity holds",
       "definition_sha256": "bffa19729a879126ad09b2eba97c28fddbdc6f4fa5e10afa5a536bb291c9dfc4",
       "id": "review report input integrity holds:1"
@@ -1808,6 +1815,11 @@
       "name": "host backup publication receipt contract (offline)",
       "definition_sha256": "f3220047635007807b551238df97e65b3db9b784bcafb35829fa009c51e3f5f4",
       "id": "host backup publication receipt contract (offline):1"
+    },
+    {
+      "name": "native-ssh citation gate suite",
+      "definition_sha256": "34cafcd66f97b170ff90432448cfed1b909cc5f20b905b42c6b09b6651c10694",
+      "id": "native-ssh citation gate suite:1"
     }
   ],
   "removed": [

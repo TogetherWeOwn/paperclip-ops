@@ -4950,6 +4950,10 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 -m unittest -v test_kofra_preview_parity
 
+      - name: kofra preview parity JSON envelope suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -m unittest -v test_kofra_preview_parity_json
+
       - name: upstream draft pin audit suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_upstream_draft_pin_audit.sh

@@ -291,5 +291,88 @@ class TestParity(unittest.TestCase):
         self.assertNotIn("sk-live", r.stdout + r.stderr)
 
 
+def run_cli(args):
+    out, err = io.StringIO(), io.StringIO()
+    old_out, old_err = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = out, err
+    try:
+        try:
+            parity.main(args)
+            code = 0
+        except SystemExit as e:
+            code = e.code
+    finally:
+        sys.stdout, sys.stderr = old_out, old_err
+    return code, out.getvalue(), err.getvalue()
+
+
+class TestJsonRegressions(unittest.TestCase):
+    # Builder-owned pins for the M11.3 JSON envelope (TOG-37013). The full
+    # envelope contract lives in test_kofra_preview_parity_json.py (paired
+    # acceptance, never edited here); these pin the three properties this
+    # suite already cares about: exit codes stay the interface, values
+    # never leak, and text mode stays untouched.
+
+    def test_json_verdict_tracks_exit_code(self):
+        # parity->0, drift->1, refused->2: the envelope never disagrees
+        # with the exit code a caller gates on.
+        parity_cfg = write_config(make_config())
+        drift_cfg = write_config(
+            make_config(staging_extra={"workers_dev": True}))
+        allow = write_allowlist()
+        for cfg_path, want_code, want_verdict in (
+                (parity_cfg, 0, "parity"), (drift_cfg, 1, "drift")):
+            code, out, err = run_cli(
+                ["check", "--config", cfg_path, "--allowlist", allow,
+                 "--json"])
+            self.assertEqual(code, want_code, out + err)
+            env = json.loads(out)
+            self.assertEqual(env["verdict"], want_verdict)
+            self.assertEqual(env["schema_version"], 1)
+        code, out, err = run_cli(
+            ["check", "--config", drift_cfg, "--allowlist", allow, "--json"])
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(json.loads(out)["summary"]["drift"], 1)
+
+    def test_json_never_carries_checked_in_values(self):
+        # A valued var is drift named by name alone — in JSON as in text.
+        secret = "sk-live-BUILDER-REGRESSION-67890"
+        cfg = make_config(staging_vars={"RELEASE_SHA": secret})
+        code, out, err = run_cli(
+            ["check", "--config", write_config(cfg),
+             "--allowlist", write_allowlist(), "--json"])
+        self.assertEqual(code, 1, out + err)
+        self.assertNotIn(secret, out)
+        self.assertNotIn(secret, err)
+        env = json.loads(out)
+        self.assertNotIn(secret, json.dumps(env))
+        by_id = {r["id"]: r for r in env["rows"]}
+        self.assertEqual(by_id["vars.RELEASE_SHA"]["staging"], '"present"')
+
+    def test_dry_run_refused_on_both_subcommands(self):
+        # Decided by the acceptance card: no plan mode. An exit-0 path
+        # that measured nothing would be a gating lie.
+        cfg = write_config(make_config())
+        allow = write_allowlist()
+        for sub in ("check", "surface"):
+            code, out, err = run_cli(
+                [sub, "--config", cfg, "--allowlist", allow, "--dry-run"])
+            self.assertEqual(code, 2, out + err)
+            self.assertNotIn("PARITY", out)
+            self.assertNotIn("schema_version", out)
+            self.assertIn("--dry-run", err)
+            self.assertIn("usage", err.lower())
+
+    def test_text_mode_has_no_envelope(self):
+        # Byte-stability companion: without --json, neither stream gains
+        # envelope keys — callers gating on exit codes see no new surface.
+        for cfg in (make_config(),
+                    make_config(staging_extra={"workers_dev": True})):
+            code, out, err = run_check(write_config(cfg))
+            self.assertIn(code, (0, 1), out + err)
+            self.assertNotIn("schema_version", out + err)
+            self.assertNotIn('"verdict"', out + err)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

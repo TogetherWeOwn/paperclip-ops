@@ -46,7 +46,7 @@ elif [[ "${1:-}" == "--list" ]]; then
   echo "      case_b2acfa5c-runner-contract, dropchannel-fixture, approval-timeout-probe, acceptance-transport reply, gh-access-dispatch,"
   echo "      upstream pre-push hook,"
   echo "      alert-queue, watchdog-snapshot-builder, fleet-run-stall, assignment-host-source,"
-  echo "      review-error-rerequest, backlog-promoter, board-jobs-bounds, focus-gate-bounds, pr-supply, flow-guard, host-ok, connection-intent-sweeper, hide-noop-reconcile, nongit-quarantine-custody,"
+  echo "      review-error-rerequest, backlog-promoter, board-jobs-bounds, focus-gate-bounds, pr-supply, flow-guard, host-ok, connection-intent-sweeper, hide-noop-reconcile, nongit-quarantine-custody, review-carry,"
   echo "      guard-state (atomic-state, stuck-run-state, idle-waiter-state, owner-guard-state), feed-contract,"
   echo "      survival-atomic-write, corpus atomic-write, observational-collect-atomic-write, pr-hygiene owner-match, live-run guard, review-route, shell-subst guard, arm-import, merge-survival-atomic-write, operator-workspace reconciler and sweep, operator copy-risk gate,"
   echo "      translator-fixture (pinned tsc), deploy-window wrapper, deploy-window manifest gate, activation contract (paperclip-upgrade), staged-tier0-drift gate,"
@@ -89,7 +89,7 @@ for f in ops/productivity/*.sh; do
   bash -n "$f" || fail "bash parse error: $f"
 done
 python3 -c 'import ast, sys; [ast.parse(open(p, "rb").read(), p) for p in sys.argv[1:]]' \
-  ops/productivity/*.py ops/lib/*.py ops/paperclip/*.py || fail "python parse error in ops/productivity, ops/lib or ops/paperclip"
+  ops/productivity/*.py ops/lib/*.py ops/paperclip/*.py ops/sdlc/*.py || fail "python parse error in ops/productivity, ops/lib, ops/paperclip or ops/sdlc"
 python3 -c 'import ast, sys; [ast.parse(open(path, "rb").read(), path) for path in sys.argv[1:]]' \
   ops/pr-hygiene/sweep.py ops/pr-hygiene/owner_match.py ops/lib/live_run_guard.py \
   ops/case_af881f62/operator_workspace_reconciler.py ops/case_af881f62/test_operator_workspace_reconciler.py \
@@ -174,6 +174,7 @@ python3 -m unittest test_case_dcf07273_assignment_bundle || fail "assignment hos
 (cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes) \
   || fail "review-error, review-dedup, PR-supply, flow-guard, flake-ledger and pr-controller suites failed"
 (cd ops/paperclip && python3 -B -m unittest test_focus_gate_bounds) || fail "focus-gate bounds suite failed"
+(cd ops/sdlc && python3 -B -m unittest test_review_carry) || fail "review-carry suite failed"
 (cd ops/lib && python3 -m unittest test_atomic_state) || fail "atomic state suite failed"
 (cd ops/productivity && python3 -m unittest test_stuck_run_state) || fail "stuck-run state suite failed"
 (cd ops/productivity && python3 -m unittest test_idle_waiters_state) || fail "idle-waiter state suite failed"

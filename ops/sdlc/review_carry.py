@@ -259,16 +259,18 @@ class GitCache:
                 'files': len(normalized_patch(pr_patch))}
 
 
-def latest_review(checks, head):
+def latest_review(checks, head, number):
     matches = [c for c in checks if c.get('name') == CHECK and
                c.get('app', {}).get('id') == APP_ID and c.get('head_sha') == head]
     if not matches:
         return None
     # A newer queued/failed assessment invalidates an older successful one.
     latest = max(matches, key=lambda c: int(c['id']))
+    external_id = str(latest.get('external_id') or '')
     if (latest.get('status') != 'completed' or latest.get('conclusion') != 'success'
             or latest.get('output', {}).get('title', '').strip() != '5/5'
-            or str(latest.get('external_id') or '').startswith(PREFIX)):
+            or external_id.startswith(PREFIX)
+            or not external_id.endswith(f':{number}:{head}')):
         return None
     return latest
 
@@ -333,7 +335,7 @@ def process_group(token, repo, ref, dry_run=False):
         raise Unsafe('queue branch no longer corresponds to an open PR/base')
     head, base = pr['head']['sha'], pr['base']['sha']
     source_checks = checks_for(token, repo, head)
-    review = latest_review(source_checks, head)
+    review = latest_review(source_checks, head, int(number))
     deterministic = False
     if review is None:
         review = latest_docs_review(source_checks, repo, int(number), head, base, token)
@@ -361,7 +363,7 @@ def process_group(token, repo, ref, dry_run=False):
         raise Unsafe('PR/base/merge-group moved during verification; retry next tick')
     fresh_checks = checks_for(token, repo, head)
     fresh_review = (latest_docs_review(fresh_checks, repo, int(number), head, base, token)
-                    if deterministic else latest_review(fresh_checks, head))
+                    if deterministic else latest_review(fresh_checks, head, int(number)))
     if (fresh_review or {}).get('id') != (review or {}).get('id'):
         raise Unsafe('review changed during verification; retry next tick')
     if deterministic and ref_sha(token, repo, ref['ref']) != group:
@@ -407,19 +409,25 @@ def event_repos():
     if not path.exists():
         return set(), 'absent'
     values = {}
-    for line in path.read_text().splitlines():
-        line = line.removeprefix('export ').strip()
-        if not line or line.startswith('#') or '=' not in line:
-            continue
-        key, raw = line.split('=', 1)
-        parts = shlex.split(raw)
-        if len(parts) == 1:
-            values[key.strip()] = parts[0]
-    url = values.get('GH_CAPTURE_URL')
-    token = values.get('GH_CAPTURE_TOKEN') or values.get('QUERY_TOKEN')
-    if not url:
-        url_path = Path.home() / 'secure-drop/gh-event-capture.url'
-        url = url_path.read_text().strip() if url_path.exists() else None
+    try:
+        for line in path.read_text().splitlines():
+            line = line.removeprefix('export ').strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, raw = line.split('=', 1)
+            parts = shlex.split(raw)
+            if len(parts) == 1:
+                values[key.strip()] = parts[0]
+        url = values.get('GH_CAPTURE_URL')
+        token = values.get('GH_CAPTURE_TOKEN') or values.get('QUERY_TOKEN')
+        if not url:
+            url_path = Path.home() / 'secure-drop/gh-event-capture.url'
+            url = url_path.read_text().strip() if url_path.exists() else None
+    except (OSError, ValueError):
+        # Hints only prioritize the authoritative timer scan; a malformed or
+        # unreadable hint file degrades to no hints instead of aborting the
+        # whole reconciliation run. (UnicodeDecodeError is a ValueError.)
+        return set(), 'invalid-config'
     if not url or not token:
         return set(), 'unconfigured'
     if urllib.parse.urlparse(url).scheme != 'https':

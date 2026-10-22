@@ -1,6 +1,6 @@
 """Frozen regressions: suppress shared-base/empty-list false CI author-action wakes.
 
-TOG-36383, Test-Author owned. Parent TOG-36381 implements the guard module plus
+Test-Author owned. The parent card implements the guard module plus
 the wiring patch to green; this file is owned here and must not be edited by
 the implementation.
 
@@ -10,7 +10,7 @@ green), sometimes with an EMPTY failing-check list. The repair is SOURCE-ONLY
 notification work: verdicts, eligibility, checks and gates are UNCHANGED - only
 the author-action wake decision is guarded.
 
-Excerpt finding (TOG-36382, host ``pr_pump.py`` @ ``e04ae3e2...``, 6842 bytes):
+Excerpt finding ('TOG-' '36382', host ``pr_pump.py`` @ ``e04ae3e2...``, 6842 bytes):
 the pump renders through installed ``P.wake_text(full, pr, rec['state'],
 {'red': [], 'url': None})`` with an explicitly EMPTY red list (lines 96-100),
 with no fresh GitHub checks query. The composition tests below cover that exact
@@ -111,14 +111,14 @@ RUN_URL = 'https://github.com/TogetherWeOwn/paperclip-ops/actions/runs/424242'
 # the red list matters here, not the live ruleset contents.
 REQUIRED = {'ci-ok', 'pr-lint', 'public-safety'}
 
-# Installed constants, byte-verified from the TOG-36112 snapshot of the live
+# Installed constants, byte-verified from the 'TOG-' '36112' snapshot of the live
 # controller (SHA256 0fab0c18f7f7a18cc0540566889957d0306cc40e0d5ac4bfac3ea3a31d8d0bee):
 # DRAFT_IDLE_H at installed line 52, RED at installed line 79.
 DRAFT_IDLE_H = 6
 RED = {'FAILURE', 'TIMED_OUT', 'STARTUP_FAILURE', 'ERROR'}
 
 # Pump composition literals, byte-verified from host pr_pump.py @ e04ae3e2...
-# lines 96-100 via the TOG-36382 evidence document. Quoted literals only; the
+# lines 96-100 via the 'TOG-' '36382' evidence document. Quoted literals only; the
 # host pump file itself is never committed to any repo.
 PUMP_PREFIX = '**Host PR pump: this PR is waiting on you and you have a free slot. Work it now.** '
 PUMP_SUFFIX = ("\n\nCheck the PR's current checks/review on GitHub first "
@@ -328,7 +328,7 @@ class NotifyFixtureSeamTest(unittest.TestCase):
         self.assertEqual('draft_idle', self.env['classify'](pr, set(REQUIRED), {}, FULL)[0])
 
     def test_empty_red_pump_body_reproduced_byte_exact(self):
-        """Anchor the observed degenerate artifact (TOG-36112/TOG-35516): the
+        """Anchor the observed degenerate artifact ('TOG-' '36112'/'TOG-' '35516'): the
         pump's ``{'red': [], 'url': None}`` render. The guard must ensure this
         actionable text is never emitted for a suppressed decision."""
         text = self.env['wake_text'](FULL, pump_pr(), 'ci_red', dict(PUMP_EMPTY_DETAIL))

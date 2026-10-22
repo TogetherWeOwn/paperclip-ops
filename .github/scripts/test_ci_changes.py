@@ -493,6 +493,14 @@ class Classify(unittest.TestCase):
         self.assertTrue(r["core"])
         self.assertFalse(r["full"])
 
+    def test_provider_baseline_integrity_wakes_core(self):
+        # provider-baseline-integrity: the integrity suite runs as its own
+        # suites step next to its sibling. A change to the suite must wake
+        # the suites job at PR time without latching a full run.
+        r = self.result("test_provider_baseline_integrity.py")
+        self.assertTrue(r["core"])
+        self.assertFalse(r["full"])
+
     def test_case_7452fc43_watchdog_delivery_wakes_core(self):
         # case_f708f865: the watchdog-delivery proof runs in CI via the
         # platform watchdog gate. Its suite and delivery source must

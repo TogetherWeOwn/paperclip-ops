@@ -15,15 +15,21 @@ import calendar
 import json
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
+import atomic_state  # noqa: E402
 
 ROOT = Path('/home/ubuntu/paperclip-enterprise-company')
 LOG = ROOT / 'ops/worker-vps/operator-actions.log'
 STATE = ROOT / 'ops/productivity/pipeline-stall-watch.state.json'
-CID = 'ef993a7e-5ea7-445f-ba88-27a6a2690c3a'
+# Synthetic placeholder: the host install step substitutes the real company id.
+CID = '00000000-0000-4000-8000-000000000004'
 SERVICES = ['review-gate.service', 'review-carry.service', 'pr-automerge.service']
 REPEAT_S = 3600
+GATE_SILENCE_MIN = 20
 
 
 def sh(*args):
@@ -35,6 +41,14 @@ def failures(unit):
     return len(re.findall(r"Failed with result 'exit-code'", out))
 
 
+def _parse_log_ts(line):
+    """Epoch seconds for a log line's leading UTC timestamp, or None when malformed."""
+    try:
+        return calendar.timegm(time.strptime(line[:20], '%Y-%m-%dT%H:%M:%SZ'))
+    except ValueError:
+        return None
+
+
 def last_gate_tick_age_min():
     tail = sh('tail', '-n', '4000', str(LOG)).splitlines()
     for line in reversed(tail):
@@ -42,18 +56,42 @@ def last_gate_tick_age_min():
         # successful tick: the gate ran. Only admits/requests counted before,
         # so recent backpressure read as silence.
         if ' review-gate: ' in line and ('gate admits' in line or 'requested review' in line or 'gate holds' in line):
-            try:
-                t = calendar.timegm(time.strptime(line[:20], '%Y-%m-%dT%H:%M:%SZ'))
-            except ValueError:
+            t = _parse_log_ts(line)
+            if t is None:
                 continue  # Malformed timestamp: skip the line, keep scanning history.
             return (time.time() - t) / 60
     return None
 
 
+def stale_history_without_tick():
+    """True when the tail holds timestamped history older than the silence window.
+
+    Distinguishes a fresh install (empty/unparseable tail: no alert) from a
+    gate that had time to tick but left no recognized tick (alert). Called only
+    when last_gate_tick_age_min() found no tick.
+    """
+    tail = sh('tail', '-n', '4000', str(LOG)).splitlines()
+    if not tail:
+        return False
+    now = time.time()
+    for line in tail:
+        t = _parse_log_ts(line)
+        if t is not None and (now - t) / 60 > GATE_SILENCE_MIN:
+            return True
+    return False
+
+
 def carry_auth_errors():
     tail = sh('tail', '-n', '4000', str(LOG)).splitlines()
-    cutoff = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 1800))
-    return sum(1 for l in tail if l[:20] >= cutoff and 'credential response invalid' in l)
+    cutoff = time.time() - 1800
+    n = 0
+    for line in tail:
+        if 'credential response invalid' not in line:
+            continue
+        t = _parse_log_ts(line)
+        if t is not None and t >= cutoff:
+            n += 1
+    return n
 
 
 def capacity_collapse():
@@ -101,16 +139,25 @@ def alert(key, title, body, state):
 
 
 def main():
-    state = json.loads(STATE.read_text()) if STATE.exists() else {}
+    try:
+        state = json.loads(STATE.read_text())
+        if not isinstance(state, dict):
+            state = {}
+    except (OSError, ValueError):
+        state = {}
     for unit in SERVICES:
         n = failures(unit)
         if n >= 3:
             alert(f'fail:{unit}', f'{unit} failed {n}x in 30 min',
                   f'`{unit}` exited with errors {n} times in the last 30 min. Check `journalctl --user -u {unit}`.', state)
     age = last_gate_tick_age_min()
-    if age is not None and age > 20:
+    if age is not None and age > GATE_SILENCE_MIN:
         alert('gate-silent', f'review-gate silent {age:.0f} min',
               f'review-gate has not logged a successful tick for {age:.0f} min, so no reviews are being requested.', state)
+    elif age is None and stale_history_without_tick():
+        alert('gate-silent', 'review-gate silent (no recognized tick in recent history)',
+              'review-gate logged no recognized successful tick (gate admits / requested review / gate holds) in the '
+              f'last {GATE_SILENCE_MIN} min of operator history, so no reviews are being requested.', state)
     n = carry_auth_errors()
     if n:
         alert('carry-auth', 'review carry auth failing', f'{n} "credential response invalid" lines in 30 min (review carry).', state)
@@ -120,7 +167,7 @@ def main():
               f'The model-capacity target C* fell from {cc[1]:.1f} to {cc[0]:.2f} within 2 h. Check '
               '`GET /api/plugins/<model-capacity>/api/ladder` for accounts with empty `rungs` (null-cost or unmatched '
               'arms).', state)
-    STATE.write_text(json.dumps(state))
+    atomic_state.write_json_atomic(STATE, state)
 
 
 if __name__ == '__main__':

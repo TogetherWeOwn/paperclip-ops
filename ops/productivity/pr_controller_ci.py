@@ -15,16 +15,19 @@ one ``[flake]`` card via the injected ``quarantine_card`` callable.
 Fail-safe direction: anything the helper does not positively recognize as an
 eligible test-only rerun wakes as today. Deny lists win over the allow-list,
 unknown attempts/run ids wake, and ledger failures are absorbed (a failed
-``record_flake`` is queued in state and retried on later ticks). The helper
-never raises for ledger, card, ``gh`` or API failures; ``gh`` failures leave
-the tick unhandled so the next pass retries, while a failed wake/cap post
+``record_flake`` is queued in state and retried on later ticks). The veto is
+run-wide: ``gh run rerun --failed`` reruns every failed job in the run, so one
+failing deny-listed sibling vetoes the whole run even when another job in it
+is eligible. The helper never raises for ledger, card, ``gh`` or API
+failures; ``gh`` failures (an exception or a nonzero exit code) leave the
+tick unhandled so the next pass retries, while a failed wake/cap post
 returns action ``'post_failed'`` so the host falls through to its normal wake
 path (which owns the retry semantics) instead of dropping the wake.
 
 State schema (owned by the helper, JSON-serializable, survives restarts)::
 
     {
-      'flights': {run_id: {'attempt', 'head', 'workflow', 'job', 'test', 'ts'}},
+      'flights': {flight_key: {'attempt', 'head', 'workflow', 'job', 'test', 'ts'}},
       'reran_runs': [run_id, ...],      # never rerun the same run twice
       'handled': [tick_key, ...],       # ticks already woken/capped
       'round_count': int,               # red rounds since last all-green
@@ -33,6 +36,13 @@ State schema (owned by the helper, JSON-serializable, survives restarts)::
       'pending_flakes': [entry, ...],   # queued while the ledger was down
       'flake_cards': [flake_key, ...],  # keys already carded
     }
+
+A flight key is ``'<run_id>\\x1f<job>'`` (:func:`_flight_key`): one entry per
+rerun job, since several required checks routinely share a workflow run and a
+run-keyed flight would attribute a sibling's success to the wrong job. One
+``gh run rerun --failed`` request covers the whole run, so fresh failures in
+one run issue a single request and record one flight per eligible job. Bare
+run-id keys from older states never match a lookup and expire via the TTL.
 
 Cross-PR flake aggregation: pass ``shared=<host-level dict>`` and the flake
 window (``flakes``/``pending_flakes``/``flake_cards``) lives there, so three
@@ -159,6 +169,53 @@ def is_eligible(check):
     return True
 
 
+def _flight_key(run_id, job):
+    """One flight per rerun job: ``'<run_id>\\x1f<job>'``.
+
+    The unit separator cannot plausibly appear in a job name, so sibling
+    jobs sharing a workflow run never collide. Job match (plus the attempt
+    gate) is what attributes a conclusion to the flight that caused it.
+    """
+    return f'{run_id}\x1f{job or ""}'
+
+
+def _run_vetoed(checks, run_id):
+    """True when a failing deny-listed sibling shares this workflow run.
+
+    ``gh run rerun <id> --failed`` reruns every failed job in the run, not
+    just the eligible one, so a failing security/supply-chain/policy or
+    deploy-like sibling vetoes the whole run. Passing siblings cannot veto:
+    ``--failed`` leaves them alone.
+    """
+    want = str(run_id)
+    for check in checks:
+        if (check.get('conclusion') or 'failure') == 'success':
+            continue
+        if str(check.get('run_id')) != want:
+            continue
+        if _denied(check.get('workflow'), check.get('job')):
+            return True
+    return False
+
+
+def _retry_concluded(check, flight):
+    """True unless the success row positively predates the rerun.
+
+    A concluding retry has an attempt above the flight's; a missing attempt
+    (classifiers that omit it) still counts, since the job match already
+    ties the row to this flight. Only an explicit attempt at or below the
+    flight's attempt withholds the flake: that success cannot be the retry.
+    """
+    attempt = check.get('attempt')
+    if type(attempt) is not int:
+        return True
+    try:
+        base = int(flight.get('attempt') or 0)
+    except (TypeError, ValueError):
+        return True
+    return attempt > base
+
+
 def _check_tuple(check):
     return (
         str(check.get('workflow') or ''),
@@ -255,12 +312,31 @@ def _post(api, owner_card_id, body):
     return str(comment_id) if comment_id else None
 
 
+def _gh_ok(result):
+    """True when a gh callable's return spells success.
+
+    The host adapter returns ``(exit_code, text)`` and never raises for a
+    rejected rerun (403/422, reruns disabled); fakes return ``None`` or a
+    ``(0, ...)`` tuple. Only explicit nonzero exit evidence fails: anything
+    else degrades to success so unknown-but-harmless adapters keep working.
+    """
+    if result is None:
+        return True
+    if isinstance(result, bool):
+        return result
+    if isinstance(result, int):
+        return result == 0
+    if isinstance(result, (tuple, list)) and len(result) > 0:
+        return _gh_ok(result[0])
+    return True
+
+
 def _rerun(gh, run_id):
     try:
-        gh(['gh', 'run', 'rerun', str(run_id), '--failed'])
+        result = gh(['gh', 'run', 'rerun', str(run_id), '--failed'])
     except Exception:
         return False
-    return True
+    return _gh_ok(result)
 
 
 def _render_cap(pr, rounds, ledger):
@@ -420,11 +496,14 @@ def _decide(pr, checks, state, *, gh, api, ledger, quarantine_card,
     if not failing:
         for check in checks:
             run_id = check.get('run_id')
-            flight = flights.get(str(run_id)) if run_id is not None else None
+            if run_id is None:
+                continue
+            fkey = _flight_key(run_id, check.get('job'))
+            flight = flights.get(fkey)
             if not isinstance(flight, dict):
                 continue
-            flights.pop(str(run_id), None)
-            if mutate:
+            flights.pop(fkey, None)
+            if mutate and _retry_concluded(check, flight):
                 _observe_flake(flake_store, pr=pr, check=check, run_id=run_id,
                                ledger=ledger, quarantine_card=quarantine_card,
                                now=now)
@@ -446,21 +525,48 @@ def _decide(pr, checks, state, *, gh, api, ledger, quarantine_card,
         if (check.get('conclusion') or 'failure') == 'success':
             continue
         run_id = check.get('run_id')
-        if run_id is None or str(run_id) in flights or run_id in reran \
+        if run_id is None or run_id in reran \
                 or str(run_id) in {str(item) for item in reran}:
             continue
-        if is_eligible(check):
+        if _flight_key(run_id, check.get('job')) in flights:
+            continue
+        if is_eligible(check) and not _run_vetoed(checks, run_id):
             fresh.append(check)
     if fresh:
         rerun_ids = []
+        requested = set()
+        failed = set()
         for check in fresh:
             run_id = check.get('run_id')
+            rkey = str(run_id)
+            if rkey in requested:
+                # One `gh run rerun --failed` retries every failed job in
+                # the run, so a second eligible row in the same run only
+                # needs its own flight, not a second request. A failed
+                # request records no flight at all (no phantom flights).
+                if mutate and rkey not in failed:
+                    flights[_flight_key(run_id, check.get('job'))] = {
+                        'attempt': check.get('attempt'),
+                        'head': head,
+                        'workflow': check.get('workflow'),
+                        'job': check.get('job'),
+                        'test': check.get('test'),
+                        'ts': now,
+                    }
+                continue
             if not mutate:
+                requested.add(rkey)
                 rerun_ids.append(run_id)
                 continue
             if not _rerun(gh, run_id):
-                continue  # failed request stays unhandled; retried next pass
-            flights[str(run_id)] = {
+                # Failed request stays unhandled; retried next pass. The
+                # run is still marked requested so a sibling row does not
+                # issue a second request for the same run in this tick.
+                requested.add(rkey)
+                failed.add(rkey)
+                continue
+            requested.add(rkey)
+            flights[_flight_key(run_id, check.get('job'))] = {
                 'attempt': check.get('attempt'),
                 'head': head,
                 'workflow': check.get('workflow'),
@@ -479,21 +585,21 @@ def _decide(pr, checks, state, *, gh, api, ledger, quarantine_card,
         # so a broken `gh` degrades to today's wake instead of silence.
 
     # Rerun conclusions: green records a flake, red counts one round.
+    # Conclusions match on (run, job): a sibling's success must neither pop
+    # this job's flight nor record a flake for a job that never reran.
     concluded_red = []
     for check in checks:
-        if (check.get('conclusion') or 'failure') == 'success':
-            run_id = check.get('run_id')
-            flight = flights.get(str(run_id)) if run_id is not None else None
-            if isinstance(flight, dict):
-                flights.pop(str(run_id), None)
-                if mutate:
-                    _observe_flake(flake_store, pr=pr, check=check, run_id=run_id,
-                                   ledger=ledger,
-                                   quarantine_card=quarantine_card, now=now)
-            continue
         run_id = check.get('run_id')
-        flight = flights.get(str(run_id)) if run_id is not None else None
+        fkey = _flight_key(run_id, check.get('job'))
+        flight = flights.get(fkey) if run_id is not None else None
         if not isinstance(flight, dict):
+            continue
+        if (check.get('conclusion') or 'failure') == 'success':
+            flights.pop(fkey, None)
+            if mutate and _retry_concluded(check, flight):
+                _observe_flake(flake_store, pr=pr, check=check, run_id=run_id,
+                               ledger=ledger,
+                               quarantine_card=quarantine_card, now=now)
             continue
         attempt = check.get('attempt')
         try:
@@ -505,7 +611,8 @@ def _decide(pr, checks, state, *, gh, api, ledger, quarantine_card,
             concluded_red.append(check)
     if concluded_red:
         for check in concluded_red:
-            flights.pop(str(check.get('run_id')), None)
+            flights.pop(_flight_key(check.get('run_id'), check.get('job')),
+                        None)
         if mutate:
             state['round_count'] = int(state.get('round_count') or 0) + 1
             evidence = state.setdefault('rounds', [])
@@ -557,10 +664,12 @@ def _decide(pr, checks, state, *, gh, api, ledger, quarantine_card,
         outcome['action'] = 'suppressed'
         return outcome
 
-    # Anything left is ineligible (deny-listed, paid/private, attempt >= 2, or
-    # an already-reran run whose retry never concluded): wake as today.
+    # Anything left is ineligible (deny-listed, run-vetoed, paid/private,
+    # attempt >= 2, or an already-reran run whose retry never concluded):
+    # wake as today.
     ineligible = [check for check in failing
-                  if str(check.get('run_id')) not in flights]
+                  if _flight_key(check.get('run_id'), check.get('job'))
+                  not in flights]
     in_flight_only = len(ineligible) == 0
     if in_flight_only:
         outcome['action'] = 'suppressed'

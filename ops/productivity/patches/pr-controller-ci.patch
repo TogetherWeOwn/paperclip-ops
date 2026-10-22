@@ -2,9 +2,9 @@
 +++ b/ops/productivity/pr_controller.py
 @@ -40,2 +40,3 @@
  from pr_controller_wakes import post_wake, reconcile_wake  # noqa: E402
-+from pr_controller_ci_host import default_deps as ci_policy_deps, handle_ci_red as ci_policy_tick  # noqa: E402
++from pr_controller_ci_host import default_deps as ci_policy_deps, handle_ci_red as ci_policy_tick, handle_ci_reset as ci_policy_reset, kill_switch_active as ci_policy_kill, shadow_active as ci_policy_shadow  # noqa: E402
  from pr_supply import REPOS as SUPPLY_REPOS  # noqa: E402
-@@ -503,6 +503,17 @@
+@@ -503,6 +503,18 @@
                  + wake_text(full, pr, cur, detail) + "\n\nFix and push once now; don't merge main unless conflict/main-red.")
          rec = state.get(key) or {}
 -        code = post_wake(rec, wkey, iid, text, api)
@@ -15,7 +15,8 @@
 +        except (TypeError, ValueError):
 +            _ci_rounds = 0
 +        _ci_capped = (cur == 'ci_red' and _ci_rounds >= 3
-+                       and _ci_state.get('capped_head') is not None)
++                       and _ci_state.get('capped_head') is not None
++                       and not ci_policy_kill() and not ci_policy_shadow())
 +        if not _ci_capped:
 +            code = post_wake(rec, wkey, iid, text, api)
 +            log(f'posted RE-wake {ident} for {key}: {cur} @ {pr["headRefOid"][:8]} unchanged {since_h}h HTTP {code}')
@@ -24,7 +25,7 @@
 +            log(f'skipped RE-wake {ident} for {key}: ci-policy capped @ {pr["headRefOid"][:8]}')
          if code.startswith('2'):
              state[key] = rec
-@@ -693,6 +693,25 @@
+@@ -693,6 +693,35 @@
                           "event on it. If your parking reason no longer applies, set the card to `in_progress` and act on "
                           "this head; if it still applies, say why in one line and leave it parked.")
 -            code = post_wake(rec, wkey, iid, text, api)
@@ -40,6 +41,16 @@
 +                        **ci_policy_deps(api=api, log=log))
 +                except Exception as exc:
 +                    log(f'ci-policy failed ({exc}); waking as today')
++            elif cards and ('ci_policy' in rec or 'ci_policy_shadow' in rec):
++                # Green/transition pass: reset-only, never suppresses the wake.
++                try:
++                    _ci_shared = state.setdefault('ci_policy_shared', {})
++                    ci_policy_reset(
++                        full=full, pr=pr, detail=detail, rec=rec,
++                        shared=_ci_shared,
++                        **ci_policy_deps(api=api, log=log))
++                except Exception as exc:
++                    log(f'ci-policy reset failed ({exc}); waking as today')
 +            if _ci_verdict == 'handled':
 +                _ci_comment = (rec.get('ci_policy') or {}).get('tick_comment_id')
 +                if _ci_comment:

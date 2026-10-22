@@ -85,6 +85,15 @@ class Harness:
             log=self.logs.append, log_action=self.actions.append,
             shadow=shadow, now=T0, shared=shared)
 
+    def reset(self, detail, rec=None, shadow=False, head=HEAD_A,
+              shared=None):
+        return host.handle_ci_reset(
+            full='TogetherWeOwn/two-bot-next',
+            pr={'number': 7, 'headRefOid': head},
+            detail=detail, rec={} if rec is None else rec,
+            ledger=self.ledger, quarantine_card=self.cards.append,
+            log=self.logs.append, shadow=shadow, now=T0, shared=shared)
+
 
 def detail_row(**overrides):
     row = {'workflow': 'check.yml', 'job': 'rust tests',
@@ -283,6 +292,121 @@ class ShadowPathTest(unittest.TestCase):
                 rec=rec, shadow=True, shared=shared)
         self.assertEqual(1, len(shared['flakes']))
         self.assertEqual(1, len(shared['shadow']['flakes']))
+
+
+class ResetPassTest(unittest.TestCase):
+    def test_green_reset_clears_rounds_and_records_pass_flake(self):
+        env = Harness()
+        rec = {}
+        verdict = env.run({'checks': [detail_row(run_id=101)]}, rec=rec)
+        self.assertEqual('handled', verdict)
+        self.assertEqual(1, len(env.gh.reruns))
+        verdict = env.reset(
+            {'checks': [detail_row(run_id=101, attempt=2,
+                                   conclusion='success')]},
+            rec=rec)
+        self.assertEqual('proceed', verdict)
+        # The headline case: the retry passed, so one flake is recorded
+        # and the host wake still proceeds (the reset never suppresses).
+        self.assertEqual(1, len(env.ledger.recorded))
+        self.assertEqual('rust tests', env.ledger.recorded[0]['job'])
+        self.assertEqual(0, rec['ci_policy']['round_count'])
+        self.assertEqual([], rec['ci_policy']['rounds'])
+        self.assertEqual({}, rec['ci_policy']['flights'])
+        self.assertEqual(1, len(env.gh.reruns))
+        self.assertEqual([], env.api.calls)
+        self.assertEqual([], env.cards)
+        self.assertTrue(any('reset rounds/cap' in line
+                            for line in env.logs))
+
+    def test_capped_record_resets_then_reruns_again(self):
+        env = Harness()
+        rec = {}
+        for head, run_id in ((HEAD_A, 101), ('b' * 40, 102),
+                             ('c' * 40, 103)):
+            env.run({'checks': [detail_row(run_id=run_id)]}, rec=rec,
+                    head=head)
+            env.run({'checks': [detail_row(run_id=run_id, attempt=2)]},
+                    rec=rec, head=head)
+        self.assertEqual(3, rec['ci_policy']['round_count'])
+        self.assertEqual('c' * 40, rec['ci_policy']['capped_head'])
+        verdict = env.reset(
+            {'checks': [detail_row(run_id=104, attempt=1,
+                                   conclusion='success')]},
+            rec=rec, head='d' * 40)
+        self.assertEqual('proceed', verdict)
+        self.assertEqual(0, rec['ci_policy']['round_count'])
+        self.assertNotIn('capped_head', rec['ci_policy'])
+        # The next red head reruns fresh instead of staying capped.
+        verdict = env.run({'checks': [detail_row(run_id=105)]}, rec=rec,
+                           head='e' * 40)
+        self.assertEqual('handled', verdict)
+        self.assertEqual(4, len(env.gh.reruns))
+
+    def test_reset_with_red_rows_leaves_state(self):
+        env = Harness()
+        rec = {}
+        env.run({'checks': [detail_row(run_id=101)]}, rec=rec)
+        before = json.loads(json.dumps(rec['ci_policy']))
+        verdict = env.reset(
+            {'checks': [detail_row(run_id=101, attempt=2)]}, rec=rec)
+        self.assertEqual('proceed', verdict)
+        self.assertEqual(before, rec['ci_policy'])
+        self.assertFalse(any('reset rounds/cap' in line
+                             for line in env.logs))
+
+    def test_reset_with_no_rows_proceeds(self):
+        env = Harness()
+        verdict = env.reset({'pending': True}, rec={})
+        self.assertEqual('proceed', verdict)
+
+    def test_reset_never_raises(self):
+        env = Harness()
+        verdict = env.reset(None, rec=None)
+        self.assertEqual('proceed', verdict)
+
+    def test_reset_under_kill_switch_skips(self):
+        env = Harness()
+        rec = {'ci_policy': {'round_count': 3, 'rounds': [{}, {}, {}],
+                             'capped_head': HEAD_A, 'flights': {}}}
+        with mock.patch.dict(os.environ, {'PR_CONTROLLER_CI_DISABLE': '1'},
+                             clear=False):
+            verdict = env.reset(
+                {'checks': [detail_row(run_id=104, attempt=1,
+                                       conclusion='success')]},
+                rec=rec)
+        self.assertEqual('proceed', verdict)
+        # The switch freezes policy state; ignoring (not clearing) the cap
+        # is what restores wake-on-first-red while it is set.
+        self.assertEqual(3, rec['ci_policy']['round_count'])
+        self.assertEqual(HEAD_A, rec['ci_policy']['capped_head'])
+        self.assertTrue(any('kill switch holds' in line
+                            for line in env.logs))
+
+    def test_reset_shadow_resets_shadow_key_only(self):
+        env = Harness()
+        rec = {}
+        env.run({'checks': [detail_row(run_id=101)]}, rec=rec, shadow=True)
+        env.run({'checks': [detail_row(run_id=101, attempt=2)]}, rec=rec,
+                shadow=True)
+        self.assertEqual(1, rec['ci_policy_shadow']['round_count'])
+        verdict = env.reset(
+            {'checks': [detail_row(run_id=101, attempt=2,
+                                   conclusion='success')]},
+            rec=rec, shadow=True)
+        self.assertEqual('proceed', verdict)
+        self.assertEqual(0, rec['ci_policy_shadow']['round_count'])
+        self.assertNotIn('ci_policy', rec)
+        self.assertEqual([], env.ledger.recorded)
+        self.assertTrue(any('shadow reset pass' in line
+                            for line in env.logs))
+
+    def test_shadow_active_flag(self):
+        with mock.patch.dict(os.environ, {'CI_POLICY_SHADOW': '1'},
+                             clear=False):
+            self.assertTrue(host.shadow_active())
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(host.shadow_active())
 
 
 class DefaultWiringTest(unittest.TestCase):

@@ -136,14 +136,15 @@ class DryRunTest(unittest.TestCase):
         gh, api = FakeGh(), FakeApi()
         live = {}
         tick(make_pr(), [make_check(run_id=101)], live, gh, api)
-        self.assertIn('101', live['flights'])
+        fkey = ci._flight_key(101, 'rust tests')
+        self.assertIn(fkey, live['flights'])
         before = json.loads(json.dumps(live))
         # A concluded retry in dry-run must not pop the live flight.
         outcome = tick(make_pr(), [make_check(run_id=101, attempt=2)],
                        live, gh, api, dry_run=True)
         self.assertEqual('woke', outcome['action'])
         self.assertEqual(before, live)
-        self.assertIn('101', live['flights'])
+        self.assertIn(fkey, live['flights'])
         self.assertEqual([], api.calls)
 
 
@@ -252,6 +253,139 @@ class EligibilityEdgeTest(unittest.TestCase):
         outcome = tick(make_pr(), [make_check()], {}, gh, api)
         self.assertEqual('woke', outcome['action'])
         self.assertEqual(1, len(api.calls))
+
+    def test_nonzero_gh_exit_wakes_without_phantom_flight(self):
+        # The host adapter returns (exit_code, text) instead of raising, so
+        # a rejected rerun (403/422, reruns disabled) must degrade to
+        # today's wake exactly like an exception. Revert mutant: restoring
+        # exception-only handling in _rerun turns this red.
+        class RejectingGh(FakeGh):
+            def __call__(self, argv):
+                self.argv_calls.append(list(argv))
+                return (1, 'rerun rejected: boom')
+
+        gh, api = RejectingGh(), FakeApi()
+        state = {}
+        outcome = tick(make_pr(), [make_check()], state, gh, api)
+        self.assertEqual('woke', outcome['action'])
+        self.assertEqual(1, len(api.calls))
+        self.assertEqual({}, state.get('flights', {}))
+        self.assertEqual([], state.get('reran_runs', []))
+        # The repeat tick stays quiet because the wake was delivered, not
+        # because a phantom flight suppresses it: no second request, no
+        # second post, and still no flight for the TTL to hold.
+        outcome = tick(make_pr(), [make_check()], state, gh, api)
+        self.assertEqual('suppressed', outcome['action'])
+        self.assertEqual(1, len(gh.argv_calls))
+        self.assertEqual(1, len(api.calls))
+        self.assertEqual({}, state.get('flights', {}))
+
+    def test_none_returning_gh_counts_as_success(self):
+        class QuietGh(FakeGh):
+            def __call__(self, argv):
+                self.argv_calls.append(list(argv))
+                return None
+
+        outcome = tick(make_pr(), [make_check()], {}, QuietGh(),
+                       FakeApi())
+        self.assertEqual('reran', outcome['action'])
+
+    def test_denied_sibling_vetoes_the_whole_run(self):
+        # `gh run rerun --failed` retries every failed job in the run, so
+        # one failing deny-listed sibling vetoes the eligible job too.
+        eligible = make_check('check.yml', 'rust tests', run_id=101)
+        denied = make_check('check.yml', 'CodeQL', run_id=101)
+        self.assertFalse(ci.is_eligible(denied))
+        gh, api = FakeGh(), FakeApi()
+        outcome = tick(make_pr(), [eligible, denied], {}, gh, api)
+        self.assertEqual('woke', outcome['action'])
+        self.assertEqual([], gh.argv_calls)
+        self.assertEqual(WAKE_TEXT, api.calls[0][2]['body'])
+
+    def test_passing_denied_sibling_does_not_veto(self):
+        # --failed leaves passing jobs alone, so a green denied sibling
+        # must not block the eligible job's rerun.
+        eligible = make_check('check.yml', 'rust tests', run_id=101)
+        passing = make_check('check.yml', 'Secret scan', run_id=101,
+                             conclusion='success')
+        gh, api = FakeGh(), FakeApi()
+        outcome = tick(make_pr(), [eligible, passing], {}, gh, api)
+        self.assertEqual('reran', outcome['action'])
+        self.assertEqual(1, len(gh.argv_calls))
+
+    def test_two_jobs_one_run_reruns_once_and_tracks_each_job(self):
+        lint = make_check('check.yml', 'lint', run_id=101)
+        rust = make_check('check.yml', 'rust tests', run_id=101)
+        gh, api = FakeGh(), FakeApi()
+        ledger = FakeLedger()
+        state = {}
+        outcome = ci.handle_ci_tick(
+            pr=make_pr(), checks=[lint, rust], state=state, gh=gh, api=api,
+            ledger=ledger, quarantine_card=lambda payload: 'card-1',
+            wake_text=WAKE_TEXT, now=T0)
+        self.assertEqual('reran', outcome['action'])
+        self.assertEqual(1, len(gh.argv_calls))
+        self.assertEqual([101], outcome['rerun_run_ids'])
+        self.assertEqual(2, len(state['flights']))
+        # Both retries pass: one flake per job, attributed correctly.
+        lint_ok = make_check('check.yml', 'lint', run_id=101, attempt=2,
+                             conclusion='success')
+        rust_ok = make_check('check.yml', 'rust tests', run_id=101,
+                             attempt=2, conclusion='success')
+        outcome = ci.handle_ci_tick(
+            pr=make_pr(), checks=[lint_ok, rust_ok], state=state, gh=gh,
+            api=api, ledger=ledger,
+            quarantine_card=lambda payload: 'card-1', wake_text=WAKE_TEXT,
+            now=T0 + 600)
+        self.assertEqual('green', outcome['action'])
+        self.assertEqual({'lint', 'rust tests'},
+                         {entry['job'] for entry in ledger.recorded})
+
+    def test_sibling_success_steals_neither_flight_nor_flake(self):
+        # The exact false-flake probe: only rust failed and reran, so
+        # lint's success must not pop rust's flight or record lint's flake.
+        gh, api = FakeGh(), FakeApi()
+        ledger = FakeLedger()
+        state = {}
+        cards = []
+        rust_red = make_check('check.yml', 'rust tests', run_id=101)
+        outcome = ci.handle_ci_tick(
+            pr=make_pr(), checks=[rust_red], state=state, gh=gh, api=api,
+            ledger=ledger, quarantine_card=cards.append,
+            wake_text=WAKE_TEXT, now=T0)
+        self.assertEqual('reran', outcome['action'])
+        lint_ok = make_check('check.yml', 'lint', run_id=101, attempt=1,
+                             conclusion='success')
+        rust_red2 = make_check('check.yml', 'rust tests', run_id=101,
+                               attempt=2)
+        outcome = ci.handle_ci_tick(
+            pr=make_pr(), checks=[lint_ok, rust_red2], state=state, gh=gh,
+            api=api, ledger=ledger, quarantine_card=cards.append,
+            wake_text=WAKE_TEXT, now=T0 + 600)
+        self.assertEqual('woke', outcome['action'])
+        self.assertEqual(1, outcome['rounds'])
+        self.assertEqual([], ledger.recorded)
+        self.assertEqual({}, state['flights'])
+
+    def test_stale_attempt_success_pops_without_recording(self):
+        # A success row at/below the flight's attempt cannot be the retry
+        # (contradictory classifier data): pop the flight, record nothing.
+        gh, api = FakeGh(), FakeApi()
+        ledger = FakeLedger()
+        state = {}
+        ci.handle_ci_tick(
+            pr=make_pr(), checks=[make_check(run_id=101)], state=state,
+            gh=gh, api=api, ledger=ledger,
+            quarantine_card=lambda payload: 'card-1', wake_text=WAKE_TEXT,
+            now=T0)
+        stale = make_check(run_id=101, attempt=1, conclusion='success')
+        outcome = ci.handle_ci_tick(
+            pr=make_pr(), checks=[stale], state=state, gh=gh, api=api,
+            ledger=ledger, quarantine_card=lambda payload: 'card-1',
+            wake_text=WAKE_TEXT, now=T0 + 600)
+        self.assertEqual('green', outcome['action'])
+        self.assertEqual([], ledger.recorded)
+        self.assertEqual({}, state['flights'])
 
     def test_failed_post_stays_retryable(self):
         # A failed post is NOT suppressed: the host must fall through to its

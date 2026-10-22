@@ -24,6 +24,12 @@ suppressed, green) set neither ``pending_wake`` nor ``woke``; like
 :func:`pr_controller_wakes.post_wake`, ``woke`` is only ever set by
 reconciliation on a claimed wake, never optimistically.
 
+The companion entry :func:`handle_ci_reset` runs when the wake-site patch
+sees ``cur != 'ci_red'`` on a record that still holds policy state: an
+all-green result clears rounds/cap and records pass-flakes, anything else
+is a no-op, and the host wake always proceeds. Without it the helper would
+never see the green transition and a cap would mute the PR forever.
+
 Shadow mode (``shadow=True``): the helper runs against null sinks under a
 separate ``rec['ci_policy_shadow']`` key (and a ``'shadow'`` sub-key of the
 shared store, so shadow counts never leak into live flake windows), the
@@ -47,6 +53,7 @@ import time
 from pathlib import Path
 
 import pr_controller_ci as ci
+from pr_controller_ci import kill_switch_active
 
 try:
     from flake_ledger import LedgerClient, quarantine_card
@@ -56,6 +63,11 @@ except Exception:  # pragma: no cover - host stages flake_ledger.py beside us
 
 CI_STATE_KEY = 'ci_policy'
 GH_TIMEOUT_S = 120
+
+
+def shadow_active():
+    """True when CI_POLICY_SHADOW=1 asks for log-only shadow mode."""
+    return os.environ.get('CI_POLICY_SHADOW', '').strip() == '1'
 
 _SKIP_CONCLUSIONS = frozenset({
     '', 'pending', 'queued', 'waiting', 'requested', 'in_progress',
@@ -342,7 +354,7 @@ def default_deps(api, log):
         'quarantine_card': default_quarantine_card(api),
         'log': log,
         'log_action': default_log_action,
-        'shadow': os.environ.get('CI_POLICY_SHADOW', '').strip() == '1',
+        'shadow': shadow_active(),
     }
 
 
@@ -449,4 +461,98 @@ def _handle_ci_red(*, full, pr, detail, rec, owner_card_id, wake_text,
             'to re-arm author wakes')
         return 'handled'
     log(f'ci-policy {ident} unknown action {action!r}; waking as today')
+    return 'proceed'
+
+
+class _ResetGuards:
+    """gh/api stand-ins proving the reset pass performs no side effects.
+
+    The helper's all-green path requests no reruns and posts nothing, so
+    any call here raises (which the helper absorbs fail-safe) and is
+    logged by the caller as a leak.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def gh(self, argv):
+        self.calls.append(('gh', list(argv)))
+        raise OSError('reset pass must not rerun')
+
+    def api(self, method, path, payload):
+        self.calls.append(('api', method, path))
+        raise OSError('reset pass must not post')
+
+
+def handle_ci_reset(*, full, pr, detail, rec, ledger, quarantine_card, log,
+                    shadow=False, now=None, shared=None, **_ignored):
+    """Reset-only transition pass for heads that left ci_red.
+
+    The wake-site patch calls this when ``cur != 'ci_red'`` but the record
+    still holds policy state. An all-green result runs the helper's green
+    branch (pass-flakes recorded, rounds/cap cleared); anything else leaves
+    state untouched. Never posts, never reruns, and always returns
+    'proceed' so the host wake is unaffected. ``**_ignored`` swallows the
+    shared ``default_deps`` (api/gh/log_action). Never raises.
+    """
+    ident = f"{full}#{pr.get('number')}"
+    if now is None:
+        now = time.time()
+    try:
+        return _handle_ci_reset(
+            full=full, pr=pr, detail=detail, rec=rec,
+            ledger=ledger, quarantine_card=quarantine_card, log=log,
+            shadow=shadow, now=now, ident=ident, shared=shared)
+    except Exception as exc:
+        log(f'ci-policy {ident} reset pass failed ({exc}); waking as today')
+        return 'proceed'
+
+
+def _handle_ci_reset(*, full, pr, detail, rec, ledger, quarantine_card, log,
+                     shadow, now, ident, shared):
+    checks, reason = checks_from_detail(detail)
+    if reason != 'ok':
+        return 'proceed'  # nothing green to reset against; wake as today
+    if any((check.get('conclusion') or 'failure') != 'success'
+           for check in checks):
+        # Still red: the ci_red path owns this head; leave rounds/cap alone.
+        return 'proceed'
+    if kill_switch_active():
+        # The switch freezes policy state entirely; ignoring (not clearing)
+        # the cap is what restores wake-on-first-red while it is set.
+        log(f'ci-policy {ident} reset pass skipped: kill switch holds state')
+        return 'proceed'
+    helper_pr = {'repo': str(full).split('/')[-1],
+                 'number': pr.get('number'),
+                 'head_sha': pr.get('headRefOid') or pr.get('head_sha'),
+                 'owner_card_id': None}
+    guards = _ResetGuards()
+    if shadow:
+        state = rec.setdefault('ci_policy_shadow', {})
+        shadow_shared = None
+        if isinstance(shared, dict):
+            shadow_shared = shared.setdefault('shadow', {})
+            if not isinstance(shadow_shared, dict):
+                shadow_shared = shared['shadow'] = {}
+        null = _NullSinks()
+        outcome = ci.handle_ci_tick(
+            pr=helper_pr, checks=checks, state=state, gh=guards.gh,
+            api=guards.api, ledger=null.ledger,
+            quarantine_card=null.quarantine_card, wake_text='',
+            now=now, shared=shadow_shared)
+        log(f'ci-policy {ident} shadow reset pass: '
+            f'would-{outcome.get("action")} '
+            f'head={str(helper_pr["head_sha"])[:8]}')
+        return 'proceed'
+    state = rec.setdefault(CI_STATE_KEY, {})
+    outcome = ci.handle_ci_tick(
+        pr=helper_pr, checks=checks, state=state, gh=guards.gh,
+        api=guards.api, ledger=ledger, quarantine_card=quarantine_card,
+        wake_text='', now=now,
+        shared=shared if isinstance(shared, dict) else None)
+    if guards.calls:
+        log(f'ci-policy {ident} reset pass leaked calls: {guards.calls!r}')
+    elif outcome.get('action') == 'green':
+        log(f'ci-policy {ident} reset rounds/cap on green '
+            f'head={str(helper_pr["head_sha"])[:8]}')
     return 'proceed'

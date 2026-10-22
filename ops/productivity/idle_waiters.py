@@ -21,12 +21,35 @@ Dry run by default; --apply to act. At most MAX_PARK parks per run; a card is no
 Stop: touch ~/.local/state/flow-guard/PAUSE. Rollback per card: PATCH status in_progress, blockedByIssueIds [].
 State: missing, empty, malformed or invalid state stops the run before any API call. Recover with
 --recover-state FILE (docs/runbooks/guard-state-recovery.md).
+
+Live-work policy has one source: live_run_guard.live_work_predicate for selection,
+and live_run_guard.issue_has_live_work immediately before the touched receipt and
+again before each parking PATCH. This protects issueId/taskId running, queued and
+scheduled_retry work (due or not). The guard is fail-closed: only explicit False
+permits a park. True conflates live work and lookup failure, so reports call it
+live_or_unmeasured; exceptions are guard_lookup_failed. Both mean retry_later,
+never permission to park. A run arriving during receipt persistence skips the
+PATCH and triggers removal of the provisional receipt. If that removal cannot
+be saved, StateError stops the run; a stale receipt may suppress retries for 24h
+until expiry or explicit operator reconciliation. DB checks and HTTP PATCH are not
+atomic; a run can still arrive after the last check. No server transaction is added.
+
+--json emits a version=1 summary instead of text. candidates are proposed parks,
+parked are confirmed blocked responses, flagged are durable suppression receipts
+(not verified delivery), and skipped carry stable issue IDs, reason, error code
+and next_action. Default text and run(apply=False) remain compatible;
+run also returns the report. State/query refusals retain stderr + nonzero exit,
+not a JSON envelope; consumers must check exit status before parsing stdout.
+Dry-run makes no board writes, logs or state saves.
+Offline check (synthetic fixtures only; no activation):
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s ops/productivity -p 'test_idle_wait*.py'
 """
-import json, math, os, re, subprocess, sys, time
+import argparse, contextlib, io, json, math, os, re, subprocess, sys, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
 import atomic_state  # noqa: E402
+import live_run_guard  # noqa: E402
 
 ROOT = '/home/ubuntu/paperclip-enterprise-company'
 CID = '00000000-0000-4000-8000-000000000004'
@@ -102,12 +125,27 @@ def open_blockers(iid):
       where r.related_issue_id='{iid}' and r.type='blocks' and o.status not in ('done','cancelled')""")
 
 
+def parking_skip(iid, ident):
+    try:
+        live = live_run_guard.issue_has_live_work(iid)
+    except Exception:
+        reason = 'guard_lookup_failed'
+    else:
+        if live is False:
+            return None
+        reason = 'live_or_unmeasured'
+    return {'issue': ident, 'issue_id': iid, 'reason': reason,
+            'error_code': reason, 'next_action': 'retry_later'}
+
+
 def run(apply=False):
     if os.path.exists(f'{STATE_DIR}/PAUSE'):
         return
     state = atomic_state.load(STATE, validate_state)
     now = time.time()
     state['touched'] = {k: v for k, v in state['touched'].items() if now - v < 86400}
+    report = {'version': 1, 'dry_run': not apply, 'candidates': [], 'parked': [],
+              'skipped': [], 'no_doer': [], 'external': [], 'operator': [], 'flagged': []}
 
     try:
         waiters = psql(f"""
@@ -128,18 +166,20 @@ where i.status in ('in_progress','todo','in_review')
   and not exists (select 1 from issue_comments c2 where c2.issue_id=i.id and c2.created_at>now()-interval '6 hours'
                   and c2.deleted_at is null and c2.presentation is null
                   and coalesce(c2.author_agent_id::text,'')<>i.assignee_agent_id::text)
-  and not exists (select 1 from heartbeat_runs r where r.context_snapshot->>'issueId'=i.id::text
-                  and r.status in ('running','queued'))
+  and not exists (select 1 from heartbeat_runs h where {live_run_guard.live_work_predicate('i.id::text')})
 order by n.k desc;""")
     except subprocess.TimeoutExpired:
         print(f'idle-waiters: FAILED: db query timed out after {PSQL_TIMEOUT}s '
               f'(unmeasured; nothing parked)', file=sys.stderr)
         raise SystemExit(1)
 
+    report['waiters'] = len(waiters)
     parked, external, nodoer, skipped, operator = [], [], [], [], []
     for iid, ident, status, title, mnotes, notes, desc in waiters:
+        entry = {'issue': ident, 'issue_id': iid}
         if ident in state['touched']:
             skipped.append(ident)
+            report['skipped'].append(dict(entry, reason='touched_within_24h', next_action='wait'))
             continue
         refs = [m for m in WAIT_REF.findall(notes + ' ' + mnotes) if m != ident]
         refs += [b[0] for b in open_blockers(iid)]
@@ -153,12 +193,16 @@ order by n.k desc;""")
                 doers.append((ref, d_id, d_title))
         if 1 <= len(doers) <= MAX_DOERS:
             parked.append((iid, ident, title, doers))
+            report['candidates'].append(dict(entry, blocker_ids=[d[1] for d in doers]))
         elif title.lower().startswith('operator:'):
             operator.append(ident)  # the doer is the host operator; it is in the operator queue, not the CEO's
+            report['operator'].append(entry)
         elif PR_WAIT.search(notes + ' ' + mnotes + ' ' + title) or re.match(r'(code )?review\b.*\bPR\b', title, re.I):
             external.append(ident)
+            report['external'].append(entry)
         else:
             nodoer.append((ident, title))
+            report['no_doer'].append(entry)
 
     print(f'{len(waiters)} waiters: {len(parked)} park-on-doer, {len(external)} external PR/CI wait (left), '
           f'{len(nodoer)} no doer (flag CEO), {len(operator)} Operator: cards (operator queue), {len(skipped)} touched <24h')
@@ -167,15 +211,27 @@ order by n.k desc;""")
     for ident, title in nodoer:
         print(f'  NODOER {ident} | {title[:70]}')
     if not apply:
-        return
+        return report
 
     done = 0
     for iid, ident, title, doers in parked[:MAX_PARK]:
         keep = [b[0] for b in open_blockers(iid)]
         ids = list(dict.fromkeys([card(k)[0] for k in keep] + [d[1] for d in doers]))
         names = ', '.join(d[0] for d in doers)
+        skip = parking_skip(iid, ident)
+        if skip:
+            report['skipped'].append(skip)
+            print(f'  SKIP {ident} {skip["reason"]}; next_action={skip["next_action"]}')
+            continue
         state['touched'][ident] = now
         persist(state)  # saved before the PATCH: a failed save parks nothing, and a park is never repeated
+        skip = parking_skip(iid, ident)
+        if skip:
+            del state['touched'][ident]
+            persist(state)
+            report['skipped'].append(skip)
+            print(f'  SKIP {ident} {skip["reason"]}; next_action={skip["next_action"]}')
+            continue
         r = api('PATCH', f'issues/{iid}', {
             'status': 'blocked', 'blockedByIssueIds': ids,
             'comment': (f'Idle-waiter guard: this card kept waking with nothing new while it waits on {names}. '
@@ -184,8 +240,15 @@ order by n.k desc;""")
                         'just to wait.')})
         ok = r.get('status') == 'blocked'
         done += ok
+        if ok:
+            report['parked'].append({'issue': ident, 'issue_id': iid, 'blocker_ids': ids})
+        else:
+            report['skipped'].append({'issue': ident, 'issue_id': iid, 'reason': 'parking_unconfirmed',
+                                      'error_code': 'parking_unconfirmed', 'next_action': 'manual_review'})
         log(f'{ident} blocked on {names} (was polling with no-op notes) ok={ok}; rollback: PATCH status in_progress, blockedByIssueIds []')
 
+    for iid, ident, _, _ in parked[MAX_PARK:]:
+        report['skipped'].append({'issue': ident, 'issue_id': iid, 'reason': 'park_limit', 'next_action': 'retry_later'})
     new_flags = [(i, t) for i, t in nodoer if i not in state['flagged']]
     if new_flags:
         roll = psql(f"""select id from issues where company_id='{CID}' and title='{ROLLUP_TITLE}'
@@ -198,6 +261,7 @@ order by n.k desc;""")
         for i, _ in new_flags:
             state['flagged'][i] = now
         persist(state)
+        report['flagged'] = [e for e in report['no_doer'] if e['issue'] in dict(new_flags)]
         if roll:
             api('POST', f'issues/{roll[0][0]}/comments', {'body': body})
         else:
@@ -209,6 +273,7 @@ order by n.k desc;""")
         log(f'flagged {len(new_flags)} no-doer waiter(s) to the CEO rollup: {", ".join(i for i, _ in new_flags)}')
     persist(state)
     print(f'parked {done}, flagged {len(new_flags)}')
+    return report
 
 
 def recover_state(doc_path):
@@ -226,14 +291,31 @@ def recover_state(doc_path):
 
 
 def main():
-    os.makedirs(STATE_DIR, exist_ok=True)
-    if '--recover-state' in sys.argv:
-        at = sys.argv.index('--recover-state') + 1
-        if at >= len(sys.argv):
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--apply', action='store_true', help='apply parking and rollup notices')
+    mode.add_argument('--dry-run', action='store_true', help='read-only preview (default)')
+    mode.add_argument('--recover-state', metavar='FILE', nargs='?', const='',
+                      help='recover invalid state from proven receipts')
+    parser.add_argument('--json', action='store_true', help='emit a version=1 summary instead of text')
+    args = parser.parse_args()
+    if args.recover_state is not None:
+        if not args.recover_state:
             raise atomic_state.StateError('--recover-state needs a FILE')
-        recover_state(sys.argv[at])
-    else:
-        run(apply='--apply' in sys.argv)
+        if args.json:
+            parser.error('--json cannot be combined with --recover-state')
+        os.makedirs(STATE_DIR, exist_ok=True)
+        recover_state(args.recover_state)
+        return
+    if args.json:
+        with contextlib.redirect_stdout(io.StringIO()):
+            report = run(apply=args.apply)
+        if report is None:
+            report = {'version': 1, 'dry_run': not args.apply, 'reason': 'paused', 'next_action': 'wait',
+                      'parked': [], 'skipped': []}
+        print(json.dumps(report, sort_keys=True))
+        return report
+    return run(apply=args.apply)
 
 
 if __name__ == '__main__':

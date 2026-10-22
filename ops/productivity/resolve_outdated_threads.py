@@ -23,6 +23,14 @@ trusted App), wrong_head (trusted checks exist but none on the expected head), o
 trusted on-head run is not completed/success/5/5). A newer success from any other App never overrides a
 trusted failure: only trusted-App runs are candidates.
 
+Incomplete evidence (fail closed, never 5/5-by-omission): a search page with
+incomplete_results, a MAX_PRS bound exit, or a failed/malformed search page
+degrades the WHOLE tick to a single incomplete_search skip row with zero
+mutations and zero per-PR detail reads. Check runs page explicitly (page=N, at
+most MAX_CHECK_RUN_PAGES) and reconcile collected runs against the first page's
+total_count; a missing/mismatched total, a failed page, or bound exhaustion
+skips THAT PR as incomplete_check_runs while siblings continue.
+
 Token helper (bounded at TOKEN_TIMEOUT, 30s): TimeoutExpired, a non-zero exit,
 a missing helper, or empty stdout refuses with a single "token helper: ..."
 line and exits non-zero with zero gh calls and zero mutations, so gh can never
@@ -49,6 +57,7 @@ TRUSTED_REVIEW_APP_ID = 5191093
 TRUSTED_REVIEW_APP_SLUG = 'togetherweown-reviewer'
 MAX_RESOLVE = 30
 MAX_PRS = 300
+MAX_CHECK_RUN_PAGES = 10
 TOKEN_TIMEOUT = 30
 STATE_DIR = Path.home() / '.local/state/resolve-outdated-threads'
 PAUSE = STATE_DIR / 'PAUSE'
@@ -152,17 +161,62 @@ def head_is_5of5(check_runs, head):
 
 
 def open_prs(e):
+    """Open org PRs with completeness. Returns (prs, complete).
+
+    complete is False when any search page reports incomplete_results, when the
+    MAX_PRS bound stops pagination (the bound governs: the set may be truncated
+    however a further probe would read), or when a page fails or is malformed.
+    The caller must degrade the whole tick on incomplete: an incomplete_search
+    skip row with zero mutations and zero per-PR detail reads.
+    """
     prs, page = [], 1
-    while len(prs) < MAX_PRS:
-        d = json.loads(gh(e, 'api', f'search/issues?q=org:{ORG}+is:pr+is:open&per_page=100&page={page}'))
-        items = d.get('items') or []
-        for it in items:
-            repo = it['repository_url'].split('/repos/')[1]
-            prs.append((repo, it['number']))
-        if len(items) < 100:
-            break
-        page += 1
-    return prs
+    try:
+        while len(prs) < MAX_PRS:
+            d = json.loads(gh(e, 'api', f'search/issues?q=org:{ORG}+is:pr+is:open&per_page=100&page={page}'))
+            if d.get('incomplete_results'):
+                return [], False
+            items = d.get('items') or []
+            for it in items:
+                repo = it['repository_url'].split('/repos/')[1]
+                prs.append((repo, it['number']))
+            if len(items) < 100:
+                return prs, True
+            page += 1
+    except (RuntimeError, ValueError, KeyError, AttributeError, TypeError, IndexError):
+        return [], False
+    return [], False
+
+
+def check_runs_for_head(e, repo, head):
+    """Check runs for one head with reconciliation. Returns (runs, complete).
+
+    Pages explicitly (page=N) up to MAX_CHECK_RUN_PAGES and reconciles collected
+    runs against the first page's total_count. Incomplete (the caller skips that
+    PR as incomplete_check_runs, never 5/5-by-omission) on: a missing/non-integer
+    total_count, collected != total_count, a failed/malformed page, a disagreeing
+    later total_count, or bound exhaustion without reconciliation. A later page
+    that omits total_count is tolerated: the first page's total governs.
+    """
+    runs, page, total = [], 1, None
+    try:
+        while page <= MAX_CHECK_RUN_PAGES:
+            d = json.loads(gh(e, 'api', f'repos/{repo}/commits/{head}/check-runs?per_page=100&page={page}'))
+            batch = d.get('check_runs') or []
+            if not isinstance(batch, list):
+                return [], False
+            if page == 1:
+                total = d.get('total_count')
+                if not isinstance(total, int) or isinstance(total, bool):
+                    return [], False
+            elif 'total_count' in d and d['total_count'] != total:
+                return [], False
+            runs.extend(batch)
+            if len(batch) < 100 or len(runs) >= total:
+                break
+            page += 1
+    except (RuntimeError, ValueError, KeyError, AttributeError, TypeError, IndexError):
+        return [], False
+    return runs, len(runs) == total
 
 
 def log(line, rec):
@@ -183,7 +237,12 @@ def run(dry=False):
         print(err)
         raise SystemExit(1)
     done, report = 0, []
-    for repo, num in open_prs(e):
+    prs, complete = open_prs(e)
+    if not complete:
+        report = [{'pr': '*', 'outdated': 0, 'skipped': 'incomplete_search'}]
+        print(json.dumps(report, indent=1))
+        return report
+    for repo, num in prs:
         if done >= MAX_RESOLVE:
             break
         owner, name = repo.split('/')
@@ -200,9 +259,9 @@ def run(dry=False):
         if not head:
             report.append({'pr': f'{repo}#{num}', 'outdated': len(cands), 'skipped': 'missing_head'})
             continue
-        try:
-            checks = json.loads(gh(e, 'api', f'repos/{repo}/commits/{head}/check-runs?per_page=100'))['check_runs']
-        except (RuntimeError, KeyError, ValueError):
+        checks, complete = check_runs_for_head(e, repo, head)
+        if not complete:
+            report.append({'pr': f'{repo}#{num}', 'outdated': len(cands), 'skipped': 'incomplete_check_runs'})
             continue
         ok, reason = review_evidence(checks, head)
         if not ok:

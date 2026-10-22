@@ -129,7 +129,7 @@ def drive(check_runs, head=HEAD, dry=False):
     pr_payload = json.dumps({'data': {'repository': {'pullRequest': {
         'headRefOid': head,
         'reviewThreads': {'nodes': [thread()]}}}}})
-    checks_payload = json.dumps({'check_runs': check_runs})
+    checks_payload = json.dumps({'total_count': len(check_runs), 'check_runs': check_runs})
     mutations = []
 
     def fake_gh(e, *args, input_=None):
@@ -147,7 +147,7 @@ def drive(check_runs, head=HEAD, dry=False):
 
     tmp = tempfile.TemporaryDirectory()
     patches = [mock.patch.object(r, 'env', lambda: {}),
-               mock.patch.object(r, 'open_prs', lambda e: [(repo, num)]),
+               mock.patch.object(r, 'open_prs', lambda e: ([(repo, num)], True)),
                mock.patch.object(r, 'gh', fake_gh),
                mock.patch.object(r, 'log'),
                mock.patch.object(r, 'STATE_DIR', Path(tmp.name) / 'state'),
@@ -207,7 +207,8 @@ def run_with_helper(behavior, dry=False):
     pr_payload = json.dumps({'data': {'repository': {'pullRequest': {
         'headRefOid': HEAD,
         'reviewThreads': {'nodes': [thread()]}}}}})
-    checks_payload = json.dumps({'check_runs': [cr('2026-10-06T11:00Z', 'success', '5/5')]})
+    checks_payload = json.dumps({'total_count': 1,
+                                   'check_runs': [cr('2026-10-06T11:00Z', 'success', '5/5')]})
     gh_calls, mutations, helper_calls = [], [], []
 
     def fake_run(cmd, **kwargs):
@@ -241,7 +242,7 @@ def run_with_helper(behavior, dry=False):
     tmp = tempfile.TemporaryDirectory()
     patches = [mock.patch.object(r.subprocess, 'run', fake_run),
                mock.patch.object(r, 'gh', fake_gh),
-               mock.patch.object(r, 'open_prs', lambda e: [(repo, num)]),
+               mock.patch.object(r, 'open_prs', lambda e: ([(repo, num)], True)),
                mock.patch.object(r, 'log'),
                mock.patch.object(r, 'STATE_DIR', Path(tmp.name) / 'state'),
                mock.patch.object(r, 'PAUSE', Path(tmp.name) / 'state' / 'PAUSE'),

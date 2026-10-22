@@ -322,6 +322,7 @@
     "api-base-validation-python suite:1",
     "provider baseline integrity suite:1",
     "review report input integrity holds:1",
+    "test-missing gate suites:1",
     "orphan-suite ratchet fixtures suite:1",
     "assignment host-source bundle suite:1",
     "stop-guard landing suite:1",
@@ -330,7 +331,8 @@
     "pr-tracker suite:1",
     "settings-bind rehearsal suite:1",
     "host backup publication receipt contract (offline):1",
-    "native-ssh citation gate suite:1"
+    "native-ssh citation gate suite:1",
+    "verify-fast plan suites:1"
   ],
   "retained": [
     {
@@ -525,7 +527,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "6a8ded26364a83cf47e7bc7f010aa059b1460fc55a6859d00bb85f6155967749",
+      "definition_sha256": "f3a57bef80b412ef41194ba3ca78f1f13fcb8af9d702307dadb66bc09d718c5f",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -555,7 +557,7 @@
     },
     {
       "name": "staging login-smoke probe suite",
-      "definition_sha256": "00e0dda681157127078945f992899071099bfa097dcb7fafbb02570a1a5e14e1",
+      "definition_sha256": "74896b139efb11ffcedb06a4d90192eb99732132f8fbfe82d18802ab71dbecea",
       "id": "staging login-smoke probe suite:1"
     },
     {
@@ -1819,6 +1821,11 @@
       "id": "review report input integrity holds:1"
     },
     {
+      "name": "test-missing gate suites",
+      "definition_sha256": "a245dc744b32a853deac2e14fcb7d52b9582f7862154f7ae954800a7da67dc3a",
+      "id": "test-missing gate suites:1"
+    },
+    {
       "name": "orphan-suite ratchet fixtures suite",
       "definition_sha256": "6a78bd74cf80ae987f05bdf0de08f83fd58cbc9b94d89517c714db382c093835",
       "id": "orphan-suite ratchet fixtures suite:1"
@@ -1862,6 +1869,11 @@
       "name": "native-ssh citation gate suite",
       "definition_sha256": "34cafcd66f97b170ff90432448cfed1b909cc5f20b905b42c6b09b6651c10694",
       "id": "native-ssh citation gate suite:1"
+    },
+    {
+      "name": "verify-fast plan suites",
+      "definition_sha256": "e1b1d3d318e2dff53a23c79b891d4bbab267c426e0d16a9c8dcf8fbef9f8074d",
+      "id": "verify-fast plan suites:1"
     }
   ],
   "removed": [

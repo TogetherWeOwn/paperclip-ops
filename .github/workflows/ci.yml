@@ -1845,6 +1845,10 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_hook_spawn_guard.sh
 
+      - name: hook spawn guard JSON envelope suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -B -m unittest -v test_hook_spawn_guard_json
+
       # case_61f942c4 slice C. Custom deployment protection rule for
       # staging-migrate-apply: approves only a verified plan plus CEO GO,
       # rejects everything else. Offline: every transport behind the webhook

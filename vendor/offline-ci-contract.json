@@ -321,7 +321,8 @@
     "api-base-validation suite:1",
     "api-base-validation-python suite:1",
     "review report input integrity holds:1",
-    "host backup publication receipt contract (offline):1"
+    "host backup publication receipt contract (offline):1",
+    "dispatch staged-lifecycle acceptance suite:1"
   ],
   "retained": [
     {
@@ -1808,6 +1809,11 @@
       "name": "host backup publication receipt contract (offline)",
       "definition_sha256": "f3220047635007807b551238df97e65b3db9b784bcafb35829fa009c51e3f5f4",
       "id": "host backup publication receipt contract (offline):1"
+    },
+    {
+      "name": "dispatch staged-lifecycle acceptance suite",
+      "definition_sha256": "08b50e006b6e7315ec03d8d6d157eab8565be8cb65e0e5c1620e6de880d6cf54",
+      "id": "dispatch staged-lifecycle acceptance suite:1"
     }
   ],
   "removed": [

@@ -307,7 +307,7 @@ def run_cli(args):
 
 
 class TestJsonRegressions(unittest.TestCase):
-    # Builder-owned pins for the M11.3 JSON envelope (TOG-37013). The full
+    # Builder-owned pins for the preview-parity JSON envelope. The full
     # envelope contract lives in test_kofra_preview_parity_json.py (paired
     # acceptance, never edited here); these pin the three properties this
     # suite already cares about: exit codes stay the interface, values

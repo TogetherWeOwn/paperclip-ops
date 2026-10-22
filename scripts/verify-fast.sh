@@ -41,7 +41,7 @@ if [[ "${1:-}" == "--parse-only" ]]; then
 elif [[ "${1:-}" == "--list" ]]; then
   echo "parse: bash -n, node --check, python py_compile, ESM check, vendored-tracked gate"
   echo "full: parse + external-disclosure, muse-stop-guard, disposition-stop-guard,"
-  echo "      ci-required-checks-audit, ci-gating, private-mutation-harness, readme-script-index,"
+  echo "      ci-required-checks-audit, test-missing-gate, ci-gating, private-mutation-harness, readme-script-index,"
   echo "      public-comment-hygiene,"
   echo "      case_b2acfa5c-runner-contract, dropchannel-fixture, approval-timeout-probe, acceptance-transport reply, gh-access-dispatch,"
   echo "      upstream pre-push hook,"
@@ -138,6 +138,11 @@ python3 -m unittest test_reharden_relative_targets || fail "reharden relative-ta
 python3 -m unittest test_deploy_window_manifest || fail "deploy-window manifest gate suite failed"
 ./test_credential_chain_lockdown.sh || fail "credential-chain lockdown fixture suite failed"
 python3 -m unittest test_ci_required_checks_audit || fail "required-checks audit failed"
+# case_6f2e8a41. Deterministic test-missing gate: unit contract plus
+# staged-copy/CLI regression. Hermetic stdlib unittest, no network, no
+# clock, temp fixtures only.
+python3 -m unittest test_blocker_test_checks test_test_missing_org_template \
+  || fail "test-missing gate suites failed"
 python3 -B test_beszel_adapter.py || fail "beszel adapter suite failed"
 python3 -B test_beszel_discord_forwarder.py || fail "beszel discord forwarder suite failed"
 bash test_fetch_beszel_normalized.sh || fail "beszel fetch wrapper suite failed"

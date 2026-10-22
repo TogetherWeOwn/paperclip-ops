@@ -31,6 +31,7 @@ Operator applies these files there after this PR merges.
 | `workflow-templates/changes.yml` | `.github/workflows/changes.yml` (reusable `workflow_call`) |
 | `workflow-templates/starter-ci.yml` | `workflow-templates/starter-ci.yml` (new-repo choice) |
 | `workflow-templates/starter-ci.properties.json` | `workflow-templates/starter-ci.properties.json` (required name/description metadata) |
+| `test-missing/blocker_test_checks.py` | `.github/scripts/blocker_test_checks.py` (verbatim copy of the repo-root source; fix upstream, then re-copy) |
 | `scripts/detect_changes.py` | reference only (stays here; the workflow embeds the same rules) |
 | `tests/test_detect_changes.sh` | reference only (stays here) |
 | `tests/test_detect_workflow.py` | reference only (executes the actual workflow step in disposable local repos) |

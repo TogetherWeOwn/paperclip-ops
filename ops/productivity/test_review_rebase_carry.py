@@ -89,9 +89,10 @@ fail-closed, delta-exactness and proof test below must fail on
 assertions (not errors). GREEN story: run against the paired builder
 change, which must satisfy every test without editing this file.
 
-Until the builder module lands, this file skips (it must stay CI-green
-as a tests-only change). A present-but-broken module fails loudly: only
-a missing ``review_rebase_carry`` module itself skips.
+Until the builder module lands, this file skips via ``setUpModule`` (it
+must stay CI-green as a tests-only change, including under the repo's
+by-module-name unittest invocation). A present-but-broken module fails
+loudly: only a missing ``review_rebase_carry`` module itself skips.
 """
 
 import ast
@@ -105,20 +106,76 @@ import tempfile
 import unittest
 from pathlib import Path
 
+PR = 7
+
+# Git repository-location variables override the cwd of every git child, so
+# a leaked GIT_DIR/GIT_WORK_TREE would aim fixture commands (and the helper
+# under test, which inherits the test process env) at the caller's repo
+# instead of the temp fixture. Strip them and point global config at
+# os.devnull; system config stays suppressed via GIT_CONFIG_NOSYSTEM.
+GIT_REPO_VARS = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR",
+    "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    "GIT_NAMESPACE")
+GIT_ENV = {
+    key: value for key, value in os.environ.items()
+    if key not in GIT_REPO_VARS
+    and not key.startswith("GIT_CONFIG_")
+    and key not in ("GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS")
+}
+GIT_ENV.update(GIT_EDITOR="true", GIT_SEQUENCE_EDITOR="true",
+               GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1",
+               GIT_CONFIG_GLOBAL=os.devnull)
+GIT_BASE = ["git", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false"]
+
+
+def _hermetic_environ():
+    """Apply the same sanitization to os.environ for helper children.
+
+    Installed before importing the helper so import-time environment
+    snapshots are covered; the returned restore runs via addModuleCleanup.
+    """
+    saved = dict(os.environ)
+    for key in list(os.environ):
+        if (key in GIT_REPO_VARS or key.startswith("GIT_CONFIG_")
+                or key in ("GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS")):
+            del os.environ[key]
+    os.environ["GIT_EDITOR"] = "true"
+    os.environ["GIT_SEQUENCE_EDITOR"] = "true"
+    os.environ["GIT_TERMINAL_PROMPT"] = "0"
+    os.environ["GIT_CONFIG_NOSYSTEM"] = "1"
+    os.environ["GIT_CONFIG_GLOBAL"] = os.devnull
+
+    def _restore():
+        os.environ.clear()
+        os.environ.update(saved)
+
+    return _restore
+
+
+unittest.addModuleCleanup(_hermetic_environ())
+
 try:
     import review_rebase_carry as rrc
 except ImportError as exc:
     if getattr(exc, "name", None) == "review_rebase_carry":
+        rrc = None
+    else:
+        raise
+
+
+def setUpModule():
+    # Skip (not error) until the builder module lands. The skip must raise
+    # here, not at module top: a top-level `raise SkipTest` only converts
+    # to a skip under unittest discovery, while the repo runs suites by
+    # module name in one invocation (ci.yml, verify-fast.sh), where
+    # loadTestsFromName would propagate it as a traceback and fail the
+    # whole combined run.
+    if rrc is None:
         raise unittest.SkipTest(
-            "review_rebase_carry is not landed yet; these acceptance tests "
-            "activate when the paired builder change adds the module")
-    raise
-
-PR = 7
-
-GIT_ENV = dict(os.environ, GIT_EDITOR="true", GIT_SEQUENCE_EDITOR="true",
-               GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1")
-GIT_BASE = ["git", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false"]
+            "review_rebase_carry is not landed yet; these acceptance "
+            "tests activate when the paired builder change adds the module")
 
 
 def run_git(repo, *args):
@@ -608,11 +665,42 @@ class FailClosedEvidence(unittest.TestCase):
     def test_unrelated_history_base_forces_review(self):
         with GitRepo() as repo:
             old_base, h1, _, _ = seed_pr(repo)
+            # Distinct new head with no review row, so decide cannot
+            # short-circuit on an already-reviewed head before resolving
+            # the merge-base. Empty, so the own-patch digest is unchanged.
+            git(repo.dir, "commit", "-q", "--allow-empty", "-m",
+                "descendant of h1")
+            h2 = repo.head()
             git(repo.dir, "checkout", "-q", "--orphan", "alien")
             git(repo.dir, "rm", "-q", "-rf", ".")
             alien = repo.commit("stowaway.txt", "unrelated\n", "alien root")
+            with self.assertRaises(rrc.GitError):
+                rrc.merge_base(repo.dir, alien, h1)
             action, _ = rrc.decide(
-                repo.dir, PR, h1, h1, base("main", old_base),
+                repo.dir, PR, h1, h2, base("main", old_base),
+                base("main", alien), [review_row(1, PR, h1)])
+            self.assertEqual(action, "review")
+
+    def test_unrelated_history_with_empty_old_patch_forces_review(self):
+        # Both own-patches are empty here, so a merge_base that wrongly
+        # returns the head instead of raising GitError would compare two
+        # empty patches as equal and carry a 5/5 onto a head that was
+        # never actually compared.
+        with GitRepo() as repo:
+            repo.commit("app.py", "print('base')\n", "base")
+            old_base = repo.head()
+            git(repo.dir, "checkout", "-q", "-b", "pr")
+            git(repo.dir, "commit", "-q", "--allow-empty", "-m", "A: noop")
+            h1 = repo.head()
+            git(repo.dir, "commit", "-q", "--allow-empty", "-m", "B: noop")
+            h2 = repo.head()
+            git(repo.dir, "checkout", "-q", "--orphan", "alien")
+            git(repo.dir, "rm", "-q", "-rf", ".")
+            alien = repo.commit("stowaway.txt", "unrelated\n", "alien root")
+            with self.assertRaises(rrc.GitError):
+                rrc.merge_base(repo.dir, alien, h2)
+            action, _ = rrc.decide(
+                repo.dir, PR, h1, h2, base("main", old_base),
                 base("main", alien), [review_row(1, PR, h1)])
             self.assertEqual(action, "review")
 
@@ -926,9 +1014,14 @@ class PureSemantics(unittest.TestCase):
         bodies = rrc.normalized_patch(transition)
         self.assertEqual(len(bodies), 1)
         only = next(iter(bodies.values()))
-        self.assertEqual(only.count(b"\x00file-record\x00"), 2)
         self.assertIn(b"-old\n", only)
         self.assertIn(b"+new\n", only)
+        # Both records survive: the transition digest matches neither
+        # single-record digest, so nothing was collapsed away.
+        delete_only = patch(DIFF_A, INDEX, b"@@ -1 +0,0 @@", b"-old")
+        add_only = patch(DIFF_A, INDEX, b"@@ -0,0 +1 @@", b"+new")
+        self.assertNotEqual(rrc.digest(transition), rrc.digest(delete_only))
+        self.assertNotEqual(rrc.digest(transition), rrc.digest(add_only))
 
     def test_digest_is_insensitive_to_file_order(self):
         file_a = patch(DIFF_A, INDEX, b"@@ -1 +1 @@", b"+aaa")

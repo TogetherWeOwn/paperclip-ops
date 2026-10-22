@@ -32,6 +32,10 @@
 # values only (TEST-*-not-a-secret).
 set -uo pipefail
 
+# A BASH_ENV hook in some harnesses resets PATH in child shells and unshadows
+# this suite's stub curl; drop it so the hermetic stub holds for every run.
+unset BASH_ENV
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOL="$HERE/ops/case_f2010cb7/fetch-beszel-normalized.sh"
 PASS=0; FAIL=0

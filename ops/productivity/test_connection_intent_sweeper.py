@@ -341,7 +341,9 @@ class TimeoutAndSecrets(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()):
                 cis.main()
         argv = calls[0][0]
-        blob = ' '.join(argv).lower()
+        # The checkout path is not credential material: mask it so a branch or
+        # directory name containing a secret word cannot false-positive here.
+        blob = ' '.join(argv).lower().replace(str(cis.ROOT).lower(), '<repo-root>')
         self.assertIn('-sk', blob, 'auth must travel via the curl -K file, never inline')
         for secret_word in ('token', 'bearer', 'authorization', 'password', 'secret'):
             self.assertNotIn(secret_word, blob)

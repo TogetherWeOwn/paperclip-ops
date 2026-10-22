@@ -108,7 +108,7 @@ required CI and Paperclip Review 5/5. Never install this entire public snapshot.
    if rec.get('state') == 'ci_red':
        nv = rec.get('notify_verdict') or {}
        if (nv.get('verdict') == 'suppress' and rec.get('head')
-               and nv.get('head') == rec.get('head'):
+               and nv.get('head') == rec.get('head')):
            continue
    ```
    The controller re-records the verdict every pass, so only a fresh

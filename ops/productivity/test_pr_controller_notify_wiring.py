@@ -143,6 +143,42 @@ class NotifyWiringTest(unittest.TestCase):
             return sum(isinstance(n, ast.Continue) for n in ast.walk(main))
         self.assertEqual(count(self.main_before) + 1, count(self.main_after))
 
+    def test_gate_placement_orders_wake_path(self):
+        """The gate must sit after the wake key and before stale collection
+        and the wake cap: earlier would skip card creation/backstop, later
+        would seed rewake candidates or consume cap for suppressed wakes."""
+        main = self.main_after
+        wkey = [n for n in ast.walk(main)
+                if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == 'wkey' for t in n.targets)]
+        self.assertEqual(1, len(wkey))
+        def is_woke_compare(v):
+            return (isinstance(v, ast.Compare)
+                    and isinstance(v.left, ast.Call)
+                    and isinstance(v.left.func, ast.Attribute)
+                    and isinstance(v.left.func.value, ast.Name)
+                    and v.left.func.value.id == 'rec'
+                    and v.left.func.attr == 'get'
+                    and len(v.comparators) == 1
+                    and isinstance(v.comparators[0], ast.Name)
+                    and v.comparators[0].id == 'wkey')
+
+        woke_collect = [n for n in ast.walk(main)
+                        if isinstance(n, ast.If)
+                        and isinstance(n.test, ast.BoolOp)
+                        and isinstance(n.test.op, ast.And)
+                        and any(is_woke_compare(v) for v in n.test.values)
+                        and any(isinstance(v, ast.Name) and v.id == 'cards'
+                                for v in n.test.values)]
+        self.assertEqual(1, len(woke_collect))
+        cap = [n for n in ast.walk(main)
+               if isinstance(n, ast.AugAssign)
+               and isinstance(n.target, ast.Name) and n.target.id == 'wakes']
+        self.assertEqual(1, len(cap))
+        self.assertLess(wkey[0].lineno, self.gate.lineno)
+        self.assertLess(self.gate.lineno, woke_collect[0].lineno)
+        self.assertLess(self.gate.lineno, cap[0].lineno)
+
     def test_inserted_names_resolve(self):
         entry = next(n for n in self.after.body
                      if isinstance(n, ast.FunctionDef) and n.name == 'notify_author_wake')

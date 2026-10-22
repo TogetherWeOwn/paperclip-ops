@@ -89,6 +89,18 @@ class TestWorkflowComparisonBase(unittest.TestCase):
     def test_pr_diff_gates_use_checked_out_merge_base(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "quality-gates.yml").read_text()
         self.assertIn('QUALITY_GATE_BASE_SHA="$(git rev-parse HEAD^1)"', workflow)
+        # Both halves of the wiring are pinned: the value must reach the
+        # job environment (not GITHUB_OUTPUT or nowhere), and the Record
+        # step must run before the gates that consume it. Either half
+        # dropped silently falls back to the payload base the wiring
+        # exists to avoid, mis-attributing main-side changes to the PR.
+        self.assertIn(
+            'echo "QUALITY_GATE_BASE_SHA=$QUALITY_GATE_BASE_SHA" >> "$GITHUB_ENV"',
+            workflow,
+        )
+        record_at = workflow.index("Record checked-out PR base for diff gates")
+        self.assertLess(record_at, workflow.index("Gate 7 (WARN)"))
+        self.assertLess(record_at, workflow.index("Gate 8 (HARD)"))
         self.assertEqual(
             workflow.count("BASE_SHA: ${{ env.QUALITY_GATE_BASE_SHA || github.event.pull_request.base.sha }}"),
             2,

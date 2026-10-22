@@ -31,10 +31,12 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUFF_VERSION: "0.17.0"
-  SEMGREP_VERSION: "1.180.0"
-  MUTMUT_VERSION: "2.5.1"
-  ZIZMOR_VERSION: "1.30.1"
+  # Gate-tool versions (ruff/semgrep/mutmut/zizmor) live in
+  # scripts/quality-gates-requirements.txt, a pip-compile
+  # --generate-hashes lockfile installed with --require-hashes below,
+  # so floating transitive deps cannot slip in at run time. Bump a tool
+  # by editing scripts/quality-gates-requirements.in and regenerating
+  # the lockfile in the same PR.
   SHELLCHECK_VERSION: "0.10.0"
   SHFMT_VERSION: "3.12.0"
   ACTIONLINT_VERSION: "1.7.7"
@@ -105,10 +107,8 @@ jobs:
             "$PIP_PY" "$RUNNER_TEMP/get-pip.py" --disable-pip-version-check >/dev/null
           fi
           "$PIP_PY" -m pip install --quiet \
-            "ruff==${RUFF_VERSION}" \
-            "semgrep==${SEMGREP_VERSION}" \
-            "mutmut[patch]==${MUTMUT_VERSION}" \
-            "zizmor==${ZIZMOR_VERSION}"
+            --require-hashes \
+            -r scripts/quality-gates-requirements.txt
           mkdir -p "$RUNNER_TEMP/qgbin"
           cd "$RUNNER_TEMP/qgbin"
           # Linux x86_64 runners; versions and digests pinned in job
@@ -128,14 +128,11 @@ jobs:
           python3 -c "import zipfile; zipfile.ZipFile('ast-grep.zip').extractall('sg')"
           chmod +x sg/sg sg/ast-grep
           # GITHUB_PATH applies to later steps only; export for the version
-          # probes below in this same step.
-          if [[ -d "$RUNNER_TEMP/qgvenv/bin" ]]; then
-            echo "$RUNNER_TEMP/qgvenv/bin:$RUNNER_TEMP/qgbin:$RUNNER_TEMP/qgbin/sg" >> "$GITHUB_PATH"
-            export PATH="$RUNNER_TEMP/qgvenv/bin:$RUNNER_TEMP/qgbin:$RUNNER_TEMP/qgbin/sg:$PATH"
-          else
-            echo "$RUNNER_TEMP/qgbin:$RUNNER_TEMP/qgbin/sg" >> "$GITHUB_PATH"
-            export PATH="$RUNNER_TEMP/qgbin:$RUNNER_TEMP/qgbin/sg:$PATH"
-          fi
+          # probes below in this same step. The venv always exists here:
+          # both branches above either create qgvenv or exit the step
+          # under set -e, so there is no non-venv case left to handle.
+          echo "$RUNNER_TEMP/qgvenv/bin:$RUNNER_TEMP/qgbin:$RUNNER_TEMP/qgbin/sg" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/qgvenv/bin:$RUNNER_TEMP/qgbin:$RUNNER_TEMP/qgbin/sg:$PATH"
           shellcheck --version | head -n 1
           shfmt --version
           actionlint --version

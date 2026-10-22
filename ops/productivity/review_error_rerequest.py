@@ -37,7 +37,7 @@ MIN_AGE_MIN = 10
 MAX_PER_TICK = 15
 ELIGIBLE_STATUSES = ('todo', 'in_progress', 'in_review')
 _gate = {}
-exec((ROOT / 'ops/paperclip/focus_gate.py').read_text().split('def tick():')[0], _gate)  # constants + db/api/allowed_sql only; no side effects
+exec((ROOT / 'ops/paperclip/focus_gate.py').read_text().split('def tick(')[0], _gate)  # constants + db/api/allowed_sql only; no side effects
 
 
 def _seconds(name, default):

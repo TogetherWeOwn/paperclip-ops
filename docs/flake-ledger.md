@@ -35,18 +35,34 @@ Interpret the result as follows:
    Treat the failure as real and fix it normally.
 3. `unavailable: ...` with a non-zero exit means evidence is missing, unreadable,
    corrupt, malformed, unmatched, or covers fewer than five runs. Record
-   **“ledger unavailable, treated as real”** and fix the failure normally.
+   **“ledger unavailable, treated as real”** and fix the failure normally,
+   unless the Residual `unavailable` fallback below grants a one-time CEO
+   exception.
 
-Never treat unavailable evidence as `no`, and never rerun because the ledger
-could not be checked. The command prints only the literal `yes` or `no` on a
+Never treat unavailable evidence as `no`, and never rerun on your own
+authority because the ledger could not be checked; the only exception is a
+CEO grant under the Residual `unavailable` fallback below. The command prints
+only the literal `yes` or `no` on a
 successful decision; unavailable details are explicit and non-zero so callers
 cannot mistake an evidence failure for a negative classification.
 
 ## Residual `unavailable` fallback
 
 `unavailable` never authorizes a rerun by itself. The literal-`yes` rule above
-is unchanged: only a `yes` verdict permits the one agent-initiated rerun, and
-any proposal to weaken that rule needs security review first.
+still governs every self-authorized rerun: only a `yes` verdict permits the
+one agent-initiated rerun. This section names the single exception — a
+CEO-granted, Operator-executed rerun — and any proposal to widen it needs
+security review first.
+
+Eligibility mirrors the host-rerun exclusions below: security, supply-chain,
+policy, deploy, migrate, drill and smoke jobs are never eligible, nor are
+paid-hosted runs on private repos. Runs already at attempt 2+ are ineligible:
+when the host controller has already consumed the ladder's one rerun, no
+exception remains to grant. The fallback therefore serves only eligible
+test-only checks still at attempt 1 because the controller did not rerun them
+(non-PR builds, the `PR_CONTROLLER_CI_DISABLE` kill switch, or a controller
+error) — the granted exception is that one rerun, never a second same-head
+rerun.
 
 When the ledger stays `unavailable` and no code fix exists for the red check,
 escalate instead of rerunning:
@@ -68,10 +84,19 @@ escalate instead of rerunning:
    Gates are unchanged: required checks green plus review on that exact head
    before merge.
 4. **Ledger repair.** Every granted exception files a follow-up to restore the
-   ledger evidence. Backfill the matching row until it has at least five
-   valid, non-ambiguous observations, then record future fail-then-pass pairs
-   with `record_flake`. Do not claim that the next identical failure resolves
-   to a real verdict until that threshold is met.
+   ledger evidence, matched to the `unavailable` cause in the verbatim output:
+   insufficient runs → backfill the matching row until it has at least five
+   valid, non-ambiguous observations; ambiguous rows (duplicates, or a test/job
+   name collision) → remove or merge rows until exactly one row matches, since
+   `eligibility()` raises ambiguous before it checks the five-run minimum
+   (`ops/productivity/flake_ledger.py:90-119`); corrupt or invalid records in
+   any row → repair or remove them first, since `read_ledger` validates every
+   record and `record_flake` refuses corrupt or ambiguous ledgers
+   (`flake_ledger.py:32-78,151-183`); missing or empty ledger file → recreate
+   it, then backfill. Record future fail-then-pass pairs with `record_flake`.
+   Close the follow-up only after rerunning the exact `is_flaky` query and
+   observing a literal `yes` or `no`; never claim recovery from the observation
+   count alone.
 
 Record the decision (real / escalated with decision link) on the red-build
 card, so every red build still has a recorded decision.
@@ -90,8 +115,10 @@ Three flakes for one job/test in a rolling 7 days open one `[flake]` card.
 
 What this changes for agents: nothing about the verdict ladder above. The
 literal-`yes` rule still governs every agent-initiated rerun, `unavailable`
-still means "treated as real", and nothing is ever dismissed without a
-ledger entry. When the controller already reran a run (visible as attempt 2
+still means "treated as real" except under the Residual fallback's CEO
+exception, and nothing is ever dismissed without a ledger entry or an
+escalated decision link. When the controller already reran a run (visible as
+attempt 2
 on the check), do not request a second rerun; fix the failure normally.
 Only test-only workflows (check/ci/e2e/pr-gates basenames) are eligible:
 security, supply-chain, policy, deploy, migrate, drill and smoke jobs are

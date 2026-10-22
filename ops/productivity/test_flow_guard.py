@@ -218,6 +218,25 @@ class SafeFlags(unittest.TestCase):
                 mkdir.assert_not_called()
                 self.assertEqual(list(Path(tmp).iterdir()), [])
 
+    def test_abbreviated_flags_are_rejected_not_live(self):
+        for flags in (['--app'], ['--a'], ['--dry'], ['--json']):
+            with self.subTest(flags=flags), tempfile.TemporaryDirectory() as tmp:
+                state = Path(tmp, 'state')
+                with mock.patch.object(fg, 'STATE', str(state)), \
+                        mock.patch.object(fg.subprocess, 'run',
+                                          side_effect=AssertionError('abbreviated flags must not reach subprocesses')) as run, \
+                        mock.patch.object(fg, 'log') as log, \
+                        mock.patch.object(fg.os, 'makedirs') as mkdir, \
+                        mock.patch.object(sys, 'stderr'), \
+                        mock.patch('builtins.print'):
+                    with self.assertRaises(SystemExit) as raised:
+                        fg.main(flags)
+                self.assertEqual(raised.exception.code, 2)
+                run.assert_not_called()
+                log.assert_not_called()
+                mkdir.assert_not_called()
+                self.assertEqual(list(Path(tmp).iterdir()), [])
+
 
 class TimeoutConfig(unittest.TestCase):
     def test_module_constants_use_environment_overrides(self):

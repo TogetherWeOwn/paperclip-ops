@@ -81,7 +81,7 @@ class Summary:
 def options(description, *, apply=False, dry_run=False, json_summary=False,
             default_apply=False, argv=None):
     """Keep callable main() compatible; the actual CLI rejects unknown flags."""
-    parser = argparse.ArgumentParser(description=description)
+    parser = argparse.ArgumentParser(description=description, allow_abbrev=False)
     parser.add_argument('--apply', action='store_true', help='apply eligible mutations; count only confirmed HTTP 200')
     parser.add_argument('--dry-run', action='store_true', help='plan without control-plane or success-state writes')
     parser.add_argument('--json-summary', action='store_true', help=f'append version {VERSION} JSON outcome summary')

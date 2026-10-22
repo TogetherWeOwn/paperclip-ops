@@ -99,8 +99,26 @@ def _call_name(node: ast.Call) -> str:
     return ""
 
 
+_NESTED_SCOPE_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+
+def _scoped_nodes(root: ast.AST):
+    """Root plus descendants, excluding nested def/class bodies.
+
+    Assertions (or helper calls) inside an uncalled nested function or
+    class body never execute when the outer test runs, so they must not
+    satisfy the vacuity guard. The root itself is always yielded; only
+    scopes *below* it are pruned.
+    """
+    yield root
+    for child in ast.iter_child_nodes(root):
+        if isinstance(child, _NESTED_SCOPE_TYPES):
+            continue
+        yield from _scoped_nodes(child)
+
+
 def _has_assertion(tree: ast.AST) -> bool:
-    for node in ast.walk(tree):
+    for node in _scoped_nodes(tree):
         if isinstance(node, ast.Assert):
             return True
         if isinstance(node, (ast.With, ast.AsyncWith)):
@@ -141,7 +159,7 @@ def _asserting_helper_names(tree: ast.AST, test_ids: set) -> set:
                 continue
             if _has_assertion(node) or any(
                 isinstance(child, ast.Call) and _call_name(child) in helpers
-                for child in ast.walk(node)
+                for child in _scoped_nodes(node)
             ):
                 helpers.add(name)
                 changed = True
@@ -152,7 +170,7 @@ def _calls_asserting_helper(fn: ast.AST, helpers: set) -> bool:
     """Whether a test function calls a same-module asserting helper."""
     return any(
         isinstance(node, ast.Call) and _call_name(node) in helpers
-        for node in ast.walk(fn)
+        for node in _scoped_nodes(fn)
     )
 
 
@@ -231,6 +249,10 @@ def _parse_args(argv=None):
                         help="Newline- or comma-separated changed paths.")
     parser.add_argument("--changed-files-file", default="",
                         help="File with one changed path per line.")
+    parser.add_argument("--deleted-files", default="",
+                        help="Newline- or comma-separated deleted paths.")
+    parser.add_argument("--deleted-files-file", default="",
+                        help="File with one deleted path per line.")
     parser.add_argument("--labels", default="",
                         help="Comma-separated PR labels.")
     parser.add_argument("--mode", default="warn",
@@ -252,7 +274,7 @@ def main(argv=None) -> int:
     files: list = []
     if args.changed_files_file:
         try:
-            with open(args.changed_files_file) as handle:
+            with open(args.changed_files_file, encoding="utf-8") as handle:
                 files.extend(line.strip() for line in handle if line.strip())
         except OSError as exc:
             print(f"test-missing gate: cannot read files list: {exc}",
@@ -261,19 +283,40 @@ def main(argv=None) -> int:
     if args.changed_files:
         raw = args.changed_files.replace(",", "\n")
         files.extend(line.strip() for line in raw.splitlines() if line.strip())
+    deleted: list = []
+    if args.deleted_files_file:
+        try:
+            with open(args.deleted_files_file, encoding="utf-8") as handle:
+                deleted.extend(line.strip() for line in handle if line.strip())
+        except OSError as exc:
+            print(f"test-missing gate: cannot read deleted-files list: {exc}",
+                  file=sys.stderr)
+            return 2
+    if args.deleted_files:
+        raw_deleted = args.deleted_files.replace(",", "\n")
+        deleted.extend(
+            line.strip() for line in raw_deleted.splitlines() if line.strip()
+        )
     labels = [part.strip() for part in (args.labels or "").replace(",", "\n").splitlines()
               if part.strip()]
-    findings = check_src_without_tests(files, labels)
+    findings = check_src_without_tests(files, labels, deleted_files=deleted)
     # Vacuity guards run on every changed test file readable from the
     # checkout. Deleted files are absent, not empty, so they are skipped;
     # a present-but-unreadable test file is a finding, never a silent
-    # pass (an unreadable test must not read as covered).
+    # pass (an unreadable test must not read as covered). Deletion is
+    # caller-declared only: never infer it from filesystem existence (a
+    # wrong working directory would then fail the gate open).
+    deleted_set = set(deleted)
     test_contents = {}
     for path in files:
+        if path in deleted_set:
+            continue
         if not is_test_path(path):
             continue
         try:
-            test_contents[path] = Path(path).read_text(errors="replace")
+            test_contents[path] = Path(path).read_text(
+                encoding="utf-8", errors="replace"
+            )
         except FileNotFoundError:
             continue
         except OSError:
@@ -282,7 +325,7 @@ def main(argv=None) -> int:
     # Changed-line coverage runs when the caller supplies coverage data.
     if args.coverage_json:
         try:
-            with open(args.coverage_json) as handle:
+            with open(args.coverage_json, encoding="utf-8") as handle:
                 coverage = json.load(handle)
             changed_lines = {
                 p: set(lines or ())
@@ -304,7 +347,7 @@ def main(argv=None) -> int:
             print(f"- {finding}")
         if summary:
             try:
-                with open(summary, "a") as handle:
+                with open(summary, "a", encoding="utf-8") as handle:
                     handle.write("## test-missing gate\n")
                     for finding in findings:
                         handle.write(f"- {finding}\n")

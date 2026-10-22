@@ -64,9 +64,16 @@ class CliWiringRegressionTest(unittest.TestCase):
         self.assertIsNotNone(main, "CLI entry point is required")
         self.assertIn("check_changed_line_coverage(", main.group())
         self.assertIn("check_test_guards(", main.group())
+        self.assertIn(
+            "deleted_files=deleted",
+            main.group(),
+            "CLI must pass caller-declared deletions to the src gate",
+        )
 
     def test_acceptance_suites_are_wired_into_fast_verification(self):
-        verify_fast = (HERE / "scripts" / "verify-fast.sh").read_text()
+        verify_fast = (HERE / "scripts" / "verify-fast.sh").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("test_blocker_test_checks", verify_fast)
         self.assertIn("test_test_missing_org_template", verify_fast)
 
@@ -179,6 +186,92 @@ class GateLogicRegressionTest(unittest.TestCase):
         )
         self.assertTrue(findings, "one vacuous test must fail the file")
 
+    def test_nested_def_assertion_does_not_satisfy_vacuity_guard(self):
+        mod = _load_root_module()
+        findings = mod.check_test_guards(
+            {
+                "tests/test_nested.py": (
+                    "def test_example():\n"
+                    "    def unused():\n"
+                    "        assert False\n"
+                    "    return None\n"
+                )
+            }
+        )
+        self.assertTrue(
+            findings, "assert inside an uncalled nested def must not pass"
+        )
+
+    def test_nested_class_assertion_does_not_satisfy_vacuity_guard(self):
+        mod = _load_root_module()
+        findings = mod.check_test_guards(
+            {
+                "tests/test_nested_cls.py": (
+                    "def test_example():\n"
+                    "    class Helper:\n"
+                    "        def check(self):\n"
+                    "            assert True\n"
+                    "    return None\n"
+                )
+            }
+        )
+        self.assertTrue(
+            findings, "assert inside a nested class must not pass"
+        )
+
+    def test_nested_raises_block_does_not_satisfy_vacuity_guard(self):
+        mod = _load_root_module()
+        findings = mod.check_test_guards(
+            {
+                "tests/test_nested_raises.py": (
+                    "import pytest\n"
+                    "def test_example():\n"
+                    "    def unused():\n"
+                    "        with pytest.raises(ValueError):\n"
+                    "            raise ValueError()\n"
+                    "    return None\n"
+                )
+            }
+        )
+        self.assertTrue(
+            findings, "raises block inside a nested def must not pass"
+        )
+
+    def test_nested_helper_call_does_not_satisfy_vacuity_guard(self):
+        mod = _load_root_module()
+        findings = mod.check_test_guards(
+            {
+                "tests/test_nested_helper.py": (
+                    "def check_it(value):\n"
+                    "    assert value == 'ok'\n"
+                    "def test_example():\n"
+                    "    def unused():\n"
+                    "        check_it('ok')\n"
+                    "    return None\n"
+                )
+            }
+        )
+        self.assertTrue(
+            findings,
+            "helper call inside an uncalled nested def must not pass",
+        )
+
+    def test_direct_assertion_beside_nested_def_passes(self):
+        mod = _load_root_module()
+        self.assertEqual(
+            mod.check_test_guards(
+                {
+                    "tests/test_nested_ok.py": (
+                        "def test_example():\n"
+                        "    def unused():\n"
+                        "        x = 1\n"
+                        "    assert True\n"
+                    )
+                }
+            ),
+            [],
+        )
+
 
 class CliExecutionTest(unittest.TestCase):
     """Run the staged CLI as a subprocess: exit codes,
@@ -236,6 +329,32 @@ class CliExecutionTest(unittest.TestCase):
         )
         self.assertEqual(rc, 1, out)
         self.assertIn("changed line not covered", out)
+
+    def test_cli_deleted_test_does_not_satisfy_src_gate(self):
+        rc, out = self.run_cli(
+            ["--changed-files", "src/foo.py,tests/test_gone.py",
+             "--deleted-files", "tests/test_gone.py", "--mode", "enforce"],
+            files={"src/foo.py": "x = 1\n"},
+        )
+        self.assertEqual(rc, 1, out)
+        self.assertIn("src change without tests", out)
+
+    def test_cli_deleted_files_file(self):
+        rc, out = self.run_cli(
+            ["--changed-files", "src/foo.py,tests/test_gone.py",
+             "--deleted-files-file", "deleted.txt", "--mode", "enforce"],
+            files={"src/foo.py": "x = 1\n",
+                   "deleted.txt": "tests/test_gone.py\n"},
+        )
+        self.assertEqual(rc, 1, out)
+        self.assertIn("src change without tests", out)
+
+    def test_cli_deleted_src_is_excluded(self):
+        rc, out = self.run_cli(
+            ["--changed-files", "src/old.py",
+             "--deleted-files", "src/old.py", "--mode", "enforce"])
+        self.assertEqual(rc, 0, out)
+        self.assertIn("no findings", out)
 
     def test_cli_unreadable_test_file_is_a_finding_not_a_silent_pass(self):
         with tempfile.TemporaryDirectory() as tmp:

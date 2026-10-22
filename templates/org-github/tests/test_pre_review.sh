@@ -1413,6 +1413,17 @@ for fallback_shape in \
   '@K@ = os.environ.get("@E@", default="@F@")~~fallbackliteral12' \
   '@K@ = os.getenv("@E@", default="@F@")~~fallbackliteral12' \
   '@K@ = os.getenv("@E@", f"@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.get("@E@", get_default() or "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.get("@E@", "dev" or "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.get("@E@", "" or "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.get("@E@", (opts) or "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.get("A", os.environ.get("B", "x") or "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.get("@E@", default="dev" or "@F@")~~fallbackliteral12' \
+  '@K@ = os.getenv("@E@", "dev" or "@F@")~~fallbackliteral12' \
+  '@K@ = ENV.fetch("@E@", "dev" or "@F@")~~fallbackliteral12' \
+  '@K@ = os.getenv("@E@", f"{x}" or "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.setdefault("@E@", "dev" or "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.pop("@E@", "dev" or "@F@")~~fallbackliteral12' \
   '@K@ = ENV.fetch("@E@", "@F@")~~fallbackliteral12' \
   '@K@ = config.get("credentials", "openai_api_key") or "@F@"~~fallbackliteral12' \
   '@K@ = config.get("credentials", "openai_api_key") || "@F@"~~fallbackliteral12' \

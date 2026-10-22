@@ -41,3 +41,26 @@ Never treat unavailable evidence as `no`, and never rerun because the ledger
 could not be checked. The command prints only the literal `yes` or `no` on a
 successful decision; unavailable details are explicit and non-zero so callers
 cannot mistake an evidence failure for a negative classification.
+
+## Automatic host rerun of PR checks
+
+The host PR controller consumes the ladder's one permitted rerun itself on
+eligible PR heads. Before waking the author for a red required check, it
+requests `gh run rerun <id> --failed` once per workflow run and holds the
+wake until the retry concludes. A retry that passes on the same head is
+recorded as one flake in this ledger (`record_flake`: two observations, one
+flip); a retry that fails wakes the author as before and counts one CI
+round. After 3 red rounds on different heads the controller posts one
+re-scope comment instead of further wakes, until a head goes all green.
+Three flakes for one job/test in a rolling 7 days open one `[flake]` card.
+
+What this changes for agents: nothing about the verdict ladder above. The
+literal-`yes` rule still governs every agent-initiated rerun, `unavailable`
+still means "treated as real", and nothing is ever dismissed without a
+ledger entry. When the controller already reran a run (visible as attempt 2
+on the check), do not request a second rerun; fix the failure normally.
+Only test-only workflows (check/ci/e2e/pr-gates basenames) are eligible:
+security, supply-chain, policy, deploy, migrate, drill and smoke jobs are
+never auto-rerun, nor are paid-hosted runs on private repos or runs already
+at attempt 2+. A kill switch (`PR_CONTROLLER_CI_DISABLE`) restores
+wake-on-first-red without a code change.

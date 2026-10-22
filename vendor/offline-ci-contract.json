@@ -1872,7 +1872,7 @@
     },
     {
       "name": "failure-drain JSON suite",
-      "definition_sha256": "320dfb3648a8ea7564b9853519a266ea8ff1ce59a133726ce2362d234222370f",
+      "definition_sha256": "50bc1a323e31572b16df3a8e610c6d955281a9a0e7f77c15c34053f34afc2fba",
       "id": "failure-drain JSON suite:1"
     }
   ],

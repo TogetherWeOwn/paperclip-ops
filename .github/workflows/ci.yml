@@ -2978,7 +2978,9 @@ jobs:
       # no other byte.
       - name: failure-drain JSON suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: ./test_ci_failure_drain_json.sh
+        # Keep default fixture attribution independent of this Actions run;
+        # the suite separately supplies a run id to verify explicit attribution.
+        run: env -u GITHUB_RUN_ID ./test_ci_failure_drain_json.sh
 
       # case_50dca137. The dark-step reporter's own vacuity gate.
       #

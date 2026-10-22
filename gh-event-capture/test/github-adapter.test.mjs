@@ -347,6 +347,44 @@ test('snapshot reads fail closed on truncated, moved or malformed GitHub state',
   await assert.rejects(early.adapter.getCloseoutSnapshot(repository, 42, { nowMs: pushedMs - 1 }))
 })
 
+test('readiness snapshot merges duplicate checks conservatively without push age', async () => {
+  const nullPushPr = (nodes) => closeoutPr({ commits: { nodes: [{ commit: { oid: headSha, pushedDate: null,
+    statusCheckRollup: { contexts: { nodes, pageInfo: { hasNextPage: false } } } } }] } })
+  const pass = () => checkRun('ci-ok', 'COMPLETED', 'SUCCESS', pushedAt)
+  const pending = () => checkRun('ci-ok', 'IN_PROGRESS')
+  const failure = () => checkRun('ci-ok', 'COMPLETED', 'FAILURE', pushedAt)
+  const survived = {
+    pass: { name: 'ci-ok', status: 'completed', conclusion: 'success', completedMs: pushedMs },
+    pending: { name: 'ci-ok', status: 'in_progress' },
+    failure: { name: 'ci-ok', status: 'completed', conclusion: 'failure', completedMs: pushedMs },
+  }
+  // Failure wins over pending, pending wins over pass, in every arrival order.
+  const orders = [
+    [['pass', 'pending'], 'pending'], [['pending', 'pass'], 'pending'],
+    [['pass', 'failure'], 'failure'], [['failure', 'pass'], 'failure'],
+    [['pending', 'failure'], 'failure'], [['failure', 'pending'], 'failure'],
+    [['pass', 'pending', 'failure'], 'failure'], [['failure', 'pending', 'pass'], 'failure'],
+    [['pass'], 'pass'],
+  ]
+  const makers = { pass, pending, failure }
+  for (const [names, winner] of orders) {
+    const payload = nullPushPr(names.map((name) => makers[name]()))
+    const { adapter, calls } = fake([snapEnvelope(payload)])
+    const snapshot = await adapter.getReadinessSnapshot(repository, 42, { nowMs: pushedMs + 1 })
+    assert.deepEqual(snapshot.checks, [survived[winner]])
+    // An explicit null pushedDate stays null: documented, not absent, and
+    // never borrowed from a check, the clock, or zero.
+    assert.ok(Object.hasOwn(snapshot, 'headPushedMs'))
+    assert.equal(snapshot.headPushedMs, null)
+    for (const forbidden of [pushedMs, pushedMs + 1, 0]) assert.notEqual(snapshot.headPushedMs, forbidden)
+    assert.equal(calls.length, 1)
+    // The same payload stays unreadable to closeout: duplicates and a null
+    // push time are both outside its strict contract.
+    const strict = fake([snapEnvelope(payload)])
+    await assert.rejects(strict.adapter.getCloseoutSnapshot(repository, 42, { nowMs: pushedMs + 1 }))
+  }
+})
+
 test('required checks merge legacy contexts and checks, sorted and deduped', async () => {
   const protection = { required_status_checks: { strict: true,
     contexts: ['b-check', 'a-check'], checks: [{ context: 'c-check', app_id: 123 }, { context: 'a-check', app_id: 456 }] } }

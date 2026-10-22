@@ -185,7 +185,11 @@ class KeeperSnapshotTests(unittest.TestCase):
             earlier = db.execute("SELECT count(*) FROM ledger WHERE ts < ?", (started,)).fetchone()[0]
             during = db.execute("SELECT count(*) FROM ledger WHERE ts BETWEEN ? AND ?",
                                 (started, finished)).fetchone()[0]
-        self.assertLessEqual(earlier, count)
+        # Single sequential writer: at most one row can be INSERTed (ts <
+        # started) but not yet COMMITted when `started` is recorded. If that
+        # in-flight row commits after the backup's read point it is invisible
+        # to the snapshot, so `earlier` exceeds `count` by at most one.
+        self.assertLessEqual(earlier, count + 1)
         self.assertLess(count, final)
         self.assertGreater(during, 0, "the writer was blocked during the online snapshot")
         self.assertEqual(record["integrity"], "ok")

@@ -823,7 +823,9 @@ class PublicCI(unittest.TestCase):
                 text = script
                 if case == "unknown-alias":
                     self.assertIn("|case_fcdcc723|", text)
+                    self.assertIn("|case_aee42a7a|", text)
                     text = text.replace("|case_fcdcc723|", "|unknown-alias|")
+                    text = text.replace("|case_aee42a7a|", "|unknown-alias|")
                 (root / script_name).write_text(text)
                 (root / "public_snapshot_test_support.py").write_bytes((ROOT / "public_snapshot_test_support.py").read_bytes())
                 (root / "README.md").write_text("private source\n" if case == "nonpublic-redacted"
@@ -835,8 +837,8 @@ class PublicCI(unittest.TestCase):
                 output = result.stdout + result.stderr
                 self.assertEqual(result.returncode, 0 if case == "public-redacted" else 1, output)
                 if case == "public-redacted":
-                    self.assertIn("SKIP: 11 private historical card identities", output)
-                    self.assertIn("111/111 POSTHOC checks correct", output)
+                    self.assertIn("SKIP: 13 private historical card identities", output)
+                    self.assertIn("129/129 POSTHOC checks correct", output)
                 else:
                     self.assertNotIn("SKIP:", output)
                     self.assertIn("bad card:", output)

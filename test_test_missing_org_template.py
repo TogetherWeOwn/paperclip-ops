@@ -426,6 +426,13 @@ class CliExecutionTest(unittest.TestCase):
         self.assertEqual(rc, 1, out)
         self.assertIn("missing test file", out)
 
+    def test_cli_declared_deleted_test_file_is_not_a_missing_finding(self):
+        rc, out = self.run_cli(
+            ["--changed-files", "tests/test_gone.py",
+             "--deleted-files", "tests/test_gone.py", "--mode", "enforce"])
+        self.assertEqual(rc, 0, out)
+        self.assertIn("no findings", out)
+
 
 if __name__ == "__main__":
     unittest.main()

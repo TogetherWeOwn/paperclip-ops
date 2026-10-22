@@ -46,7 +46,7 @@ elif [[ "${1:-}" == "--list" ]]; then
   echo "      case_b2acfa5c-runner-contract, dropchannel-fixture, approval-timeout-probe, acceptance-transport reply, gh-access-dispatch,"
   echo "      upstream pre-push hook,"
   echo "      alert-queue, watchdog-snapshot-builder, fleet-run-stall, assignment-host-source,"
-  echo "      review-error-rerequest, backlog-promoter, board-jobs-bounds, focus-gate-bounds, pr-supply, flow-guard, host-ok, connection-intent-sweeper, hide-noop-reconcile, nongit-quarantine-custody,"
+  echo "      review-error-rerequest, backlog-promoter, board-jobs-bounds, focus-gate-bounds, pr-supply, flow-guard, host-ok, connection-intent-sweeper, hide-noop-reconcile, nongit-quarantine-custody, pipeline-stall-watch,"
   echo "      guard-state (atomic-state, stuck-run-state, idle-waiter-state, owner-guard-state), feed-contract,"
   echo "      survival-atomic-write, corpus atomic-write, observational-collect-atomic-write, pr-hygiene owner-match, live-run guard, review-route, shell-subst guard, arm-import, merge-survival-atomic-write, operator-workspace reconciler and sweep, operator copy-risk gate,"
   echo "      translator-fixture (pinned tsc), deploy-window wrapper, deploy-window manifest gate, activation contract (paperclip-upgrade), staged-tier0-drift gate,"
@@ -171,7 +171,7 @@ python3 -m unittest test_alert_queue || fail "alert-queue suite failed"
 python3 -m unittest test_watchdog_snapshot_builder || fail "watchdog snapshot-builder suite failed"
 python3 -m unittest test_case_da79e241_fleet_run_stall || fail "fleet-run-stall suite failed"
 python3 -m unittest test_case_dcf07273_assignment_bundle || fail "assignment host-source suite failed"
-(cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes) \
+(cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes test_pipeline_stall_watch) \
   || fail "review-error, review-dedup, PR-supply, flow-guard, flake-ledger and pr-controller suites failed"
 (cd ops/paperclip && python3 -B -m unittest test_focus_gate_bounds) || fail "focus-gate bounds suite failed"
 (cd ops/lib && python3 -m unittest test_atomic_state) || fail "atomic state suite failed"

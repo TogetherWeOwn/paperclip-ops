@@ -143,7 +143,7 @@ SOURCE_TOKENS = re.compile(
     r"//[^\r\n]*|/\*.*?(?:\*/|\Z)|"
     r"/(?![/*])(?:\\.|\[(?:\\.|[^\]\\\r\n])*\]|[^/\\\[\r\n])+/[a-z]*|"
     r'''"(?:\\.|[^"\\])*(?:"|\Z)|'''
-    r"'(?:\\.|[^'\\])*(?:'|\Z)|`(?:\\.|[^`\\])*(?:`|\Z)|(?P<identifier>[$\w]+)",
+    r"'(?:\\.|[^'\\])*(?:'|\Z)|(?P<template>`)|(?P<brace>[{}])|(?P<identifier>[$\w]+)",
     re.DOTALL,
 )
 
@@ -166,13 +166,52 @@ def find_anchor(path: Path, anchor: str) -> tuple[str, int | None, str]:
     return "present", hits[0], "ok"
 
 
+def skip_template(text: str, start: int) -> int:
+    """Return the end of a template, skipping nested interpolation conservatively."""
+    # Zero denotes template text; positive entries are interpolation brace depths.
+    stack = [0]
+    pos = start
+    while stack and pos < len(text):
+        if stack[-1] == 0:
+            if text[pos] == "\\":
+                pos += 2
+            elif text[pos] == "`":
+                stack.pop()
+                pos += 1
+            elif text.startswith("${", pos):
+                stack.append(1)
+                pos += 2
+            else:
+                pos += 1
+        else:
+            match = SOURCE_TOKENS.search(text, pos)
+            if match is None:
+                return len(text)
+            pos = match.end()
+            if match.lastgroup == "template":
+                stack.append(0)
+            elif match.lastgroup == "brace":
+                stack[-1] += 1 if match.group() == "{" else -1
+                if stack[-1] == 0:
+                    stack.pop()
+    return min(pos, len(text))
+
+
 def count_symbol(path: Path, symbol: str) -> int | None:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
     identifiers = SYMBOL_IDENTIFIERS.get(symbol, {symbol})
-    return sum(match.group("identifier") in identifiers for match in SOURCE_TOKENS.finditer(text))
+    count = 0
+    pos = 0
+    while match := SOURCE_TOKENS.search(text, pos):
+        pos = match.end()
+        if match.lastgroup == "template":
+            pos = skip_template(text, pos)
+        elif match.group("identifier") in identifiers:
+            count += 1
+    return count
 
 
 def main(argv: list[str]) -> int:

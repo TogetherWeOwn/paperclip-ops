@@ -19,6 +19,8 @@ import sys
 import time
 from pathlib import Path
 
+import confirmed_outcomes as outcomes
+
 ROOT = Path(__file__).resolve().parents[2]
 API = 'http://127.0.0.1:3100/api'
 CID = '00000000-0000-4000-8000-000000000004'
@@ -29,6 +31,8 @@ EVIDENCE_WINDOW_MIN = 30
 SIGNATURES = ("stream disconnected", "stream error", "stream closed", "429", "rate limit", "rate_limit",
               "overloaded", "usage limit")
 APPLY = '--apply' in sys.argv
+DRY_RUN = '--dry-run' in sys.argv
+JSON_SUMMARY = '--json-summary' in sys.argv
 PSQL_TIMEOUT = 60
 CURL_TIMEOUT = 60
 REASON = ("Host operator: no direct Anthropic connection is needed. Agents reach every model through CLIProxy "
@@ -44,7 +48,14 @@ def psql(sql):
     return [l.split('\t') for l in out.splitlines() if l]
 
 
-def main():
+def main(argv=None):
+    args = outcomes.options('Decline only eligible misclassified connection intents; dry-run by default.',
+                            apply=APPLY, dry_run=DRY_RUN, json_summary=JSON_SUMMARY, argv=argv)
+    summary = outcomes.Summary('connection_intent_sweeper', args.json_summary)
+    if args.refused:
+        summary.error('contradictory_flags')
+        summary.finish()
+        raise SystemExit(2)
     slugs = ','.join(f"'{s}'" for s in SERVICES)
     try:
         rows = psql(f"""select t.id, i.identifier, t.payload->>'requestingAgentName',
@@ -58,14 +69,25 @@ def main():
     except subprocess.TimeoutExpired:
         print(f'connection-intent-sweeper: FAILED: db query timed out after {PSQL_TIMEOUT}s '
               f'(unmeasured; nothing declined)', file=sys.stderr)
+        summary.error('db_timeout')
+        summary.finish()
         sys.exit(1)
-    done, failed = [], []
+    except (subprocess.CalledProcessError, OSError):
+        print('connection-intent-sweeper: FAILED: db read unavailable; nothing declined', file=sys.stderr)
+        summary.error('db_read_failed')
+        summary.finish()
+        sys.exit(1)
+    done, seen = [], set()
     for iid, ident, agent, err in rows:
-        if not (err.startswith('claude_auth_required') and any(sig in err for sig in SIGNATURES)):
-            print(f'left {iid} on {ident} ({agent}): no known misclassification evidence ({err[:80]!r})')
+        if iid in seen:
             continue
-        if not APPLY:
+        seen.add(iid)
+        if not (err.startswith('claude_auth_required') and any(sig in err for sig in SIGNATURES)):
+            print(f'left {iid} on {ident} ({agent}): no known misclassification evidence')
+            continue
+        if not args.apply:
             print(f'would decline {iid} on {ident} ({agent})')
+            summary.planned += 1
             continue
         try:
             r = subprocess.run(['curl', '-sK', str(ROOT / '.pc.curl'), '-X', 'POST',
@@ -73,21 +95,31 @@ def main():
                                 '-d', json.dumps({'reason': REASON}), '-o', '/dev/null', '-w', '%{http_code}'],
                                capture_output=True, text=True, timeout=CURL_TIMEOUT)
         except subprocess.TimeoutExpired:
-            print(f'FAILED decline {iid} on {ident} ({agent}): timed out after {CURL_TIMEOUT}s '
-                  f'(unmeasured; not declined)')
-            failed.append(ident)
+            outcome = outcomes.from_curl()
+        except OSError:
+            outcome = outcomes.Outcome('definite_failure', 'curl_unavailable', 'check_transport_before_next_tick')
+        else:
+            outcome = outcomes.from_curl(r)
+        summary.add('decline', f'{ident}:{iid}', outcome)
+        if not outcome.confirmed:
+            detail = f'timed out after {CURL_TIMEOUT}s; ' if 'timeout' in outcome.code else ''
+            print(f'FAILED decline {iid} on {ident} ({agent}): {detail}'
+                  f'outcome {outcome.outcome} code={outcome.code} next_action={outcome.next_action}')
             continue
-        done.append(f'{ident}:{r.stdout.strip()}')
-        print(f'declined {iid} on {ident} ({agent}) HTTP {r.stdout.strip()}')
+        done.append(f'{ident}:{outcome.http_status}')
+        print(f'declined {iid} on {ident} ({agent}) HTTP {outcome.http_status}')
     if done:
-        with LOG.open('a') as f:
-            f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} connection-intent-sweeper: declined "
-                    f"bogus Connect-Anthropic intents {done}\n")
-    if failed:
-        print(f'connection-intent-sweeper: FAILED: {len(failed)} decline(s) timed out ({", ".join(failed)})',
-              file=sys.stderr)
+        try:
+            with LOG.open('a') as f:
+                f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} connection-intent-sweeper: declined "
+                        f"bogus Connect-Anthropic intents {done}\n")
+        except OSError:
+            summary.error('action_log_failed')
+    if summary.finish():
+        print('connection-intent-sweeper: FAILED: unconfirmed declines; inspect action results', file=sys.stderr)
         sys.exit(1)
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main(sys.argv[1:]))

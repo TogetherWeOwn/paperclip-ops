@@ -422,6 +422,15 @@ class GuardContractTest(unittest.TestCase):
             set(REQUIRED), known_base_executed=self.known)
         self.assertEqual('wake', verdict)
 
+    def test_author_wake_required_wins_over_known_base(self):
+        """R2 at the author_wake layer: required membership wins even when the
+        failing check is also a known shared-base member."""
+        verdict, _ = self.g.author_wake(
+            'ci_red', {'red': [('readiness-sweep', RUN_URL)]},
+            set(REQUIRED) | {'readiness-sweep'},
+            known_base_executed=('readiness-sweep',))
+        self.assertEqual('wake', verdict)
+
     def test_author_wake_ci_red_mixed_wakes(self):
         red = [('readiness-sweep', RUN_URL), ('ci-ok', RUN_URL)]
         verdict, _ = self.g.author_wake(

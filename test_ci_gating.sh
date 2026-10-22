@@ -10,10 +10,6 @@ set -Eeuo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 cd "$ROOT"
 
-printf '# explicit workflow job permissions and acceptance fixtures\n'
-python3 "$ROOT/check_workflow_job_permissions.py"
-python3 -m unittest -v test_check_workflow_job_permissions
-
 GATE="$ROOT/verification/case_d5bc7950-ci-gating.sh"
 WORKFLOW="$ROOT/.github/workflows/ci.yml"
 TMP=$(mktemp -d)

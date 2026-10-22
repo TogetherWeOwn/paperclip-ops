@@ -1008,6 +1008,18 @@ jobs:
       - name: change-gating contract holds
         run: ./test_ci_gating.sh
 
+      # Explicit workflow job permissions gate: every job in every workflow
+      # must declare its own least-privilege `permissions:` block. Runs the
+      # checker over the live tree plus its acceptance suite. A separate
+      # contract-pinned step (not lines inside test_ci_gating.sh) so deleting
+      # it fails the offline-ci contract instead of silently unwiring
+      # enforcement. No step-level `if:`: it runs on every suites execution,
+      # exactly like the change-gating step above.
+      - name: explicit workflow job permissions gate
+        run: |
+          python3 check_workflow_job_permissions.py
+          python3 -m unittest -v test_check_workflow_job_permissions
+
       # case_6bf2cca9. The review-routing contract is load-bearing for review-model
       # spend: a red router that CI never executes would silently misroute
       # risky diffs to `standard`. verify-fast.sh --parse-only never reaches

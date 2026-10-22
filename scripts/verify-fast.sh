@@ -41,7 +41,7 @@ if [[ "${1:-}" == "--parse-only" ]]; then
 elif [[ "${1:-}" == "--list" ]]; then
   echo "parse: bash -n, node --check, python py_compile, ESM check, vendored-tracked gate"
   echo "full: parse + external-disclosure, muse-stop-guard, disposition-stop-guard,"
-  echo "      ci-required-checks-audit, ci-gating, private-mutation-harness, readme-script-index,"
+  echo "      ci-required-checks-audit, ci-gating, workflow-job-permissions, private-mutation-harness, readme-script-index,"
   echo "      public-comment-hygiene,"
   echo "      case_b2acfa5c-runner-contract, dropchannel-fixture, approval-timeout-probe, acceptance-transport reply, gh-access-dispatch,"
   echo "      upstream pre-push hook,"
@@ -146,6 +146,10 @@ python3 -m unittest test_quality_gates test_floor_guard test_no_pull_request_tar
   || fail "quality-gate helper suites failed"
 ./test_mutmut_changed.sh || fail "mutmut budget-kill fixture suite failed"
 ./test_ci_gating.sh || fail "change-gating contract failed"
+# Explicit workflow job permissions gate: same two commands as the
+# contract-pinned CI step, so the fast tier still executes the gate locally.
+python3 check_workflow_job_permissions.py || fail "workflow job permissions gate failed"
+python3 -m unittest test_check_workflow_job_permissions || fail "workflow job permissions acceptance suite failed"
 ./test_readme_script_index.sh || fail "readme script-index gate failed"
 ./test_public_comment_hygiene_gate.sh || fail "public-comment hygiene gate suite failed"
 ./test_acceptance_transport.sh || fail "acceptance-transport reply suite failed"

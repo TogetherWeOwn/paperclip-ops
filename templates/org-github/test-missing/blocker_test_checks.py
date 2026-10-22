@@ -301,9 +301,11 @@ def main(argv=None) -> int:
               if part.strip()]
     findings = check_src_without_tests(files, labels, deleted_files=deleted)
     # Vacuity guards run on every changed test file readable from the
-    # checkout. Deleted files are absent, not empty, so they are skipped;
-    # a present-but-unreadable test file is a finding, never a silent
-    # pass (an unreadable test must not read as covered). Deletion is
+    # checkout. Caller-declared deleted files are absent, not empty, so
+    # they are skipped; an absent path the caller did NOT declare deleted
+    # (wrong working directory, partial checkout) is a finding, never a
+    # silent pass -- the same as a present-but-unreadable test file (an
+    # unreadable test must not read as covered). Deletion is
     # caller-declared only: never infer it from filesystem existence (a
     # wrong working directory would then fail the gate open).
     deleted_set = set(deleted)
@@ -318,7 +320,9 @@ def main(argv=None) -> int:
                 encoding="utf-8", errors="replace"
             )
         except FileNotFoundError:
-            continue
+            # Declared deletions were skipped above, so this path is an
+            # undeclared absence: report it like any unreadable test.
+            findings.append(f"{path}: missing test file (not declared deleted)")
         except OSError:
             findings.append(f"{path}: unreadable test file")
     findings += check_test_guards(test_contents)

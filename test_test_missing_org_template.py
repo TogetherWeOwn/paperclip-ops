@@ -272,6 +272,46 @@ class GateLogicRegressionTest(unittest.TestCase):
             [],
         )
 
+    def test_nested_transitive_helper_call_does_not_satisfy_vacuity_guard(self):
+        mod = _load_root_module()
+        findings = mod.check_test_guards(
+            {
+                "tests/test_nested_trans.py": (
+                    "def inner(value):\n"
+                    "    assert value\n"
+                    "def mid(value):\n"
+                    "    def unused():\n"
+                    "        inner(value)\n"
+                    "    return value\n"
+                    "def test_example():\n"
+                    "    mid('ok')\n"
+                )
+            }
+        )
+        self.assertTrue(
+            findings,
+            "transitive delegation through a nested def must not pass",
+        )
+
+    def test_direct_transitive_helper_call_passes(self):
+        mod = _load_root_module()
+        self.assertEqual(
+            mod.check_test_guards(
+                {
+                    "tests/test_direct_trans.py": (
+                        "def inner(value):\n"
+                        "    assert value\n"
+                        "def mid(value):\n"
+                        "    inner(value)\n"
+                        "    return value\n"
+                        "def test_example():\n"
+                        "    mid('ok')\n"
+                    )
+                }
+            ),
+            [],
+        )
+
 
 class CliExecutionTest(unittest.TestCase):
     """Run the staged CLI as a subprocess: exit codes,
@@ -376,6 +416,15 @@ class CliExecutionTest(unittest.TestCase):
         )
         self.assertEqual(rc, 1, out)
         self.assertIn("unreadable test file", out)
+
+    def test_cli_undeclared_absent_test_file_is_a_finding(self):
+        rc, out = self.run_cli(
+            ["--changed-files", "src/foo.py,tests/test_absent.py",
+             "--mode", "enforce"],
+            files={"src/foo.py": "x = 1\n"},
+        )
+        self.assertEqual(rc, 1, out)
+        self.assertIn("missing test file", out)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ import { closeoutShadowSettings, createShadowReviewHook } from './closeout-shado
 import { closeoutDisarmSettings, createDisarmShadowHook, DisarmShadowDeferred } from './closeout-disarm-wiring.js'
 import { closeoutRedmainSettings, createRedmainShadowHook, RedmainShadowDeferred } from './closeout-redmain-wiring.js'
 import { closeoutDeploySettings, createDeployShadowHook, DeployShadowDeferred } from './closeout-deploy-wiring.js'
+import { closeoutDeployFailSettings, createDeployFailShadowHook, DeployFailShadowDeferred } from './closeout-deployfail-wiring.js'
 
 // execFile's abort callback can fire before child close. Await close explicitly;
 // a SIGTERM-ignoring gh process must not survive this pass's deadline.
@@ -135,15 +136,18 @@ export async function runProductPass({ config, captureToken, boardToken, runId =
   const disarmSettings = closeoutDisarmSettings(config)
   const redmainSettings = closeoutRedmainSettings(config)
   const deploySettings = closeoutDeploySettings(config)
+  const deployFailSettings = closeoutDeployFailSettings(config)
   const budget = createPassBudget({ ...limits, signal, ...clock })
   let disarmShadow = null
   let redmainShadow = null
   let deployShadow = null
+  let deployFailShadow = null
   const disarmReferences = disarmSettings === null ? null : []
   const observation = () => ({
     ...(disarmShadow === null ? {} : { disarmShadow: disarmShadow.summary() }),
     ...(redmainShadow === null ? {} : { redmainShadow: redmainShadow.summary() }),
     ...(deployShadow === null ? {} : { deployShadow: deployShadow.summary() }),
+    ...(deployFailShadow === null ? {} : { deployFailShadow: deployFailShadow.summary() }),
   })
   let events = null
   let sweeps = null
@@ -216,6 +220,31 @@ export async function runProductPass({ config, captureToken, boardToken, runId =
         catch (error) { throw admissionError ?? error }
       }
       deployShadow = createDeployShadowHook({ settings: deploySettings, check: budget.check, log,
+        stopReason: () => budget.snapshot().reason,
+        capture: { listDeliveries: guarded('listDeliveries'), getDelivery: guarded('getDelivery') } })
+    }
+    if (deployFailSettings !== null) {
+      let admissionError = null
+      const execute = transport
+      const reader = createCaptureAdapter({ ...scoped, baseUrl: config.captureOrigin, queryToken: captureToken,
+        fetchImpl: (url, init) => {
+          // listDeliveries pages and each body read each admit separately:
+          // guard EVERY transport admission, not just the outer call.
+          budget.check()
+          if (budget.snapshot().requests >= limits.maxRequests) {
+            admissionError = new DeployFailShadowDeferred()
+            throw admissionError
+          }
+          return execute(url, init)
+        }, pageSize: limits.pageSize, maxPages: limits.maxPages })
+      const guarded = (method) => async (...args) => {
+        admissionError = null
+        try { return await reader[method](...args) }
+        // The adapter sanitizes transport errors. Preserve only our local
+        // admission sentinel across that boundary, never provider text.
+        catch (error) { throw admissionError ?? error }
+      }
+      deployFailShadow = createDeployFailShadowHook({ settings: deployFailSettings, check: budget.check, log,
         stopReason: () => budget.snapshot().reason,
         capture: { listDeliveries: guarded('listDeliveries'), getDelivery: guarded('getDelivery') } })
     }
@@ -299,7 +328,7 @@ export async function runProductPass({ config, captureToken, boardToken, runId =
       // drain: an S3c index overrun that already stopped the pass (the finally
       // drain above holds the lock with no budget check) fails here exactly as
       // with the shadow OFF, instead of being hidden by observation.
-      if (disarmShadow !== null || redmainShadow !== null || deployShadow !== null) {
+      if (disarmShadow !== null || redmainShadow !== null || deployShadow !== null || deployFailShadow !== null) {
         budget.check()
         shadowDrained = true
         if (disarmShadow !== null) {
@@ -310,6 +339,9 @@ export async function runProductPass({ config, captureToken, boardToken, runId =
         }
         if (deployShadow !== null) {
           for (const repository of deploySettings.enabledRepositories) await deployShadow.observe(repository)
+        }
+        if (deployFailShadow !== null) {
+          for (const repository of deployFailSettings.enabledRepositories) await deployFailShadow.observe(repository)
         }
       }
     })
@@ -323,7 +355,7 @@ export async function runProductPass({ config, captureToken, boardToken, runId =
     const shadowContained = shadowDrained && drainStop === 'deadline'
     if (!shadowContained) budget.check()
     const ok = events.ok && sweeps.ok
-    for (const hook of [disarmShadow, redmainShadow, deployShadow]) {
+    for (const hook of [disarmShadow, redmainShadow, deployShadow, deployFailShadow]) {
       if (hook === null) continue
       if (shadowContained) hook.emit({ ignoreStop: true })
       else { hook.emit(); budget.check() }
@@ -333,7 +365,7 @@ export async function runProductPass({ config, captureToken, boardToken, runId =
   } catch {
     // Only fixed reason labels escape. Even local filesystem errors can contain
     // a credential path; adapters/provider errors must not enter service logs.
-    for (const hook of [disarmShadow, redmainShadow, deployShadow]) {
+    for (const hook of [disarmShadow, redmainShadow, deployShadow, deployFailShadow]) {
       if (budget.snapshot().reason === null && hook !== null) {
         try { hook.emit() } catch { /* Its check can discover a whole-pass deadline. */ }
       }

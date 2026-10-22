@@ -1003,6 +1003,16 @@ jobs:
       - name: review routing contract holds
         run: ./test_review_route.sh
 
+      # The review-report input-integrity suites are load-bearing for honest
+      # partial reports: without this step the validation they pin (invalid
+      # route/bucket rejection, future-date refusal, empty-ledger unknown)
+      # could be deleted while CI stays green. Runs alongside the router
+      # contract with the same gating (no area `if:`: every suites run).
+      - name: review report input integrity holds
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_review_report_input_integrity
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_review_report_empty_ledger
+
       # Shell-substitution guard contract: the offline gate that refuses an
       # unbounded `yes` inside `$(...)`/backticks before execution (the
       # memcg OOM mechanism: substitution collects stdout until EOF and
@@ -4877,6 +4887,7 @@ jobs:
           ./test_migration_squawk.sh
           ./test_migration_rehearsal.sh
           python3 -m unittest -v test_migration_drift_gate
+          python3 -m unittest -v test_migration_evidence_ax
 
       # == area: runbook (was runbook-gates; runs only when runbook or full changed) ==
       - name: DLQ redrive CLI standalone suite

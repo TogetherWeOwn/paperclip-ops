@@ -217,9 +217,70 @@ See `reusable-migration-drift.yml` for the exact paging steps to copy.
 ```bash
 ./migration_squawk.sh --migrations-dir path/to/migrations
 ./test_migration_timeout_preamble.sh && ./test_migration_squawk.sh \
-  && ./test_migration_rehearsal.sh && python3 -m unittest test_migration_drift_gate
+  && ./test_migration_rehearsal.sh && python3 -m unittest test_migration_drift_gate \
+  && python3 -m unittest test_migration_evidence_ax
 ```
 
-All four suites are offline: fixture files, fake binaries on `PATH`, a
+All five suites are offline: fixture files, fake binaries on `PATH`, a
 throwaway temp dir. A suite that cannot reach a database, a provider, or
 the network refuses or skips loudly — it never scores itself green.
+
+## 6. Machine-readable verdicts (`--json`)
+
+`migration_drift_gate.py` accepts an opt-in `--json` flag for agent
+consumers. Without it, output and exits are unchanged (one `ok:`/`FAIL:`
+line per check; 0 pass, 1 gate failed, 2 bad input). With it, stdout is
+exactly one versioned JSON object — parseable on every success and
+input-error path — and diagnostics never carry a traceback or raw
+evidence content.
+
+The object shape (the single canonical schema source is
+`JSON_SCHEMA_VERSION` in `migration_drift_gate.py`):
+
+```json
+{"version": 1, "verdict": "pass", "pending_count": 0, "unknown_count": 0,
+ "checks": [{"id": "candidate_chain", "status": "pass", "reason": "ok"}],
+ "next_action": ""}
+```
+
+- `"version"` is the schema version (currently 1).
+- `"verdict"` is `pass`, `fail`, or `refused`, and maps to the exit code
+  (pass 0, fail 1, refused 2). JSON mode never changes the exit code.
+- `"pending_count"` counts candidate migrations absent from the ledger;
+  `"unknown_count"` counts ledger hashes unknown to the candidate.
+- `"checks"` lists stable check entries (`"id"`, `"status"`, `"reason"`)
+  such as `candidate_chain`, `ledger_unknown`, `evidence_schema`,
+  `evidence_freshness`, `evidence_binding`, and `evidence_order`.
+- `"next_action"` is empty on pass and names the concrete next step on
+  any refusal, so callers can act without parsing prose.
+
+Reason-to-`next_action` examples (each reason below is a stable ID from
+the verdict object):
+
+- `evidence_stale` → `next_action` "Re-run the rehearsal for fresh
+  evidence within max-age (24h default) and re-submit."
+- `evidence_unbound` → `next_action` "Rehearse the exact pending chain
+  so evidence tags and digest hashes are bound to this candidate."
+- `evidence_duplicate_tag` → `next_action` "Remove duplicate migration
+  tags from the evidence and re-run the rehearsal."
+- `pending_without_evidence` → `next_action` "Rehearse the pending
+  migrations and attach fresh evidence, or narrow the candidate to
+  already-ledgered tags."
+- `unknown_ledger_rows` → `next_action` "Inspect the production ledger
+  for out-of-band DDL and reconcile the candidate repo before retrying."
+- `evidence_future` → `next_action` "Check the rehearsal clock:
+  finished_at is in the future; re-run the rehearsal with correct time."
+
+Evidence shape (root object, version, migrations list, row field types,
+duplicate tags) is validated before evaluation; wrong-shaped evidence
+fails closed with exit 2 (`refused`) instead of crashing.
+
+Dry-run is inherent: this gate is read-only. It only reads its input
+files, writes nothing, and reaches no network or database, so every
+invocation is already a dry-run and no separate preview flag exists.
+
+Verify offline with the focused command (synthetic fixtures only):
+
+```bash
+python3 -B -m unittest test_migration_evidence_ax test_migration_drift_gate
+```

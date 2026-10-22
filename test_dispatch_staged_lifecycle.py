@@ -678,7 +678,9 @@ class BoundedSmoke(DispatchLifecycleBase):
         target, shas = self.make_target("timeoutflag")
         before = (self.head(target), self.record_bytes(target))
         canary = self.fixture_root / "timeout-smoke-ran"
-        for bad in ("0", "-5", "abc", "", "9999999"):
+        for bad in ("0", "-5", "abc", "", "9999999", "601",
+                      # 2^64+1: wraps to 1 under bash fixed-width arithmetic.
+                      "18446744073709551617"):
             r = self.run_wrapper(
                 target, ["deploy", "--commit", shas[1], "--smoke-cmd",
                          f"touch {canary}; true", "--smoke-timeout", bad],
@@ -1120,6 +1122,246 @@ class JsonDryRunHelp(DispatchLifecycleBase):
         # Concise examples present.
         self.assertIn("deploy", text.lower())
         self.assertIn("example", text.lower())
+
+
+class StagedLifecycleGuardPins(DispatchLifecycleBase):
+    """Pins for review-found guards: timeout overflow, lock-fd hygiene,
+    streaming capture cap, --json pre-scan, HEAD recheck, MUTATING
+    interrupt state, lazy flock dependency. Each test fails against the
+    pre-fix behavior it pins (verified red before the fix, green after)."""
+
+    def test_smoke_timeout_boundary_accepts_600(self):
+        target, shas = self.make_target("timeout600")
+        r = self.run_wrapper(target, ["deploy", "--commit", shas[1],
+                                     "--smoke-cmd", "true",
+                                     "--smoke-timeout", "600"],
+                             timeout=QUICK_OUTER)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        data = json.loads(self.record_bytes(target).decode())
+        self.assertEqual(data["smoke"]["timeoutSec"], 600)
+        # Leading zeros are data, not octal: accepted, stored canonical.
+        target2, shas2 = self.make_target("timeout007")
+        r = self.run_wrapper(target2, ["deploy", "--commit", shas2[1],
+                                      "--smoke-cmd", "true",
+                                      "--smoke-timeout", "007"],
+                             timeout=QUICK_OUTER)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        data = json.loads(self.record_bytes(target2).decode())
+        self.assertEqual(data["smoke"]["timeoutSec"], 7)
+
+    def test_daemonizing_smoke_releases_lock(self):
+        if shutil.which("setsid") is None:
+            self.skipTest("setsid unavailable")
+        target, shas = self.make_target("daemonlock")
+        daemon_pid = self.fixture_root / "daemon.pid"
+        # The daemon escapes the smoke process group via setsid, so the
+        # wrapper's group kill cannot reach it: it must not inherit LOCK_FD.
+        smoke = (f"setsid bash -c 'echo $$ > {daemon_pid}; exec sleep 25' "
+                 "& exit 0")
+        r = self.run_wrapper(target, ["deploy", "--commit", shas[1],
+                                     "--smoke-cmd", smoke],
+                             timeout=QUICK_OUTER)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        try:
+            self.assertTrue(self.wait_for_file(daemon_pid, timeout=10),
+                            "daemon did not start; lock inheritance untestable")
+            pid = int(daemon_pid.read_text().strip())
+            self._live_children.append(pid)
+            self.assertTrue(self.pid_alive(pid),
+                            "daemon must outlive the deploy to test inheritance")
+            # The next transaction must not see lock contention from it.
+            r = self.run_wrapper(target, ["rollback", "--smoke-cmd", "true"],
+                                 timeout=QUICK_OUTER)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(self.head(target), shas[0])
+        finally:
+            try:
+                pid = int(daemon_pid.read_text().strip())
+            except (ValueError, OSError):
+                pid = None
+            if pid:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+
+    def test_smoke_capture_capped_while_streaming(self):
+        target, shas = self.make_target("streamspew")
+        spewed = self.fixture_root / "spewed"
+        smoke = ("python3 -c \"import sys; sys.stdout.write('S'*"
+                 f"{NOISY_BYTES}); sys.stdout.flush()\"; "
+                 f"touch {spewed}; sleep {SMOKE_SLEEP_STUCK}")
+        proc = self.start_wrapper(target, ["deploy", "--commit", shas[1],
+                                           "--smoke-cmd", smoke])
+        try:
+            self.assertTrue(self.wait_for_file(spewed, timeout=10),
+                            "smoke did not spew; streaming cap untestable")
+            time.sleep(0.5)  # let the capture file settle
+            captures = sorted((self.fixture_root / "tmp").glob(
+                "dispatch-smoke-out.*"))
+            self.assertTrue(captures,
+                            "smoke capture file must exist mid-run")
+            total = sum(p.stat().st_size for p in captures)
+            self.assertLess(total, 64 * 1024,
+                            "streaming capture must stay capped mid-run, "
+                            f"got {total} bytes for a {NOISY_BYTES}-byte spew")
+            try:
+                out, err = proc.communicate(timeout=OUTER_WATCHDOG)
+                rc = proc.returncode
+            except subprocess.TimeoutExpired:
+                self.kill_group(proc)
+                self.fail("wrapper hung; streaming smoke must still time out")
+            text = (out or "") + (err or "")
+            self.assertEqual(rc, 2, text)
+            self.assertIn("timeout", text.lower())
+            self.assertEqual(self.head(target), shas[0])
+            self.assertIsNone(self.record_bytes(target))
+            self.assertEqual(self.leaked_registrations(target), [])
+        finally:
+            if proc.poll() is None:
+                self.kill_group(proc)
+
+    def test_json_after_unknown_flag(self):
+        target, shas = self.make_target("jsonorder")
+        before = (self.head(target), self.record_bytes(target))
+        r = self.run_wrapper(target, ["deploy", "--bogus", "--json"],
+                             timeout=QUICK_OUTER)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        try:
+            data = json.loads(r.stdout)
+        except json.JSONDecodeError as exc:
+            self.fail(f"--json after unknown flag must still emit one JSON "
+                      f"object: {exc}\nstdout={r.stdout!r}\n"
+                      f"stderr={r.stderr!r}")
+        self.assertEqual(data.get("schemaVersion"), JSON_SCHEMA_VERSION)
+        self.assertEqual(data.get("exitCode"), 2)
+        self.assertEqual(data.get("error", {}).get("code"), "unknown_argument")
+        # A --json consumed as an option value stays data: text refusal.
+        r = self.run_wrapper(target, ["deploy", "--commit", "--json",
+                                     "--smoke-cmd", "true"],
+                             timeout=QUICK_OUTER)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertEqual(r.stdout, "",
+                         "--json as --commit value must stay data")
+        self.assertIn("commit", (r.stdout + r.stderr).lower())
+        self.assertEqual((self.head(target), self.record_bytes(target)), before)
+
+    def test_head_moved_during_smoke_refused(self):
+        target, shas = self.make_target("headmove", commits=3)
+        smoke = f"git -C {target} checkout -q --detach {shas[2]}; exit 0"
+        r = self.run_wrapper(target, ["deploy", "--commit", shas[1],
+                                     "--smoke-cmd", smoke],
+                             timeout=QUICK_OUTER)
+        text = r.stdout + r.stderr
+        self.assertEqual(r.returncode, 2, text)
+        self.assertIn("live HEAD moved", text)
+        self.assertEqual(self.head(target), shas[2],
+                         "the out-of-band checkout itself is kept; the "
+                         "wrapper must refuse to overwrite it")
+        self.assertEqual(self.anchor(target, REF_CURRENT), shas[0])
+        self.assertEqual(self.anchor(target, REF_ROLLBACK), shas[0])
+        self.assertIsNone(self.record_bytes(target))
+        self.assertEqual(self.leaked_registrations(target), [])
+
+    def test_interrupt_during_mutation_reports_inspect(self):
+        target, shas = self.make_target("sigmutate")
+        checkout_started = self.fixture_root / "checkout-started"
+        # Slow only the live checkout (which runs after MUTATING is set and
+        # the anchors move); every other git call chains to the fail-closed
+        # shim unchanged.
+        slowbin = self.fixture_root / "slowbin"
+        slowbin.mkdir()
+        slow_git = slowbin / "git"
+        slow_git.write_text(
+            "#!/bin/sh\n"
+            f'MARKER="{checkout_started}"\n'
+            f'NEXT="{self.shim_dir}/git"\n'
+            'case "$*" in\n'
+            '  *checkout*) touch "$MARKER"; sleep 3;;\n'
+            "esac\n"
+            'exec "$NEXT" "$@"\n'
+        )
+        slow_git.chmod(0o755)
+        env_extra = {"PATH": str(slowbin) + os.pathsep + str(self.shim_dir)
+                     + os.pathsep + os.environ.get("PATH", "")}
+        proc = self.start_wrapper(target, ["deploy", "--commit", shas[1],
+                                           "--smoke-cmd", "true"],
+                                  extra_env=env_extra)
+        try:
+            self.assertTrue(
+                self.wait_for_file(checkout_started, timeout=10),
+                "deploy never reached live checkout; cannot signal "
+                "mid-mutation")
+            time.sleep(0.3)
+            # Signal ONLY the wrapper PID: the trap must report, not the kill.
+            os.kill(proc.pid, signal.SIGTERM)
+            try:
+                out, err = proc.communicate(timeout=INT_TERM_OUTER)
+                rc = proc.returncode
+            except subprocess.TimeoutExpired:
+                self.kill_group(proc)
+                self.fail("wrapper did not exit after SIGTERM mid-mutation")
+            text = (out or "") + (err or "")
+            self.assertNotEqual(rc, 0, text)
+            self.assertIn("inspect HEAD", text,
+                          f"mid-mutation interrupt must say inspect, got: "
+                          f"{text!r}")
+            self.assertNotIn("unchanged", text,
+                             "mid-mutation interrupt must never claim live "
+                             "HEAD unchanged")
+        finally:
+            if proc.poll() is None:
+                self.kill_group(proc)
+
+    def test_flockless_status_and_dryrun_ok_deploy_refuses(self):
+        target, shas = self.make_target("noflock")
+        r = self.run_wrapper(target, ["deploy", "--commit", shas[1],
+                                     "--smoke-cmd", "true"],
+                             timeout=QUICK_OUTER)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        # A PATH with every wrapper dependency except flock.
+        nobin = self.fixture_root / "nobin"
+        nobin.mkdir()
+        (nobin / "git").symlink_to(self.shim_dir / "git")
+        for name in ("bash", "python3", "mktemp", "mv", "date", "sed"):
+            resolved = shutil.which(name)
+            self.assertIsNotNone(
+                resolved, f"{name} must exist to build a nobin PATH")
+            (nobin / name).symlink_to(resolved)
+        env_extra = {"PATH": str(nobin)}
+        before = (self.head(target), self.anchor(target, REF_CURRENT),
+                  self.anchor(target, REF_ROLLBACK),
+                  self.record_bytes(target))
+        lock_path = Path(str(target) + ".dispatch-deploy.lock")
+        lock_before = (lock_path.exists(),
+                       lock_path.stat().st_size if lock_path.exists() else 0,
+                       lock_path.stat().st_mtime_ns if lock_path.exists() else 0)
+        r = self.run_wrapper(target, ["status"], timeout=QUICK_OUTER,
+                             extra_env=env_extra)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        canary = self.fixture_root / "noflock-smoke-ran"
+        r = self.run_wrapper(target, ["deploy", "--commit", shas[2],
+                                     "--smoke-cmd", f"touch {canary}; true",
+                                     "--dry-run"],
+                             timeout=QUICK_OUTER, extra_env=env_extra)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(canary.exists(), "--dry-run must not run smoke")
+        r = self.run_wrapper(target, ["deploy", "--commit", shas[2],
+                                     "--smoke-cmd", "true"],
+                             timeout=QUICK_OUTER, extra_env=env_extra)
+        text = r.stdout + r.stderr
+        self.assertEqual(r.returncode, 2, text)
+        self.assertIn("required command missing: flock", text)
+        self.assertEqual((self.head(target), self.anchor(target, REF_CURRENT),
+                          self.anchor(target, REF_ROLLBACK),
+                          self.record_bytes(target)), before,
+                         "flock-less deploy must refuse before any write")
+        self.assertFalse(canary.exists())
+        lock_after = (lock_path.exists(),
+                      lock_path.stat().st_size if lock_path.exists() else 0,
+                      lock_path.stat().st_mtime_ns if lock_path.exists() else 0)
+        self.assertEqual(lock_after, lock_before,
+                         "refused deploy must not touch the lock file")
 
 
 if __name__ == "__main__":

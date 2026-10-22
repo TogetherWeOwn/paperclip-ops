@@ -289,13 +289,29 @@ release_transaction_lock() {
   unset LOCK_HELD
 }
 
+# Close the transaction lock fd in a child subshell (smoke, deadline keeper)
+# so a daemonizing smoke (setsid / double-fork) that escapes the smoke
+# process group cannot pin the lock past wrapper exit. The braced group
+# scopes the 2>/dev/null: on a bare exec the redirection would persist for
+# the rest of the subshell (see the NOTE in acquire_transaction_lock).
+close_lock_fd() {
+  if [[ -n "${LOCK_FD:-}" ]]; then
+    { exec {LOCK_FD}>&-; } 2>/dev/null || true
+  fi
+}
+
 # Stage $1 into a throwaway worktree and run the smoke command there with a
 # finite deadline. The smoke and its deadline keeper each run in their own
 # process group: past the deadline the keeper terminates the smoke group and
-# escalates to a forced kill, so a stuck or noisy child can neither hang the
-# wrapper nor grow captured memory (output is read back bounded). Sets
-# SMOKE_RC / SMOKE_TIMED_OUT / SMOKE_OUTPUT and removes the owned worktree
-# before returning; SMOKE_CLEANUP_FAILED records a surviving registration.
+# escalates to a forced kill, so a stuck child cannot hang the wrapper.
+# Smoke output streams through a fifo into a tail that keeps only the last
+# 8KB on disk, so a noisy child can neither exhaust TMPDIR mid-run nor grow
+# captured memory. Completion tracks the smoke PID, not the pipe: a smoke
+# that exits while a background child still holds stdio still reports its
+# own exit code; the tail then gets a bounded drain grace before SIGKILL
+# (its buffered bytes are lost only in that daemon case). Sets SMOKE_RC /
+# SMOKE_TIMED_OUT / SMOKE_OUTPUT and removes the owned worktree before
+# returning; SMOKE_CLEANUP_FAILED records a surviving registration.
 run_smoke() {
   local sha="$1" smoke_cmd="$2" stage_dir
   SMOKE_TIMED_OUT=0
@@ -306,6 +322,9 @@ run_smoke() {
     || refuse "cannot create smoke capture file"
   SMOKE_FLAG=$(mktemp "${TMPDIR:-/tmp}/dispatch-smoke-flag.XXXXXXXX") \
     || refuse "cannot create smoke flag file"
+  SMOKE_FIFO=$(mktemp -u "${TMPDIR:-/tmp}/dispatch-smoke-fifo.XXXXXXXX") \
+    || refuse "cannot create smoke fifo name"
+  mkfifo "$SMOKE_FIFO" || refuse "cannot create smoke fifo"
   stage_dir=$(mktemp -d "${TMPDIR:-/tmp}/dispatch-smoke-wt.XXXXXXXX") \
     || refuse "cannot create smoke worktree parent"
   rmdir "$stage_dir"
@@ -313,10 +332,32 @@ run_smoke() {
   git -C "$TARGET" worktree add --detach --quiet "$SMOKE_DIR" "$sha" \
     || { remove_owned_worktree || true; refuse "could not stage $sha into a throwaway worktree for smoke checks"; }
   set -m
-  ( cd "$SMOKE_DIR" && bash -c "$smoke_cmd" >"$SMOKE_OUT" 2>&1 ) &
+  # set +m inside: the inner background jobs must stay in this subshell's
+  # process group so the deadline keeper's group kill reaches them.
+  ( close_lock_fd
+    set +m
+    cd "$SMOKE_DIR" || exit 1
+    bash -c "$smoke_cmd" >"$SMOKE_FIFO" 2>&1 &
+    smoke_inner_pid=$!
+    tail -c "$SMOKE_TAIL_BYTES" <"$SMOKE_FIFO" >"$SMOKE_OUT" &
+    tail_pid=$!
+    smoke_inner_rc=0
+    wait "$smoke_inner_pid" || smoke_inner_rc=$?
+    # Bounded tail drain: normally EOF arrives in ms once the smoke and
+    # its children are gone; a daemon-held fifo keeps tail alive, so
+    # escalate to KILL (a zombie holds its PID until reaped below, so
+    # this cannot strike a reused PID).
+    for ((_drain = 0; _drain < 20; _drain++)); do
+      kill -0 "$tail_pid" 2>/dev/null || break
+      sleep 0.1 2>/dev/null || true
+    done
+    kill -KILL "$tail_pid" 2>/dev/null || true
+    wait "$tail_pid" 2>/dev/null || true
+    exit "$smoke_inner_rc" ) &
   SMOKE_PID=$!
   SMOKE_PGID=$SMOKE_PID
   (
+    close_lock_fd
     sleep "$SMOKE_TIMEOUT" || exit 0
     printf 'fired' >"$SMOKE_FLAG" 2>/dev/null || true
     kill -TERM -- "-$SMOKE_PGID" 2>/dev/null || true
@@ -341,9 +382,10 @@ run_smoke() {
   fi
   kill -KILL -- "-$SMOKE_PGID" 2>/dev/null || true
   SMOKE_OUTPUT=$(tail -c "$SMOKE_TAIL_BYTES" "$SMOKE_OUT" 2>/dev/null || true)
-  rm -f -- "$SMOKE_OUT" "$SMOKE_FLAG" 2>/dev/null || true
+  rm -f -- "$SMOKE_OUT" "$SMOKE_FLAG" "$SMOKE_FIFO" 2>/dev/null || true
   SMOKE_OUT=""
   SMOKE_FLAG=""
+  SMOKE_FIFO=""
   remove_owned_worktree || SMOKE_CLEANUP_FAILED=1
 }
 
@@ -575,6 +617,7 @@ on_interrupt() {
   remove_owned_worktree || cleanup_failed=1
   if [[ -n "${SMOKE_OUT:-}" ]]; then rm -f -- "$SMOKE_OUT" 2>/dev/null || true; SMOKE_OUT=""; fi
   if [[ -n "${SMOKE_FLAG:-}" ]]; then rm -f -- "$SMOKE_FLAG" 2>/dev/null || true; SMOKE_FLAG=""; fi
+  if [[ -n "${SMOKE_FIFO:-}" ]]; then rm -f -- "$SMOKE_FIFO" 2>/dev/null || true; SMOKE_FIFO=""; fi
   if [[ "${MUTATING:-0}" == "1" ]]; then
     refuse "interrupted by $sig during live mutation; inspect HEAD, anchor refs and the deployment record before retrying"
   fi
@@ -596,6 +639,7 @@ exit_cleanup() {
   remove_owned_worktree >/dev/null 2>&1 || true
   [[ -n "${SMOKE_OUT:-}" ]] && rm -f -- "$SMOKE_OUT" 2>/dev/null || true
   [[ -n "${SMOKE_FLAG:-}" ]] && rm -f -- "$SMOKE_FLAG" 2>/dev/null || true
+  [[ -n "${SMOKE_FIFO:-}" ]] && rm -f -- "$SMOKE_FIFO" 2>/dev/null || true
 }
 
 # ---- globals (traps may fire before the transaction starts) ----
@@ -604,7 +648,7 @@ DRY_RUN=0
 STAGE="validate"
 COMMAND="unknown"
 SMOKE_TIMEOUT="$DEFAULT_SMOKE_TIMEOUT"
-SMOKE_DIR=""; SMOKE_OUT=""; SMOKE_FLAG=""
+SMOKE_DIR=""; SMOKE_OUT=""; SMOKE_FLAG=""; SMOKE_FIFO=""
 SMOKE_PID=""; SMOKE_PGID=""; SMOKE_RUNNING=0
 KILLER_PID=""; KILLER_PGID=""
 SMOKE_RC=""; SMOKE_TIMED_OUT=0; SMOKE_OUTPUT=""; SMOKE_CLEANUP_FAILED=0
@@ -626,6 +670,21 @@ SMOKE_TIMEOUT_RAW=""; TIMEOUT_GIVEN=0
 JSON_MODE=0
 DRY_RUN=0
 REASON="dispatch_deploy.sh $SUBCOMMAND"
+# Pre-scan for a standalone --json so flag errors (unknown argument, missing
+# option value) still emit the documented single JSON object when the caller
+# appends --json after the bad flag. A --json consumed as the value of a
+# value-taking option is data, not the switch, so that token is skipped.
+_prescan_skip_value=0
+for _prescan_arg in "$@"; do
+  if [[ "$_prescan_skip_value" == "1" ]]; then
+    _prescan_skip_value=0
+    continue
+  fi
+  case "$_prescan_arg" in
+    --commit|--smoke-cmd|--smoke-timeout|--reason) _prescan_skip_value=1 ;;
+    --json) JSON_MODE=1 ;;
+  esac
+done
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --commit) [[ $# -ge 2 ]] || refuse "option --commit requires a value"; COMMIT="$2"; COMMIT_GIVEN=1; shift 2;;
@@ -640,8 +699,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$TIMEOUT_GIVEN" == "1" ]]; then
-  if [[ "$SMOKE_TIMEOUT_RAW" =~ ^[0-9]+$ ]] && (( 10#$SMOKE_TIMEOUT_RAW >= SMOKE_TIMEOUT_MIN && 10#$SMOKE_TIMEOUT_RAW <= SMOKE_TIMEOUT_MAX )); then
-    SMOKE_TIMEOUT="$SMOKE_TIMEOUT_RAW"
+  # Bound the digit count before arithmetic: bash fixed-width arithmetic
+  # wraps huge digit strings (2^64+1 -> 1), which would pass the range check
+  # while the keeper sleeps the raw string and the deadline never fires.
+  # Leading zeros are data, not octal (10# forces base 10); store the
+  # canonical integer so sleep and timeoutSec never see the raw string.
+  if [[ "$SMOKE_TIMEOUT_RAW" =~ ^0*[0-9]{1,3}$ ]] && (( 10#$SMOKE_TIMEOUT_RAW >= SMOKE_TIMEOUT_MIN && 10#$SMOKE_TIMEOUT_RAW <= SMOKE_TIMEOUT_MAX )); then
+    SMOKE_TIMEOUT=$((10#$SMOKE_TIMEOUT_RAW))
   else
     refuse "--smoke-timeout must be an integer 1..600 (got '$SMOKE_TIMEOUT_RAW')"
   fi

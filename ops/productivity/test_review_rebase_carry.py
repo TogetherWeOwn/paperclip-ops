@@ -132,13 +132,21 @@ def _is_stripped_git_var(key):
     return key in _GIT_STRIP_EXACT or key.startswith("GIT_CONFIG_")
 
 
+# Single shared forced-vars mapping used by both GIT_ENV and
+# _apply_hermetic_environ so the two cannot drift.
+_HERMETIC_FORCED = {
+    "GIT_EDITOR": "true",
+    "GIT_SEQUENCE_EDITOR": "true",
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": os.devnull,
+}
+
 GIT_ENV = {
     key: value for key, value in os.environ.items()
     if not _is_stripped_git_var(key)
 }
-GIT_ENV.update(GIT_EDITOR="true", GIT_SEQUENCE_EDITOR="true",
-               GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1",
-               GIT_CONFIG_GLOBAL=os.devnull)
+GIT_ENV.update(_HERMETIC_FORCED)
 GIT_BASE = ["git", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false"]
 
 
@@ -147,32 +155,39 @@ def _apply_hermetic_environ():
     for key in list(os.environ):
         if _is_stripped_git_var(key):
             del os.environ[key]
-    os.environ["GIT_EDITOR"] = "true"
-    os.environ["GIT_SEQUENCE_EDITOR"] = "true"
-    os.environ["GIT_TERMINAL_PROMPT"] = "0"
-    os.environ["GIT_CONFIG_NOSYSTEM"] = "1"
-    os.environ["GIT_CONFIG_GLOBAL"] = os.devnull
+    os.environ.update(_HERMETIC_FORCED)
 
 
 def _hermetic_environ():
     """Sanitize os.environ for helper children; return the restore.
 
-    Applied at import so helper import-time environment snapshots are
-    covered. The restore is registered in setUpModule, not here: the
-    addModuleCleanup stack is process-global and drains after the first
-    module in combined runs.
+    The restore only touches variables this module controls (stripped
+    git vars + forced vars); unrelated environment changes made by other
+    suites in a combined run are left alone.
     """
-    saved = dict(os.environ)
+    saved = {key: os.environ.get(key) for key in os.environ
+             if _is_stripped_git_var(key)}
+    saved.update({key: os.environ.get(key) for key in _HERMETIC_FORCED})
     _apply_hermetic_environ()
 
     def _restore():
-        os.environ.clear()
-        os.environ.update(saved)
+        for key in list(os.environ):
+            if _is_stripped_git_var(key) and key not in saved:
+                del os.environ[key]
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
     return _restore
 
 
-_HERMETIC_RESTORE = _hermetic_environ()
+# Import-time sanitization exists only to cover helper import-time
+# environment snapshots; it is restored immediately after the import
+# attempt so it cannot leak into other modules' imports/tests in
+# combined runs. setUpModule takes a fresh save for this module's tests.
+_IMPORT_RESTORE = _hermetic_environ()
 
 try:
     import review_rebase_carry as rrc
@@ -181,16 +196,21 @@ except ImportError as exc:
         rrc = None
     else:
         raise
+finally:
+    _IMPORT_RESTORE()
+
+_HERMETIC_RESTORE = None  # replaced by setUpModule before any test runs
 
 
 def setUpModule():
-    # Re-apply: earlier modules' tests in the combined invocation may have
-    # mutated os.environ since our import. No new save: _HERMETIC_RESTORE
-    # still restores the original pre-import environment.
-    _apply_hermetic_environ()
+    global _HERMETIC_RESTORE
+    # Fresh save here, not at import: earlier modules' tests in the
+    # combined invocation may have mutated os.environ since our import.
+    _HERMETIC_RESTORE = _hermetic_environ()
     # Register here so the restore runs after THIS module even in combined
-    # runs, and even when the SkipTest below fires (module cleanups run on
-    # setUpModule failure, unlike tearDownModule).
+    # runs (the addModuleCleanup stack is process-global and drains after
+    # the first module), and even when the SkipTest below fires (module
+    # cleanups run on setUpModule failure, unlike tearDownModule).
     unittest.addModuleCleanup(_HERMETIC_RESTORE)
     # Skip (not error) until the builder module lands. The skip must raise
     # here, not at module top: a top-level `raise SkipTest` only converts
@@ -207,7 +227,10 @@ def setUpModule():
 def tearDownModule():
     # Backup restore for runners that honor module fixtures but not module
     # cleanups; idempotent under unittest (doModuleCleanups re-runs it).
-    _HERMETIC_RESTORE()
+    # Guarded: setUpModule always assigns this first under unittest, but a
+    # runner that calls tearDownModule without setUpModule must not crash.
+    if _HERMETIC_RESTORE is not None:
+        _HERMETIC_RESTORE()
 
 
 def run_git(repo, *args):

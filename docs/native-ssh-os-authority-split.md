@@ -134,9 +134,14 @@ not arbitrary identifiers containing that substring. The live counts remain
 9/5/1, with all ten anchors unchanged and zero occurrences in `ssh.ts`.
 
 This remains a lexical citation guard, not a TypeScript parser or proof of an
-executed authorization path. Template literals are conservatively excluded in
-full, including interpolation. The host preflight and hostile-agent suite in §5
-remain mandatory; this gate cannot authorize activation.
+executed authorization path. Template literal *text* is excluded, but
+`${...}` interpolations are executable code, so identifiers inside them are
+counted in both files. Division is distinguished from a regex literal by the
+previous significant token, and line comments end at U+2028/U+2029 as well as
+CR/LF; the forbidden-file count additionally never skips `/.../`, so a seam
+there fails closed rather than hiding behind a misclassified division. The
+host preflight and hostile-agent suite in §5 remain mandatory; this gate
+cannot authorize activation.
 
 ### What this run could not establish
 

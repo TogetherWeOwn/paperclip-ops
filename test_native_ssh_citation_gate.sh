@@ -210,6 +210,309 @@ mut_seam_in_forbidden_file() {
 }
 run_case "seam_in_forbidden_file_fails" 1 "unexpectedly_present_in_ssh" mut_seam_in_forbidden_file
 
+# --- lexical counting contract -------------------------------------------
+# The required-file count must exclude comments, strings, regex/template
+# literals and identifier substrings (counting any of those as deployed code
+# would be a false present), while the forbidden-file count must still catch
+# executable seam references in division chains and template interpolations
+# (missing those would be a false clean in ssh.ts). Each mutator below rewrites
+# the three seam lines (100-102) IN PLACE so no anchor shifts.
+
+mut_lexical_comment_only() {
+  local d="$1"
+  python3 - "$d/app/packages/adapter-utils/src/server-utils.ts" <<'EOF'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").readlines()
+lines[99] = "// const hostExecutor = null;\n"
+lines[100] = "// type HostExecutor = typeof hostExecutor;\n"
+lines[101] = "// await authorizeLaunch(envelope);\n"
+open(p, "w", encoding="utf-8").writelines(lines)
+EOF
+}
+
+mut_lexical_string_only() {
+  local d="$1"
+  python3 - "$d/app/packages/adapter-utils/src/server-utils.ts" <<'EOF'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").readlines()
+lines[99] = 'const a = "hostExecutor";\n'
+lines[100] = 'const b = "HostExecutor hostExecutor";\n'
+lines[101] = "const c = 'authorizeLaunch';\n"
+open(p, "w", encoding="utf-8").writelines(lines)
+EOF
+}
+
+mut_lexical_regex_only() {
+  local d="$1"
+  python3 - "$d/app/packages/adapter-utils/src/server-utils.ts" <<'EOF'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").readlines()
+lines[99] = "const ra = /hostExecutor/;\n"
+lines[100] = "const rb = /HostExecutor|hostExecutor/g;\n"
+lines[101] = "if (/authorizeLaunch/.test(x)) {}\n"
+open(p, "w", encoding="utf-8").writelines(lines)
+EOF
+}
+
+mut_lexical_substring_only() {
+  local d="$1"
+  python3 - "$d/app/packages/adapter-utils/src/server-utils.ts" <<'EOF'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").readlines()
+lines[99] = "const myhostExecutor = 1;\n"
+lines[100] = "const HostExecutorish = myhostExecutor2;\n"
+lines[101] = "const preauthorizeLaunchpost = 1;\n"
+open(p, "w", encoding="utf-8").writelines(lines)
+EOF
+}
+
+mut_lexical_template_text_only() {
+  local d="$1"
+  python3 - "$d/app/packages/adapter-utils/src/server-utils.ts" <<'EOF'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").readlines()
+lines[99] = "const ta = `hostExecutor`;\n"
+lines[100] = "const tb = `HostExecutor and ${42} hostExecutor`;\n"
+lines[101] = "const tc = `authorizeLaunch`;\n"
+open(p, "w", encoding="utf-8").writelines(lines)
+EOF
+}
+
+# A lexical trap must read ABSENT: all three symbols at 0 occurrences with
+# failures=3 and no DRIFT/ABSENT, exactly like the seam-absent case.
+run_lexical_absent_case() {
+  local name="$1"; shift
+  local dir="$FIXROOT/$name"
+  build_fixture "$dir"
+  "$@" "$dir"
+
+  local out rc
+  set +e
+  out="$(python3 "$GATE" --root "$dir" 2>&1)"
+  rc=$?
+  set -e
+
+  local ok=1
+  [ "$rc" -eq 1 ] || ok=0
+  grep -qF "[FAIL] hostExecutor: 0 occurrence(s)" <<<"$out" || ok=0
+  grep -qF "[FAIL] HostExecutor: 0 occurrence(s)" <<<"$out" || ok=0
+  grep -qF "[FAIL] authorizeLaunch: 0 occurrence(s)" <<<"$out" || ok=0
+  grep -qF "failures=3 audit_errors=0" <<<"$out" || ok=0
+  grep -q "DRIFT" <<<"$out" && ok=0
+  grep -q "ABSENT" <<<"$out" && ok=0
+
+  if [ "$ok" -eq 1 ]; then
+    echo "  [PASS] $name (exit=$rc, lexical trap reads absent)"
+    pass=$((pass + 1))
+  else
+    echo "  [FAIL] $name: wanted exit=1 with all 3 symbols at 0, failures=3, no DRIFT/ABSENT; got exit=$rc"
+    printf '%s\n' "$out" | sed 's/^/         | /'
+    fail=$((fail + 1))
+  fi
+}
+
+run_lexical_absent_case "lexical_comment_only_absent" mut_lexical_comment_only
+run_lexical_absent_case "lexical_string_only_absent" mut_lexical_string_only
+run_lexical_absent_case "lexical_regex_only_absent" mut_lexical_regex_only
+run_lexical_absent_case "lexical_substring_only_absent" mut_lexical_substring_only
+run_lexical_absent_case "lexical_template_text_only_absent" mut_lexical_template_text_only
+
+# Deployed-name mapping: the live tree has no standalone HostExecutor; the
+# label is satisfied only through NativeSshHostExecutorTarget and
+# getActiveNativeSshHostExecutor. Drop the literal and require exactly those
+# two to keep the gate green, or the mapping can break with CI still green.
+mut_deployed_names_only() {
+  local d="$1"
+  python3 - "$d/app/packages/adapter-utils/src/server-utils.ts" <<'EOF'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").readlines()
+lines[100] = "type T = NativeSshHostExecutorTarget; getActiveNativeSshHostExecutor();\n"
+open(p, "w", encoding="utf-8").writelines(lines)
+EOF
+}
+
+run_deployed_names_case() {
+  local name="deployed_hostexecutor_names_satisfy_label"
+  local dir="$FIXROOT/$name"
+  build_fixture "$dir"
+  mut_deployed_names_only "$dir"
+
+  local json rc
+  set +e
+  json="$(python3 "$GATE" --root "$dir" --json 2>&1)"
+  rc=$?
+  set -e
+
+  local ok=1
+  [ "$rc" -eq 0 ] || ok=0
+  python3 - "$json" <<'EOF' || ok=0
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["failures"] == 0, d
+assert d["audit_errors"] == 0, d
+ep = {e["symbol"]: e for e in d["expected_present"]}
+assert ep["hostExecutor"]["occurrences"] == 1, ep
+assert ep["HostExecutor"]["occurrences"] == 2, ep
+assert ep["authorizeLaunch"]["occurrences"] == 1, ep
+assert all(e["verdict"] == "present_as_expected" for e in ep.values()), ep
+EOF
+
+  if [ "$ok" -eq 1 ]; then
+    echo "  [PASS] $name (exit=$rc, HostExecutor reads exactly the 2 deployed names)"
+    pass=$((pass + 1))
+  else
+    echo "  [FAIL] $name: wanted exit=0 with HostExecutor occurrences=2; got exit=$rc"
+    printf '%s\n' "$json" | sed 's/^/         | /'
+    fail=$((fail + 1))
+  fi
+}
+run_deployed_names_case
+
+# Division and interpolation forms must be COUNTED in both files. The plain
+# seam lines are X-ed out first so the verdict rests solely on the appended
+# forms (at EOF, past every anchor, so no drift). Exact --json counts prove
+# each individual form is seen: a lexer that swallows any one form undercounts.
+mut_division_in_required() {
+  local d="$1"
+  local f="$d/app/packages/adapter-utils/src/server-utils.ts"
+  sed -i -e 's/hostExecutor/XXXXXXXXXXXX/g' \
+         -e 's/HostExecutor/XXXXXXXXXXXX/g' \
+         -e 's/authorizeLaunch/XXXXXXXXXXXXXXX/g' "$f"
+  python3 - "$f" <<'EOF'
+import sys
+with open(sys.argv[1], "a", encoding="utf-8") as fh:
+    fh.write("const r = total / hostExecutor / 2;\n")
+    fh.write("x /= y; authorizeLaunch(z);\n")
+    fh.write("// chain-note\u2028hostExecutor\n")
+    fh.write("// assign-note\u2029authorizeLaunch\n")
+    fh.write("const v = total / HostExecutor / 2;\n")
+EOF
+}
+
+mut_interpolation_in_required() {
+  local d="$1"
+  local f="$d/app/packages/adapter-utils/src/server-utils.ts"
+  sed -i -e 's/hostExecutor/XXXXXXXXXXXX/g' \
+         -e 's/HostExecutor/XXXXXXXXXXXX/g' \
+         -e 's/authorizeLaunch/XXXXXXXXXXXXXXX/g' "$f"
+  python3 - "$f" <<'EOF'
+import sys
+with open(sys.argv[1], "a", encoding="utf-8") as fh:
+    fh.write("const s1 = `${hostExecutor}`;\n")
+    fh.write("const s2 = `outer ${`inner ${hostExecutor}`}`;\n")
+    fh.write("const s3 = `${hostExecutor + 1}`;\n")
+    fh.write("const s4 = `${HostExecutor}`;\n")
+    fh.write("const s5 = `${authorizeLaunch(x)}`;\n")
+EOF
+}
+
+# want: <name> <mutator> <hostExecutor_n> <HostExecutor_n> <authorizeLaunch_n>
+run_required_forms_case() {
+  local name="$1" mut="$2" n_host="$3" n_type="$4" n_auth="$5"
+  local dir="$FIXROOT/$name"
+  build_fixture "$dir"
+  "$mut" "$dir"
+
+  local json rc
+  set +e
+  json="$(python3 "$GATE" --root "$dir" --json 2>&1)"
+  rc=$?
+  set -e
+
+  local ok=1
+  [ "$rc" -eq 0 ] || ok=0
+  python3 - "$json" "$n_host" "$n_type" "$n_auth" <<'EOF' || ok=0
+import json, sys
+d = json.loads(sys.argv[1])
+want_host, want_type, want_auth = int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+assert d["failures"] == 0, d
+assert d["audit_errors"] == 0, d
+ep = {e["symbol"]: e for e in d["expected_present"]}
+assert ep["hostExecutor"]["occurrences"] == want_host, ep
+assert ep["HostExecutor"]["occurrences"] == want_type, ep
+assert ep["authorizeLaunch"]["occurrences"] == want_auth, ep
+assert all(e["verdict"] == "present_as_expected" for e in ep.values()), ep
+EOF
+
+  if [ "$ok" -eq 1 ]; then
+    echo "  [PASS] $name (exit=$rc, counts $n_host/$n_type/$n_auth)"
+    pass=$((pass + 1))
+  else
+    echo "  [FAIL] $name: wanted exit=0 with counts $n_host/$n_type/$n_auth; got exit=$rc"
+    printf '%s\n' "$json" | sed 's/^/         | /'
+    fail=$((fail + 1))
+  fi
+}
+
+run_required_forms_case "division_forms_count_in_required" mut_division_in_required 2 1 2
+run_required_forms_case "interpolation_forms_count_in_required" mut_interpolation_in_required 3 1 1
+
+mut_division_in_forbidden() {
+  local d="$1"
+  python3 - "$d/app/packages/adapter-utils/src/ssh.ts" <<'EOF'
+import sys
+with open(sys.argv[1], "a", encoding="utf-8") as fh:
+    fh.write("const r = total / hostExecutor / 2;\n")
+    fh.write("x /= y; authorizeLaunch(z);\n")
+    fh.write("// trailing-note\u2028HostExecutor\n")
+EOF
+}
+
+mut_interpolation_in_forbidden() {
+  local d="$1"
+  python3 - "$d/app/packages/adapter-utils/src/ssh.ts" <<'EOF'
+import sys
+with open(sys.argv[1], "a", encoding="utf-8") as fh:
+    fh.write("const s1 = `${hostExecutor}`;\n")
+    fh.write("const s4 = `${HostExecutor}`;\n")
+    fh.write("const s5 = `${authorizeLaunch(x)}`;\n")
+EOF
+}
+
+run_forbidden_forms_case() {
+  local name="$1"; shift
+  local dir="$FIXROOT/$name"
+  build_fixture "$dir"
+  "$@" "$dir"
+
+  local json rc
+  set +e
+  json="$(python3 "$GATE" --root "$dir" --json 2>&1)"
+  rc=$?
+  set -e
+
+  local ok=1
+  [ "$rc" -eq 1 ] || ok=0
+  python3 - "$json" <<'EOF' || ok=0
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["failures"] == 3, d
+assert d["audit_errors"] == 0, d
+ep = {e["symbol"]: e for e in d["expected_present"]}
+for sym in ("hostExecutor", "HostExecutor", "authorizeLaunch"):
+    assert ep[sym]["verdict"] == "unexpectedly_present_in_ssh", ep
+    assert ep[sym]["ssh_occurrences"] == 1, ep
+EOF
+
+  if [ "$ok" -eq 1 ]; then
+    echo "  [PASS] $name (exit=$rc, all 3 symbols caught in ssh.ts)"
+    pass=$((pass + 1))
+  else
+    echo "  [FAIL] $name: wanted exit=1 with all 3 unexpectedly_present_in_ssh at ssh=1; got exit=$rc"
+    printf '%s\n' "$json" | sed 's/^/         | /'
+    fail=$((fail + 1))
+  fi
+}
+
+run_forbidden_forms_case "division_forms_fail_in_forbidden" mut_division_in_forbidden
+run_forbidden_forms_case "interpolation_forms_fail_in_forbidden" mut_interpolation_in_forbidden
+
 # Negative control: a mutation the gate should IGNORE. Editing an unrelated region
 # must stay green, otherwise the gate is just detecting "file changed" and every red
 # above is uninformative.

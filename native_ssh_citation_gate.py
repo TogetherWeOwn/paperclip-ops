@@ -137,14 +137,32 @@ SYMBOL_IDENTIFIERS = {
 }
 
 # Skip comments and quoted text before matching complete identifiers. Template
-# literals are conservatively excluded in full. This is a lexical citation check,
-# not a TypeScript parser or proof that an authorization path actually executes.
-SOURCE_TOKENS = re.compile(
-    r"//[^\r\n]*|/\*.*?(?:\*/|\Z)|"
-    r"/(?![/*])(?:\\.|\[(?:\\.|[^\]\\\r\n])*\]|[^/\\\[\r\n])+/[a-z]*|"
-    r'''"(?:\\.|[^"\\])*(?:"|\Z)|'''
-    r"'(?:\\.|[^'\\])*(?:'|\Z)|(?P<template>`)|(?P<brace>[{}])|(?P<identifier>[$\w]+)",
-    re.DOTALL,
+# *text* is skipped but `${...}` interpolations are executable code, so their
+# identifiers are counted. Regex literals are skipped only in the required file,
+# where counting a literal as deployed code would be a false present; the
+# forbidden file uses a conservative count that never skips `/.../` (a seam in
+# a regex there fails closed rather than hiding). Division is distinguished
+# from a regex by the previous significant token. Line comments end at CR, LF,
+# U+2028 and U+2029 per the TypeScript scanner. This is a lexical citation
+# check, not a TypeScript parser or proof that an authorization path executes.
+IDENT_RE = re.compile(r"[$\w]+")
+
+LINE_TERMINATORS = "\r\n\u2028\u2029"
+
+# Value-like words: an expression just ended, so `/` is division.
+VALUE_KEYWORDS = frozenset({"this", "true", "false", "null", "super"})
+
+# Keywords in expression-expected position: `/` opens a regex literal.
+REGEX_ALLOWED_KEYWORDS = frozenset(
+    {
+        "return", "typeof", "instanceof", "in", "of", "new", "delete",
+        "void", "throw", "case", "do", "else", "yield", "await",
+        "function", "if", "for", "while", "with", "catch", "switch",
+        "var", "let", "const", "class", "extends", "import", "export",
+        "default", "try", "finally", "break", "continue", "debugger",
+        "as", "implements", "interface", "package", "private",
+        "protected", "public", "static", "enum", "declare",
+    }
 )
 
 
@@ -166,51 +184,192 @@ def find_anchor(path: Path, anchor: str) -> tuple[str, int | None, str]:
     return "present", hits[0], "ok"
 
 
-def skip_template(text: str, start: int) -> int:
-    """Return the end of a template, skipping nested interpolation conservatively."""
-    # Zero denotes template text; positive entries are interpolation brace depths.
-    stack = [0]
+def _try_parse_regex(text: str, pos: int) -> int | None:
+    """Return the end of a regex literal starting at pos, or None if invalid.
+
+    pos must point at `/` whose next char is neither `/` nor `*` (comments are
+    handled before this is called). An unescaped line terminator or a missing
+    closing slash means this is division, not a regex.
+    """
+    n = len(text)
+    i = pos + 1
+    in_class = False
+    while i < n:
+        ch = text[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch in LINE_TERMINATORS:
+            return None
+        if ch == "[" and not in_class:
+            in_class = True
+            i += 1
+            continue
+        if ch == "]" and in_class:
+            in_class = False
+            i += 1
+            continue
+        if ch == "/" and not in_class:
+            i += 1
+            while i < n and "a" <= text[i] <= "z":
+                i += 1
+            return i
+        i += 1
+    return None
+
+
+def _scan_template(
+    text: str, start: int, identifiers: set[str], conservative: bool
+) -> tuple[int, int]:
+    """Scan the template opening at start; return (end_pos, interpolation_hits).
+
+    Template text is skipped; each `${...}` interpolation is scanned as code so
+    executable seam references inside interpolations are counted. Handles
+    arbitrary nesting via mutual recursion with _scan_js.
+    """
+    n = len(text)
+    pos = start + 1  # past the opening backtick
+    count = 0
+    while pos < n:
+        ch = text[pos]
+        if ch == "\\":
+            pos += 2
+            continue
+        if ch == "`":
+            return pos + 1, count
+        if text.startswith("${", pos):
+            pos, inner = _scan_js(
+                text, pos + 2, identifiers, conservative, in_interpolation=True
+            )
+            count += inner
+            continue
+        pos += 1
+    return n, count
+
+
+def _scan_js(
+    text: str,
+    start: int,
+    identifiers: set[str],
+    conservative: bool,
+    in_interpolation: bool,
+) -> tuple[int, int]:
+    """Scan JS/TS from start; return (end_pos, identifier_hits).
+
+    When in_interpolation is true, stop after the matching `}` of the `${`
+    that opened this call (brace depth tracked from 1). Otherwise scan to the
+    end of text. prev tracks the previous significant token: 'operand' means
+    an expression just ended so `/` is division; anything else means `/` may
+    open a regex. conservative=True (forbidden file) never skips `/.../` so a
+    seam there cannot hide behind a misclassified division.
+    """
+    n = len(text)
     pos = start
-    while stack and pos < len(text):
-        if stack[-1] == 0:
-            if text[pos] == "\\":
-                pos += 2
-            elif text[pos] == "`":
-                stack.pop()
+    count = 0
+    prev: str | None = None  # None | 'operand' | 'operator'
+    depth = 1 if in_interpolation else 0
+    while pos < n:
+        ch = text[pos]
+        if ch in " \t\v\f" or ch in LINE_TERMINATORS:
+            pos += 1
+            continue
+        if text.startswith("//", pos):
+            pos += 2
+            while pos < n and text[pos] not in LINE_TERMINATORS:
                 pos += 1
-            elif text.startswith("${", pos):
-                stack.append(1)
-                pos += 2
-            else:
+            continue
+        if text.startswith("/*", pos):
+            end = text.find("*/", pos + 2)
+            pos = n if end == -1 else end + 2
+            continue
+        if ch == '"' or ch == "'":
+            quote = ch
+            pos += 1
+            while pos < n:
+                c = text[pos]
+                if c == "\\":
+                    pos += 2
+                    continue
+                if c == quote:
+                    pos += 1
+                    break
+                if c in LINE_TERMINATORS:
+                    break
                 pos += 1
-        else:
-            match = SOURCE_TOKENS.search(text, pos)
-            if match is None:
-                return len(text)
+            prev = "operand"
+            continue
+        if ch == "`":
+            pos, inner = _scan_template(text, pos, identifiers, conservative)
+            count += inner
+            prev = "operand"
+            continue
+        if ch == "/":
+            if not conservative and prev != "operand":
+                regex_end = _try_parse_regex(text, pos)
+                if regex_end is not None:
+                    pos = regex_end
+                    prev = "operand"
+                    continue
+            pos += 1
+            prev = "operator"
+            continue
+        match = IDENT_RE.match(text, pos)
+        if match:
+            tok = match.group(0)
             pos = match.end()
-            if match.lastgroup == "template":
-                stack.append(0)
-            elif match.lastgroup == "brace":
-                stack[-1] += 1 if match.group() == "{" else -1
-                if stack[-1] == 0:
-                    stack.pop()
-    return min(pos, len(text))
+            if tok[0].isdigit():
+                prev = "operand"
+            elif tok in VALUE_KEYWORDS:
+                prev = "operand"
+            elif tok in REGEX_ALLOWED_KEYWORDS:
+                prev = "operator"
+            else:
+                if tok in identifiers:
+                    count += 1
+                prev = "operand"
+            continue
+        if ch == "{":
+            if in_interpolation:
+                depth += 1
+            pos += 1
+            prev = "operator"
+            continue
+        if ch == "}":
+            if in_interpolation:
+                depth -= 1
+                pos += 1
+                if depth == 0:
+                    break
+                prev = "operator"
+                continue
+            # Top level: ambiguous block-end vs object-end. Prefer regex-allowed
+            # so a literal seam is skipped (fail-closed for the required file).
+            pos += 1
+            prev = "operator"
+            continue
+        if ch == ")" or ch == "]":
+            pos += 1
+            prev = "operand"
+            continue
+        # `(`, `[`, `,`, `;`, `:`, `?`, operators, `.`, `#`, `@`, and anything
+        # else: expression-expected position, so a following `/` may be regex.
+        pos += 1
+        prev = "operator"
+    return pos, count
 
 
-def count_symbol(path: Path, symbol: str) -> int | None:
+def count_symbol(
+    path: Path, symbol: str, *, for_forbidden_file: bool = False
+) -> int | None:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
     identifiers = SYMBOL_IDENTIFIERS.get(symbol, {symbol})
-    count = 0
-    pos = 0
-    while match := SOURCE_TOKENS.search(text, pos):
-        pos = match.end()
-        if match.lastgroup == "template":
-            pos = skip_template(text, pos)
-        elif match.group("identifier") in identifiers:
-            count += 1
+    _, count = _scan_js(
+        text, 0, identifiers, conservative=for_forbidden_file,
+        in_interpolation=False,
+    )
     return count
 
 
@@ -259,7 +418,9 @@ def main(argv: list[str]) -> int:
     present_results: list[dict[str, Any]] = []
     for symbol, why in PRESENT_EXPECTED:
         present_count = count_symbol(resolve(PRESENT_FILE), symbol)
-        absent_count = count_symbol(resolve(ABSENT_FILE), symbol)
+        absent_count = count_symbol(
+            resolve(ABSENT_FILE), symbol, for_forbidden_file=True
+        )
         if present_count is None or absent_count is None:
             verdict, audit_errors = "error", audit_errors + 1
         elif present_count == 0:

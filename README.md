@@ -133,6 +133,13 @@ parser, not a standing operator command. Test entry points begin with `test_`.
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
 
+## Productivity reconcilers
+
+For confirmed mutation counts, safe CLI modes, versioned JSON summaries and an
+offline verification command, see [Reconciler outcomes](docs/reconciler-outcomes.md).
+The source contract does not imply runtime installation; flow guard's existing
+no-flag invocation is mutating.
+
 ## Contributing
 
 Use a feature branch and a reviewed pull request. Report actual tests and their

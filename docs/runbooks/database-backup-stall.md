@@ -48,6 +48,13 @@ clock sampled after its stat; that same observation time determines its age and
 orphan cutoff. `checkedAt` remains the run's start time. This is a size/mtime
 detector, not gzip, SQL or restoration verification.
 
+An empty `--backup-dir ""` is missing evidence, not an alias for the current
+directory; use an explicit `--backup-dir .` to select the current directory.
+Numeric options require positive decimal integers of at most 18 digits. Age
+options must also fit signed 64-bit seconds: at most 153722867280912930 minutes
+or 2562047788015215 hours. Out-of-range input exits 2 before observation, rather
+than wrapping a size or age threshold.
+
 A measured empty directory is a positive **stall (exit 1)**. An absent/unreadable
 directory, failed enumeration, failed stat or unusable/future timestamp is an
 **unknown observation**, not a zero-byte archive, epoch-zero orphan or fresh

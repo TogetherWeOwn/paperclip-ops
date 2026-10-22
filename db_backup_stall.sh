@@ -201,9 +201,13 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# Match stat's bounded decimal domain before any arithmetic. Age options must
+# also fit signed 64-bit seconds, so unit conversion cannot wrap a threshold.
 for n in "$WINDOW_BYTES" "$ORPHAN_MIN_AGE_MINUTES" "$MIN_BACKUP_BYTES" "$MAX_BACKUP_AGE_HOURS"; do
-  [[ "$n" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: numeric options must be positive integers" >&2; exit 2; }
+  [[ "$n" =~ ^[1-9][0-9]{0,17}$ ]] || { echo "ERROR: numeric options must be positive integers of at most 18 digits" >&2; exit 2; }
 done
+(( ORPHAN_MIN_AGE_MINUTES <= 153722867280912930 && MAX_BACKUP_AGE_HOURS <= 2562047788015215 )) \
+  || { echo "ERROR: numeric options exceed the signed 64-bit age range" >&2; exit 2; }
 [[ "$PREFIX" =~ ^[A-Za-z0-9._-]+$ ]] \
   || { echo "ERROR: prefix contains characters that could escape the glob" >&2; exit 2; }
 [[ -z "$EXCLUDE_SUFFIX" || "$EXCLUDE_SUFFIX" =~ ^[A-Za-z0-9._-]+$ ]] \
@@ -413,7 +417,8 @@ BACKUP_DIR_READABLE=0
 BACKUP_FILES=()
 SCAN_DIR="$BACKUP_DIR"
 [[ "$SCAN_DIR" == /* || "$SCAN_DIR" == ./* || "$SCAN_DIR" == ../* ]] || SCAN_DIR="./$SCAN_DIR"
-if [[ -d "$SCAN_DIR" && -r "$SCAN_DIR" && -x "$SCAN_DIR" ]]; then
+# An empty caller expansion is missing evidence, not an alias for the CWD.
+if [[ -n "$BACKUP_DIR" && -d "$SCAN_DIR" && -r "$SCAN_DIR" && -x "$SCAN_DIR" ]]; then
   # A glob silently looks empty when readdir fails. Read a NUL-delimited listing
   # AND its exit status, without a temp file or a pipeline that loses the status.
   mapfile -d '' -t BACKUP_FILES < <(

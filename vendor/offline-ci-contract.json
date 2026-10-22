@@ -320,7 +320,8 @@
     "staging-preflight carrier suite:1",
     "api-base-validation suite:1",
     "api-base-validation-python suite:1",
-    "database backup observation contract:1"
+    "database backup observation contract:1",
+    "review report input integrity holds:1"
   ],
   "retained": [
     {
@@ -1802,6 +1803,11 @@
       "name": "database backup observation contract",
       "definition_sha256": "a64fd8e7feb4204bf4a38dcf22309c198bbd6b554b66c83cab7ffe813a150aa8",
       "id": "database backup observation contract:1"
+    },
+    {
+      "name": "review report input integrity holds",
+      "definition_sha256": "bffa19729a879126ad09b2eba97c28fddbdc6f4fa5e10afa5a536bb291c9dfc4",
+      "id": "review report input integrity holds:1"
     }
   ],
   "removed": [

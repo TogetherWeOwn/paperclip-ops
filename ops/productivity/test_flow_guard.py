@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 import types
@@ -80,7 +81,8 @@ class LoopPass(unittest.TestCase):
 class TimeoutPass(unittest.TestCase):
     STEPS = ['idle_waiters', 'hide_noop_comments', 'orphan_prs', 'reconcile_replay_blocked']
 
-    def run_pass(self, fail=lambda args, kwargs: False, loops='', agents='', returncode=0):
+    def run_pass(self, fail=lambda args, kwargs: False, loops='', agents='', returncode=0,
+                 patch_returncode=None, child_stdout='0 rows\n', child_stderr='fixture error'):
         calls = []
 
         def fake_run(args, **kwargs):
@@ -92,16 +94,20 @@ class TimeoutPass(unittest.TestCase):
             elif args[0] == 'curl':
                 out = '200' if 'PATCH' in args else json.dumps({'executionPolicy': {'stages': [STAGE]}})
             else:
-                out = '0 rows\n'
-            return types.SimpleNamespace(returncode=returncode, stdout=out, stderr='fixture error')
+                out = child_stdout
+            code = patch_returncode if 'PATCH' in args and patch_returncode is not None else returncode
+            return subprocess.CompletedProcess(args, code, stdout=out, stderr=child_stderr)
 
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.object(fg, 'STATE', tmp), \
                 mock.patch.object(fg, 'log') as log, \
                 mock.patch.object(fg.subprocess, 'run', side_effect=fake_run), \
+                mock.patch.object(sys, 'argv', ['flow_guard', '--apply']), \
                 mock.patch('builtins.print') as output:
-            fg.main()
-        return calls, log, output
+            exit_code = fg.main()
+            if exit_code is None:
+                exit_code = 0
+        return calls, log, output, exit_code
 
     def assert_steps_ran(self, calls):
         children = [a for a, _ in calls if a[0] == 'python3']
@@ -111,33 +117,33 @@ class TimeoutPass(unittest.TestCase):
     def test_child_timeout_logs_step_and_continues(self):
         for step in self.STEPS:
             with self.subTest(step=step):
-                calls, log, _ = self.run_pass(lambda a, k: a[0] == 'python3' and Path(a[1]).stem == step)
+                calls, log, _, _ = self.run_pass(lambda a, k: a[0] == 'python3' and Path(a[1]).stem == step)
                 self.assert_steps_ran(calls)
                 log.assert_any_call(f'{step} timed out after {fg.STEP_TIMEOUT_SECONDS}s; outcome unknown, not retried this tick')
 
     def test_psql_read_timeout_does_not_derive_patch(self):
-        calls, log, _ = self.run_pass(lambda a, k: a[0] == 'docker', loops='card-1\tTOG-900\t6\n',
+        calls, log, _, _ = self.run_pass(lambda a, k: a[0] == 'docker', loops='card-1\tTOG-900\t6\n',
                                     agents='agent-1\tFixture\tprocess_lost\n')
         self.assertFalse(any('PATCH' in a for a, _ in calls))
         self.assert_steps_ran(calls)
         log.assert_any_call(f'psql read timed out after {fg.PSQL_TIMEOUT_SECONDS}s; could not read, no derived changes')
 
     def test_http_read_timeout_does_not_derive_patch(self):
-        calls, log, _ = self.run_pass(lambda a, k: a[0] == 'curl' and 'PATCH' not in a,
+        calls, log, _, _ = self.run_pass(lambda a, k: a[0] == 'curl' and 'PATCH' not in a,
                                     loops='card-1\tTOG-900\t6\n')
         self.assertFalse(any('PATCH' in a for a, _ in calls))
         self.assert_steps_ran(calls)
         log.assert_any_call('continuation loop on TOG-' '900: executionPolicy unreadable, card not changed')
 
     def test_failed_card_read_does_not_block_a_later_measured_card(self):
-        calls, _, _ = self.run_pass(lambda a, k: a[0] == 'curl' and a[-1].endswith('/issues/card-1'),
+        calls, _, _, _ = self.run_pass(lambda a, k: a[0] == 'curl' and a[-1].endswith('/issues/card-1'),
                                   loops='card-1\tTOG-900\t6\ncard-2\tTOG-901\t6\n')
         patches = [a for a, _ in calls if 'PATCH' in a]
         self.assertEqual(len(patches), 1)
         self.assertTrue(any(x.endswith('/issues/card-2') for x in patches[0]))
 
     def test_patch_timeout_is_unknown_not_success_or_retried(self):
-        calls, log, _ = self.run_pass(lambda a, k: 'PATCH' in a, loops='card-1\tTOG-900\t6\n',
+        calls, log, _, _ = self.run_pass(lambda a, k: 'PATCH' in a, loops='card-1\tTOG-900\t6\n',
                                     agents='agent-1\tFixture\tprocess_lost\n')
         self.assertEqual(sum('PATCH' in a for a, _ in calls), 2)
         self.assert_steps_ran(calls)
@@ -146,18 +152,71 @@ class TimeoutPass(unittest.TestCase):
         self.assertFalse(any('armed 2h monitor' in msg or 'reset to idle' in msg for msg in messages))
 
     def test_every_exercised_subprocess_has_its_named_bound(self):
-        calls, _, _ = self.run_pass(loops='card-1\tTOG-900\t6\n', agents='agent-1\tFixture\tprocess_lost\n')
+        calls, _, _, _ = self.run_pass(loops='card-1\tTOG-900\t6\n', agents='agent-1\tFixture\tprocess_lost\n')
         self.assertEqual(len(calls), 9)
         for args, kwargs in calls:
             expected = {'docker': fg.PSQL_TIMEOUT_SECONDS, 'curl': fg.CURL_TIMEOUT_SECONDS,
                         'python3': fg.STEP_TIMEOUT_SECONDS}[args[0]]
             self.assertEqual(kwargs['timeout'], expected)
 
-    def test_nonzero_children_keep_failure_logs_and_replay_output(self):
-        _, log, output = self.run_pass(returncode=7)
-        for step in self.STEPS[:3]:
-            log.assert_any_call(f'{step} failed rc=7: fixture error')
+    def test_nonzero_children_log_sanitized_failures_including_replay(self):
+        calls, log, output, exit_code = self.run_pass(
+            returncode=7, child_stdout='raw-stdout-canary', child_stderr='raw-stderr-canary')
+        self.assert_steps_ran(calls)
+        self.assertNotEqual(exit_code, 0)
+        for step in self.STEPS:
+            log.assert_any_call(f'{step} failed rc=7; next_action=inspect_child_result')
+        logged = '\n'.join(str(c) for c in log.call_args_list + output.call_args_list)
+        self.assertNotIn('raw-stdout-canary', logged)
+        self.assertNotIn('raw-stderr-canary', logged)
         output.assert_not_called()
+
+    def test_nonzero_psql_reads_do_not_derive_patches_from_partial_rows(self):
+        calls, log, _, exit_code = self.run_pass(returncode=7, loops='card-1\tcase_loop_fixture\t6\n',
+                                               agents='agent-1\tFixture\tprocess_lost\n')
+        self.assertNotEqual(exit_code, 0)
+        self.assertFalse(any('PATCH' in a for a, _ in calls))
+        self.assert_steps_ran(calls)
+        self.assertEqual(sum(c.args == ('psql read failed; could not read, no derived changes',)
+                             for c in log.call_args_list), 2)
+
+    def test_nonzero_patch_transport_with_stdout_200_never_arms_or_resets(self):
+        for code in (7, 28):
+            with self.subTest(returncode=code):
+                calls, log, _, exit_code = self.run_pass(
+                    patch_returncode=code, loops='card-1\tcase_loop_fixture\t6\n',
+                    agents='agent-1\tFixture\tprocess_lost\n')
+                self.assertEqual(sum('PATCH' in a for a, _ in calls), 2)
+                self.assertNotEqual(exit_code, 0)
+                messages = [c.args[0] for c in log.call_args_list]
+                self.assertFalse(any('armed 2h monitor' in m or 'reset to idle' in m for m in messages))
+
+
+class SafeFlags(unittest.TestCase):
+    def test_dry_run_and_contradictory_flags_have_no_side_effects(self):
+        for flags, succeeds in ((['--dry-run'], True), (['--apply', '--dry-run'], False),
+                                (['--dry-run', '--apply'], False)):
+            with self.subTest(flags=flags), tempfile.TemporaryDirectory() as tmp:
+                state = Path(tmp, 'state')
+                with mock.patch.object(fg, 'STATE', str(state)), \
+                        mock.patch.object(sys, 'argv', ['flow_guard', *flags]), \
+                        mock.patch.object(fg.subprocess, 'run',
+                                          side_effect=AssertionError('safe flags must not run subprocesses')) as run, \
+                        mock.patch.object(fg, 'log') as log, \
+                        mock.patch.object(fg.os, 'makedirs') as mkdir, \
+                        mock.patch('builtins.print'):
+                    try:
+                        exit_code = fg.main()
+                    except SystemExit as exc:
+                        exit_code = exc.code
+                if succeeds:
+                    self.assertEqual(exit_code, 0)
+                else:
+                    self.assertNotEqual(exit_code, 0)
+                run.assert_not_called()
+                log.assert_not_called()
+                mkdir.assert_not_called()
+                self.assertEqual(list(Path(tmp).iterdir()), [])
 
 
 class TimeoutConfig(unittest.TestCase):

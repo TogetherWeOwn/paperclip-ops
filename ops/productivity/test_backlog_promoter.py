@@ -2,11 +2,11 @@
 """Offline: a fake subprocess.run stands in for psql, gh_token.sh, gh and curl. No host, network or credential."""
 import contextlib
 import io
+import json
 import os
 import subprocess
 import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -19,8 +19,9 @@ PLAIN_CARD = ('a2', 'case_a08f133a', 'Add retry to the deploy step', 'medium', '
 
 
 class Run(unittest.TestCase):
-    def run_promoter(self, *, rows=(PR_CARD, PLAIN_CARD), runnable='0', pr_state='OPEN', slow=()):
-        """slow: which reads time out, from {'runnable', 'rows', 'token', 'pr', 'patch'}."""
+    def run_promoter(self, *, rows=(PR_CARD, PLAIN_CARD), runnable='0', pr_state='OPEN', slow=(),
+                     patch_stdout='200', patch_returncode=0, log_path=None):
+        """slow: which calls time out, from {'runnable', 'rows', 'token', 'pr', 'patch'}."""
         patches, calls = [], []
 
         def run(cmd, **kwargs):
@@ -40,31 +41,34 @@ class Run(unittest.TestCase):
             elif cmd[0] == 'gh':
                 kind, out = 'pr', pr_state
             else:
-                kind, out = 'patch', '200'
+                kind, out = 'patch', patch_stdout
                 patches.append(cmd[cmd.index('-X') + 2].rsplit('/', 1)[1])
             if kind in slow:
-                if kind == 'patch':
-                    patches.pop()
                 timed_out(cmd, **kwargs)
-            return types.SimpleNamespace(stdout=out + '\n')
+            return subprocess.CompletedProcess(cmd, patch_returncode if kind == 'patch' else 0,
+                                               stdout=out + '\n', stderr='')
 
-        stdout, error = io.StringIO(), None
+        stdout, error, exit_code = io.StringIO(), None, None
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp, 'operator.log')
-            log.write_text('')
+            log = log_path or Path(tmp, 'operator.log')
+            if not log.exists():
+                log.write_text('')
             with mock.patch.dict(sys.modules, {'host_ok': host_ok_stub()}), \
                     mock.patch.dict(bp._pr_cache, clear=True), \
                     mock.patch.object(bp, 'APPLY', True), \
                     mock.patch.object(bp, 'LOG', log), \
                     mock.patch.object(bp, 'PAUSE', Path(tmp, 'PAUSE')), \
                     mock.patch.object(bp.subprocess, 'run', side_effect=run), \
+                    mock.patch.object(sys, 'argv', ['promoter', '--apply', '--json-summary']), \
                     contextlib.redirect_stdout(stdout):
                 try:
-                    bp.main()
+                    exit_code = bp.main()
+                    if exit_code is None:  # Match sys.exit(main()) for imported legacy success.
+                        exit_code = 0
                 except Exception as e:
                     error = e
             return {'patches': patches, 'calls': calls, 'log': log.read_text(), 'stdout': stdout.getvalue(),
-                    'error': error}
+                    'error': error, 'exit': exit_code}
 
     def test_open_pr_card_and_plain_card_are_promoted(self):
         out = self.run_promoter()
@@ -99,11 +103,70 @@ class Run(unittest.TestCase):
         self.assertIsInstance(out['error'], subprocess.TimeoutExpired)
         self.assertEqual(out['patches'], [])
 
-    def test_timed_out_patch_is_logged_and_the_run_goes_on(self):
-        out = self.run_promoter(slow={'patch'})
+    def test_timed_out_patches_are_unknown_and_do_not_suppress_a_fresh_tick(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp, 'operator.log')
+            first = self.run_promoter(slow={'patch'}, log_path=log)
+            self.assertIsNone(first['error'])
+            self.assertEqual(first['patches'], ['a1', 'a2'])
+            self.assertNotEqual(first['exit'], 0)
+            self.assertEqual(first['log'], '', 'timeouts must not create completed-promotion records')
+            summary = json.loads(first['stdout'].splitlines()[-1])
+            self.assertEqual(summary['counts'], {'attempted': 2, 'confirmed': 0,
+                                                 'definite_failure': 0, 'unknown': 2})
+            for action, card in zip(summary['actions'], (PR_CARD, PLAIN_CARD)):
+                self.assertIn(card[0], action['target'])
+            self.assertEqual([a['outcome'] for a in summary['actions']], ['unknown', 'unknown'])
+            for card in (PR_CARD, PLAIN_CARD):
+                self.assertTrue(any(card[1] in line and 'unknown' in line
+                                    for line in first['stdout'].splitlines() if not line.startswith('{')))
+            second = self.run_promoter(log_path=log)
+            self.assertIsNone(second['error'])
+            self.assertEqual(second['patches'], ['a1', 'a2'], 'unknown is not 24h bounce suppression')
+            self.assertEqual(second['exit'], 0)
+            for card in (PR_CARD, PLAIN_CARD):
+                self.assertIn(f'{card[1]} backlog->todo', second['log'])
+
+    def test_unknown_duplicate_candidate_is_attempted_once_per_tick(self):
+        out = self.run_promoter(rows=(PR_CARD, PR_CARD, PLAIN_CARD), slow={'patch'})
         self.assertIsNone(out['error'])
-        self.assertIn('case_698e8eb7 backlog->todo [TWO Bot Next/high] assignee Founding Engineer HTTP timeout', out['log'])
-        self.assertIn('case_a08f133a backlog->todo', out['log'])
+        self.assertEqual(out['patches'], ['a1', 'a2'])
+        self.assertEqual(out['log'], '')
+        summary = json.loads(out['stdout'].splitlines()[-1])
+        self.assertEqual(summary['counts'], {'attempted': 2, 'confirmed': 0,
+                                             'definite_failure': 0, 'unknown': 2})
+
+    def test_nonzero_transport_with_stdout_200_never_confirms(self):
+        for code in (7, 28):
+            with self.subTest(returncode=code), tempfile.TemporaryDirectory() as tmp:
+                log = Path(tmp, 'operator.log')
+                first = self.run_promoter(patch_returncode=code, log_path=log)
+                self.assertIsNone(first['error'])
+                self.assertEqual(first['patches'], ['a1', 'a2'])
+                self.assertNotEqual(first['exit'], 0)
+                self.assertEqual(first['log'], '')
+                summary = json.loads(first['stdout'].splitlines()[-1])
+                self.assertEqual(summary['counts']['attempted'], 2)
+                self.assertEqual(summary['counts']['confirmed'], 0)
+                self.assertTrue(all(a['outcome'] in {'definite_failure', 'unknown'}
+                                    for a in summary['actions']))
+                second = self.run_promoter(log_path=log)
+                self.assertIsNone(second['error'])
+                self.assertEqual(second['patches'], ['a1', 'a2'])
+                self.assertEqual(second['exit'], 0)
+
+    def test_definite_failures_do_not_remove_the_attempt_cap(self):
+        rows = tuple((f'card-{n}', f'case_fixture{n}', 'Tighten deploy guard',
+                      'medium', 'Founding Engineer', 'idle') for n in range(5))
+        with mock.patch.object(bp, 'MAX_PER_RUN', 2):
+            out = self.run_promoter(rows=rows, patch_stdout='403')
+        self.assertIsNone(out['error'])
+        self.assertEqual(out['patches'], ['card-0', 'card-1'])
+        self.assertNotEqual(out['exit'], 0)
+        self.assertEqual(out['log'], '')
+        summary = json.loads(out['stdout'].splitlines()[-1])
+        self.assertEqual(summary['counts'], {'attempted': 2, 'confirmed': 0,
+                                             'definite_failure': 2, 'unknown': 0})
 
 
 class Timeouts(unittest.TestCase):
@@ -113,7 +176,7 @@ class Timeouts(unittest.TestCase):
         self.assertEqual(untimed_runs(source), [])
 
     def test_timeouts_are_the_named_constants(self):
-        run = mock.Mock(return_value=types.SimpleNamespace(stdout='OPEN'))
+        run = mock.Mock(return_value=subprocess.CompletedProcess([], 0, stdout='OPEN', stderr=''))
         with mock.patch.object(bp.subprocess, 'run', run), mock.patch.dict(bp._pr_cache, clear=True):
             bp.psql('select 1')
             bp.pr_open('two-bot-next', '12')

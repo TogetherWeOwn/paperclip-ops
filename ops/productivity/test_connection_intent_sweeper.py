@@ -13,6 +13,7 @@ no network, no credentials.
 """
 import contextlib
 import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -325,6 +326,31 @@ class TimeoutAndSecrets(unittest.TestCase):
         self.assertEqual(curl.call_count, 1, 'declines must not be retried')
         self.assertNotIn('token', out.getvalue().lower())
         self.assertNotIn('bearer', out.getvalue().lower())
+
+    def test_nonzero_transport_with_stdout_200_never_confirms_a_decline(self):
+        for code in (7, 28):
+            with self.subTest(returncode=code), tempfile.TemporaryDirectory() as tmp:
+                log = Path(tmp) / 'actions.log'
+                out, err = io.StringIO(), io.StringIO()
+                result = subprocess.CompletedProcess([], code, stdout='200', stderr='raw-stderr-canary')
+                with mock.patch.object(cis, 'APPLY', True), \
+                        mock.patch.object(sys, 'argv', ['sweeper', '--apply', '--json-summary']), \
+                        mock.patch.object(cis, 'psql', return_value=[row()]), \
+                        mock.patch.object(cis, 'LOG', log), \
+                        mock.patch.object(cis.subprocess, 'run', return_value=result) as run, \
+                        contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    with self.assertRaises(SystemExit) as cm:
+                        cis.main()
+                self.assertNotEqual(cm.exception.code, 0)
+                self.assertEqual(run.call_count, 1)
+                self.assertFalse(log.exists())
+                self.assertNotIn('declined intent-1 on', out.getvalue())
+                self.assertIn('FAILED decline intent-1', out.getvalue())
+                self.assertNotIn('raw-stderr-canary', out.getvalue() + err.getvalue())
+                summary = json.loads(out.getvalue().splitlines()[-1])
+                self.assertEqual(summary['counts']['attempted'], 1)
+                self.assertEqual(summary['counts']['confirmed'], 0)
+                self.assertIn(summary['actions'][0]['outcome'], {'definite_failure', 'unknown'})
 
     def test_decline_argv_carries_no_credential_material(self):
         calls = []

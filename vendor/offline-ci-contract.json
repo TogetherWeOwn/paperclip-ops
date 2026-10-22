@@ -320,7 +320,8 @@
     "staging-preflight carrier suite:1",
     "api-base-validation suite:1",
     "api-base-validation-python suite:1",
-    "review report input integrity holds:1"
+    "review report input integrity holds:1",
+    "paginated review-gate acceptance suite:1"
   ],
   "retained": [
     {
@@ -1802,6 +1803,11 @@
       "name": "review report input integrity holds",
       "definition_sha256": "bffa19729a879126ad09b2eba97c28fddbdc6f4fa5e10afa5a536bb291c9dfc4",
       "id": "review report input integrity holds:1"
+    },
+    {
+      "name": "paginated review-gate acceptance suite",
+      "definition_sha256": "4db540a9f06f2feae7401389daad82217a87a46fc82816dcf64018d4a558d63d",
+      "id": "paginated review-gate acceptance suite:1"
     }
   ],
   "removed": [

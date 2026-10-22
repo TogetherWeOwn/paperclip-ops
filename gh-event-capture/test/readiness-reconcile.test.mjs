@@ -43,7 +43,7 @@ function input(number, over = {}) {
 function doubles(snapshots, { rulesets = null, fail = [] } = {}) {
   const calls = []
   const github = {
-    async getCloseoutSnapshot(repository, number, { nowMs } = {}) {
+    async getReadinessSnapshot(repository, number, { nowMs } = {}) {
       calls.push(['read-snapshot', repository, number, nowMs])
       const found = snapshots.get(`${repository}#${number}`)
       if (!found) throw new Error('GitHub query failed: transport, timeout, output limit or invalid JSON')

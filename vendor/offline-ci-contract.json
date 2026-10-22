@@ -320,8 +320,10 @@
     "staging-preflight carrier suite:1",
     "api-base-validation suite:1",
     "api-base-validation-python suite:1",
+    "provider baseline integrity suite:1",
     "review report input integrity holds:1",
     "host backup publication receipt contract (offline):1",
+    "native-ssh citation gate suite:1",
     "dispatch staged-lifecycle acceptance suite:1"
   ],
   "retained": [
@@ -512,12 +514,12 @@
     },
     {
       "name": "guard state fail-closed suites",
-      "definition_sha256": "e2a9927bc5def107f7280a8d0673f31718926a45a28cff6a4e64790ebecabbc3",
+      "definition_sha256": "cc4f8a604969e0c70933c2fff7b461c71ae4ae29645bc2e34e3df8f4fa45498f",
       "id": "guard state fail-closed suites:1"
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "27ac44120e09f66eb760b819f40612ea5afd7a9185518e26439f0de1d9ee32e2",
+      "definition_sha256": "cc83d5e72b441e7d8dd069e8ce5ac032c9d16756c5ed3b87f21c39b987b55bec",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1801,6 +1803,11 @@
       "id": "api-base-validation-python suite:1"
     },
     {
+      "name": "provider baseline integrity suite",
+      "definition_sha256": "a61a574a93f9aa493c38694fb68c4c43a4df905ac3721442d5547cf09a665dcd",
+      "id": "provider baseline integrity suite:1"
+    },
+    {
       "name": "review report input integrity holds",
       "definition_sha256": "bffa19729a879126ad09b2eba97c28fddbdc6f4fa5e10afa5a536bb291c9dfc4",
       "id": "review report input integrity holds:1"
@@ -1809,6 +1816,11 @@
       "name": "host backup publication receipt contract (offline)",
       "definition_sha256": "f3220047635007807b551238df97e65b3db9b784bcafb35829fa009c51e3f5f4",
       "id": "host backup publication receipt contract (offline):1"
+    },
+    {
+      "name": "native-ssh citation gate suite",
+      "definition_sha256": "34cafcd66f97b170ff90432448cfed1b909cc5f20b905b42c6b09b6651c10694",
+      "id": "native-ssh citation gate suite:1"
     },
     {
       "name": "dispatch staged-lifecycle acceptance suite",

@@ -215,6 +215,44 @@ class RecordFlake(unittest.TestCase):
             self.module.record_flake(self.path, self.entry())
         self.assertEqual(self.path.read_text(encoding='utf-8'), '{not-json}\n')
 
+    def test_undecodable_bytes_are_never_overwritten(self):
+        self.path.write_bytes(b'\xff\xfe binary \x00 not utf-8 \n')
+        with self.assertRaises(self.module.LedgerWriteError):
+            self.module.record_flake(self.path, self.entry())
+        self.assertEqual(self.path.read_bytes(),
+                         b'\xff\xfe binary \x00 not utf-8 \n')
+
+    def test_empty_and_whitespace_only_files_start_fresh(self):
+        for content in ('', '  \n\t\n'):
+            with self.subTest(content=repr(content)):
+                path = Path(self.tmp.name, f'fresh-{len(content)}.jsonl')
+                path.write_text(content, encoding='utf-8')
+                row = self.module.record_flake(path, self.entry())
+                self.assertEqual((row['flips'], row['observations']), (1, 2))
+                self.assertEqual(len(self.module.read_ledger(path)), 1)
+
+    def test_missing_test_maps_to_job_summary_row(self):
+        row = self.module.record_flake(self.path, self.entry(test=None))
+        self.assertEqual(row['test'], 'job rust tests')
+        # 1 flip / 2 obs is below MIN_RUNS, so the row cannot yet qualify
+        # a rerun on its own: the host cannot bootstrap a `yes`.
+        with self.assertRaises(self.module.LedgerUnavailable):
+            self.module.eligibility(
+                self.module.read_ledger(self.path),
+                'two-bot-next', 'rust tests')
+        client = self.module.LedgerClient(path=str(self.path))
+        self.assertEqual(client.verdict('two-bot-next', 'rust tests'),
+                         'unavailable')
+
+    def test_blank_test_maps_to_job_summary_row(self):
+        row = self.module.record_flake(self.path, self.entry(test='   '))
+        self.assertEqual(row['test'], 'job rust tests')
+
+    def test_non_string_test_rejected_without_touching_file(self):
+        with self.assertRaises(self.module.LedgerWriteError):
+            self.module.record_flake(self.path, self.entry(test=42))
+        self.assertFalse(self.path.exists())
+
     def test_bad_entry_rejected_without_touching_file(self):
         with self.assertRaises(self.module.LedgerWriteError):
             self.module.record_flake(self.path, {'repo': 'x'})

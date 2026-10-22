@@ -16,8 +16,10 @@ Fail-safe direction: anything the helper does not positively recognize as an
 eligible test-only rerun wakes as today. Deny lists win over the allow-list,
 unknown attempts/run ids wake, and ledger failures are absorbed (a failed
 ``record_flake`` is queued in state and retried on later ticks). The helper
-never raises for ledger, card, ``gh`` or API failures; ``gh``/API failures
-leave the tick unhandled so the next pass retries.
+never raises for ledger, card, ``gh`` or API failures; ``gh`` failures leave
+the tick unhandled so the next pass retries, while a failed wake/cap post
+returns action ``'post_failed'`` so the host falls through to its normal wake
+path (which owns the retry semantics) instead of dropping the wake.
 
 State schema (owned by the helper, JSON-serializable, survives restarts)::
 
@@ -32,6 +34,12 @@ State schema (owned by the helper, JSON-serializable, survives restarts)::
       'flake_cards': [flake_key, ...],  # keys already carded
     }
 
+Cross-PR flake aggregation: pass ``shared=<host-level dict>`` and the flake
+window (``flakes``/``pending_flakes``/``flake_cards``) lives there, so three
+flakes for one job/test across different PRs still open one card. Flights,
+handled ticks and the round counter always stay in the per-PR ``state``.
+Omit ``shared`` to keep everything in ``state`` (unit tests do this).
+
 Kill switch (no code change): set ``PR_CONTROLLER_CI_DISABLE`` to a truthy
 value (``1``/``true``/``yes``/``on``) or create the file named by
 ``PR_CONTROLLER_CI_DISABLE_FILE``. The helper then wakes on first red exactly
@@ -43,6 +51,7 @@ The host runs shadow state separately so dry runs can never leak flights or
 rounds into the live state file.
 """
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -282,8 +291,12 @@ def _render_cap(pr, rounds, ledger):
     return '\n'.join(lines)
 
 
-def _observe_flake(state, *, pr, check, run_id, ledger, quarantine_card, now):
-    """Record one fail-then-pass flake; maybe open the [flake] card."""
+def _observe_flake(store, *, pr, check, run_id, ledger, quarantine_card, now):
+    """Record one fail-then-pass flake; maybe open the [flake] card.
+
+    ``store`` is the shared flake window (or the per-PR state when no
+    shared store was passed), so the 7-day count spans PRs.
+    """
     entry = {
         'repo': pr.get('repo'),
         'workflow': check.get('workflow'),
@@ -294,9 +307,9 @@ def _observe_flake(state, *, pr, check, run_id, ledger, quarantine_card, now):
         'head_sha': pr.get('head_sha'),
     }
     if not _safe_record(ledger, entry):
-        pending = state.setdefault('pending_flakes', [])
+        pending = store.setdefault('pending_flakes', [])
         pending.append(entry)
-    flakes = state.setdefault('flakes', [])
+    flakes = store.setdefault('flakes', [])
     flakes.append({
         'repo': entry['repo'], 'workflow': entry['workflow'],
         'job': entry['job'], 'test': entry['test'], 'ts': now,
@@ -304,7 +317,7 @@ def _observe_flake(state, *, pr, check, run_id, ledger, quarantine_card, now):
     })
     key = _flake_key(entry['repo'], entry['workflow'], entry['job'],
                      entry['test'])
-    carded = state.setdefault('flake_cards', [])
+    carded = store.setdefault('flake_cards', [])
     if key in carded:
         return
     window = [item for item in flakes
@@ -335,7 +348,8 @@ def _observe_flake(state, *, pr, check, run_id, ledger, quarantine_card, now):
 
 
 def handle_ci_tick(*, pr, checks, state, gh, api, ledger,
-                   quarantine_card, wake_text, now, dry_run=False):
+                   quarantine_card, wake_text, now, dry_run=False,
+                   shared=None):
     """Run one controller pass for one PR; see the module docstring."""
     outcome = {'action': 'suppressed', 'rounds': 0, 'rerun_run_ids': []}
     if dry_run:
@@ -343,6 +357,7 @@ def handle_ci_tick(*, pr, checks, state, gh, api, ledger,
     checks = list(checks or [])
     head = pr.get('head_sha')
     owner = pr.get('owner_card_id')
+    store = shared if isinstance(shared, dict) else state
 
     if kill_switch_active():
         failing = [check for check in checks
@@ -354,35 +369,44 @@ def handle_ci_tick(*, pr, checks, state, gh, api, ledger,
             outcome['action'] = 'woke'
             return outcome
         comment_id = _post(api, owner, wake_text)
-        if comment_id is not None:
-            handled = state.setdefault('handled', [])
-            key = _tick_key(head, checks)
-            if key not in handled:
-                handled.append(key)
-            outcome['action'] = 'woke'
-            outcome['comment_id'] = comment_id
+        if comment_id is None:
+            outcome['action'] = 'post_failed'
+            _trim(state)
+            return outcome
+        handled = state.setdefault('handled', [])
+        key = _tick_key(head, checks)
+        if key not in handled:
+            handled.append(key)
+        outcome['action'] = 'woke'
+        outcome['comment_id'] = comment_id
         _trim(state)
         return outcome
 
     if dry_run:
-        return _decide(pr, checks, dict(state), gh=None, api=None,
+        return _decide(pr, checks, copy.deepcopy(state), gh=None, api=None,
                        ledger=ledger, quarantine_card=None,
                        wake_text=wake_text, now=now, outcome=outcome,
-                       mutate=False)
+                       mutate=False,
+                       flake_store=copy.deepcopy(store))
 
-    _flush_pending(state, ledger)
+    _flush_pending(store, ledger)
     _prune_flights(state, now)
-    _prune_flakes(state, now)
+    _prune_flakes(store, now)
     _trim(state)
+    if store is not state:
+        _trim(store)
     outcome = _decide(pr, checks, state, gh=gh, api=api, ledger=ledger,
                       quarantine_card=quarantine_card, wake_text=wake_text,
-                      now=now, outcome=outcome, mutate=True)
+                      now=now, outcome=outcome, mutate=True,
+                      flake_store=store)
     _trim(state)
+    if store is not state:
+        _trim(store)
     return outcome
 
 
 def _decide(pr, checks, state, *, gh, api, ledger, quarantine_card,
-            wake_text, now, outcome, mutate):
+            wake_text, now, outcome, mutate, flake_store):
     head = pr.get('head_sha')
     owner = pr.get('owner_card_id')
     flights = state.setdefault('flights', {})
@@ -401,7 +425,7 @@ def _decide(pr, checks, state, *, gh, api, ledger, quarantine_card,
                 continue
             flights.pop(str(run_id), None)
             if mutate:
-                _observe_flake(state, pr=pr, check=check, run_id=run_id,
+                _observe_flake(flake_store, pr=pr, check=check, run_id=run_id,
                                ledger=ledger, quarantine_card=quarantine_card,
                                now=now)
         if mutate:
@@ -463,7 +487,7 @@ def _decide(pr, checks, state, *, gh, api, ledger, quarantine_card,
             if isinstance(flight, dict):
                 flights.pop(str(run_id), None)
                 if mutate:
-                    _observe_flake(state, pr=pr, check=check, run_id=run_id,
+                    _observe_flake(flake_store, pr=pr, check=check, run_id=run_id,
                                    ledger=ledger,
                                    quarantine_card=quarantine_card, now=now)
             continue
@@ -505,11 +529,11 @@ def _decide(pr, checks, state, *, gh, api, ledger, quarantine_card,
                 return outcome
             comment_id = _post(api, owner, wake_text)
             if comment_id is None:
-                return outcome  # post failed; retry next pass
+                # Nothing posted: the host falls through to its normal wake
+                # path (which owns the retry) instead of recording a wake.
+                outcome['action'] = 'post_failed'
+                return outcome
             handled.append(key)
-            state['last_outcome'] = {'action': 'woke',
-                                     'comment_id': comment_id,
-                                     'rounds': outcome['rounds']}
             outcome['action'] = 'woke'
             outcome['comment_id'] = comment_id
             return outcome
@@ -521,12 +545,10 @@ def _decide(pr, checks, state, *, gh, api, ledger, quarantine_card,
             comment_id = _post(api, owner, body)
             if comment_id is None:
                 state['round_count'] -= 1  # re-decide next pass
+                outcome['action'] = 'post_failed'
                 return outcome
             handled.append(key)
             state['capped_head'] = head
-            state['last_outcome'] = {'action': 'capped',
-                                     'comment_id': comment_id,
-                                     'rounds': outcome['rounds']}
             outcome['action'] = 'capped'
             outcome['comment_id'] = comment_id
             return outcome
@@ -548,7 +570,8 @@ def _decide(pr, checks, state, *, gh, api, ledger, quarantine_card,
         return outcome
     comment_id = _post(api, owner, wake_text)
     if comment_id is None:
-        return outcome  # post failed; retry next pass
+        outcome['action'] = 'post_failed'
+        return outcome
     handled.append(key)
     outcome['action'] = 'woke'
     outcome['comment_id'] = comment_id

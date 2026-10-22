@@ -59,10 +59,8 @@ literal-`yes` rule still governs every agent-initiated rerun, `unavailable`
 still means "treated as real", and nothing is ever dismissed without a
 ledger entry. When the controller already reran a run (visible as attempt 2
 on the check), do not request a second rerun; fix the failure normally.
-Security, supply-chain, policy, deploy, migrate, drill and smoke jobs are
+Only test-only workflows (check/ci/e2e/pr-gates basenames) are eligible:
+security, supply-chain, policy, deploy, migrate, drill and smoke jobs are
 never auto-rerun, nor are paid-hosted runs on private repos or runs already
 at attempt 2+. A kill switch (`PR_CONTROLLER_CI_DISABLE`) restores
 wake-on-first-red without a code change.
-
-*This section changes how the ladder's one permitted rerun is consumed on PR
-heads; it is pending CISO review before the host enables the policy.*

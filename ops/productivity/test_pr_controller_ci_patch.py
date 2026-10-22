@@ -57,8 +57,13 @@ class CiPatchTest(unittest.TestCase):
             applied = controller.read_text(encoding='utf-8')
             compile(applied, str(controller), 'exec')
             for token in ('ci_policy_tick', 'ci_policy_deps', 'capped_head',
-                          'last_outcome', 'pending_wake'):
+                          'tick_comment_id', 'pending_wake',
+                          'ci_policy_shared'):
                 self.assertIn(token, applied)
+            # No optimistic delivery marker: like post_wake, the patch sets at
+            # most pending_wake; reconcile_wake alone sets rec['woke'].
+            self.assertNotIn("rec['woke']", applied)
+            self.assertNotIn('last_outcome', applied)
 
 
 if __name__ == '__main__':

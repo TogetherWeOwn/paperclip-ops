@@ -10,13 +10,25 @@ cap comment with an UNDO line, and maps the helper outcome back to a
 
 Fail-safe direction: any unrecognized ``detail`` shape, any ``gh``/API
 failure, or any exception in this module returns 'proceed' (or 'woke' in
-shadow terms) so the controller behaves exactly as before the packet. The
-only new host state is ``rec['ci_policy']``, owned by the helper.
+shadow terms) so the controller behaves exactly as before the packet. A
+helper ``'post_failed'`` outcome also returns 'proceed': nothing was posted,
+so the normal wake path retries with its own retry semantics. The new host
+state is ``rec['ci_policy']`` (per-PR, owned by the helper) plus
+``state['ci_policy_shared']`` (host-level flake window shared across PRs).
+
+After every live tick the fresh comment id (or None when this tick posted
+nothing) is stored as ``rec['ci_policy']['tick_comment_id']`` so the
+call-site patch correlates exactly the comment posted on this tick -- never
+a stale id from an earlier wake. Ticks that post nothing (reran,
+suppressed, green) set neither ``pending_wake`` nor ``woke``; like
+:func:`pr_controller_wakes.post_wake`, ``woke`` is only ever set by
+reconciliation on a claimed wake, never optimistically.
 
 Shadow mode (``shadow=True``): the helper runs against null sinks under a
-separate ``rec['ci_policy_shadow']`` key, the would-be decision is logged,
-and this function always returns 'proceed' so the live wake path is
-unchanged. The 24h shadow counts come from these lines.
+separate ``rec['ci_policy_shadow']`` key (and a ``'shadow'`` sub-key of the
+shared store, so shadow counts never leak into live flake windows), the
+would-be decision is logged, and this function always returns 'proceed' so
+the live wake path is unchanged. The 24h shadow counts come from these lines.
 
 Operator log lines (appended via the injected ``log_action`` callable, which
 the host wires to ops/worker-vps/operator-actions.log)::
@@ -336,13 +348,15 @@ def default_deps(api, log):
 
 def handle_ci_red(*, full, pr, detail, rec, owner_card_id, wake_text,
                   api, gh, ledger, quarantine_card, log, log_action,
-                  shadow=False, now=None):
+                  shadow=False, now=None, shared=None):
     """Run the CI-rerun policy for one ci_red wake decision.
 
     Returns 'handled' when the normal wake must be skipped (the helper
     reran, already handled the tick, or posted the wake/cap itself) and
     'proceed' when the controller must wake as today. Never raises: any
-    unexpected failure returns 'proceed'.
+    unexpected failure returns 'proceed'. ``shared`` is the host-level
+    flake store (``state['ci_policy_shared']``); omit it to keep the flake
+    window in the per-PR record.
     """
     ident = f"{full}#{pr.get('number')}"
     if now is None:
@@ -352,7 +366,8 @@ def handle_ci_red(*, full, pr, detail, rec, owner_card_id, wake_text,
             full=full, pr=pr, detail=detail, rec=rec,
             owner_card_id=owner_card_id, wake_text=wake_text, api=api, gh=gh,
             ledger=ledger, quarantine_card=quarantine_card, log=log,
-            log_action=log_action, shadow=shadow, now=now, ident=ident)
+            log_action=log_action, shadow=shadow, now=now, ident=ident,
+            shared=shared)
     except Exception as exc:
         log(f'ci-policy {ident} host glue failed ({exc}); waking as today')
         return 'proceed'
@@ -360,7 +375,7 @@ def handle_ci_red(*, full, pr, detail, rec, owner_card_id, wake_text,
 
 def _handle_ci_red(*, full, pr, detail, rec, owner_card_id, wake_text,
                    api, gh, ledger, quarantine_card, log, log_action,
-                   shadow, now, ident):
+                   shadow, now, ident, shared):
     checks, reason = checks_from_detail(detail)
     if reason != 'ok':
         log(f'ci-policy {ident} no check rows ({reason}); waking as today')
@@ -378,11 +393,16 @@ def _handle_ci_red(*, full, pr, detail, rec, owner_card_id, wake_text,
         # but under a separate key that live mode never reads. Null sinks
         # record the would-be side effects without performing any.
         state = rec.setdefault('ci_policy_shadow', {})
+        shadow_shared = None
+        if isinstance(shared, dict):
+            shadow_shared = shared.setdefault('shadow', {})
+            if not isinstance(shadow_shared, dict):
+                shadow_shared = shared['shadow'] = {}
         null = _NullSinks()
         outcome = ci.handle_ci_tick(
             pr=helper_pr, checks=checks, state=state, gh=null.gh, api=null.api,
             ledger=null.ledger, quarantine_card=null.quarantine_card,
-            wake_text=wake_text, now=now)
+            wake_text=wake_text, now=now, shared=shadow_shared)
         action = outcome.get('action')
         log_action(f'ci-policy shadow {ident} would-{action} '
                    f'runs={",".join(str(run_id) for run_id in outcome.get("rerun_run_ids") or []) or "-"} '
@@ -394,8 +414,15 @@ def _handle_ci_red(*, full, pr, detail, rec, owner_card_id, wake_text,
     outcome = ci.handle_ci_tick(
         pr=helper_pr, checks=checks, state=state, gh=gh, api=api,
         ledger=ledger, quarantine_card=quarantine_card,
-        wake_text=wake_text, now=now)
+        wake_text=wake_text, now=now,
+        shared=shared if isinstance(shared, dict) else None)
+    # Fresh every tick (None when this tick posted nothing) so the call
+    # site never correlates a stale comment id from an earlier wake.
+    state['tick_comment_id'] = outcome.get('comment_id')
     action = outcome.get('action')
+    if action == 'post_failed':
+        log(f'ci-policy {ident} post failed; waking as today')
+        return 'proceed'
     if action == 'reran':
         for run_id in outcome.get('rerun_run_ids') or []:
             row = next((check for check in checks

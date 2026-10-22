@@ -125,15 +125,26 @@ def eligibility(rows, repo, job_or_test):
 
 
 def _coerce_flake_entry(entry):
-    """Validate a pr_controller_ci flake entry into (repo, job, test)."""
+    """Validate a pr_controller_ci flake entry into (repo, job, test).
+
+    A missing or blank test name is a job-level flake; it maps to the
+    job-summary row convention (``job <job>``) that ``eligibility``
+    already reads, so host check rows without a test name still persist.
+    """
     if not isinstance(entry, dict):
         raise LedgerWriteError('flake entry must be a JSON object')
     values = {}
-    for key in ('repo', 'job', 'test'):
+    for key in ('repo', 'job'):
         value = entry.get(key)
         if not isinstance(value, str) or not value.strip():
             raise LedgerWriteError(f'flake entry is missing {key}')
         values[key] = value
+    test = entry.get('test')
+    if test is None or (isinstance(test, str) and not test.strip()):
+        test = f"job {values['job']}"
+    elif not isinstance(test, str):
+        raise LedgerWriteError('flake entry test must be a string')
+    values['test'] = test
     return values['repo'], values['job'], values['test']
 
 
@@ -150,12 +161,17 @@ def record_flake(path, entry):
     repo, job, test = _coerce_flake_entry(entry)
     path = Path(path)
     try:
-        rows = read_ledger(path)
-    except LedgerUnavailable as exc:
-        message = str(exc)
-        if 'cannot read' in message or 'ledger is empty' in message:
-            rows = []
-        else:
+        raw = path.read_text(encoding='utf-8')
+    except FileNotFoundError:
+        raw = ''
+    except (OSError, UnicodeError) as exc:
+        raise LedgerWriteError(f'cannot read {path}: {exc}') from exc
+    if not raw.strip():
+        rows = []
+    else:
+        try:
+            rows = read_ledger(path)
+        except LedgerUnavailable as exc:
             raise LedgerWriteError(str(exc)) from exc
     matches = [row for row in rows
                if row['repo'] == repo and row['job'] == job

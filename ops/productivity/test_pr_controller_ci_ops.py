@@ -132,6 +132,92 @@ class DryRunTest(unittest.TestCase):
         self.assertEqual([], api.calls)
         self.assertEqual({}, state)
 
+    def test_dry_run_leaves_nonempty_nested_state_untouched(self):
+        gh, api = FakeGh(), FakeApi()
+        live = {}
+        tick(make_pr(), [make_check(run_id=101)], live, gh, api)
+        self.assertIn('101', live['flights'])
+        before = json.loads(json.dumps(live))
+        # A concluded retry in dry-run must not pop the live flight.
+        outcome = tick(make_pr(), [make_check(run_id=101, attempt=2)],
+                       live, gh, api, dry_run=True)
+        self.assertEqual('woke', outcome['action'])
+        self.assertEqual(before, live)
+        self.assertIn('101', live['flights'])
+        self.assertEqual([], api.calls)
+
+
+class SharedFlakeStoreTest(unittest.TestCase):
+    def flake_tick(self, pr, run_id, state, shared, now, ledger, cards):
+        red = make_check(run_id=run_id)
+        ci.handle_ci_tick(pr=pr, checks=[red], state=state, gh=FakeGh(),
+                          api=FakeApi(), ledger=ledger,
+                          quarantine_card=cards.append, wake_text=WAKE_TEXT,
+                          now=now, shared=shared)
+        green = make_check(run_id=run_id, attempt=2, conclusion='success')
+        return ci.handle_ci_tick(
+            pr=pr, checks=[green], state=state, gh=FakeGh(), api=FakeApi(),
+            ledger=ledger, quarantine_card=cards.append, wake_text=WAKE_TEXT,
+            now=now + 600, shared=shared)
+
+    def test_flakes_aggregate_across_prs_into_one_card(self):
+        ledger, cards = FakeLedger(), []
+        shared = {}
+        state_a, state_b = {}, {}
+        outcome = self.flake_tick(make_pr('a' * 40), 101, state_a, shared,
+                                  T0, ledger, cards)
+        self.assertEqual('green', outcome['action'])
+        self.assertEqual([], cards)
+        self.flake_tick(make_pr('b' * 40), 102, state_b, shared,
+                        T0 + 600, ledger, cards)
+        self.assertEqual([], cards)
+        # Third flake, back on PR A: the shared window reaches 3.
+        shared = json.loads(json.dumps(shared))  # restart-proof
+        self.flake_tick(make_pr('c' * 40), 103, state_a, shared,
+                        T0 + 1200, ledger, cards)
+        self.assertEqual(1, len(cards))
+        self.assertIn('[flake]', cards[0]['title'])
+        self.assertEqual(['101', '102', '103'], cards[0]['run_ids'])
+        # The window lives in the shared store, not in either PR record.
+        self.assertEqual(3, len(shared['flakes']))
+        self.assertNotIn('flakes', state_a)
+        self.assertNotIn('flakes', state_b)
+
+    def test_rounds_and_flights_stay_per_pr(self):
+        ledger, cards = FakeLedger(), []
+        shared = {}
+        state_a, state_b = {}, {}
+        gh, api = FakeGh(), FakeApi()
+        tick(make_pr('a' * 40), [make_check(run_id=101)], state_a, gh, api,
+             shared=shared)
+        tick(make_pr('a' * 40), [make_check(run_id=101, attempt=2)],
+             state_a, gh, api, shared=shared)
+        self.assertEqual(1, state_a['round_count'])
+        self.assertNotIn('round_count', state_b)
+        self.assertNotIn('round_count', shared)
+        self.assertNotIn('flights', shared)
+        self.assertNotIn('handled', shared)
+
+    def test_pending_flakes_flush_from_shared_on_another_pr_tick(self):
+        ledger, cards = FakeLedger(), []
+
+        class OutageLedger(FakeLedger):
+            def record_flake(self, entry):
+                raise OSError('ledger down')
+
+        failing = OutageLedger()
+        shared = {}
+        state_a, state_b = {}, {}
+        self.flake_tick(make_pr('a' * 40), 101, state_a, shared,
+                        T0, failing, cards)
+        self.assertEqual(1, len(shared['pending_flakes']))
+        self.assertNotIn('pending_flakes', state_a)
+        outcome = self.flake_tick(make_pr('b' * 40), 102, state_b, shared,
+                                  T0 + 600, ledger, cards)
+        self.assertEqual('green', outcome['action'])
+        self.assertEqual(2, len(ledger.recorded))
+        self.assertEqual([], shared['pending_flakes'])
+
 
 class EligibilityEdgeTest(unittest.TestCase):
     def test_malformed_rows_wake_without_rerun(self):
@@ -168,9 +254,70 @@ class EligibilityEdgeTest(unittest.TestCase):
         self.assertEqual(1, len(api.calls))
 
     def test_failed_post_stays_retryable(self):
+        # A failed post is NOT suppressed: the host must fall through to its
+        # normal wake path (which owns the retry) instead of dropping the wake.
         gh, api = FakeGh(), FakeApi(fail=True)
-        outcome = tick(make_pr(), [make_check(workflow='deploy')], {}, gh, api)
-        self.assertEqual('suppressed', outcome['action'])
+        state = {}
+        outcome = tick(make_pr(), [make_check(workflow='deploy')], state,
+                       gh, api)
+        self.assertEqual('post_failed', outcome['action'])
+        self.assertEqual([], gh.argv_calls)
+        self.assertNotIn('comment_id', outcome)
+        self.assertEqual([], state.get('handled', []))
+
+    def test_failed_wake_post_after_rerun_is_post_failed(self):
+        gh, api = FakeGh(), FakeApi()
+        state = {}
+        tick(make_pr(), [make_check(run_id=101)], state, gh, api)
+        api.fail = True
+        outcome = tick(make_pr(),
+                       [make_check(run_id=101, attempt=2)], state, gh, api)
+        self.assertEqual('post_failed', outcome['action'])
+        # The retry re-decides instead of staying silent: the flight is
+        # gone, so the same red wakes through the ineligible path.
+        api.fail = False
+        outcome = tick(make_pr(),
+                       [make_check(run_id=101, attempt=2)], state, gh, api)
+        self.assertEqual('woke', outcome['action'])
+        self.assertEqual(2, len(api.calls))  # one failed, one delivered
+
+    def test_failed_cap_post_redecides_next_pass(self):
+        gh, api = FakeGh(), FakeApi()
+        state = {}
+        for head, run_id in (('a' * 40, 101), ('b' * 40, 102)):
+            pr = make_pr(head)
+            tick(pr, [make_check(run_id=run_id)], state, gh, api)
+            tick(pr, [make_check(run_id=run_id, attempt=2)], state, gh, api)
+        pr = make_pr('c' * 40)
+        tick(pr, [make_check(run_id=103)], state, gh, api)
+        api.fail = True
+        outcome = tick(pr, [make_check(run_id=103, attempt=2)], state,
+                       gh, api)
+        self.assertEqual('post_failed', outcome['action'])
+        self.assertEqual(2, state['round_count'])
+        self.assertNotIn('capped_head', state)
+        # The retry fails safe to a normal wake (the flight is gone, so the
+        # same red wakes through the ineligible path instead of capping).
+        api.fail = False
+        outcome = tick(pr, [make_check(run_id=103, attempt=2)], state,
+                       gh, api)
+        self.assertEqual('woke', outcome['action'])
+        self.assertEqual(2, state['round_count'])
+        # ... and the next red head still caps (without the decrement it
+        # would conclude as round 4 and the cap comment would never post).
+        pr = make_pr('d' * 40)
+        tick(pr, [make_check(run_id=104)], state, gh, api)
+        outcome = tick(pr, [make_check(run_id=104, attempt=2)], state,
+                       gh, api)
+        self.assertEqual('capped', outcome['action'])
+        self.assertEqual('d' * 40, state['capped_head'])
+
+    def test_failed_kill_switch_post_is_post_failed(self):
+        with mock.patch.dict(os.environ, {'PR_CONTROLLER_CI_DISABLE': '1'},
+                             clear=False):
+            gh, api = FakeGh(), FakeApi(fail=True)
+            outcome = tick(make_pr(), [make_check()], {}, gh, api)
+        self.assertEqual('post_failed', outcome['action'])
         self.assertEqual([], gh.argv_calls)
 
     def test_quarantine_card_failure_does_not_crash_tick(self):

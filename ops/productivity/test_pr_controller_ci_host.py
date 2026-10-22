@@ -73,7 +73,8 @@ class Harness:
         self.logs = []
         self.actions = []
 
-    def run(self, detail, rec=None, shadow=False, head=HEAD_A):
+    def run(self, detail, rec=None, shadow=False, head=HEAD_A,
+              shared=None):
         return host.handle_ci_red(
             full='TogetherWeOwn/two-bot-next',
             pr={'number': 7, 'headRefOid': head},
@@ -82,7 +83,7 @@ class Harness:
             api=self.api, gh=self.gh, ledger=self.ledger,
             quarantine_card=self.cards.append,
             log=self.logs.append, log_action=self.actions.append,
-            shadow=shadow, now=T0)
+            shadow=shadow, now=T0, shared=shared)
 
 
 def detail_row(**overrides):
@@ -189,6 +190,54 @@ class LivePathTest(unittest.TestCase):
         verdict = env.run(None, rec=None)
         self.assertEqual('proceed', verdict)
 
+    def test_failed_post_proceeds_to_the_normal_wake_path(self):
+        env = Harness()
+
+        def failing_api(method, path, payload):
+            raise OSError('api is down')
+
+        env.api = failing_api
+        rec = {}
+        verdict = env.run({'checks': [detail_row(workflow='deploy')]},
+                          rec=rec)
+        self.assertEqual('proceed', verdict)
+        self.assertIsNone(rec['ci_policy']['tick_comment_id'])
+        self.assertTrue(any('post failed' in line for line in env.logs))
+
+    def test_tick_comment_id_is_fresh_every_tick(self):
+        env = Harness()
+        rec = {}
+        env.run({'checks': [detail_row(run_id=101)]}, rec=rec)
+        self.assertIsNone(rec['ci_policy']['tick_comment_id'])
+        verdict = env.run(
+            {'checks': [detail_row(run_id=101, attempt=2)]}, rec=rec)
+        self.assertEqual('handled', verdict)
+        self.assertEqual('comment-1',
+                         rec['ci_policy']['tick_comment_id'])
+        # A later quiet tick clears the id; the patch never sees a stale one.
+        verdict = env.run(
+            {'checks': [detail_row(run_id=101, attempt=2)]}, rec=rec)
+        self.assertEqual('handled', verdict)
+        self.assertIsNone(rec['ci_policy']['tick_comment_id'])
+
+    def test_shared_store_carries_flakes_across_prs(self):
+        env = Harness()
+        shared = {}
+        for head, run_id in ((HEAD_A, 101), ('b' * 40, 102),
+                             ('c' * 40, 103)):
+            rec = {}
+            env.run({'checks': [detail_row(run_id=run_id)]}, rec=rec,
+                    head=head, shared=shared)
+            verdict = env.run(
+                {'checks': [detail_row(run_id=run_id, attempt=2,
+                                       conclusion='success')]},
+                rec=rec, head=head, shared=shared)
+            self.assertEqual('handled', verdict)
+            self.assertNotIn('flakes', rec['ci_policy'])
+        self.assertEqual(3, len(shared['flakes']))
+        self.assertEqual(1, len(env.cards))
+        self.assertIn('[flake]', env.cards[0]['title'])
+
 
 class ShadowPathTest(unittest.TestCase):
     def test_shadow_logs_would_reran_and_always_proceeds(self):
@@ -221,6 +270,19 @@ class ShadowPathTest(unittest.TestCase):
         self.assertEqual('proceed', verdict)
         self.assertEqual(1, len(env.actions))
         self.assertIn('would-wake', env.actions[0])
+
+    def test_shadow_flakes_stay_namespaced_off_the_live_window(self):
+        env = Harness()
+        shared = {'flakes': [{'repo': 'r', 'workflow': 'w', 'job': 'j',
+                              'test': 't', 'ts': T0, 'run_id': 1}]}
+        rec = {}
+        env.run({'checks': [detail_row(run_id=101)]}, rec=rec, shadow=True,
+                shared=shared)
+        env.run({'checks': [detail_row(run_id=101, attempt=2,
+                                       conclusion='success')]},
+                rec=rec, shadow=True, shared=shared)
+        self.assertEqual(1, len(shared['flakes']))
+        self.assertEqual(1, len(shared['shadow']['flakes']))
 
 
 class DefaultWiringTest(unittest.TestCase):
@@ -292,7 +354,7 @@ class DefaultWiringTest(unittest.TestCase):
 
 
 class OutcomeStateTest(unittest.TestCase):
-    def test_cap_records_capped_head_and_last_outcome(self):
+    def test_cap_records_capped_head_and_reports_comment_id(self):
         import pr_controller_ci as ci
         gh, api = FakeGh(), FakeApi()
         ledger = FakeLedger()
@@ -314,9 +376,12 @@ class OutcomeStateTest(unittest.TestCase):
                 ledger=ledger, quarantine_card=lambda payload: 'k',
                 wake_text=WAKE_TEXT, now=T0 + 600)
         self.assertEqual('capped', outcome['action'])
+        self.assertEqual('comment-1', outcome['comment_id'])
         self.assertEqual('c' * 40, state['capped_head'])
-        self.assertEqual('capped', state['last_outcome']['action'])
-        self.assertEqual('comment-1', state['last_outcome']['comment_id'])
+        # The helper reports the id on the outcome; the host glue owns the
+        # per-tick stash (tick_comment_id), so no persistent copy lingers.
+        self.assertNotIn('last_outcome', state)
+        self.assertNotIn('tick_comment_id', state)
 
 
 if __name__ == '__main__':

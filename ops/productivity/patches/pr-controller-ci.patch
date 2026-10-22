@@ -15,7 +15,7 @@
 +        except (TypeError, ValueError):
 +            _ci_rounds = 0
 +        _ci_capped = (cur == 'ci_red' and _ci_rounds >= 3
-+                       and _ci_state.get('capped_head') == pr["headRefOid"])
++                       and _ci_state.get('capped_head') is not None)
 +        if not _ci_capped:
 +            code = post_wake(rec, wkey, iid, text, api)
 +            log(f'posted RE-wake {ident} for {key}: {cur} @ {pr["headRefOid"][:8]} unchanged {since_h}h HTTP {code}')
@@ -24,7 +24,7 @@
 +            log(f'skipped RE-wake {ident} for {key}: ci-policy capped @ {pr["headRefOid"][:8]}')
          if code.startswith('2'):
              state[key] = rec
-@@ -693,6 +693,24 @@
+@@ -693,6 +693,25 @@
                           "event on it. If your parking reason no longer applies, set the card to `in_progress` and act on "
                           "this head; if it still applies, say why in one line and leave it parked.")
 -            code = post_wake(rec, wkey, iid, text, api)
@@ -32,18 +32,19 @@
 +            _ci_verdict = 'proceed'
 +            if cur == 'ci_red' and cards:
 +                try:
++                    _ci_shared = state.setdefault('ci_policy_shared', {})
 +                    _ci_verdict = ci_policy_tick(
 +                        full=full, pr=pr, detail=detail, rec=rec,
 +                        owner_card_id=cards[0][0], wake_text=text,
++                        shared=_ci_shared,
 +                        **ci_policy_deps(api=api, log=log))
 +                except Exception as exc:
 +                    log(f'ci-policy failed ({exc}); waking as today')
 +            if _ci_verdict == 'handled':
-+                _ci_last = (rec.get('ci_policy') or {}).get('last_outcome') or {}
-+                if _ci_last.get('comment_id'):
++                _ci_comment = (rec.get('ci_policy') or {}).get('tick_comment_id')
++                if _ci_comment:
 +                    rec['pending_wake'] = {'key': wkey, 'issue_id': iid,
-+                                           'comment_id': _ci_last['comment_id']}
-+                rec['woke'] = wkey
++                                           'comment_id': _ci_comment}
 +                code = '200 ci-policy handled wake decision'
 +                log(f'ci-policy handled {ident} for {key}: {cur} @ {head[:8]}')
 +            else:

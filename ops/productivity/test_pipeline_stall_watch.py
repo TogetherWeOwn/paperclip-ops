@@ -31,6 +31,7 @@ service-failure counts pass. Post-fix: the full file passes.
 
 import calendar
 import importlib.util
+import os
 import time
 import unittest
 from pathlib import Path
@@ -121,6 +122,19 @@ def failures_for_journal(journal_text, unit="review-gate.service"):
             return psw.count_failures(journal_text)
     with mock.patch.object(psw, "sh", return_value=journal_text), alert_guard, main_guard:
         return psw.failures(unit)
+
+
+def capacity_for_log(log_text):
+    """capacity_collapse() result for fixture log text at the fixed clock."""
+    alert_guard, main_guard = _guarded()
+    with mock.patch.object(psw, "sh", return_value=log_text), \
+            mock.patch("time.time", return_value=FIXED_NOW), \
+            alert_guard, main_guard:
+        return psw.capacity_collapse()
+
+
+def capacity_line(ts_str, value_text):
+    return f"{ts_str} model-capacity-caps: C*={value_text} pool=main"
 
 
 class GateHoldsLiveness(unittest.TestCase):
@@ -333,6 +347,60 @@ class OptionalPureHelpers(unittest.TestCase):
             pure_age = pure(log.splitlines(), FIXED_NOW)
         self.assertIsNotNone(pure_age)
         self.assertLess(pure_age, 10)
+
+
+class CapacityCollapseRobustness(unittest.TestCase):
+    """Malformed C* values are skipped, never crash the scan (review finding)."""
+
+    def test_malformed_capacity_value_is_skipped(self):
+        log = "\n".join([
+            capacity_line(ts_before(minutes=90), "8.0"),
+            # Matches C*=([0-9.]+) but float() rejects it: must not raise.
+            capacity_line(ts_before(minutes=60), "1.2.3"),
+            capacity_line(ts_before(minutes=30), "4.0"),
+        ])
+        self.assertEqual(capacity_for_log(log), (4.0, 8.0))
+
+    def test_all_malformed_capacity_values_yield_none(self):
+        log = "\n".join([
+            capacity_line(ts_before(minutes=90), "1.2.3"),
+            capacity_line(ts_before(minutes=30), "9.9.9"),
+        ])
+        self.assertIsNone(capacity_for_log(log))
+
+    def test_valid_capacity_values_unchanged(self):
+        log = "\n".join([
+            capacity_line(ts_before(minutes=90), "8.0"),
+            capacity_line(ts_before(minutes=30), "4.0"),
+        ])
+        self.assertEqual(capacity_for_log(log), (4.0, 8.0))
+
+
+class UtcTimestampParsing(unittest.TestCase):
+    """`Z` ticks parse as UTC even on DST-observing hosts (review finding)."""
+
+    def test_recent_tick_is_recent_under_dst_timezone(self):
+        if not hasattr(time, "tzset"):
+            self.skipTest("tzset unavailable on this platform")
+        if not os.path.exists("/usr/share/zoneinfo/America/New_York"):
+            self.skipTest("America/New_York tzdata missing")
+        old_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "America/New_York"
+        time.tzset()
+        try:
+            if time.localtime(FIXED_NOW).tm_isdst <= 0:
+                self.skipTest("fixed clock is outside DST; the mktime bug is not exercisable")
+            log = gate_line(ts_before(minutes=5), "gate admits 1 head")
+            age = age_for_log(log)
+        finally:
+            if old_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old_tz
+            time.tzset()
+        self.assertIsNotNone(age)
+        self.assertAlmostEqual(age, 5.0, places=6)
+        self.assertFalse(is_silent(age), f"DST-zone tick must read recent, got age {age}")
 
 
 if __name__ == "__main__":

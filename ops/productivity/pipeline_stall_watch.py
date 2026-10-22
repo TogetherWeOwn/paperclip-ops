@@ -11,6 +11,7 @@ Every 5 min, report-only checks:
 Any hit opens (or comments once per hour on) a CEO card "[pipeline-stall] <check>" so the CEO routes the fix; it never
 changes pipeline state itself. Rollback: systemctl --user disable --now pipeline-stall-watch.timer
 """
+import calendar
 import json
 import re
 import subprocess
@@ -42,7 +43,7 @@ def last_gate_tick_age_min():
         # so recent backpressure read as silence.
         if ' review-gate: ' in line and ('gate admits' in line or 'requested review' in line or 'gate holds' in line):
             try:
-                t = time.mktime(time.strptime(line[:20], '%Y-%m-%dT%H:%M:%SZ')) - time.timezone
+                t = calendar.timegm(time.strptime(line[:20], '%Y-%m-%dT%H:%M:%SZ'))
             except ValueError:
                 continue  # Malformed timestamp: skip the line, keep scanning history.
             return (time.time() - t) / 60
@@ -59,8 +60,15 @@ def capacity_collapse():
     """(latest C*, highest C* in the 2 h before it) from model-capacity-caps lines, or None."""
     tail = sh('tail', '-n', '6000', str(LOG)).splitlines()
     cutoff = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 7200))
-    vals = [float(m.group(1)) for l in tail if l[:20] >= cutoff and 'model-capacity-caps' in l
-            for m in [re.search(r'C\*=([0-9.]+)', l)] if m]
+    vals = []
+    for line in tail:
+        if line[:20] >= cutoff and 'model-capacity-caps' in line:
+            m = re.search(r'C\*=([0-9.]+)', line)
+            if m:
+                try:
+                    vals.append(float(m.group(1)))
+                except ValueError:
+                    continue  # Malformed capacity value (e.g. C*=1.2.3): skip, keep scanning.
     return (vals[-1], max(vals[:-1])) if len(vals) >= 2 else None
 
 

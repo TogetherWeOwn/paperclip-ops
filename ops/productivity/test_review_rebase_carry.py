@@ -117,12 +117,24 @@ GIT_REPO_VARS = (
     "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR",
     "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM",
-    "GIT_NAMESPACE")
+    "GIT_NAMESPACE",
+    # Bare GIT_CONFIG redirects git-config file I/O; GIT_TEMPLATE_DIR
+    # injects hooks into `git init`. Neither matches the GIT_CONFIG_*
+    # prefix, so they are listed exactly.
+    "GIT_CONFIG", "GIT_TEMPLATE_DIR")
+# Single shared exclusion used by both GIT_ENV and _hermetic_environ so the
+# two filters cannot drift.
+_GIT_STRIP_EXACT = frozenset(
+    (*GIT_REPO_VARS, "GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS"))
+
+
+def _is_stripped_git_var(key):
+    return key in _GIT_STRIP_EXACT or key.startswith("GIT_CONFIG_")
+
+
 GIT_ENV = {
     key: value for key, value in os.environ.items()
-    if key not in GIT_REPO_VARS
-    and not key.startswith("GIT_CONFIG_")
-    and key not in ("GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS")
+    if not _is_stripped_git_var(key)
 }
 GIT_ENV.update(GIT_EDITOR="true", GIT_SEQUENCE_EDITOR="true",
                GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1",
@@ -130,22 +142,28 @@ GIT_ENV.update(GIT_EDITOR="true", GIT_SEQUENCE_EDITOR="true",
 GIT_BASE = ["git", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false"]
 
 
-def _hermetic_environ():
-    """Apply the same sanitization to os.environ for helper children.
-
-    Installed before importing the helper so import-time environment
-    snapshots are covered; the returned restore runs via addModuleCleanup.
-    """
-    saved = dict(os.environ)
+def _apply_hermetic_environ():
+    """Strip leaked git vars from os.environ in place (no save)."""
     for key in list(os.environ):
-        if (key in GIT_REPO_VARS or key.startswith("GIT_CONFIG_")
-                or key in ("GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS")):
+        if _is_stripped_git_var(key):
             del os.environ[key]
     os.environ["GIT_EDITOR"] = "true"
     os.environ["GIT_SEQUENCE_EDITOR"] = "true"
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
     os.environ["GIT_CONFIG_NOSYSTEM"] = "1"
     os.environ["GIT_CONFIG_GLOBAL"] = os.devnull
+
+
+def _hermetic_environ():
+    """Sanitize os.environ for helper children; return the restore.
+
+    Applied at import so helper import-time environment snapshots are
+    covered. The restore is registered in setUpModule, not here: the
+    addModuleCleanup stack is process-global and drains after the first
+    module in combined runs.
+    """
+    saved = dict(os.environ)
+    _apply_hermetic_environ()
 
     def _restore():
         os.environ.clear()
@@ -154,7 +172,7 @@ def _hermetic_environ():
     return _restore
 
 
-unittest.addModuleCleanup(_hermetic_environ())
+_HERMETIC_RESTORE = _hermetic_environ()
 
 try:
     import review_rebase_carry as rrc
@@ -166,6 +184,14 @@ except ImportError as exc:
 
 
 def setUpModule():
+    # Re-apply: earlier modules' tests in the combined invocation may have
+    # mutated os.environ since our import. No new save: _HERMETIC_RESTORE
+    # still restores the original pre-import environment.
+    _apply_hermetic_environ()
+    # Register here so the restore runs after THIS module even in combined
+    # runs, and even when the SkipTest below fires (module cleanups run on
+    # setUpModule failure, unlike tearDownModule).
+    unittest.addModuleCleanup(_HERMETIC_RESTORE)
     # Skip (not error) until the builder module lands. The skip must raise
     # here, not at module top: a top-level `raise SkipTest` only converts
     # to a skip under unittest discovery, while the repo runs suites by
@@ -176,6 +202,12 @@ def setUpModule():
         raise unittest.SkipTest(
             "review_rebase_carry is not landed yet; these acceptance "
             "tests activate when the paired builder change adds the module")
+
+
+def tearDownModule():
+    # Backup restore for runners that honor module fixtures but not module
+    # cleanups; idempotent under unittest (doModuleCleanups re-runs it).
+    _HERMETIC_RESTORE()
 
 
 def run_git(repo, *args):
@@ -198,7 +230,9 @@ class GitRepo:
 
     def __enter__(self):
         self.dir = tempfile.mkdtemp(prefix="rebase-carry-test-")
-        git(self.dir, "init", "-b", "main", "-q")
+        # --template= ignores any inherited GIT_TEMPLATE_DIR (belt and
+        # braces: it is also stripped from GIT_ENV).
+        git(self.dir, "init", "--template=", "-b", "main", "-q")
         git(self.dir, "config", "user.email", "acceptance@example.com")
         git(self.dir, "config", "user.name", "Acceptance")
         git(self.dir, "config", "commit.gpgsign", "false")

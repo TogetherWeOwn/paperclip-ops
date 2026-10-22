@@ -65,7 +65,7 @@ const on = readinessPolicy({ enabledRepositories: [repo] })
 function doubles(snapshots, { rulesets = null } = {}) {
   const calls = []
   const github = {
-    async getCloseoutSnapshot(repository, number) {
+    async getReadinessSnapshot(repository, number) {
       calls.push(['read-snapshot', repository, number])
       const found = snapshots.get(`${repository}#${number}`)
       if (!found) throw new Error('GitHub query failed: transport, timeout, output limit or invalid JSON')

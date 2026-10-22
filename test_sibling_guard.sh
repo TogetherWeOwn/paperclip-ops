@@ -326,7 +326,7 @@ run_guard() {
   # then makes `git credential fill` fail — the fixture for that case.
   if [[ "${OVERRIDE_GH_TOKEN-sentinel}" == "" ]]; then
     OUT="$( cd "$cwd" && \
-      PAPERCLIP_API_URL="$BASE" \
+      PAPERCLIP_API_URL="${OVERRIDE_PAPERCLIP_API_URL:-$BASE}" \
       PAPERCLIP_API_KEY="${OVERRIDE_KEY-stub-key}" \
       PAPERCLIP_COMPANY_ID="${OVERRIDE_CO-stub-co}" \
       PAPERCLIP_AGENT_ID="${OVERRIDE_AGENT-agent-me}" \
@@ -336,7 +336,7 @@ run_guard() {
       "$TOOL" "$issue" "$@" 2>&1 )"
   else
     OUT="$( cd "$cwd" && \
-      PAPERCLIP_API_URL="$BASE" \
+      PAPERCLIP_API_URL="${OVERRIDE_PAPERCLIP_API_URL:-$BASE}" \
       PAPERCLIP_API_KEY="${OVERRIDE_KEY-stub-key}" \
       PAPERCLIP_COMPANY_ID="${OVERRIDE_CO-stub-co}" \
       PAPERCLIP_AGENT_ID="${OVERRIDE_AGENT-agent-me}" \
@@ -1219,6 +1219,67 @@ assert "$(grep -q "EXAMPLE-907" <<< "$OUT" && echo 0 || echo 1)" \
 run_guard "$VACUOUS" 22222222-3333-4444-5555-666666666666 --repo=stub/shavacforeign
 assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
   "at start by uuid, a vacuous HEAD with a 404ing lookup and a relevant foreign-claim same-commit PR exits 3, not 0" "rc=$RC out=$OUT"
+
+# ===========================================================================
+hdr "6d1. A malformed base refuses at every ownership lookup, before curl."
+# The control-plane guard is pinned shape by shape in
+# test_paperclip_api_base_validation.sh; these three pin the WIRING of the
+# remote ownership guards instead (cross-branch, prepush same-head,
+# same-commit). Each reuses the uuid fixtures above with a base curl rejects
+# locally (no network, no DNS): the lookup must go blind with its own
+# refusal reason, exit 3, and zero curl calls carrying the hostile base.
+# Deleting any one guard reddens its case — the lookup then attempts the
+# base and reports a transport failure instead of the refusal.
+REAL_CURL_BIN="$(command -v curl)"
+mkdir -p "$TMP/curlwrap"
+cat > "$TMP/curlwrap/curl" <<'WRAP'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${SIB_CURL_LOG:?SIB_CURL_LOG is unset}"
+exec "${REAL_CURL_BIN:?REAL_CURL_BIN is unset}" "$@"
+WRAP
+chmod +x "$TMP/curlwrap/curl"
+export REAL_CURL_BIN SIB_CURL_LOG="$TMP/sib-curl.log"
+SIB_PATH_SAVED="$PATH"; export PATH="$TMP/curlwrap:$PATH"
+# A BASH_ENV hook (set in some runners) re-exports PATH in every child bash,
+# which would unshadow the wrapper above and let the zero-curl-call asserts
+# pass vacuously. Drop it for these three cases, restored below.
+SIB_BASH_ENV_SAVED="${BASH_ENV-}"; unset BASH_ENV
+SIB_BAD_BASE="http:///no-host"
+
+: > "$SIB_CURL_LOG"
+OVERRIDE_PAPERCLIP_API_URL="$SIB_BAD_BASE" run_guard "$CLEAN" 11111111-2222-3333-4444-555555555555 --repo=stub/crossforeign
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a malformed base refuses at the cross-branch lookup, exits 3" "rc=$RC out=$OUT"
+assert "$(grep -q "cross-branch ownership check refuses" <<< "$OUT" && echo 0 || echo 1)" \
+  "the cross-branch refusal names its own guard" "$OUT"
+assert "$([[ "$(grep -c "no-host" "$SIB_CURL_LOG" || true)" -eq 0 ]] && echo 0 || echo 1)" \
+  "the refused cross-branch lookup makes zero board curl calls" "$(cat "$SIB_CURL_LOG")"
+
+: > "$SIB_CURL_LOG"
+OVERRIDE_PAPERCLIP_API_URL="$SIB_BAD_BASE" run_guard "$MYPR" 11111111-2222-3333-4444-555555555555 --repo=stub/foreign --phase=prepush
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a malformed base refuses at the prepush lookup, exits 3" "rc=$RC out=$OUT"
+assert "$(grep -q "prepush ownership check refuses" <<< "$OUT" && echo 0 || echo 1)" \
+  "the prepush refusal names its own guard" "$OUT"
+assert "$([[ "$(grep -c "no-host" "$SIB_CURL_LOG" || true)" -eq 0 ]] && echo 0 || echo 1)" \
+  "the refused prepush lookup makes zero board curl calls" "$(cat "$SIB_CURL_LOG")"
+
+# The vacuous block above repointed the stub SHA file at its own HEAD; the
+# same-commit fixture needs the caller head under test again.
+(cd "$SHAHEAD" && git rev-parse HEAD > "$TMP/sha.txt")
+: > "$SIB_CURL_LOG"
+OVERRIDE_PAPERCLIP_API_URL="$SIB_BAD_BASE" run_guard "$SHAHEAD" 11111111-2222-3333-4444-555555555555 --repo=stub/shaforeign
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "a malformed base refuses at the same-commit lookup, exits 3" "rc=$RC out=$OUT"
+assert "$(grep -q "same-commit ownership check refuses" <<< "$OUT" && echo 0 || echo 1)" \
+  "the same-commit refusal names its own guard" "$OUT"
+assert "$([[ "$(grep -c "no-host" "$SIB_CURL_LOG" || true)" -eq 0 ]] && echo 0 || echo 1)" \
+  "the refused same-commit lookup makes zero board curl calls" "$(cat "$SIB_CURL_LOG")"
+
+export PATH="$SIB_PATH_SAVED"
+if [[ -n "${SIB_BASH_ENV_SAVED-}" ]]; then export BASH_ENV="$SIB_BASH_ENV_SAVED"; fi
+unset SIB_BASH_ENV_SAVED
+unset OVERRIDE_PAPERCLIP_API_URL
 
 # ===========================================================================
 hdr "6e. Same HEAD checked out in another worktree."

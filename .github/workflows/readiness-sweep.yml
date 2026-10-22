@@ -144,7 +144,8 @@ jobs:
     #   pull-requests: write — body PATCH, mark-ready, convert-to-draft,
     #     auto-merge arm, PR reads (write implies read).
     #   contents: write — enablePullRequestAutoMerge requires it. The sweep
-    #     never merges, closes, or pushes; it arms auto-merge only.
+    #     issues no merge, close, or push operation; it arms auto-merge only,
+    #     and that arm can merge immediately when the PR is already eligible.
     #   checks / statuses: read — head commit rollup.
     # `metadata` is deliberately absent: it is implicit for job tokens, not a
     # permission key (actionlint rejects it). NOT granted: workflows (a PR

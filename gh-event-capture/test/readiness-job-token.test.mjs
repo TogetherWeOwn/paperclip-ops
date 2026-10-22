@@ -79,7 +79,7 @@ function doubles(snapshots) {
         .filter((snap) => snap.repository === repository)
         .map((snap) => ({ repository: snap.repository, number: snap.number }))
     },
-    async getCloseoutSnapshot(repository, number) {
+    async getReadinessSnapshot(repository, number) {
       const found = snapshots.get(`${repository}#${number}`)
       if (!found) throw new Error('GitHub query failed: transport, timeout, output limit or invalid JSON')
       return found

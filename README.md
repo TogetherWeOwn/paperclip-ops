@@ -67,6 +67,7 @@ This documentation does not authorize running a backup or changing a host.
 | `agent_error_proposer.py` |
 | `approval_timeout_probe.sh` |
 | `balancer_silence_guard.py` |
+| `blocker_test_checks.py` |
 | `bridge_row_inventory.py` |
 | `capture_host_evidence.sh` |
 | `capture_host_render.sh` |
@@ -136,6 +137,13 @@ This documentation does not authorize running a backup or changing a host.
 | `upstream_watch.sh` |
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
+
+## Verification
+
+Run the fast tier with `make verify-fast` (`make verify-fast-parse` for the
+parse gate only). To inspect suite scope and prerequisites without running or
+preparing anything, use `make verify-fast-plan` (offline, read-only;
+`scripts/verify-fast.sh --plan --json`).
 
 ## Contributing
 

@@ -51,6 +51,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import pr_controller_ci as ci
 from pr_controller_ci import kill_switch_active
@@ -191,16 +192,19 @@ def annotate_cost(checks, *, gh, full, log):
     except Exception as exc:  # pragma: no cover - resolve never raises
         log(f'ci-policy cost lookup failed for {full}: {exc}')
         private = True
+    hosted = {}
     for check in checks:
         check['private_repo'] = private
         if private:
-            try:
-                self_hosted = resolve_run_self_hosted(
-                    gh, full, check['run_id'])
-            except Exception as exc:
-                log(f"ci-policy runner lookup failed run {check['run_id']}: {exc}")
-                self_hosted = False
-            check['paid_runner'] = not self_hosted
+            run_id = check['run_id']
+            if run_id not in hosted:
+                try:
+                    hosted[run_id] = resolve_run_self_hosted(
+                        gh, full, run_id)
+                except Exception as exc:
+                    log(f"ci-policy runner lookup failed run {run_id}: {exc}")
+                    hosted[run_id] = False
+            check['paid_runner'] = not hosted[run_id]
         else:
             check['paid_runner'] = False
     return checks
@@ -297,9 +301,9 @@ def default_find_card(api, company_id):
         if not company_id:
             return None
         try:
+            query = quote(str(payload.get('title') or ''), safe='')
             code, body = api('GET',
-                             f'companies/{company_id}/issues'
-                             f'?q={payload.get("title", "")}',
+                             f'companies/{company_id}/issues?q={query}',
                              {})
         except Exception:
             return None

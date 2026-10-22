@@ -172,6 +172,18 @@ class CostAnnotationTest(unittest.TestCase):
         self.assertEqual((True, True),
                          (checks[0]['private_repo'], checks[0]['paid_runner']))
 
+    def test_sibling_checks_share_one_runner_lookup(self):
+        gh = FakeGh(private=True, self_hosted=True)
+        checks = host.annotate_cost(
+            [host._normalize_check(detail_row(job='job-a')),
+             host._normalize_check(detail_row(job='job-b'))],
+            gh=gh, full='o/r', log=lambda line: None)
+        jobs_calls = [call for call in gh.calls
+                      if call[1:2] == ['api'] and call[2].endswith('/jobs')]
+        self.assertEqual(1, len(jobs_calls))
+        self.assertTrue(all(check['paid_runner'] is False
+                            for check in checks))
+
 
 class LivePathTest(unittest.TestCase):
     def test_first_red_reruns_and_skips_wake_with_undo_log(self):
@@ -454,6 +466,23 @@ class DefaultWiringTest(unittest.TestCase):
         self.assertTrue(all(method == 'GET' and
                             path.startswith('companies/company-1/issues')
                             for method, path in seen))
+
+    def test_find_card_url_encodes_flake_title(self):
+        seen = []
+
+        def search(method, path, payload):
+            seen.append((method, path))
+            return ('200', json.dumps({'issues': [
+                {'id': 'card-7',
+                 'title': '[flake] o/r a&b?c#d'}]}))
+
+        find = host.default_find_card(search, 'company-1')
+        self.assertEqual('card-7', find({'title': '[flake] o/r a&b?c#d'}))
+        query = seen[0][1].split('?q=', 1)[1]
+        self.assertNotIn(' ', query)
+        self.assertNotIn('&', query)
+        self.assertIn('%5Bflake%5D', query)
+        self.assertIn('%26', query)
 
     def test_find_card_failure_fails_open_to_none(self):
         def boom(method, path, payload):

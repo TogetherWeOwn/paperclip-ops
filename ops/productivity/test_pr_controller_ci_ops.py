@@ -111,6 +111,17 @@ class KillSwitchTest(unittest.TestCase):
         self.assertEqual([], gh.argv_calls)
         self.assertEqual([], api.calls)
 
+    def test_kill_switch_repeat_tick_posts_once(self):
+        with mock.patch.dict(os.environ, {'PR_CONTROLLER_CI_DISABLE': '1'},
+                             clear=False):
+            gh, api = FakeGh(), FakeApi()
+            state = {}
+            first = tick(make_pr(), [make_check()], state, gh, api)
+            second = tick(make_pr(), [make_check()], state, gh, api)
+        self.assertEqual('woke', first['action'])
+        self.assertEqual('suppressed', second['action'])
+        self.assertEqual(1, len(api.calls))
+
 
 class DryRunTest(unittest.TestCase):
     def test_dry_run_decides_without_side_effects_or_state(self):

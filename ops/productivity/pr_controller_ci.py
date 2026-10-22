@@ -444,15 +444,22 @@ def handle_ci_tick(*, pr, checks, state, gh, api, ledger,
         if dry_run:
             outcome['action'] = 'woke'
             return outcome
+        handled = state.setdefault('handled', [])
+        key = _tick_key(head, checks)
+        if key in handled:
+            # A repeat tick for the same red event (e.g. before reconcile
+            # confirms delivery) must not post the wake a second time. The
+            # normal path checks this at _decide; the switch must match it
+            # to restore today's behaviour exactly.
+            outcome['action'] = 'suppressed'
+            _trim(state)
+            return outcome
         comment_id = _post(api, owner, wake_text)
         if comment_id is None:
             outcome['action'] = 'post_failed'
             _trim(state)
             return outcome
-        handled = state.setdefault('handled', [])
-        key = _tick_key(head, checks)
-        if key not in handled:
-            handled.append(key)
+        handled.append(key)
         outcome['action'] = 'woke'
         outcome['comment_id'] = comment_id
         _trim(state)

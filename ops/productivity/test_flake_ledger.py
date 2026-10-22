@@ -318,5 +318,96 @@ class QuarantineCard(unittest.TestCase):
                 company_id='company-1', payload=self.payload())
 
 
+class ReportUnit(unittest.TestCase):
+    """White-box unit regressions for the ranked report helpers.
+
+    The black-box CLI contract lives in test_flake_ledger_report.py (owned
+    by the paired acceptance card; never edited here). These tests pin the
+    pure helpers directly: ordering, gating, validity, IDs, and arg parsing.
+    """
+
+    def setUp(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('flake_ledger_under_test', SCRIPT)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+
+    def test_rank_orders_rate_then_observations_then_job_then_test(self):
+        rows = [
+            ledger_row(job='b job', test='b_test', flips=2, observations=5),
+            ledger_row(job='a job', test='z_test', flips=4, observations=10),
+            ledger_row(job='a job', test='a_test', flips=4, observations=10),
+            ledger_row(job='c job', test='top_test', flips=9, observations=10),
+        ]
+        ranked, insufficient, truncated = self.module.rank_report_rows(rows, 10, 5)
+        self.assertEqual([row['test'] for row in ranked],
+                         ['top_test', 'a_test', 'z_test', 'b_test'])
+        self.assertEqual((insufficient, truncated), ([], 0))
+
+    def test_gate_boundary_is_inclusive_and_top_counts_truncation(self):
+        rows = [
+            ledger_row(test='at_gate_test', flips=4, observations=5),
+            ledger_row(test='above_gate_test', flips=5, observations=5),
+            ledger_row(test='below_gate_test', flips=4, observations=4),
+        ]
+        ranked, insufficient, truncated = self.module.rank_report_rows(rows, 1, 5)
+        self.assertEqual([row['test'] for row in ranked], ['above_gate_test'])
+        self.assertEqual([row['test'] for row in insufficient], ['below_gate_test'])
+        self.assertEqual(truncated, 1)
+
+    def test_duplicate_keys_raise_naming_the_row(self):
+        rows = [ledger_row(flips=4, observations=5),
+                ledger_row(flips=0, observations=5)]
+        with self.assertRaises(self.module.LedgerUnavailable) as raised:
+            self.module.validate_report_rows(rows, 'two-bot-next')
+        self.assertIn('sample_test', str(raised.exception))
+
+    def test_cross_row_test_job_collision_raises_naming_the_value(self):
+        rows = [ledger_row(job='other', test='nightly', flips=5, observations=5),
+                ledger_row(job='nightly', test='job nightly', flips=0, observations=5)]
+        with self.assertRaises(self.module.LedgerUnavailable) as raised:
+            self.module.validate_report_rows(rows, 'two-bot-next')
+        self.assertIn('nightly', str(raised.exception))
+
+    def test_same_row_test_equals_job_is_not_a_collision(self):
+        rows = [ledger_row(job='nightly', test='nightly', flips=4, observations=5)]
+        self.assertEqual(self.module.validate_report_rows(rows, 'two-bot-next'), rows)
+
+    def test_row_ids_are_stable_unique_and_name_the_row(self):
+        first = self.module.report_row_id('two-bot-next', 'rust tests', 'sample_test')
+        second = self.module.report_row_id('two-bot-next', 'rust tests', 'sample_test')
+        other = self.module.report_row_id('two-bot-next', 'rust tests', 'other_test')
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, other)
+        self.assertIn('rust tests', first)
+        self.assertIn('sample_test', first)
+
+    def test_text_format_marks_only_insufficient_lines(self):
+        ranked = [ledger_row(test='ranked_test', flips=4, observations=5)]
+        insufficient = [ledger_row(test='newbie_test', flips=1, observations=2)]
+        text = self.module.format_report_text(
+            ranked=ranked, insufficient=insufficient, min_observations=5)
+        lines = text.splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertNotIn('insufficient', lines[0])
+        self.assertIn('insufficient', lines[1])
+        self.assertIn('ranked_test', lines[0])
+        self.assertIn('newbie_test', lines[1])
+
+    def test_parse_rejects_unknown_flags_and_bad_positionals(self):
+        with self.assertRaises(self.module.ReportUsageError):
+            self.module._parse_report_args(['two-bot-next', '--bogus'])
+        with self.assertRaises(self.module.ReportUsageError):
+            self.module._parse_report_args([])
+        with self.assertRaises(self.module.ReportUsageError):
+            self.module._parse_report_args(['   '])
+        with self.assertRaises(self.module.ReportUsageError):
+            self.module._parse_report_args(['two-bot-next', 'extra'])
+        repo, top, minimum, as_json = self.module._parse_report_args(
+            ['two-bot-next', '--top', '3', '--min-observations', '7', '--json'])
+        self.assertEqual((repo, top, minimum, as_json),
+                         ('two-bot-next', 3, 7, True))
+
+
 if __name__ == '__main__':
     unittest.main()

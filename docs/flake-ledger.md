@@ -42,6 +42,43 @@ could not be checked. The command prints only the literal `yes` or `no` on a
 successful decision; unavailable details are explicit and non-zero so callers
 cannot mistake an evidence failure for a negative classification.
 
+## Ranked triage report
+
+Start triage from the N flakiest jobs/tests instead of querying one name:
+
+```sh
+python3 ops/productivity/flake_ledger.py report <repo> [--top N] [--min-observations M] [--json] [--dry-run]
+```
+
+Rows matching `<repo>` exactly rank by flip rate (`flips / observations`),
+highest first. Ties break deterministically: observations descending, then
+job name ascending, then test name ascending. `--top N` defaults to 10 and
+accepts integers 1-100 only. `--min-observations M` defaults to 5 and
+accepts positive integers only; rows below the gate list as `insufficient`
+with counts and never appear in the ranking, regardless of `--top`.
+
+The report applies the same strict validity as `is_flaky`: every ledger row
+must be well-formed (including other repos' rows), and duplicate (job, test)
+pairs or test-vs-job collisions across different rows make the whole report
+unavailable (non-zero exit + explicit reason), never silently combined. A
+row whose own test equals its own job is one row, not a collision. Unlike
+`is_flaky`, job summary rows (`job <job>`) carry no precedence: every row
+ranks as a row.
+
+Text output prints one greppable row per line (ranked rows, then
+insufficient rows), byte-deterministic across runs. `--json` prints a
+pure-JSON envelope on stdout: `schema_version` 1, `repo`, `generated_at`
+(ISO-8601), `top`, `min_observations`, ranked `rows` (stable `id` plus
+job/test/flips/observations/rate), `insufficient` rows with counts,
+`excluded` counts with reasons, and `error` (null on success, or
+`{code, retryable, next_action}` on failure).
+
+The report is read-only: it never writes the ledger, reruns tests, or files
+cards. `--dry-run` is a documented no-op alias producing byte-identical text
+output. Unknown flags, a missing or blank repo, and extra positionals refuse
+with usage + exit 2; unavailable evidence exits non-zero with an explicit
+reason. `report --help` prints the full usage.
+
 ## Automatic host rerun of PR checks
 
 The host PR controller consumes the ladder's one permitted rerun itself on

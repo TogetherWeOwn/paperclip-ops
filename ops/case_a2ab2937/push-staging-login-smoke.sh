@@ -55,6 +55,11 @@ for flag in "$@"; do [[ "$flag" != --json ]] || JSON=true; done
 trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# HUP must also exit through finish: an untrapped fatal signal while curl
+# runs with redirected stderr kills the shell without the EXIT trap, leaking
+# the private temp dir and yielding no result. Exit 129 keeps the uncoded
+# post-preflight default (mark_aborted), never a false refusal or success.
+trap 'exit 129' HUP
 seen_json=false
 for flag in "$@"; do
   case "$flag" in
@@ -73,6 +78,7 @@ if [[ "$HELP" == true ]]; then
     '--dry-run: static plan only; no credentials, temp configs, curl, sleep or push.' \
     'Offline check (repository root):' \
     '  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_staging_login_journey' \
+    '  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_staging_login_journey_guards' \
     '  PYTHONDONTWRITEBYTECODE=1 bash test_case_00b2eb59_probe.sh' \
     'No flag grants runtime authority or removes a CISO/install HOLD.'
   exit 0
@@ -116,9 +122,13 @@ umask 077
 TMPD="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/login_smoke.XXXXXXXX")" \
   || refuse temp_unavailable 'Restore private temporary-directory access before retrying.'
 JAR="$TMPD/jar"; HDR="$TMPD/hdr"; BODY="$TMPD/body"; CFG="$TMPD/curlcfg"
+# A 204 plus tiny JSON bodies/headers never approach this; a broken staging
+# step must not stream gigabytes into the shared temp dir or verifier RAM.
+MAX_RESPONSE_BYTES=65536
 {
   printf 'header = "X-TWO-QA-Auth: %s"\n' "$QA_AUTH_TOKEN"
   printf 'header = "Origin: https://next.togetherweown.com"\n'
+  printf 'max-filesize = "%s"\n' "$MAX_RESPONSE_BYTES"
 } > "$CFG"
 chmod 0600 "$CFG" || refuse temp_permissions 'Restore private temporary-file permissions before retrying.'
 # Preflight passed: an uncoded exit is an abort, not an origin refusal.
@@ -149,6 +159,17 @@ fail_push() {
 
 # Clear response state for EVERY call. -q must be first: an ambient .curlrc
 # cannot inject a session, redirect, verbose output or another destination.
+# --max-filesize caps the body while streaming; the size backstop below also
+# covers headers, which curl downloads unbounded into -D.
+check_response_size() {
+  python3 - "$HDR" "$BODY" "$MAX_RESPONSE_BYTES" 2>/dev/null <<'PY'
+import os, sys
+try:
+    sys.exit(0 if all(os.path.getsize(path) <= int(sys.argv[3]) for path in sys.argv[1:3]) else 1)
+except OSError:
+    sys.exit(1)
+PY
+}
 run_capped() {
   local index="$1" max_secs="$2"; shift 2
   { : > "$HDR" && : > "$BODY"; } || return 1
@@ -162,6 +183,7 @@ run_capped() {
     rc=1
   fi
   STEPS[index]="$CODE $SECS"
+  check_response_size || return 1
   return "$rc"
 }
 step1_once() {
@@ -207,10 +229,37 @@ try:
                     continue
                 record, *attributes = value.split(";")
                 cookie_name, separator, cookie_value = record.partition("=")
-                if cookie_name == "__Host-two_session":
-                    attributes = [a.strip(" \t").lower() for a in attributes]
-                    cookies.append(bool(separator and cookie_value) and "secure" in attributes and "httponly" in attributes
-                                   and "path=/" in attributes and not any(a.split("=", 1)[0] == "domain" for a in attributes))
+                if cookie_name != "__Host-two_session":
+                    continue
+                # Effective attributes, mirroring the jar consumer: trim
+                # whitespace around names and values (RFC 6265 5.2, as curl
+                # applies them) and reject duplicate names, where curl would
+                # apply only one value. A bare or valued Domain is never a
+                # host-only __Host- cookie; only an effective Path=/ passes.
+                seen = set()
+                well_formed = True
+                has_secure = has_httponly = False
+                path_is_root = False
+                for attribute in attributes:
+                    attr_name, _, attr_value = attribute.partition("=")
+                    attr_name = attr_name.strip(" \t").lower()
+                    if not attr_name:
+                        continue
+                    if attr_name in seen:
+                        well_formed = False
+                        break
+                    seen.add(attr_name)
+                    if attr_name == "domain":
+                        well_formed = False
+                        break
+                    elif attr_name == "secure":
+                        has_secure = True
+                    elif attr_name == "httponly":
+                        has_httponly = True
+                    elif attr_name == "path":
+                        path_is_root = attr_value.strip(" \t") == "/"
+                cookies.append(bool(separator and cookie_value) and well_formed
+                               and has_secure and has_httponly and path_is_root)
             valid = cookies == [True]
     sys.exit(0 if valid else 1)
 except (OSError, ValueError, RecursionError):

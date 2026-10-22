@@ -25,6 +25,7 @@ From the repository root, run the same source-only checks used in CI:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_staging_login_journey
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_staging_login_journey_guards
 PYTHONDONTWRITEBYTECODE=1 bash test_case_00b2eb59_probe.sh
 ```
 
@@ -32,7 +33,10 @@ The immutable journey suite uses generated synthetic values, recording adapters
 and a Linux libseccomp network fence (libseccomp.so.2 is required). It checks fresh
 cookie propagation, retry cleanup, strict response validation, redaction and
 static/refusal modes. Keep malformed, failed-login, secret-non-disclosure and
-endpoint-fragment controls intact.
+endpoint-fragment controls intact. The builder-owned guards suite pins the
+remaining edges with the same fence: cookie attribute whitespace/duplicates,
+duplicate origin/JSON evidence, the `-q`-first curl guard, abort and
+push-failure outcomes, and the response size bound.
 
 ## CLI and result contract
 
@@ -71,7 +75,8 @@ to retry or change credentials. Codes are fixed identifiers, never server text:
 - `login_throttled`: retryable `throttled`, **not** authenticated-journey success.
 - `probe_aborted`: retryable failure for an interrupted journey or final delivery,
   or an unexpected exit after preflight. Preserve HOLDs and the existing scheduler;
-  this result never authorizes an immediate retry. INT/TERM retain exits 130/143.
+  this result never authorizes an immediate retry. INT/TERM/HUP retain exits
+  130/143/129 with cleanup and a structured result.
 
 Exit 0 means `ok`, static `dry_run`, help, or the existing non-paging repeated-429
 policy. Exit 1 is a failed journey/push; exit 2 is refusal (no push). A repeated
@@ -84,12 +89,17 @@ required for structured output as well as response validation.
 Each login attempt truncates its private jar and responses, enables curl jar
 writing, and passes only that jar to auth/status. Secure/HttpOnly must be exact
 attributes on the exact `__Host-two_session` Set-Cookie record (with host-cookie
-Path=/ and no Domain); duplicate session records fail. Auth/status must be a JSON
-object whose top-level `authenticated` is boolean true; malformed/duplicate-key
-JSON fails. /up uses no session and requires a single exact `x-two-origin` value
+Path=/ and no Domain); duplicate session records fail. Attribute names and values
+allow surrounding spaces/tabs exactly as curl applies them, but duplicate
+attribute names fail closed: curl would apply only one value, so a repeated
+Path, Domain or flag cannot be trusted. Auth/status must be a JSON object whose
+top-level `authenticated` is boolean true; malformed/duplicate-key JSON fails.
+/up uses no session and requires a single exact `x-two-origin` value
 `two-web-next`, allowing HTTP field-name case and surrounding spaces/tabs but no
 prefixes or extra values. No redirects are followed; ambient curl configs are
-disabled. Private files are cleaned on exit and transport diagnostics stay private.
+disabled. Header and body responses are capped at 64 KiB while streaming with a
+pre-parse backstop; oversize responses fail the step. Private files are cleaned
+on exit and transport diagnostics stay private.
 
 ## Rollback
 

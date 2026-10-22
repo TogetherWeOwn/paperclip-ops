@@ -21,17 +21,20 @@ its inventory, classification, review, merge, capacity, hold, or live-run rules.
   `agent_wakeup_requests` record. The existing read-only SQL client is injected;
   this module performs no database writes or new wake API calls.
 - `pr-controller-notify-guard.patch`: wires the notification-only author-wake
-  gate into the live wake path. Three hunks: the `notify_author_wake` entry
+  gate into the live wake path. Four hunks: the `notify_author_wake` entry
   point beside the classification seam, a `required` hoist feeding
-  `classify()`, and a `ci_red` consult inside `main()` right after the wake
-  key is computed. Suppress fires only for `ci_red` with no
-  author-actionable failure (empty red list, or only known shared-base
-  checks red while the required set is known); the verdict is recorded on
-  the state record (`rec['notify_verdict']`) every pass for the pump, and a
-  suppressed wake skips render and post without consuming the wake cap or
-  marking the transition delivered (a later genuine failure on the same
-  head still wakes). Verdicts, eligibility, checks and gates are unchanged.
-  Unknown required sets fail closed to `wake`.
+  `classify()`, a verdict-record block immediately after `state[key] = rec`,
+  and a `ci_red` suppress gate in `main()` right after the wake key.
+  Suppress fires only for `ci_red` with no author-actionable failure (empty
+  red list, or only known shared-base checks red while the required set is
+  known). The verdict is recorded alongside every state/head update, before
+  any exit that can save, and cleared when the state leaves `ci_red` — so a
+  saved same-head suppress verdict always describes the checks of the pass
+  that saved it, and a later genuine failure on the same head re-records a
+  fresh verdict. The gate reads the recorded verdict and skips render and
+  post without consuming the wake cap or marking the transition delivered.
+  Verdicts, eligibility, checks and gates are unchanged. Unknown required
+  sets fail closed to `wake`.
 - `../pr_controller_wake_guard.py`: the pure-stdlib decision module behind
   that gate (`actionable_red`, `author_wake`, `KNOWN_BASE_EXECUTED`).
   Deterministic, no I/O, no host imports.
@@ -111,9 +114,13 @@ required CI and Paperclip Review 5/5. Never install this entire public snapshot.
                and nv.get('head') == rec.get('head')):
            continue
    ```
-   The controller re-records the verdict every pass, so only a fresh
-   same-head suppress skips; missing or stale verdicts fail closed to the
-   legacy pump. Preserve the pump file and its hash before editing; compile
+   The controller records the verdict in the same pass as the state/head it
+   describes, before every exit that can save, and clears it whenever the
+   state leaves `ci_red`; a saved same-head suppress verdict therefore
+   always describes the checks of the pass that saved it. The skip requires
+   all three equalities (stored `ci_red`, same head, recorded `suppress`),
+   so a missing verdict, a head change, or a refreshed `wake` verdict fails
+   closed to the legacy pump. Preserve the pump file and its hash before editing; compile
    it; dry-run the pump (no `--apply`) and confirm a suppressed record no
    longer appears as `would pump` while a genuinely actionable `ci_red`
    still does.

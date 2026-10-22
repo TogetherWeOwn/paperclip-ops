@@ -33,16 +33,34 @@
              if cur == 'passed' and f"{full.split('/')[-1]}#{pr['number']}@{pr['headRefOid']}".lower() in ejected_heads():
                  # Green alone, red in the merge group; nobody re-enqueues this head, so only its owner can move it
                  # (10-17: two-bot-next#1008 sat 12 h as 'passed' after update-branch was refused).
-@@ -719,6 +719,16 @@
+@@ -661,4 +661,16 @@
+             state[key] = rec
++            # Notification-only verdict record for the host pump: refreshed on
++            # every pass that reaches this record, before the WAKE_STATES /
++            # age / pressure / red-settle exits below, so a saved same-head
++            # verdict always describes the checks this pass classified.
++            # Non-ci_red states pop it, so a later ci_red cannot revive it.
++            if cur == 'ci_red':
++                rec['notify_verdict'] = {
++                    'head': head,
++                    'verdict': notify_author_wake(cur, detail, required)[0],
++                }
++            else:
++                rec.pop('notify_verdict', None)
+             cards = owner_cards(full, pr['number'])
+             if len(cards) > 1 and not pressure and rec.get('dupe_noted') != cards[0][1]:
+                 for iid, ident, st, _ in cards[1:]:
+@@ -719,6 +719,17 @@
              if cur == 'ci_red' and detail.get('pending') and (NOW - parse(rec['red_since'])) / 60 < RED_SETTLE_MIN:
                  continue
              wkey = f'{cur}@{head}'
 +            if cur == 'ci_red':
 +                # Notification-only gate: a ci_red state with no author-actionable
 +                # failure (empty red list, or only known shared-base checks red)
-+                # pages nobody. Verdicts, eligibility and gates are unchanged.
-+                verdict = notify_author_wake(cur, detail, required)[0]
-+                rec['notify_verdict'] = {'head': head, 'verdict': verdict}
++                # pages nobody. The verdict was recorded above on every pass
++                # that updates this record; here it only decides the skip.
++                # Verdicts, eligibility and gates are unchanged.
++                verdict = (rec.get('notify_verdict') or {}).get('verdict')
 +                if verdict == 'suppress':
 +                    if SHADOW:
 +                        log(f'would suppress author wake for {key}: {cur} @ {head[:8]} (no actionable failure)')

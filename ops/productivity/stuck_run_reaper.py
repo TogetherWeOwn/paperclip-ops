@@ -26,9 +26,18 @@ Two narrow actions, at most MAX_ACTIONS per tick:
 
 Never kills processes or DB backends, never mass-cancels. Ledger: stuck-run-reaper.jsonl. Pause: touch PAUSE.
 Usage: stuck_run_reaper.py [--dry-run] | stuck_run_reaper.py --recover-state FILE
+   or: stuck_run_reaper.py report [--top N] [--min-idle-hours H] [--json] [--dry-run]
 State: missing, empty or corrupt state stops the run before any action (docs/runbooks/guard-state-recovery.md).
 Undo: dead-run cancels auto-redispatch the card; parked cards are released by removing the anchor edge
 (PATCH blockedByIssueIds without the anchor id, status todo).
+
+The report subcommand is a read-only ranked triage inventory over the FULL
+candidate set (rows beyond MAX_ACTIONS keep ordinary ranks; the action cap is
+stated separately). It reuses the same scanners and pure classifiers as the
+actor (find_dead/find_loops, is_dead/loop_verdict/classify) but never cancels,
+parks, or writes ledger/state/API mutations. UNMEASURED probes list as
+unmeasured with diagnostics (never ranked dead); loop cards with live work
+list as deferred_live_work (never parkable).
 """
 import datetime as dt
 import json
@@ -422,11 +431,207 @@ def run(dry=False):
     return report
 
 
-if __name__ == '__main__':
-    try:
-        if '--recover-state' in sys.argv:
-            recover_state(sys.argv[sys.argv.index('--recover-state') + 1])
+# ---------- read-only ranked triage report (M12.5) ----------
+
+REPORT_SCHEMA_VERSION = 1
+REPORT_TOP_DEFAULT = 10
+REPORT_TOP_MIN = 1
+REPORT_TOP_MAX = 100
+
+REPORT_USAGE = """usage: stuck_run_reaper.py report [--top N] [--min-idle-hours H] [--json] [--dry-run]
+
+Read-only ranked triage inventory over the full candidate set (no cap at
+MAX_ACTIONS; the cap is stated separately in the output).
+
+  --top N            rows per section, 1-100 (default 10)
+  --min-idle-hours H extra idle gate on dead runs only; never relaxes the
+                     built-in 2 h dead rule (default: no extra gate)
+  --json             versioned JSON envelope on stdout
+  --dry-run          no-op alias (the report is always read-only)"""
+
+
+def report_usage_error(msg):
+    print(f'stuck-run-reaper report: {msg}\n{REPORT_USAGE}', file=sys.stderr)
+    raise SystemExit(2)
+
+
+def parse_report_args(args):
+    """Parse report flags -> (top, min_idle_hours, as_json). Refuses (exit 2) on unknown flags."""
+    top, min_idle, as_json = REPORT_TOP_DEFAULT, None, False
+    i = 0
+    while i < len(args):
+        tok, inline = args[i], None
+        if tok.startswith('--') and '=' in tok:
+            tok, inline = tok.split('=', 1)
+        if tok == '--json':
+            if inline is not None:
+                report_usage_error('--json takes no value')
+            as_json = True
+        elif tok == '--dry-run':
+            if inline is not None:
+                report_usage_error('--dry-run takes no value')
+            # no-op alias: the report path is always read-only
+        elif tok in ('--top', '--min-idle-hours'):
+            val = inline
+            if val is None:
+                i += 1
+                val = args[i] if i < len(args) else None
+            if val is None or not str(val).strip():
+                report_usage_error(f'{tok} needs a value')
+            if tok == '--top':
+                try:
+                    top = int(str(val).strip())
+                except ValueError:
+                    report_usage_error(f'--top must be an integer {REPORT_TOP_MIN}-{REPORT_TOP_MAX}')
+                if not REPORT_TOP_MIN <= top <= REPORT_TOP_MAX:
+                    report_usage_error(f'--top must be {REPORT_TOP_MIN}-{REPORT_TOP_MAX}')
+            else:
+                try:
+                    min_idle = float(str(val).strip())
+                except ValueError:
+                    report_usage_error('--min-idle-hours must be a non-negative number')
+                if not (min_idle >= 0 and min_idle != float('inf') and min_idle == min_idle):
+                    report_usage_error('--min-idle-hours must be a non-negative number')
         else:
-            run(dry='--dry-run' in sys.argv)
+            report_usage_error(f'unknown argument {args[i]!r}')
+        i += 1
+    return top, min_idle, as_json
+
+
+def _idle_hours(run_row, now):
+    act = last_activity(run_row)
+    if act is None:
+        return 0.0, None
+    return (now - act).total_seconds() / 3600, act
+
+
+def _newest_failure_ts(runs):
+    best = None
+    for r in runs:
+        t = parse_ts(r.get('created_at'))
+        if t is not None and (best is None or t > best):
+            best = t
+    return best
+
+
+def build_report(now, top, min_idle_hours):
+    """Rank the full inventory. Read-only: no API writes, no ledger/state access.
+
+    find_loops takes anchor=None: without state access the report cannot know
+    the parking anchor, so already-parked loops stay visible (full inventory).
+    """
+    threshold = max(DEAD_AFTER, dt.timedelta(hours=min_idle_hours or 0))
+    dead, unmeasured = find_dead(now)
+    loops = find_loops(now, None)
+
+    scored, gated = [], 0
+    for run_row, why in dead:
+        idle_h, act = _idle_hours(run_row, now)
+        if act is None or now - act < threshold:
+            gated += 1
+            continue
+        scored.append({'run_id': run_row['id'], 'issue_id': run_row.get('issue_id'),
+                       'agent': run_row.get('agent'), 'idle_hours': round(idle_h, 2),
+                       'idle_seconds': (now - act).total_seconds(),
+                       'last_activity': act.isoformat(), 'evidence': why or 'dead'})
+    scored.sort(key=lambda d: (-d['idle_seconds'], d['run_id']))
+    dead_rows = scored[:top]
+    for rank, row in enumerate(dead_rows, 1):
+        row['rank'] = rank
+        del row['idle_seconds']
+
+    unmeasured_rows = [{'run_id': u.get('run'), 'run': u.get('run'), 'agent': u.get('agent'),
+                        'issue_id': u.get('issue'), 'issue': u.get('issue'),
+                        'diagnostic': u.get('diagnostic', '')} for u in unmeasured]
+
+    ranked_loops, deferred = [], []
+    for card, cls, runs in loops:
+        iid = card['id']
+        try:
+            live = live_run_guard.issue_has_live_work(iid)
+        except Exception as e:
+            deferred.append({'issue_id': iid, 'issue': card.get('identifier'), 'status': card.get('status'),
+                             'reason': f'deferred_live_work: live-work probe failed ({e}); treating as live'})
+            continue
+        if live:
+            deferred.append({'issue_id': iid, 'issue': card.get('identifier'), 'status': card.get('status'),
+                             'reason': 'deferred_live_work: issue has live work; never parkable'})
+            continue
+        newest = _newest_failure_ts(runs)
+        ranked_loops.append({'issue_id': iid, 'issue': card.get('identifier'), 'status': card.get('status'),
+                             'error_class': cls or classify(None, None),
+                             'runs': len(runs), 'run_ids': [x.get('id') for x in runs],
+                             'newest_failure': newest.isoformat() if newest else None,
+                             '_newest_ts': newest.timestamp() if newest else 0.0})
+    ranked_loops.sort(key=lambda l: (-l['runs'], -l['_newest_ts'], l['issue_id']))
+    loop_rows = ranked_loops[:top]
+    for rank, row in enumerate(loop_rows, 1):
+        row['rank'] = rank
+        del row['_newest_ts']
+
+    excluded = {}
+    if unmeasured_rows:
+        excluded['unmeasured'] = len(unmeasured_rows)
+    if deferred:
+        excluded['deferred_live_work'] = len(deferred)
+    if gated:
+        excluded['below_min_idle_hours'] = gated
+
+    return {'schema_version': REPORT_SCHEMA_VERSION, 'generated_at': now.isoformat(),
+            'top': top, 'min_idle_hours': min_idle_hours, 'action_cap': MAX_ACTIONS,
+            'dead_runs': dead_rows, 'retry_loops': loop_rows,
+            'unmeasured': unmeasured_rows, 'deferred_live_work': deferred,
+            'excluded': excluded,
+            'error': {'code': 'ok', 'retryable': False,
+                      'next_action': 'inspect the ranked rows; the actor cancels/parks at most action_cap per tick'}}
+
+
+def _plural(n, one, many=None):
+    return f'{n} {one if n == 1 else (many or one + "s")}'
+
+
+def format_report_text(env):
+    lines = ['reaper triage report: %s, %s, %s, %s (action cap: %d per tick)' % (
+        _plural(len(env['dead_runs']), 'dead run'),
+        _plural(len(env['retry_loops']), 'retry loop'),
+        _plural(len(env['unmeasured']), 'unmeasured'),
+        _plural(len(env['deferred_live_work']), 'deferred_live_work'),
+        env['action_cap'])]
+    for row in env['dead_runs']:
+        lines.append('rank %d DEAD %s idle_hours=%.2f last_activity=%s evidence=%s' % (
+            row['rank'], row['run_id'], row['idle_hours'], row['last_activity'], row['evidence']))
+    for row in env['retry_loops']:
+        lines.append('rank %d LOOP %s issue_id=%s error_class=%s runs=%d run_ids=%s newest_failure=%s' % (
+            row['rank'], row['issue'], row['issue_id'], row['error_class'], row['runs'],
+            ','.join(x for x in row['run_ids'] if x), row['newest_failure']))
+    for row in env['unmeasured']:
+        lines.append('UNMEASURED %s agent=%s issue_id=%s diagnostic=%s' % (
+            row['run_id'], row['agent'], row['issue_id'], row['diagnostic']))
+    for row in env['deferred_live_work']:
+        lines.append('DEFERRED %s issue_id=%s reason=%s' % (row['issue'], row['issue_id'], row['reason']))
+    return '\n'.join(lines)
+
+
+def report_cmd(args):
+    top, min_idle, as_json = parse_report_args(args)
+    now = utc()
+    env = build_report(now, top, min_idle)
+    print(json.dumps(env, indent=1) if as_json else format_report_text(env))
+    return env
+
+
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args[:1] == ['report']:
+        return report_cmd(args[1:])
+    try:
+        if '--recover-state' in args:
+            recover_state(args[args.index('--recover-state') + 1])
+        else:
+            run(dry='--dry-run' in args)
     except atomic_state.StateError as e:
         sys.exit(f'stuck-run-reaper: refusing to act: {e}')
+
+
+if __name__ == '__main__':
+    main()

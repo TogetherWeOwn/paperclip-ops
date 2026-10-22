@@ -120,7 +120,7 @@ seam symbols with no extra `DRIFT`s; whole-line deletes would shift every later
 anchor and bury the seam verdict under drift noise. The slice-D preamble's
 point-in-time figures (the 365-line count, the byte-identical gate blob) describe
 the recovery snapshot, not this tree, and are superseded here along with its
-red-by-design note; the §3 pins above track the live tree.
+red-by-design note; the §3 pins below track the live tree.
 
 ### What this run could not establish
 

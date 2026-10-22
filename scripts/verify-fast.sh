@@ -167,6 +167,20 @@ fi
 rc=0
 fail() { echo "::error::$1"; rc=1; }
 
+# Backup observation contract (immutable acceptance + pinned regressions).
+# Runs under a run-owned TMPDIR so fixture debris can never escape into the
+# caller's temp space; the directory is removed on both pass and fail. Kept
+# as a function with a single `<call> || fail` execution line so the
+# verify-fast plan gates (inventory drift + neutralized --no-prepare run)
+# see exactly one fast-tier command for this suite.
+run_backup_observation_contract() {
+  local work suite_rc=0
+  work="$(mktemp -d "${TMPDIR:-/tmp}/backup-observation.XXXXXXXX")" || return 1
+  TMPDIR="$work" PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_backup_observation_contract test_backup_observation_regressions || suite_rc=$?
+  rm -rf -- "$work" || true
+  return "$suite_rc"
+}
+
 echo "=== verify-fast: parse gate (bash/node/python/esm) ==="
 # Slice-1 cutover deleted whole globs (e.g. scripts/*.js); a non-matching glob
 # must expand to nothing, not to its own literal text.
@@ -233,13 +247,7 @@ if (( PREPARE )) && ! python3 verification/offline_ci_contract.py --check-restor
 fi
 
 echo "=== verify-fast: fast unit/contract gates ==="
-if ! (
-  work="$(mktemp -d "${TMPDIR:-/tmp}/backup-observation.XXXXXXXX")" || exit 1
-  trap 'rm -rf -- "$work"' EXIT
-  TMPDIR="$work" PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_backup_observation_contract test_backup_observation_regressions
-); then
-  fail "backup observation contract failed"
-fi
+run_backup_observation_contract || fail "backup observation contract failed"
 node --test test/external-disclosure.test.mjs || fail "external-disclosure suite failed"
 node --test hooks/muse-stop-guard/muse-stop-guard.test.mjs || fail "muse-stop-guard suite failed"
 node --test hooks/disposition-stop-guard/disposition-stop-guard.test.mjs hooks/disposition-stop-guard/measure/census.test.mjs \

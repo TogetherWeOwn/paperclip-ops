@@ -34,70 +34,73 @@ from typing import Any
 
 # (key, path, recorded_line, anchor_substring, why_it_matters)
 #
-# recorded_line is what the ADR asserts today. anchor is a substring unique within
-# the file. Uniqueness is enforced at runtime: a non-unique anchor is an audit error,
+# recorded_line is the last-verified live line (re-pinned 2026-10-22 to the
+# tog.22 tree, commit 8b8dcb7d5444719b6e269a875d773ce3609a28fb; the ADR's
+# printed §1.0-§1.1 numbers describe the 2026-08-31 tree — see the §1.2/§1.3
+# addenda). anchor is a substring unique within the file. Uniqueness is
+# enforced at runtime: a non-unique anchor is an audit error,
 # not a silent first-match, because a first-match resolver reads the wrong site.
 CITATIONS: tuple[tuple[str, str, int, str, str], ...] = (
     (
         "spawn_target_resolver",
         "/app/packages/adapter-utils/src/server-utils.ts",
-        2338,
+        3741,
         "async function resolveSpawnTarget(",
         "constructs the ssh spawn target; the native-SSH carrier",
     ),
     (
         "ssh_resolved_no_guard",
         "/app/packages/adapter-utils/src/server-utils.ts",
-        2351,
+        3787,
         'const sshResolved = await resolveCommandPath("ssh", process.cwd(), env)',
         "ssh is resolved here with no assigned-model/authority throw preceding it",
     ),
     (
         "child_spawn_site",
         "/app/packages/adapter-utils/src/server-utils.ts",
-        3248,
+        4934,
         "const child = spawn(target.command, target.args, {",
         "the shared child-process spawn seam",
     ),
     (
         "run_child_process",
         "/app/packages/adapter-utils/src/server-utils.ts",
-        3194,
+        4833,
         "function runChildProcess",
         "narrow seam; insufficient alone, ACP and in-process adapters bypass it",
     ),
     (
         "ssh_argv_builder",
         "/app/packages/adapter-utils/src/ssh.ts",
-        1224,
+        1541,
         "export async function buildSshSpawnTarget(",
         "builds remote command/argv/cwd/env",
     ),
     (
         "remote_runtime_staging",
         "/app/packages/adapter-utils/src/remote-managed-runtime.ts",
-        128,
+        138,
         'path.posix.join(workspaceRemoteDir, ".paperclip-runtime", input.adapterKey)',
         "runtime staged into an agent-writable remote tree; non-authoritative",
     ),
     (
         "adapter_execute_seam",
         "/app/server/src/services/heartbeat.ts",
-        15564,
-        "adapterResult = await adapter.execute(",
+        25879,
+        "() => adapter.execute({",
         "the complete per-run executor boundary the ADR selects",
     ),
     (
         "plugin_dynamic_import",
         "/app/server/src/adapters/plugin-loader.ts",
-        180,
-        "const mod = await import(modulePath)",
+        195,
+        "const mod = await import(pathToFileURL(modulePath).href)",
         "external adapter code loaded into the server process",
     ),
     (
         "acpx_runtime_options",
         "/app/packages/adapter-utils/src/acpx-engine/execute.ts",
-        3283,
+        4256,
         "const runtimeOptions: PaperclipAcpRuntimeOptions = {",
         "ACP builds its runtime outside runChildProcess()",
     ),
@@ -110,17 +113,20 @@ CITATIONS: tuple[tuple[str, str, int, str, str], ...] = (
     ),
 )
 
-# Symbols the case_e4054a66 acceptance comment cited as deployed protection. Each must be
-# ABSENT from the installed tree for the gate's "not deployed" finding to hold. If one
-# appears, the finding is stale and the ADR must be re-reviewed, so presence fails.
-ABSENT_EXPECTED: tuple[tuple[str, str], ...] = (
+# Symbols the case_e4054a66 acceptance comment cited as deployed protection. The seam is
+# now live dormant in /app (tog.22), so each must be PRESENT in the installed tree
+# for the gate's "deployed" finding to hold. If one is missing, the finding is stale
+# and the ADR must be re-reviewed, so absence fails.
+#
+# assertAssignedModel + launchAuthorization dropped per the 2026-09-01 finding
+# (identifiers never existed in the accepted tree).
+PRESENT_EXPECTED: tuple[tuple[str, str], ...] = (
     ("hostExecutor", "case_e4054a66 host-executor seam"),
     ("HostExecutor", "case_e4054a66 host-executor seam (type)"),
-    ("assertAssignedModel", "case_e4054a66 pre-dispatch assigned-model throw"),
-    ("launchAuthorization", "signer-issued launch envelope"),
+    ("authorizeLaunch", "signer-issued launch authorization"),
 )
 
-ABSENT_SCAN_FILES: tuple[str, ...] = (
+PRESENT_SCAN_FILES: tuple[str, ...] = (
     "/app/packages/adapter-utils/src/server-utils.ts",
     "/app/packages/adapter-utils/src/ssh.ts",
 )
@@ -194,11 +200,11 @@ def main(argv: list[str]) -> int:
             }
         )
 
-    absent_results: list[dict[str, Any]] = []
-    for symbol, why in ABSENT_EXPECTED:
+    present_results: list[dict[str, Any]] = []
+    for symbol, why in PRESENT_EXPECTED:
         total = 0
         unreadable = False
-        for raw_path in ABSENT_SCAN_FILES:
+        for raw_path in PRESENT_SCAN_FILES:
             n = count_symbol(resolve(raw_path), symbol)
             if n is None:
                 unreadable = True
@@ -207,11 +213,11 @@ def main(argv: list[str]) -> int:
         if unreadable:
             verdict, audit_errors = "error", audit_errors + 1
         elif total == 0:
-            verdict = "absent_as_expected"
+            # Absent means the ADR's "deployed" finding no longer holds.
+            verdict, failures = "unexpectedly_absent", failures + 1
         else:
-            # Present means the ADR's "not deployed" finding no longer holds.
-            verdict, failures = "unexpectedly_present", failures + 1
-        absent_results.append(
+            verdict = "present_as_expected"
+        present_results.append(
             {"symbol": symbol, "occurrences": total, "verdict": verdict, "why": why}
         )
 
@@ -219,7 +225,7 @@ def main(argv: list[str]) -> int:
         json.dump(
             {
                 "citations": results,
-                "expected_absent": absent_results,
+                "expected_present": present_results,
                 "failures": failures,
                 "audit_errors": audit_errors,
             },
@@ -239,9 +245,9 @@ def main(argv: list[str]) -> int:
             if r["verdict"] != "present":
                 print(f"           {r['path']} — {r['detail']}")
         print()
-        print("Symbols required ABSENT (case_e4054a66 seam not deployed):")
-        for r in absent_results:
-            mark = "ok  " if r["verdict"] == "absent_as_expected" else "FAIL"
+        print("Symbols required PRESENT (case_e4054a66 seam deployed):")
+        for r in present_results:
+            mark = "ok  " if r["verdict"] == "present_as_expected" else "FAIL"
             print(f"  [{mark}] {r['symbol']}: {r['occurrences']} occurrence(s)")
         print()
         print(f"failures={failures} audit_errors={audit_errors}")

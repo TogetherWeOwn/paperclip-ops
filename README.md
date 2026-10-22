@@ -138,6 +138,13 @@ This documentation does not authorize running a backup or changing a host.
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
 
+## Productivity reconcilers
+
+For confirmed mutation counts, safe CLI modes, versioned JSON summaries and an
+offline verification command, see [Reconciler outcomes](docs/reconciler-outcomes.md).
+The source contract does not imply runtime installation; flow guard's existing
+no-flag invocation is mutating.
+
 ## Verification
 
 Run the fast tier with `make verify-fast` (`make verify-fast-parse` for the

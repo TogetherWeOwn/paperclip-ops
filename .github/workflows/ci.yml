@@ -6,6 +6,15 @@ name: CI
 # green badge anywhere: a CI that looks like it tests everything while testing
 # part of it is worse than one that says which part.
 #
+#   ADDING A SUITE: every tracked test suite (test_* scripts and JS/TS
+#   *.test.* / *.spec.* files) must be referenced by a run: step in
+#   .github/workflows/*.yml (or by a script those steps call, starting
+#   with the parse tier of scripts/verify-fast.sh — references in
+#   the full tier below its --parse-only exit never run in CI), or carry a
+#   one-line-reason exemption in verification/orphan_suites_allowlist.json.
+#   The parse tier of scripts/verify-fast.sh enforces this via
+#   verification/orphan_suites.py.
+#
 #   REPO SPLIT (C5e cutover): default restoration is immutable toolkit main-d0324d0.
 #   Only 19 complete portable producers with exact-pin suite, dependency and
 #   hosted-command proof are removed from 247 accepted runnable suites steps.
@@ -1058,6 +1067,72 @@ jobs:
 
       - name: Syntax check every script
         run: ./scripts/verify-fast.sh --parse-only
+
+      # Orphan-suite ratchet fixtures: the temp-repo cases pin the wiring
+      # rules (node --test multi-file targets, npm script resolution,
+      # vitest coverage, stale and empty exemptions). Without this step
+      # only the ratchet itself runs in CI while its fixtures run only
+      # in the full local verify-fast tier, so a regression only they
+      # catch would merge green.
+      - name: orphan-suite ratchet fixtures suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -m unittest -v test_orphan_suites
+
+      # Assignment host-source bundle: the builder, normalizer and detector
+      # run as CLIs with the SQL under a SQLite translation — no database,
+      # no network, no credential. Without this step the suite runs only
+      # in the full local verify-fast tier while CI runs --parse-only, so
+      # a regression only it catches would merge green.
+      - name: assignment host-source bundle suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -m unittest -v test_case_dcf07273_assignment_bundle
+
+      # Stop-guard landing acceptance: pins the Stop-path read budget and
+      # card cache from paperclip-ops PR #3, plus the landing criteria
+      # groups around it. Stdlib unittest with stubbed network and clock,
+      # so it runs in the core area. The suite classifies core via the
+      # root fallthrough, so a PR touching it runs this step.
+      - name: stop-guard landing suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -m unittest -v test_pr3_stop_guard_landing
+
+      # Warn-first inventory: fixture-driven tests pinning the WARN-first
+      # lint-rule inventory against a fixture tree with known violations,
+      # so a vacuous always-zero implementation fails. Stdlib unittest,
+      # no network, no clock, no writes outside a temp dir, so it runs
+      # in the core area next to the other contract gates.
+      - name: warn-first inventory suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -m unittest -v test_warn_first_inventory
+
+      # Regen dry-run receipt: offline tests for the receipt writer that
+      # fail the three defects of the refused queued wrapper (missing
+      # EXIT trap, custody-UUID miscount, fail_closed rejection) and prove
+      # PAUSE is present afterwards. Deterministic: no network, no
+      # credentials, no host paths. Classifies core via the ops/ prefix.
+      - name: regen dry-run receipt suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./ops/case_34c2c99f/test_regen_dry_run_receipt.sh
+
+      # PR tracker suite: the setup and entries offline contract (disabled
+      # ticks do nothing, 304s stay silent, digests wake exactly once with
+      # an idempotency marker). Fake host context and fake REST collect:
+      # no network, no board credentials. Pass the files, not the
+      # directory: node --test resolves a bare directory unreliably on
+      # Node 24. The specs classify core plus the full latch (no area
+      # claims the pr-tracker path), so a PR touching them runs this step.
+      - name: pr-tracker suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: node --test plugins/pr-tracker/test/collect-rest.test.mjs plugins/pr-tracker/test/poll-prs.test.mjs plugins/pr-tracker/test/setup.test.mjs plugins/pr-tracker/test/upstream-watcher.test.mjs plugins/pr-tracker/test/view-model.test.mjs
+
+      # Settings-bind rehearsal: the file-bind source contract suite
+      # (baseline, read-only bound-file, kill-switch and rollback phases)
+      # with synthetic inputs and stub Docker — no live home, no network,
+      # no credentials. Classifies core plus the full latch (no area
+      # claims the paperclip-upgrade path), so a PR touching it runs here.
+      - name: settings-bind rehearsal suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: node --test paperclip-upgrade/settings-bind-rehearsal.test.mjs
 
       # case_6d842160. acceptance_transport.sh reply classification: the stub
       # transport covers success, transport failure and a malformed reply, and

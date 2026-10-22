@@ -22,6 +22,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, writeFileSync, chmodSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -88,7 +89,7 @@ function stubQueue(dir, body) {
 for a in "$@"; do printf '%s\\n' "$a" >> "$(dirname "$0")/argv.txt"; done
 printf 'COMPANY_ID=%s\\n' "$COMPANY_ID" > "$(dirname "$0")/env.txt"
 env | grep -c BEARER >> "$(dirname "$0")/env.txt" 2>/dev/null || true
-echo "SUBMITTED REQ-001"
+if [ "$1" != "inbox" ]; then echo "SUBMITTED REQ-001"; fi
 `,
     { mode: 0o700 },
   );
@@ -295,8 +296,208 @@ test("the read tool is scoped by the AUTHENTICATED principal, and takes no argum
     // request in the company, which would turn a personal inbox into a company
     // -wide read the moment somebody "generalised" it. And `--for` carries the
     // authenticated agent id, which is the only selector that exists.
-    assert.deepEqual(recordedArgv(dir), ["inbox", "--for", CALLER]);
+    assert.deepEqual(recordedArgv(dir), ["inbox", "--for", CALLER, "--json"]);
     assert.ok(!recordedArgv(dir).includes(VICTIM), "the victim's id must appear nowhere in the argv");
+  });
+});
+
+test("a non-canonical Authorization the transport accepts is still the credential it redacts", async () => {
+  const dir = scratch();
+  const row = JSON.stringify({
+    rid: "REQ-101",
+    status: "approved",
+    agent: CALLER,
+    body: `approval recorded; stray credential ${BEARER} must not survive`,
+  });
+  await withServer(configFor(dir, {
+    queueBody: `#!/bin/sh\necho '${row}'\n`,
+  }), {}, async (call) => {
+    // requireBearer accepts these (case-insensitive scheme, extra
+    // whitespace), so the redaction secret must be the same parse — a
+    // case-sensitive `replace(/^Bearer /, "")` would leave the bare token.
+    for (const authorization of [`bearer ${BEARER}`, `Bearer  ${BEARER}  `]) {
+      const response = await call(
+        rpc("tools/call", { name: "read_my_requests", arguments: {} }),
+        { ...IDENTITY_HEADERS, authorization },
+      );
+      assert.equal(response.status, 200, `rejected ${JSON.stringify(authorization)}`);
+      assert.equal(response.json.result.isError, false, `error for ${JSON.stringify(authorization)}`);
+      const sc = response.json.result.structuredContent;
+      assert.ok(sc, `missing structuredContent for ${JSON.stringify(authorization)}`);
+      assert.ok(
+        !JSON.stringify(sc).includes(BEARER),
+        `structured output leaks the bearer via ${JSON.stringify(authorization)}`,
+      );
+      assert.ok(
+        !response.json.result.content[0].text.includes(BEARER),
+        `text leaks the bearer via ${JSON.stringify(authorization)}`,
+      );
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Own-inbox fail-closed guards.
+//
+// The acceptance suite pins the inbox contract; these pin the three properties
+// a review's revert mutants proved were unguarded: the transport-side caller
+// filter, the queue reader/parser failure propagation, and the three output
+// bounds. Each test names the mutant it kills: deleting the guarded line must
+// turn exactly this test red.
+// ---------------------------------------------------------------------------
+
+// execFile without the throw-on-nonzero: these cases ASSERT on exit codes, so
+// a rejection would be the assertion wearing an unfamiliar shape.
+function runQuiet(file, args, options) {
+  return new Promise((resolve) => {
+    execFile(file, args, options, (error, stdout, stderr) => {
+      resolve({ code: error?.code ?? 0, stdout, stderr });
+    });
+  });
+}
+
+test("a mixed backend response never leaks a foreign row as the caller's own", async () => {
+  const dir = scratch();
+  const own = JSON.stringify({ rid: "REQ-101", status: "approved", agent: CALLER });
+  // Well-formed in every field: the ONLY reason to drop it is that it names a
+  // different agent, so this test dies if and only if the caller filter does.
+  const foreign = JSON.stringify({ rid: "REQ-102", status: "approved", agent: VICTIM });
+  await withServer(configFor(dir, {
+    queueBody: `#!/bin/sh\nprintf '%s\\n' '${own}' '${foreign}'\n`,
+  }), {}, async (call) => {
+    const response = await call(
+      rpc("tools/call", { name: "read_my_requests", arguments: {} }),
+      IDENTITY_HEADERS,
+    );
+    assert.equal(response.status, 200);
+    // Fail CLOSED: the foreign row is dropped AND the collection is reported
+    // incomplete, so no caller can mistake it for a full inbox.
+    assert.equal(response.json.result.isError, true, "a mixed response was returned as success");
+    const sc = response.json.result.structuredContent;
+    assert.ok(sc, "missing structuredContent");
+    assert.equal(sc.error.code, "inbox_parse_error");
+    assert.deepEqual(sc.requests.map((row) => row.id), ["REQ-101"]);
+    assert.equal(sc.diagnostics.parsed, 1);
+    assert.equal(sc.diagnostics.skipped, 1);
+    assert.equal(sc.diagnostics.complete, false);
+    // The foreign id appears NOWHERE — neither structured nor text.
+    assert.ok(!JSON.stringify(sc).includes("REQ-102"), "structured output carries the foreign row");
+    assert.ok(!response.json.result.content[0].text.includes("REQ-102"), "text carries the foreign row");
+  });
+});
+
+test("cmd_inbox fails closed when its reader/parser fails, never as an empty inbox", { skip: skipIfNoQueue }, async () => {
+  const dir = scratch();
+  const queueFile = path.join(dir, "queue.jsonl");
+  writeFileSync(queueFile, "");
+  // The queue script exits at SOURCE time unless PROV names an executable
+  // sibling, and the mutation-gate staging copy has no org_provisioner.sh
+  // sibling — without this the harness dies inside `source` (its output
+  // swallowed by design) and the test fails with an empty stderr. The stub is
+  // never executed on the inbox path; it only satisfies the load-time check.
+  // Same seam the real-queue acceptance below uses.
+  const prov = writeProvisionerStub(dir);
+  const harness = path.join(dir, "inbox-harness.sh");
+  // The harness sources the REAL queue script, so cmd_inbox under test is the
+  // shipped function, not a copy. `reader-fail` stubs notify_states as failing
+  // (the states-capture half); `malformed` stubs it as succeeding with
+  // unparseable output (the jq half, unreachable any other way — the real
+  // notify_states only ever emits valid @json). An empty queue file keeps
+  // reap_expired a no-op, so the probe is fully offline.
+  writeFileSync(harness, `#!/usr/bin/env bash
+Q="$1"; export QUEUE="$2"; MODE="$3"
+set --
+source "$Q" >/dev/null 2>&1
+if [[ "$MODE" == "reader-fail" ]]; then
+  notify_states() { return 1; }
+else
+  notify_states() { printf 'not-json\\n'; }
+fi
+cmd_inbox --for "ffffffff-ffff-4fff-8fff-ffffffffffff" --json
+`, { mode: 0o700 });
+  for (const [mode, marker] of [
+    ["reader-fail", "inbox backend unavailable"],
+    ["malformed", "inbox output could not be parsed"],
+  ]) {
+    const { code, stdout, stderr } = await runQuiet(
+      harness, [REAL_QUEUE, queueFile, mode], { env: { ...process.env, COMPANY_ID: COMPANY, PROV: prov } },
+    );
+    // The reverted piped form exits 0 with empty stdout here — an empty inbox
+    // the operator cannot distinguish from "nothing to decide". Either half
+    // reverted must turn this red.
+    assert.equal(code, 1, `${mode}: a failed reader/parser exited ${code}, masking as an empty inbox`);
+    assert.equal(stdout, "", `${mode}: a failed read must emit no stdout (got ${JSON.stringify(stdout)})`);
+    assert.ok(stderr.includes(marker), `${mode}: stderr missing '${marker}' (got ${JSON.stringify(stderr)})`);
+  }
+});
+
+test("more than 1000 rows is reported truncated, never silently complete", async () => {
+  const dir = scratch();
+  const rows = Array.from({ length: 1001 }, (_, i) =>
+    JSON.stringify({ rid: `REQ-${101 + i}`, status: "approved", agent: CALLER }));
+  await withServer(configFor(dir, {
+    queueBody: `#!/bin/sh\ncat <<'EOF'\n${rows.join("\n")}\nEOF\n`,
+  }), {}, async (call) => {
+    const response = await call(
+      rpc("tools/call", { name: "read_my_requests", arguments: {} }),
+      IDENTITY_HEADERS,
+    );
+    assert.equal(response.json.result.isError, true, "1001 rows were returned as a complete inbox");
+    const sc = response.json.result.structuredContent;
+    assert.equal(sc.error.code, "inbox_parse_error");
+    assert.equal(sc.diagnostics.truncated, true);
+    assert.equal(sc.diagnostics.complete, false);
+    assert.equal(sc.diagnostics.parsed, 1000);
+    // Partial rows survive: truncation bounds the output, it does not void it.
+    assert.equal(sc.requests.length, 1000);
+  });
+});
+
+test("input past 128 KiB is reported truncated with its surviving rows", async () => {
+  const dir = scratch();
+  // 500 rows sit under the 1000-row bound but, at ~300 bytes each, over the
+  // 128 KiB bound — so ONLY the char slice accounts for the truncation.
+  const rows = Array.from({ length: 500 }, (_, i) =>
+    JSON.stringify({ rid: `REQ-${2000 + i}`, status: "approved", agent: CALLER, body: "y".repeat(200) }));
+  await withServer(configFor(dir, {
+    queueBody: `#!/bin/sh\ncat <<'EOF'\n${rows.join("\n")}\nEOF\n`,
+  }), {}, async (call) => {
+    const response = await call(
+      rpc("tools/call", { name: "read_my_requests", arguments: {} }),
+      IDENTITY_HEADERS,
+    );
+    assert.equal(response.json.result.isError, true, "oversized input was returned as a complete inbox");
+    const sc = response.json.result.structuredContent;
+    assert.equal(sc.error.code, "inbox_parse_error");
+    assert.equal(sc.diagnostics.truncated, true);
+    assert.equal(sc.diagnostics.complete, false);
+    assert.equal(sc.diagnostics.skipped, 0);
+    assert.ok(
+      sc.diagnostics.parsed > 0 && sc.diagnostics.parsed < 500,
+      `expected surviving partial rows, got parsed=${sc.diagnostics.parsed}`,
+    );
+    assert.equal(sc.requests.length, sc.diagnostics.parsed);
+  });
+});
+
+test("a body past 4000 chars is capped and reported truncated", async () => {
+  const dir = scratch();
+  const row = JSON.stringify({ rid: "REQ-3001", status: "approved", agent: CALLER, body: "z".repeat(5000) });
+  await withServer(configFor(dir, {
+    queueBody: `#!/bin/sh\necho '${row}'\n`,
+  }), {}, async (call) => {
+    const response = await call(
+      rpc("tools/call", { name: "read_my_requests", arguments: {} }),
+      IDENTITY_HEADERS,
+    );
+    assert.equal(response.json.result.isError, true, "an oversized body was returned as a complete inbox");
+    const sc = response.json.result.structuredContent;
+    assert.equal(sc.error.code, "inbox_parse_error");
+    assert.equal(sc.diagnostics.truncated, true);
+    assert.equal(sc.diagnostics.complete, false);
+    assert.equal(sc.diagnostics.parsed, 1);
+    assert.equal(sc.requests.length, 1);
+    assert.equal(sc.requests[0].body.length, 4000);
   });
 });
 

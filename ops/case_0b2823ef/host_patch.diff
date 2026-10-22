@@ -1,24 +1,23 @@
-Host patch for case_0b2823ef (source-only; DO NOT apply by hand outside host review).
-Target: live_accounts.py SHA256 d8cab34855fee1507b8c72eae8c05ae76cb6da1e03250a650c1acdf29e2baa2d
-Apply on host: patch -p0 --dry-run < host_patch.diff, then install per ops/case_0b2823ef/RUNBOOK.md.
+# Source-only carrier rebased onto the exact host source below.
+# Target: ops/cliproxy-live/live_accounts.py
+# Before SHA256: 93a99797b20726182f14938b394f58c4ec6b3adcc87fdfc7bcce787e465bf75e
+# Before byte count: 42536
+# Scope: servedModels oracle only; exclusions unchanged; preserves plan-aware 0.2.46, pace_guard, detect_free_resets, and freeResets behavior.
+# Apply only after host-side SHA256 verification: patch -p0 --dry-run < host_patch.diff
 --- live_accounts.py
 +++ live_accounts.py
-@@ -56,6 +56,37 @@
- CONFIG = "/home/ubuntu/stacks/cliproxy/config.yaml"
- HOST_PROVIDER = (("z.ai", "zai"), ("/zen/go", "opencode-go"), ("opencode.ai/zen", "zen-free"))
- 
-+# case_0b2823ef feed contract: exact servedModels oracle + durable exclusions.
-+# Install prerequisite (verified at host readback, never probed here):
-+# loopback GET {SERVED_MODELS_URL} must accept the bearer served_bearer()
-+# returns (the existing management KEY by default). Same key, same host,
-+# loopback only: no new credential, grant, or network scope. Optional host
-+# env overrides: CLIPROXY_SERVED_MODELS_URL, CLIPROXY_SERVED_MODELS_KEY_FILE.
-+# See ops/case_0b2823ef/RUNBOOK.md in paperclip-ops.
-+SERVED_MODELS_URL = os.environ.get("CLIPROXY_SERVED_MODELS_URL", "http://127.0.0.1:8317/v1/models")
+@@ -58,0 +59,6 @@
++
++# Exact CLIProxy /v1/models IDs for the model-capacity feed (source-only carrier).
++SERVED_MODELS_URL_DEFAULT = "http://127.0.0.1:8317/v1/models"
++SERVED_MODELS_URL = os.environ.get("CLIPROXY_SERVED_MODELS_URL", SERVED_MODELS_URL_DEFAULT)
 +SERVED_MODELS_KEY_FILE = os.environ.get("CLIPROXY_SERVED_MODELS_KEY_FILE", "")
 +SERVED_MODELS_TIMEOUT = 15
-+DURABLE_FLAG = "durable"
+@@ -366,0 +373,98 @@
 +
++
++class ServedModelsError(Exception):
++    """The oracle did not yield a usable authoritative list."""
 +
 +def served_bearer(key_file="", fallback_key=""):
 +    """Bearer for the /v1/models oracle: existing KEY unless overridden.
@@ -33,47 +32,15 @@ Apply on host: patch -p0 --dry-run < host_patch.diff, then install per ops/case_
 +        with open(key_file) as f:
 +            for line in f:
 +                line = line.strip()
-+                if line and not line.startswith("#"):
-+                    return line.split("=", 1)[1].strip().strip('"').strip("'") if "=" in line else line
++                if not line or line.startswith("#"):
++                    continue
++                bearer = line.split("=", 1)[1].strip() if "=" in line else line
++                if len(bearer) >= 2 and bearer[0] == bearer[-1] and bearer[0] in "\"'":
++                    bearer = bearer[1:-1]
++                if bearer:
++                    return bearer
 +        raise ServedModelsError("no bearer in CLIPROXY_SERVED_MODELS_KEY_FILE")
 +    return fallback_key
-+
- 
- def now_iso():
-     return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
-@@ -238,6 +269,173 @@
-     STATE["models"]["__config__"] = (time.time(), out)
-     return out
- 
-+
-+class ServedModelsError(Exception):
-+    """The oracle did not yield a usable authoritative list."""
-+
-+def served_iso(ts):
-+    """Normalize an ISO-8601 or epoch timestamp to ``...Z``; None if unparseable.
-+
-+    Mirrors the host producer's ``iso()`` so exclusion ``until`` values parse
-+    identically here and on the host.
-+    """
-+    if ts is None:
-+        return None
-+    try:
-+        if isinstance(ts, (int, float)) or (
-+            isinstance(ts, str) and re.fullmatch(r"\d+(\.\d+)?", ts)
-+        ):
-+            return (
-+                dt.datetime.fromtimestamp(float(ts), dt.timezone.utc)
-+                .isoformat()
-+                .replace("+00:00", "Z")
-+            )
-+        return (
-+            dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-+            .astimezone(dt.timezone.utc)
-+            .isoformat()
-+            .replace("+00:00", "Z")
-+        )
-+    except Exception:
-+        return None
 +
 +def extract_served_ids(payload):
 +    """Exact ``data[].id`` strings from a parsed ``GET /v1/models`` body.
@@ -82,8 +49,9 @@ Apply on host: patch -p0 --dry-run < host_patch.diff, then install per ops/case_
 +    authoritative list: non-dict payload, missing/non-list ``data``, or zero
 +    usable ids (empty oracle). Order is preserved, first-seen wins on
 +    duplicates, and values are kept VERBATIM: provider prefixes are never
-+    stripped and nothing is canonicalized. Non-string or blank entries are
-+    skipped as malformed oracle rows, not as model policy.
++    stripped and nothing is canonicalized. Only object rows with nonblank
++    string ``id`` values are accepted; malformed rows are skipped, not treated
++    as model policy.
 +    """
 +    if not isinstance(payload, dict):
 +        raise ServedModelsError("oracle payload is not an object")
@@ -92,8 +60,8 @@ Apply on host: patch -p0 --dry-run < host_patch.diff, then install per ops/case_
 +        raise ServedModelsError("oracle payload has no data[] list")
 +    ids = []
 +    for row in data:
-+        mid = row.get("id") if isinstance(row, dict) else row
-+        if isinstance(mid, str) and mid:
++        mid = row.get("id") if isinstance(row, dict) else None
++        if isinstance(mid, str) and mid.strip():
 +            if mid not in ids:
 +                ids.append(mid)
 +    if not ids:
@@ -144,118 +112,15 @@ Apply on host: patch -p0 --dry-run < host_patch.diff, then install per ops/case_
 +    else:
 +        doc.pop("servedModels", None)
 +    return doc
-+
-+def exclusion_is_active(entry, now_ts=None):
-+    """True when an exclusion-map entry excludes its target right now.
-+
-+    Contract (case_ad9f6568):
-+
-+    * ``entry`` is not a dict -> False (invalid input never excludes).
-+    * ``entry["durable"] is True`` (boolean identity) -> True, permanently.
-+      Any other value for ``durable`` -- ``"true"``, ``1``, ``[...]`` --
-+      is INVALID and falls through to ``until`` semantics; it never means
-+      forever.
-+    * Otherwise the entry excludes only with a parseable ``until`` in the
-+      future -- exactly the current host behavior, preserved for every
-+      existing expiring entry.
-+    """
-+    if not isinstance(entry, dict):
-+        return False
-+    if entry.get(DURABLE_FLAG) is True:
-+        return True
-+    until = served_iso(entry.get("until"))
-+    if not until:
-+        return False
+@@ -532,0 +637,9 @@
 +    try:
-+        return (
-+            dt.datetime.fromisoformat(until.replace("Z", "+00:00")).timestamp()
-+            > (now_ts if now_ts is not None else time.time())
++        served = fetch_served_models(
++            SERVED_MODELS_URL,
++            served_bearer(SERVED_MODELS_KEY_FILE, KEY),
++            timeout=SERVED_MODELS_TIMEOUT,
 +        )
 +    except Exception:
-+        return False
-+
-+def active_dropped_models(excl, now_ts=None):
-+    """Model ids dropped from every account's list by active ``model:`` entries."""
-+    if not isinstance(excl, dict):
-+        return set()
-+    now = now_ts if now_ts is not None else time.time()
-+    return {
-+        k[6:]
-+        for k, e in excl.items()
-+        if k.startswith("model:") and exclusion_is_active(e, now)
-+    }
-+
-+def apply_exclusions(accounts, excl, now_ts=None):
-+    """Apply the exclusion map to feed accounts; mirrors the host producer.
-+
-+    Model-level entries drop the id (suffix-matched, as on the host) from
-+    every account's ``models`` list; account/provider entries mark matching
-+    accounts ``unavailable`` with their ``excludedReason`` (200 chars, as on
-+    the host). Non-matching accounts and unrelated entries pass through
-+    untouched. Mutates and returns ``accounts``.
-+    """
-+    if not isinstance(excl, dict):
-+        return accounts
-+    now = now_ts if now_ts is not None else time.time()
-+    dropped = active_dropped_models(excl, now)
-+    if dropped:
-+        for acc in accounts:
-+            if isinstance(acc.get("models"), list):
-+                acc["models"] = [
-+                    m for m in acc["models"] if m.rsplit("/", 1)[-1] not in dropped
-+                ]
-+    for acc in accounts:
-+        for key in (acc.get("accountKey"), acc.get("provider")):
-+            e = excl.get(key) if key else None
-+            if exclusion_is_active(e, now):
-+                acc["health"] = "unavailable"
-+                acc["excludedReason"] = str(e.get("reason", ""))[:200]
-+                break
-+    return accounts
- 
- def build():
-     files = mgmt("/auth-files").get("files", [])
-@@ -353,30 +551,25 @@
-             accounts.append({"lane": lane, "provider": prov, "accountKey": lane, "health": health(a), "models": ms,
-                              "meter": "reactive", "weekly": None, "fiveHour": None, "observedAt": now_iso(),
-                              "quality": "reactive"})
--    # Operator exclusions (ops/cliproxy-live/feed-exclusions.json): {"<provider or accountKey>": {"until": ISO, "reason": str}}.
--    # Marks matching accounts unavailable so the model-capacity plugin stops choosing them, until expiry. Stopgap for
-+    # Operator exclusions (ops/cliproxy-live/feed-exclusions.json):
-+    # {"<provider or accountKey>": {"until": ISO, "reason": str}} excludes until expiry (unchanged);
-+    # {"durable": true, ...} excludes permanently (case_0b2823ef). Any other shape excludes nothing.
-+    # Marks matching accounts unavailable so the model-capacity plugin stops choosing them. Stopgap for
-     # provider-side failures the feed cannot see (e.g. a pool with "no healthy managed capacity").
-     try:
-         excl = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "feed-exclusions.json")))
-     except Exception:
-         excl = {}
--    nowts = time.time()
--    # Model-level entries {"model:<id>": {...}} drop that model from every account's models list (ladder never sees it).
--    dropped = {k[6:] for k, e in excl.items() if k.startswith("model:") and isinstance(e, dict) and iso(e.get("until"))
--               and dt.datetime.fromisoformat(iso(e.get("until")).replace("Z", "+00:00")).timestamp() > nowts}
--    if dropped:
--        for acc in accounts:
--            if isinstance(acc.get("models"), list):
--                acc["models"] = [m for m in acc["models"] if m.rsplit("/", 1)[-1] not in dropped]
--    for acc in accounts:
--        for key in (acc.get("accountKey"), acc.get("provider")):
--            e = excl.get(key) if key else None
--            until = iso(e.get("until")) if isinstance(e, dict) else None
--            if until and dt.datetime.fromisoformat(until.replace("Z", "+00:00")).timestamp() > nowts:
--                acc["health"] = "unavailable"
--                acc["excludedReason"] = str(e.get("reason", ""))[:200]
--                break
-+    apply_exclusions(accounts, excl)
-+    # case_0b2823ef: exact served IDs from the oracle on every refresh. Any oracle
-+    # failure yields None and the key is OMITTED (fail-open): never a fresh
-+    # authoritative empty list, never stale IDs re-served as current.
-+    try:
-+        served = fetch_served_models(SERVED_MODELS_URL, served_bearer(SERVED_MODELS_KEY_FILE, KEY), timeout=SERVED_MODELS_TIMEOUT)
-+    except Exception:
++        # Fail open: absence is the consumer contract when the oracle is unavailable.
 +        served = None
-     doc = {"observedAt": now_iso(), "accounts": accounts}
+@@ -533,0 +647 @@
 +    attach_served_models(doc, served)
-     # Context-tiered pricing inputs for the plugin: measured prompt-size distribution per model (Keeper, 24 h) and the
-     # verified vendor tier table. Both are optional; the plugin treats absence as "no tier data".
-     for key, path in (("modelStats", f"{SNAP}/model-prompt-stats.json"),

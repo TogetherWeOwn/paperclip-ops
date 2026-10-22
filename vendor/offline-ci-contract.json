@@ -327,7 +327,8 @@
     "warn-first inventory suite:1",
     "regen dry-run receipt suite:1",
     "pr-tracker suite:1",
-    "settings-bind rehearsal suite:1"
+    "settings-bind rehearsal suite:1",
+    "host backup publication receipt contract (offline):1"
   ],
   "retained": [
     {
@@ -1844,6 +1845,11 @@
       "name": "settings-bind rehearsal suite",
       "definition_sha256": "bb309c4b15965281fffe7f9190063f90688cd4a7cb1c00f659918423a5bde7fd",
       "id": "settings-bind rehearsal suite:1"
+    },
+    {
+      "name": "host backup publication receipt contract (offline)",
+      "definition_sha256": "f3220047635007807b551238df97e65b3db9b784bcafb35829fa009c51e3f5f4",
+      "id": "host backup publication receipt contract (offline):1"
     }
   ],
   "removed": [

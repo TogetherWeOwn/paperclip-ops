@@ -3294,6 +3294,12 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_host_db_backup.sh
 
+      - name: host backup publication receipt contract (offline)
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: >-
+          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP"
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_host_backup_publication
+
       # case_d8c3515a. On 2026-09-17 (case_231b8224) the runner host disk filled: two
       # runners died with `No space left on device` writing their own _diag
       # logs and ~25 checks sat queued for 12+ hours. This suite tests

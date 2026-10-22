@@ -1010,7 +1010,7 @@ class CarrierTests(unittest.TestCase):
             self.write_request(request)
 
     def test_receipt_result_shape_refused(self):
-        for result in (None, True, 0, "PASS", "error", ["pass"]):
+        for index, result in enumerate((None, True, 0, "PASS", "error", ["pass"])):
             payload = valid_adapter_receipt()
             payload["result"] = result
             self.write_stdout(payload)
@@ -1018,7 +1018,7 @@ class CarrierTests(unittest.TestCase):
                 receipt = self.dispatch()
                 self.assertEqual(receipt["failure"], "adapter_receipt_refused")
             request = valid_request()
-            request["request_id"] = f"fixture-request-result-{id(result) % 100000}"
+            request["request_id"] = f"fixture-request-result-{index:02d}"
             self.write_request(request)
 
     # CLI layer: one input flag, fixed paths, exit-code mapping.

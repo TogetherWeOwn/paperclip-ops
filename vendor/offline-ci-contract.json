@@ -330,7 +330,8 @@
     "pr-tracker suite:1",
     "settings-bind rehearsal suite:1",
     "host backup publication receipt contract (offline):1",
-    "native-ssh citation gate suite:1"
+    "native-ssh citation gate suite:1",
+    "verify-fast plan suites:1"
   ],
   "retained": [
     {
@@ -1862,6 +1863,11 @@
       "name": "native-ssh citation gate suite",
       "definition_sha256": "34cafcd66f97b170ff90432448cfed1b909cc5f20b905b42c6b09b6651c10694",
       "id": "native-ssh citation gate suite:1"
+    },
+    {
+      "name": "verify-fast plan suites",
+      "definition_sha256": "e1b1d3d318e2dff53a23c79b891d4bbab267c426e0d16a9c8dcf8fbef9f8074d",
+      "id": "verify-fast plan suites:1"
     }
   ],
   "removed": [

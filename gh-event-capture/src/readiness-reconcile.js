@@ -208,8 +208,9 @@ export function emptyCounters() {
  * Dependencies (and deliberately NOTHING else):
  * github.getReadinessSnapshot, github.getRulesetRequiredChecks,
  * github.updatePullRequestBody, github.markReadyForReview,
- * github.convertToDraft, github.enableAutoMerge. There is no merge, no close
- * and no comment call path in this module to mistake for one of these.
+ * github.convertToDraft, github.enableAutoMerge. There is no separate merge,
+ * close or comment call path in this module — but the arm itself can merge
+ * immediately when the PR is already eligible (see enableAutoMerge).
  */
 export function createReconciler({ github, policy, nowMs = () => Date.now() }) {
   requireValue(github && typeof github.getReadinessSnapshot === 'function' &&

@@ -513,6 +513,49 @@ EOF
 run_forbidden_forms_case "division_forms_fail_in_forbidden" mut_division_in_forbidden
 run_forbidden_forms_case "interpolation_forms_fail_in_forbidden" mut_interpolation_in_forbidden
 
+# A regex is atomic in both modes: body punctuation (quote, //, backtick, })
+# must not desync the scan and hide a seam after it in ssh.ts.
+mut_regex_quote_in_forbidden() {
+  local d="$1"
+  python3 - "$d/app/packages/adapter-utils/src/ssh.ts" <<'EOF'
+import sys
+with open(sys.argv[1], "a", encoding="utf-8") as fh:
+    fh.write("const q = /\\'/; const leak = hostExecutor;\n")
+    fh.write("const u = /https:\\/\\/\\//; authorizeLaunch(u);\n")
+    fh.write("if (/['\"]/.test(s)) HostExecutor.boot();\n")
+EOF
+}
+
+mut_regex_desync_in_forbidden() {
+  local d="$1"
+  python3 - "$d/app/packages/adapter-utils/src/ssh.ts" <<'EOF'
+import sys
+with open(sys.argv[1], "a", encoding="utf-8") as fh:
+    fh.write("const t = /a`b/;\n")
+    fh.write("leak2(hostExecutor);\n")
+    fh.write("const m = `${/}/.source, authorizeLaunch}`;\n")
+    fh.write("const c = /\\/\\//; HostExecutor(c);\n")
+EOF
+}
+
+# Fail-closed half of the atomic-regex contract: a seam inside a regex body
+# in ssh.ts is still counted (the required file skips it; see the
+# lexical_regex_only_absent negative case).
+mut_regex_body_seam_in_forbidden() {
+  local d="$1"
+  python3 - "$d/app/packages/adapter-utils/src/ssh.ts" <<'EOF'
+import sys
+with open(sys.argv[1], "a", encoding="utf-8") as fh:
+    fh.write("const r1 = /hostExecutor/.test(s);\n")
+    fh.write("const r2 = /see:HostExecutor/.test(s);\n")
+    fh.write("const r3 = /authorizeLaunch/i.test(s);\n")
+EOF
+}
+
+run_forbidden_forms_case "regex_quote_forms_fail_in_forbidden" mut_regex_quote_in_forbidden
+run_forbidden_forms_case "regex_desync_forms_fail_in_forbidden" mut_regex_desync_in_forbidden
+run_forbidden_forms_case "regex_body_seam_fails_closed_in_forbidden" mut_regex_body_seam_in_forbidden
+
 # Negative control: a mutation the gate should IGNORE. Editing an unrelated region
 # must stay green, otherwise the gate is just detecting "file changed" and every red
 # above is uninformative.

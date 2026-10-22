@@ -138,11 +138,13 @@ SYMBOL_IDENTIFIERS = {
 
 # Skip comments and quoted text before matching complete identifiers. Template
 # *text* is skipped but `${...}` interpolations are executable code, so their
-# identifiers are counted. Regex literals are skipped only in the required file,
-# where counting a literal as deployed code would be a false present; the
-# forbidden file uses a conservative count that never skips `/.../` (a seam in
-# a regex there fails closed rather than hiding). Division is distinguished
-# from a regex by the previous significant token. Line comments end at CR, LF,
+# identifiers are counted. A regex literal is an atomic token in both files: the
+# required file skips it (counting a literal as deployed code would be a false
+# present) while the forbidden file counts identifiers inside it without lexing
+# its body as code (a seam in a regex there fails closed, and body punctuation
+# can never desync the scan and hide a seam after it). Division is
+# distinguished from a regex by the previous significant token. Line comments
+# end at CR, LF,
 # U+2028 and U+2029 per the TypeScript scanner. This is a lexical citation
 # check, not a TypeScript parser or proof that an authorization path executes.
 IDENT_RE = re.compile(r"[$\w]+")
@@ -260,8 +262,10 @@ def _scan_js(
     that opened this call (brace depth tracked from 1). Otherwise scan to the
     end of text. prev tracks the previous significant token: 'operand' means
     an expression just ended so `/` is division; anything else means `/` may
-    open a regex. conservative=True (forbidden file) never skips `/.../` so a
-    seam there cannot hide behind a misclassified division.
+    open a regex, which is consumed atomically via _try_parse_regex so body
+    punctuation can never desync the scan. conservative=True (forbidden file)
+    additionally counts identifiers inside the consumed token, so a seam in a
+    regex body there fails closed instead of hiding.
     """
     n = len(text)
     pos = start
@@ -304,9 +308,19 @@ def _scan_js(
             prev = "operand"
             continue
         if ch == "/":
-            if not conservative and prev != "operand":
+            if prev != "operand":
                 regex_end = _try_parse_regex(text, pos)
                 if regex_end is not None:
+                    if conservative:
+                        # The regex is atomic in both modes so body
+                        # punctuation (a quote, `//`, a backtick, `}`) can
+                        # never desync the scan and hide code after it. In
+                        # the forbidden file a seam inside the regex body
+                        # itself still fails closed: count it without lexing
+                        # the body as code.
+                        for tok in IDENT_RE.findall(text[pos:regex_end]):
+                            if tok in identifiers:
+                                count += 1
                     pos = regex_end
                     prev = "operand"
                     continue

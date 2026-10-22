@@ -127,8 +127,10 @@ red-by-design note; the §3 pins below track the live tree.
 The gate now checks each seam independently in each file: the required-file
 `occurrences` count is from `server-utils.ts` only, and `ssh_occurrences` must be
 zero. Relocating a seam into `ssh.ts` or adding a second copy there fails.
-Counts skip comments and quoted/regular-expression literals and match whole
-identifiers. The historical `HostExecutor` label includes the exact deployed
+Counts skip comments and quoted literals and match whole identifiers. A regex
+literal is an atomic token in both files: the required file skips it, while
+the forbidden file counts identifiers inside it without lexing its body as
+code. The historical `HostExecutor` label includes the exact deployed
 identifiers `NativeSshHostExecutorTarget` and `getActiveNativeSshHostExecutor`,
 not arbitrary identifiers containing that substring. The live counts remain
 9/5/1, with all ten anchors unchanged and zero occurrences in `ssh.ts`.
@@ -138,8 +140,9 @@ executed authorization path. Template literal *text* is excluded, but
 `${...}` interpolations are executable code, so identifiers inside them are
 counted in both files. Division is distinguished from a regex literal by the
 previous significant token, and line comments end at U+2028/U+2029 as well as
-CR/LF; the forbidden-file count additionally never skips `/.../`, so a seam
-there fails closed rather than hiding behind a misclassified division. The
+CR/LF. Because the regex is consumed as one token, body punctuation (a quote,
+`//`, a backtick, `}`) can never desync the scan and hide a seam after it,
+while a seam inside the body in the forbidden file still fails closed. The
 host preflight and hostile-agent suite in §5 remain mandatory; this gate
 cannot authorize activation.
 

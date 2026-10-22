@@ -144,6 +144,13 @@ offline verification command, see [Reconciler outcomes](docs/reconciler-outcomes
 The source contract does not imply runtime installation; flow guard's existing
 no-flag invocation is mutating.
 
+## Verification
+
+Run the fast tier with `make verify-fast` (`make verify-fast-parse` for the
+parse gate only). To inspect suite scope and prerequisites without running or
+preparing anything, use `make verify-fast-plan` (offline, read-only;
+`scripts/verify-fast.sh --plan --json`).
+
 ## Contributing
 
 Use a feature branch and a reviewed pull request. Report actual tests and their

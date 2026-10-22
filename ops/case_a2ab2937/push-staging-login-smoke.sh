@@ -1,49 +1,94 @@
 #!/usr/bin/env bash
-# push-staging-login-smoke.sh — cron: staging login-journey smoke → Gatus
-# `two_staging-login-smoke`. Spec: case_a2ab2937 document `probe-spec`.
-#
-# Journey (staging ONLY, default https://next.togetherweown.com):
-#   1. POST /auth/qa/qa-member, headers X-TWO-QA-Auth + Origin,
-#      maxRedirects 0 → 204 + Set-Cookie __Host-two_session (Secure, HttpOnly)
-#   2. GET /auth/status with the fresh jar → 200 {"authenticated": true}
-#   3. GET /up, no auth → 200 + header x-two-origin: two-web-next
-#
-# Latency bounds: step 1 < 5000 ms, steps 2-3 < 3000 ms.
-#
-# FAIL CLOSED: missing env, missing curl/python3, transport error, unexpected
-# status, slow step, or bad cookie/header pushes success=false and exits 1.
-# Refusals (bad env shape or non-allowlisted staging origin) exit 2 with zero
-# pushes — the 10m heartbeat miss then pages, never a silent green.
-#
-# THROTTLE: 429 on step 1 spends the shared qa-login budget (10/min per
-# runner IP). The probe sleeps per Retry-After (capped at 120s), retries once,
-# and on a second 429 pushes success=true (throttled, NOT a page) and exits 0.
-# Gatus failure-threshold 3 pages only on consecutive non-429 failures.
-#
-# NON-DISCLOSURE: QA_AUTH_TOKEN and GATUS_EXTERNAL_TOKEN travel in the
-# environment (root-only 0600 env file; see OPERATOR.md) and reach curl only
-# through 0600 config files, never argv. Transport-error text echoes request
-# headers, so this script logs status codes and latencies only — never bodies,
-# never headers, never tokens. A missing/refused credential blocks; never
-# substitute another credential.
-#
-# Env in:  QA_AUTH_TOKEN (mandatory), GATUS_URL + GATUS_EXTERNAL_TOKEN
-#          (mandatory, via _gatus_push.sh), STAGING_BASE_URL (optional,
-#          default https://next.togetherweown.com; only that exact HTTPS origin
-#          or the same origin with one trailing slash is accepted), GATUS_PUSH_TIMEOUT
-#          (seconds, default 10).
-# Cron (operator): */10 * * * * root . /root/.config/paperclip/case_60330d6f.env;
-#   /opt/status-page/current/ops/case_a2ab2937/push-staging-login-smoke.sh
+# Staging-only login journey → two_staging-login-smoke. No installation authority.
+# POST login → fresh __Host-two_session → GET auth/status → unauthenticated /up.
+# Bounds: login < 5000ms; status/up < 3000ms. Never follow redirects.
+# 429: Retry-After capped at 120s, one retry; repeated 429 remains non-paging
+# (Gatus true / exit 0), but is NOT an authenticated journey in --json.
+# Credentials use 0600 curl configs, never argv. Never dump responses or errors;
+# a missing/refused credential blocks; never substitute another credential.
+# Existing CISO/release/install HOLDs remain; source changes authorize no live call.
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../case_658bf6b9/_gatus_push.sh
-. "$HERE/../case_658bf6b9/_gatus_push.sh"
 
 KEY="two_staging-login-smoke"
+JSON=false; DRY_RUN=false; HELP=false
+OUTCOME=refused; ERROR_CODE=invalid_arguments; RETRYABLE=false
+NEXT_ACTION="Use --help and supply only the documented flags."
+TMPD=""; STEPS=(); PLAN=false
+
+mark_aborted() {
+  OUTCOME=failed; ERROR_CODE=probe_aborted; RETRYABLE=true
+  NEXT_ACTION='The probe stopped before completion; use only the existing authorized scheduler and preserve all HOLDs.'
+}
+
+# Emit only allowlisted metadata, including on refusals. No response data crosses
+# this boundary; metrics are validated before they enter STEPS.
+finish() {
+  local rc=$?
+  # Signals supersede even a journey whose final Gatus delivery was interrupted.
+  [[ "$rc" != 129 && "$rc" != 130 && "$rc" != 143 ]] || mark_aborted
+  [[ -z "$TMPD" ]] || rm -rf "$TMPD"
+  if [[ "$JSON" == true ]]; then
+    python3 - "$KEY" "$OUTCOME" "$ERROR_CODE" "$RETRYABLE" "$NEXT_ACTION" "$PLAN" "${STEPS[@]}" >&"$RESULT_FD" <<'PY'
+import json, sys
+key, outcome, code, retryable, action, plan, *metrics = sys.argv[1:]
+ids = ("login", "auth_status", "up")
+steps = []
+for i, metric in enumerate(metrics):
+    status, seconds = metric.split()
+    steps.append({"id": ids[i], "http_status": int(status), "latency_ms": float(seconds) * 1000})
+if plan == "true":
+    steps = [{"id": id, "method": method, "path": path} for id, method, path in (
+        ("login", "POST", "/auth/qa/qa-member"),
+        ("auth_status", "GET", "/auth/status"), ("up", "GET", "/up"))]
+result = {"schema_version": 1, "probe_id": key, "outcome": outcome, "steps": steps}
+if outcome in ("refused", "failed", "throttled"):
+    result["error"] = {"code": code, "retryable": retryable == "true", "next_action": action}
+print(json.dumps(result, allow_nan=False, separators=(",", ":")))
+PY
+  fi
+  return "$rc"
+}
+# Recognize structured mode even when another argument is invalid. Never echo it.
+for flag in "$@"; do [[ "$flag" != --json ]] || JSON=true; done
+# An EXIT inside push_result must not redirect the JSON into its private capture.
+[[ "$JSON" != true ]] || exec {RESULT_FD}>&1
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# HUP must also exit through finish: an untrapped fatal signal while curl
+# runs with redirected stderr kills the shell without the EXIT trap, leaking
+# the private temp dir and yielding no result. Finish supersedes exit 129 to
+# an abort like 130/143, never a false refusal or success.
+trap 'exit 129' HUP
+seen_json=false
+for flag in "$@"; do
+  case "$flag" in
+    --json) [[ "$seen_json" == false ]] || exit 2; seen_json=true ;;
+    --dry-run) [[ "$DRY_RUN" == false ]] || exit 2; DRY_RUN=true ;;
+    --help) [[ "$HELP" == false ]] || exit 2; HELP=true ;;
+    *) echo "push-staging-login-smoke: refusing — unknown argument (see --help)" >&2; exit 2 ;;
+  esac
+done
+if [[ "$HELP" == true ]]; then
+  [[ "$JSON" == false && "$DRY_RUN" == false ]] || exit 2
+  printf '%s\n' \
+    'Usage: push-staging-login-smoke.sh [--json] [--dry-run] | --help' \
+    'Default: run the separately authorized staging journey and existing Gatus push.' \
+    '--json: version 1 redacted result; throttled is NOT journey success.' \
+    '--dry-run: static plan only; no credentials, temp configs, curl, sleep or push.' \
+    'Offline check (repository root):' \
+    '  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_staging_login_journey' \
+    '  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_staging_login_journey_guards' \
+    '  PYTHONDONTWRITEBYTECODE=1 bash test_case_00b2eb59_probe.sh' \
+    'No flag grants runtime authority or removes a CISO/install HOLD.'
+  exit 0
+fi
+
 STAGING_ORIGIN="https://next.togetherweown.com"
 BASE="${STAGING_BASE_URL:-$STAGING_ORIGIN}"
-
-# Validate the destination before credential checks or private config creation.
+OUTCOME=refused; ERROR_CODE=staging_origin_refused
+NEXT_ACTION="Use only the canonical staging origin; do not broaden its allowlist."
+# Preserve the exact destination guard before credentials or private config I/O.
 case "$BASE" in
   "$STAGING_ORIGIN"|"$STAGING_ORIGIN"/) BASE="$STAGING_ORIGIN" ;;
   *)
@@ -51,99 +96,229 @@ case "$BASE" in
     exit 2
     ;;
 esac
+if [[ "$DRY_RUN" == true ]]; then
+  OUTCOME=dry_run; PLAN=true
+  [[ "$JSON" == true ]] || printf '%s\n' \
+    'Static staging journey: login POST → auth_status GET (fresh private jar) → up GET (no session).' \
+    'No session, credential config, curl, sleep or Gatus push executed. All HOLDs remain.'
+  exit 0
+fi
 
-fail_push() { gatus_push "$KEY" false "$1"; exit 1; }
+refuse() {
+  OUTCOME=refused; RETRYABLE=false; ERROR_CODE="$1"; NEXT_ACTION="$2"
+  echo "push-staging-login-smoke: refusing — $ERROR_CODE" >&2
+  exit 2
+}
+[[ -n "${QA_AUTH_TOKEN:-}" ]] || refuse qa_auth_missing 'Restore the existing scoped credential through its authorized owner; never substitute one.'
+[[ "$QA_AUTH_TOKEN" =~ ^[A-Za-z0-9_.\-~+/=]+$ ]] || refuse qa_auth_shape 'Correct the scoped credential configuration without exposing its value.'
+command -v curl >/dev/null 2>&1 || refuse curl_missing 'Install the existing curl prerequisite through the authorized operator.'
+command -v python3 >/dev/null 2>&1 || refuse python_missing 'Install the existing python3 prerequisite through the authorized operator.'
 
-[[ -n "${QA_AUTH_TOKEN:-}" ]] \
-  || { echo "push-staging-login-smoke: refusing — QA_AUTH_TOKEN is unset" >&2; exit 2; }
-[[ "$QA_AUTH_TOKEN" =~ ^[A-Za-z0-9_.\-~+/=]+$ ]] \
-  || { echo "push-staging-login-smoke: refusing — QA_AUTH_TOKEN has an unsafe shape" >&2; exit 2; }
-command -v curl >/dev/null 2>&1 \
-  || { echo "push-staging-login-smoke: refusing — curl not found" >&2; exit 2; }
-command -v python3 >/dev/null 2>&1 \
-  || { echo "push-staging-login-smoke: refusing — python3 not found" >&2; exit 2; }
-
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../case_658bf6b9/_gatus_push.sh
+. "$HERE/../case_658bf6b9/_gatus_push.sh"
+# This umask also covers response bodies, headers and suppressed curl errors.
+umask 077
 TMPD="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/login_smoke.XXXXXXXX")" \
-  || { echo "push-staging-login-smoke: refusing — no private temp dir" >&2; exit 2; }
-trap 'rm -rf "$TMPD"' EXIT
+  || refuse temp_unavailable 'Restore private temporary-directory access before retrying.'
 JAR="$TMPD/jar"; HDR="$TMPD/hdr"; BODY="$TMPD/body"; CFG="$TMPD/curlcfg"
-: > "$JAR"; chmod 0600 "$JAR"
-
-# Auth header travels in a 0600 curl config file, never argv.
+# A 204 plus tiny JSON bodies/headers never approach this; a broken staging
+# step must not stream gigabytes into the shared temp dir or verifier RAM.
+MAX_RESPONSE_BYTES=65536
 {
   printf 'header = "X-TWO-QA-Auth: %s"\n' "$QA_AUTH_TOKEN"
   printf 'header = "Origin: https://next.togetherweown.com"\n'
+  printf 'max-filesize = "%s"\n' "$MAX_RESPONSE_BYTES"
 } > "$CFG"
-chmod 0600 "$CFG"
+chmod 0600 "$CFG" || refuse temp_permissions 'Restore private temporary-file permissions before retrying.'
+# Preflight passed: an uncoded exit is an abort, not an origin refusal.
+mark_aborted
 
-# run_capped <out-prefix> <max-secs> -- <curl args...>: single curl call with
-# headers dumped to $HDR, body to $BODY; prints "<http-code> <seconds>".
+# Shared Gatus helper diagnostics can contain curl text: capture, never relay it.
+push_result() {
+  if ! {
+    if [[ "$1" == true ]]; then
+      gatus_push "$KEY" true
+    else
+      gatus_push "$KEY" false "${2:-}"
+    fi
+  } >"$TMPD/pushout" 2>"$TMPD/pusherr"; then
+    OUTCOME=failed; ERROR_CODE=gatus_push_failed; RETRYABLE=true
+    NEXT_ACTION='Inspect the existing Gatus configuration through its authorized owner; do not dump transport output.'
+    echo 'push-staging-login-smoke: Gatus push failed (diagnostics suppressed)' >&2
+    return 1
+  fi
+}
+fail_push() {
+  OUTCOME=failed; ERROR_CODE="$1"; RETRYABLE="${3:-false}"
+  NEXT_ACTION='Inspect the failing step using offline checks; preserve all live-probe and installation HOLDs.'
+  echo "push-staging-login-smoke: $2" >&2
+  push_result false "$2"
+  exit 1
+}
+
+# Clear response state for EVERY call. -q must be first: an ambient .curlrc
+# cannot inject a session, redirect, verbose output or another destination.
+# --max-filesize caps the body while streaming; the size backstop below also
+# covers headers, which curl downloads unbounded into -D.
+check_response_size() {
+  python3 - "$HDR" "$BODY" "$MAX_RESPONSE_BYTES" 2>/dev/null <<'PY'
+import os, sys
+try:
+    sys.exit(0 if all(os.path.getsize(path) <= int(sys.argv[3]) for path in sys.argv[1:3]) else 1)
+except OSError:
+    sys.exit(1)
+PY
+}
 run_capped() {
-  local prefix="$1" max_secs="$2"; shift 2
-  : > "$HDR"; : > "$BODY"
-  local out
-  out="$(curl -sS --config "$CFG" -D "$HDR" -o "$BODY" \
-    --max-time "$max_secs" -w '%{http_code} %{time_total}' "$@" 2>"$TMPD/curlerr")" \
-    || { echo "push-staging-login-smoke: transport failed at $prefix" >&2; return 1; }
-  printf '%s' "$out"
+  local index="$1" max_secs="$2"; shift 2
+  { : > "$HDR" && : > "$BODY"; } || return 1
+  local out rc=0
+  out="$(curl -q -sS --config "$CFG" -D "$HDR" -o "$BODY" \
+    --max-redirs 0 --max-time "$max_secs" -w '%{http_code} %{time_total}' "$@" 2>"$TMPD/curlerr")" || rc=$?
+  CODE=0; SECS=0
+  if [[ "$out" =~ ^([0-9]{3})\ ([0-9]+([.][0-9]+)?)$ ]]; then
+    CODE="${BASH_REMATCH[1]}"; SECS="${BASH_REMATCH[2]}"
+  else
+    rc=1
+  fi
+  STEPS[index]="$CODE $SECS"
+  check_response_size || return 1
+  return "$rc"
 }
-
-# --- step 1: login POST ------------------------------------------------------
 step1_once() {
-  run_capped "login-POST" 20 --max-redirs 0 -X POST "$BASE/auth/qa/qa-member"
+  : > "$JAR" || return 1
+  chmod 0600 "$JAR" || return 1
+  run_capped 0 20 -c "$JAR" -X POST "$BASE/auth/qa/qa-member"
 }
 
-STEP1="$(step1_once)" || fail_push "login POST transport failure"
-CODE="${STEP1%% *}"; SECS="${STEP1##* }"
+# Parse the final HTTP header block only. Cookie attributes must occur as exact
+# attributes on the exact session Set-Cookie record, never in an unrelated field.
+verify_response() {
+  python3 - "$1" "$HDR" "$BODY" <<'PY'
+import json, pathlib, sys
+kind, header_path, body_path = sys.argv[1:]
+def reject(*args):
+    raise ValueError("invalid response")
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            reject()
+        result[key] = value
+    return result
+try:
+    if kind == "auth_status":
+        body = json.loads(pathlib.Path(body_path).read_text(), object_pairs_hook=unique_object, parse_constant=reject)
+        valid = isinstance(body, dict) and body.get("authenticated") is True
+    else:
+        headers = []
+        for line in pathlib.Path(header_path).read_bytes().decode("utf-8").split("\n"):
+            line = line.removesuffix("\r")
+            if line.startswith("HTTP/"):
+                headers = []
+            elif ":" in line:
+                name, value = line.split(":", 1)
+                headers.append((name.lower(), value.strip(" \t")))
+        if kind == "up":
+            valid = [value for name, value in headers if name == "x-two-origin"] == ["two-web-next"]
+        else:
+            cookies = []
+            for name, value in headers:
+                if name != "set-cookie":
+                    continue
+                record, *attributes = value.split(";")
+                cookie_name, separator, cookie_value = record.partition("=")
+                if cookie_name != "__Host-two_session":
+                    continue
+                # Effective attributes, mirroring the jar consumer: trim
+                # whitespace around names and values (RFC 6265 5.2, as curl
+                # applies them) and reject duplicate names, where curl would
+                # apply only one value. A bare or valued Domain is never a
+                # host-only __Host- cookie; only an effective Path=/ passes.
+                seen = set()
+                well_formed = True
+                has_secure = has_httponly = False
+                path_is_root = False
+                for attribute in attributes:
+                    attr_name, _, attr_value = attribute.partition("=")
+                    attr_name = attr_name.strip(" \t").lower()
+                    if not attr_name:
+                        continue
+                    if attr_name in seen:
+                        well_formed = False
+                        break
+                    seen.add(attr_name)
+                    if attr_name == "domain":
+                        well_formed = False
+                        break
+                    elif attr_name == "secure":
+                        has_secure = True
+                    elif attr_name == "httponly":
+                        has_httponly = True
+                    elif attr_name == "path":
+                        path_is_root = attr_value.strip(" \t") == "/"
+                cookies.append(bool(separator and cookie_value) and well_formed
+                               and has_secure and has_httponly and path_is_root)
+            valid = cookies == [True]
+    sys.exit(0 if valid else 1)
+except (OSError, ValueError, RecursionError):
+    sys.exit(1)
+PY
+}
+check_latency() {
+  python3 -c 'import math,sys; s=float(sys.argv[1]); sys.exit(0 if math.isfinite(s) and 0 <= s < float(sys.argv[2]) else 1)' "$SECS" "$1" 2>/dev/null
+}
+
+step1_once || fail_push login_transport 'login POST transport failure' true
 if [[ "$CODE" == "429" ]]; then
-  RA="$(grep -i -m1 '^Retry-After:' "$HDR" | tr -dc '0-9' || true)"
-  [[ "$RA" =~ ^[0-9]+$ ]] || RA="60"
-  (( 10#$RA > 120 )) && RA="120"
+  RA="$(python3 - "$HDR" <<'PY'
+import pathlib, re, sys
+try:
+    values = []
+    for line in pathlib.Path(sys.argv[1]).read_bytes().decode("utf-8").split("\n"):
+        line = line.removesuffix("\r")
+        if line.startswith("HTTP/"):
+            values = []
+        elif ":" in line:
+            key, value = line.split(":", 1)
+            if key.lower() == "retry-after":
+                values.append(value.strip(" \t"))
+    value = values[0] if len(values) == 1 else ""
+    if re.fullmatch(r"[0-9]+", value):
+        value = value.lstrip("0") or "0"
+        print(120 if len(value) > 3 else min(int(value), 120))
+    else:
+        print(60)
+except (OSError, ValueError):
+    sys.exit(1)
+PY
+)" || fail_push retry_after_invalid 'login Retry-After could not be parsed'
   echo "push-staging-login-smoke: throttled (429), backing off ${RA}s per Retry-After" >&2
-  sleep "$RA"
-  : > "$JAR"; chmod 0600 "$JAR"
-  STEP1="$(step1_once)" || fail_push "login POST transport failure on retry"
-  CODE="${STEP1%% *}"; SECS="${STEP1##* }"
+  sleep "$RA" || fail_push backoff_failed 'login backoff failed' true
+  step1_once || fail_push login_transport 'login POST transport failure on retry' true
   if [[ "$CODE" == "429" ]]; then
-    echo "push-staging-login-smoke: still throttled after backoff; not paging" >&2
-    gatus_push "$KEY" true
+    echo 'push-staging-login-smoke: still throttled after backoff; not paging' >&2
+    push_result true || exit 1
+    OUTCOME=throttled; ERROR_CODE=login_throttled; RETRYABLE=true
+    NEXT_ACTION='Wait for the existing scheduled probe; do not treat this as authenticated-journey evidence.'
     exit 0
   fi
 fi
-[[ "$CODE" == "204" ]] \
-  || fail_push "login POST status $CODE (want 204)"
-if ! grep -qi '__Host-two_session' "$HDR" \
-  || ! grep -qi 'Secure' "$HDR" \
-  || ! grep -qi 'HttpOnly' "$HDR"; then
-  fail_push "login POST missing Secure+HttpOnly __Host-two_session cookie"
-fi
-if ! python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 5.0 else 1)' "$SECS"; then
-  fail_push "login POST ${SECS}s over 5000ms bound"
-fi
+[[ "$CODE" == "204" ]] || fail_push login_status "login POST status $CODE (want 204)"
+verify_response login || fail_push login_cookie 'login POST missing Secure+HttpOnly __Host-two_session cookie'
+check_latency 5.0 || fail_push login_latency "login POST ${SECS}s over 5000ms bound"
 
-# --- step 2: session check ---------------------------------------------------
-STEP2="$(run_capped "auth-status" 15 -b "$JAR" "$BASE/auth/status")" \
-  || fail_push "auth/status transport failure"
-CODE="${STEP2%% *}"; SECS="${STEP2##* }"
-[[ "$CODE" == "200" ]] \
-  || fail_push "auth/status status $CODE (want 200)"
-grep -q '"authenticated"[[:space:]]*:[[:space:]]*true' "$BODY" \
-  || fail_push "auth/status body not authenticated:true"
-if ! python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 3.0 else 1)' "$SECS"; then
-  fail_push "auth/status ${SECS}s over 3000ms bound"
-fi
+run_capped 1 15 -b "$JAR" "$BASE/auth/status" || fail_push auth_status_transport 'auth/status transport failure' true
+[[ "$CODE" == "200" ]] || fail_push auth_status_status "auth/status status $CODE (want 200)"
+verify_response auth_status || fail_push auth_status_body 'auth/status body not authenticated:true'
+check_latency 3.0 || fail_push auth_status_latency "auth/status ${SECS}s over 3000ms bound"
 
-# --- step 3: liveness ---------------------------------------------------------
-STEP3="$(run_capped "up" 15 --cookie '' "$BASE/up")" \
-  || fail_push "up transport failure"
-CODE="${STEP3%% *}"; SECS="${STEP3##* }"
-[[ "$CODE" == "200" ]] \
-  || fail_push "up status $CODE (want 200)"
-grep -qi '^x-two-origin:[[:space:]]*two-web-next' "$HDR" \
-  || fail_push "up missing x-two-origin: two-web-next header"
-if ! python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 3.0 else 1)' "$SECS"; then
-  fail_push "up ${SECS}s over 3000ms bound"
-fi
+run_capped 2 15 --cookie '' "$BASE/up" || fail_push up_transport 'up transport failure' true
+[[ "$CODE" == "200" ]] || fail_push up_status "up status $CODE (want 200)"
+verify_response up || fail_push up_origin 'up missing exact x-two-origin: two-web-next header'
+check_latency 3.0 || fail_push up_latency "up ${SECS}s over 3000ms bound"
 
-echo "push-staging-login-smoke: login ${STEP1%% *}/${STEP1##* }s, status ${STEP2%% *}/${STEP2##* }s, up ${STEP3%% *}/${STEP3##* }s"
-gatus_push "$KEY" true
+[[ "$JSON" == true ]] || printf 'push-staging-login-smoke: login %s, status %s, up %s (HTTP/seconds)\n' "${STEPS[0]}" "${STEPS[1]}" "${STEPS[2]}"
+push_result true || exit 1
+OUTCOME=ok

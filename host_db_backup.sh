@@ -1,80 +1,14 @@
 #!/usr/bin/env bash
-# ===========================================================================
-# host_db_backup.sh — host-side database backup that does NOT depend on the
-# in-server scheduler (case_43a9cf5b).
-# ---------------------------------------------------------------------------
-# case_14da0d3f/case_00b5a2b4/case_9b650c35/case_da018575/case_43a9cf5b: the in-server hourly backup
-# scheduler wedges on a hung COPY loop and its in-flight guard
-# (databaseBackupInFlight) is process memory that only a restart clears — and
-# as of case_43a9cf5b, even a restart no longer reliably fixes it (the very first
-# tick after a 19:57 restart wedged again at 20:58). This script removes the
-# server's own health from the RPO equation entirely: it runs `pg_dump`
-# directly against the `paperclip-db` container from the host, independent of
-# whatever state the app container's in-process flag is in.
-#
-# This is intentionally the SAME approach the owner's own manual out-of-band
-# backup used (podman exec pg_dump | gzip), just made durable and scheduled.
-#
-# NAMING. Output uses the SAME "paperclip-" prefix db_backup_stall.sh already
-# globs for staleness/no-usable-backup, with a "-hostcron" tag inserted so a
-# human or script can still tell which process produced a given archive:
-#
-#   paperclip-<YYYYMMDD>-<HHMMSS>-hostcron.sql.gz
-#
-# This is deliberate: signal 3 (staleness) and signal "no usable backup" in
-# db_backup_stall.sh should legitimately clear once THIS timer is landing
-# archives — that is the whole point of a fallback. It does NOT mask signal 1
-# (log suppression), which is the one that actually identifies the in-server
-# scheduler as wedged; that signal reads the server's own log lines and has
-# nothing to do with what is on disk. Do not use this script's success to
-# conclude the in-server scheduler recovered — check signal 1 for that.
-#
-# OVERLAP. The owner's caution: "the in-server scheduler and a host timer can
-# both be dumping at once... take a lock so a slow dump under load cannot
-# overlap the next tick." This script CANNOT flock against the app
-# container's in-process scheduler directly -- the host and the app container
-# do not share a filesystem namespace an external flock could pin them both
-# to (the exact case_cd5f668d blind spot: host paths are invisible from inside the
-# app container, and the reverse is equally true). What it DOES do:
-#
-#   1. flock its OWN lock file so two ticks of ITSELF never overlap, even if
-#      a prior run is still draining a large dump when the timer fires again.
-#   2. Query pg_stat_activity for another backend already running a COPY (a
-#      dump in progress, whoever started it) and skip this cycle rather than
-#      pile a second concurrent dump on top of one already running. This is a
-#      courtesy check, not a lock -- there is an unavoidable race between the
-#      check and this script's own COPY starting -- but it is the best
-#      available signal from outside the process that holds the real state.
-#   3. The timer is scheduled off the top of the hour (see the .timer unit),
-#      so it does not compete with the in-server scheduler's own hourly tick
-#      by construction, not just by luck.
-#
-# VERIFICATION. Mirrors the owner's own manual verification, not just "gzip
-# exited 0": integrity (`gzip -t`), a real completion trailer, and a nonzero
-# CREATE TABLE count. An empty or truncated dump is never left where a
-# consumer would mistake it for a good one -- it is written to a `.partial`
-# name and only renamed into place after every check passes.
-#
-# RETENTION. Prunes only the files THIS script created (the "-hostcron" tag),
-# never a server-authored archive, at --retention-days (default matches
-# PAPERCLIP_DB_BACKUP_RETENTION_DAYS=2 in production).
-#
-# This is read-write only within the backup directory: it creates and prunes
-# archives there. It does not touch the database beyond a read-only dump and
-# a read-only pg_stat_activity query, and it never restarts anything.
-#
-#   ./host_db_backup.sh                 # run one cycle
-#   ./host_db_backup.sh --dry-run       # log what would happen, write nothing
-#
-# Exit status:
-#   0  backup landed (or a live concurrent dump caused a deliberate skip)
-#   1  backup attempted and failed verification
-#   2  refused -- missing tool, bad config, or precondition not met
-# ===========================================================================
+# Independent host-side pg_dump fallback; deployment/host authorization is separate.
+# flock serializes this producer. The unchanged pg_stat_activity COPY query is a
+# courtesy check, not a lock against the in-server scheduler (a race remains).
+# Verify a private temporary stream before atomic, no-clobber publication. Prune
+# only top-level paperclip-*-hostcron.sql.gz files older than the existing policy.
+# A published archive and a completed retention cycle are separate facts.
+# Canonical receipt/verification contract: docs/host-db-backup.md; --help is offline.
 set -uo pipefail
 
 ME="${BASH_SOURCE[0]##*/}"
-
 CONTAINER="${PAPERCLIP_DB_CTR:-paperclip-db}"
 BACKUP_DIR="${PAPERCLIP_DB_BACKUP_DIR:-/paperclip/instances/default/data/backups}"
 RETENTION_DAYS="${PAPERCLIP_DB_BACKUP_RETENTION_DAYS:-2}"
@@ -82,124 +16,217 @@ LOCK_DIR="${HOST_DB_BACKUP_LOCK_DIR:-/tmp}"
 LOCK_FILE="$LOCK_DIR/host_db_backup.lock"
 TAG="hostcron"
 DRY_RUN=0
+JSON=0
+HELP=0
+CYCLE_ID="${EPOCHREALTIME//./}-${BASHPID}-${RANDOM}"
+ARCHIVE_ID=null
+BACKUP_LANDED=false
+RETENTION_STATUS=not_started
+PRUNED=null
+PARTIAL=""
+LIST=""
 
-usage() {
-  cat >&2 <<EOF
-usage: $ME [--dry-run] [--backup-dir DIR] [--container NAME] [--retention-days N]
-
-Runs pg_dump against \$PAPERCLIP_DB_CTR (default paperclip-db) from the host,
-independent of the in-server backup scheduler. See the header comment for the
-overlap-avoidance and verification contract.
-
-  0 backup landed (or a courtesy skip)   1 verification failed   2 refused
-EOF
+# JSON strings are fixed tokens or generated safe identifiers, never dump data,
+# database/user identities, caller-supplied paths, or raw external diagnostics.
+cleanup() {
+  local rc=0 path
+  for path in "$PARTIAL" "$LIST"; do
+    [[ -z "$path" ]] || rm -f -- "$path" 2>/dev/null || rc=1
+  done
+  PARTIAL=""; LIST=""
+  return "$rc"
 }
 
+finish() {
+  local rc="$1" outcome="$2" stage="$3" code="$4" retryable="$5" action="$6" message="$7"
+  if ! cleanup; then
+    rc=1; outcome=error; stage=cleanup; code=temporary_cleanup_failed
+    retryable=false; action=inspect_owned_temporary_artifact
+    message="ERROR: owned temporary artifact cleanup failed"
+  fi
+  if [[ "$BACKUP_LANDED" == true && "$outcome" == error ]]; then outcome=partial; fi
+  if (( JSON )); then
+    [[ "$code" == null ]] || code="\"$code\""
+    printf '{"schema_version":1,"cycle_id":"%s","archive_id":%s,"outcome":"%s","stage":"%s","error_code":%s,"retryable":%s,"next_action":"%s","backup_landed":%s,"retention":{"status":"%s","pruned":%s}}\n' \
+      "$CYCLE_ID" "$ARCHIVE_ID" "$outcome" "$stage" "$code" "$retryable" "$action" "$BACKUP_LANDED" "$RETENTION_STATUS" "$PRUNED"
+  elif (( rc != 0 )) || [[ "$outcome" == skipped ]]; then
+    printf '%s\n' "$message" >&2
+  else
+    printf '%s\n' "$message"
+  fi
+  exit "$rc"
+}
+
+refuse() { finish 2 error arguments invalid_arguments false correct_arguments "$1"; }
+
+usage() {
+  printf '%s\n' "usage: $ME [--json] [--dry-run] [--backup-dir DIR] [--container NAME] [--retention-days N]" '
+Independent host-side pg_dump fallback; execution requires existing authorization.
+--dry-run: no-write plan, before locks/artifacts or any podman/DB call.
+--json: one v1 receipt on stdout, including on argument errors; no DB/user values.
+Fields: schema_version, cycle_id, archive_id (null until publication), outcome,
+stage, error_code, retryable, next_action, backup_landed, retention {status, pruned}.
+Outcomes: success, error, partial, planned, skipped. Unknown pruned count is null.
+Exit: 0 complete/planned/skipped; 1 dump/verify/publish/retention error; 2 refused.
+A partial cycle can have a valid published archive; it must not be redumped blindly.
+Defaults/env: PAPERCLIP_DB_CTR=paperclip-db; PAPERCLIP_DB_BACKUP_RETENTION_DAYS=2;
+PAPERCLIP_DB_BACKUP_DIR=the existing instance backup directory;
+HOST_DB_BACKUP_LOCK_DIR=/tmp. No scheduler, restore or new execution grant.
+Discover: ./host_db_backup.sh --help
+Plan:     ./host_db_backup.sh --json --dry-run
+Details and stable stage/error tokens: docs/host-db-backup.md'
+}
+
+# Recognize JSON even when a preceding flag is invalid. Parsing never runs tools.
+for arg in "$@"; do [[ "$arg" != --json ]] || JSON=1; done
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --json) JSON=1 ;;
     --dry-run) DRY_RUN=1 ;;
-    --backup-dir) shift; [[ $# -gt 0 ]] || { echo "ERROR: --backup-dir needs a value" >&2; exit 2; }; BACKUP_DIR="$1" ;;
-    --container) shift; [[ $# -gt 0 ]] || { echo "ERROR: --container needs a value" >&2; exit 2; }; CONTAINER="$1" ;;
-    --retention-days) shift; [[ $# -gt 0 ]] || { echo "ERROR: --retention-days needs a value" >&2; exit 2; }; RETENTION_DAYS="$1" ;;
-    -h|--help) usage; exit 0 ;;
-    *) echo "ERROR: unknown argument: $1" >&2; usage; exit 2 ;;
+    --backup-dir|--container|--retention-days)
+      flag="$1"; shift
+      [[ $# -gt 0 && -n "$1" && "$1" != -* ]] || refuse "ERROR: $flag needs a value"
+      case "$flag" in
+        --backup-dir) BACKUP_DIR="$1" ;;
+        --container) CONTAINER="$1" ;;
+        --retention-days) RETENTION_DAYS="$1" ;;
+      esac ;;
+    -h|--help) HELP=1 ;;
+    *) refuse "ERROR: unknown argument" ;;
   esac
   shift
 done
-
-[[ "$RETENTION_DAYS" =~ ^[1-9][0-9]*$ ]] \
-  || { echo "ERROR: --retention-days must be a positive integer" >&2; exit 2; }
-[[ "$CONTAINER" =~ ^[A-Za-z0-9._-]+$ ]] \
-  || { echo "ERROR: container name contains characters that could escape podman's argv" >&2; exit 2; }
-for tool in podman gzip flock date find stat; do
-  command -v "$tool" >/dev/null 2>&1 || { echo "ERROR: $tool is required" >&2; exit 2; }
-done
-[[ -d "$BACKUP_DIR" ]] || { echo "ERROR: backup directory does not exist: $BACKUP_DIR" >&2; exit 2; }
-[[ -w "$BACKUP_DIR" ]] || { echo "ERROR: backup directory is not writable: $BACKUP_DIR" >&2; exit 2; }
-
-exec 9>"$LOCK_FILE" || { echo "ERROR: cannot open lock file: $LOCK_FILE" >&2; exit 2; }
-if ! flock -n 9; then
-  echo "SKIP: another $ME cycle already holds the lock; not overlapping it" >&2
-  exit 0
+[[ "$RETENTION_DAYS" =~ ^[1-9][0-9]*$ ]] || refuse "ERROR: --retention-days must be a positive integer"
+[[ "$CONTAINER" =~ ^[A-Za-z0-9._-]+$ ]] || refuse "ERROR: invalid container name"
+if (( HELP )); then usage; exit 0; fi
+if (( DRY_RUN )); then
+  finish 0 planned plan null false obtain_execution_authorization 'DRY-RUN: would lock, check concurrent COPY, dump, verify, publish without overwrite, then prune only aged hostcron archives; no live state checked'
 fi
 
-podman container exists "$CONTAINER" \
-  || { echo "ERROR: container is absent: $CONTAINER" >&2; exit 2; }
+for tool in podman gzip flock date find stat mktemp mv rm awk; do
+  command -v "$tool" >/dev/null 2>&1 || finish 2 error precondition missing_tool false install_required_tools "ERROR: $tool is required"
+done
+[[ -d "$BACKUP_DIR" && -w "$BACKUP_DIR" ]] || finish 2 error precondition invalid_backup_directory false correct_backup_directory 'ERROR: backup directory must exist and be writable'
+# Absolute paths keep every pathname operand unambiguous to downstream tools.
+[[ "$BACKUP_DIR" == /* ]] || BACKUP_DIR="$PWD/$BACKUP_DIR"
 
-# Courtesy check, not a lock (see header): if a dump-shaped query is already
-# running against this database, another process (the in-server scheduler,
-# or a previous cycle of this same script that outlived its own flock window
-# via a stale lock file) is already doing the work this cycle would duplicate.
-# Skip rather than add a second concurrent COPY.
-active_dumps="$(podman exec "$CONTAINER" psql -X -A -t -U "$(podman exec "$CONTAINER" sh -c 'echo "$POSTGRES_USER"')" \
-  -d "$(podman exec "$CONTAINER" sh -c 'echo "$POSTGRES_DB"')" \
+trap cleanup EXIT
+trap 'finish 1 error interrupted interrupted false inspect_cycle_before_retry "ERROR: cycle interrupted"' HUP INT TERM
+exec 9>"$LOCK_FILE" || finish 2 error lock lock_open_failed false correct_lock_directory 'ERROR: cannot open lock file'
+if ! flock -n 9; then
+  finish 0 skipped lock null true wait_for_active_cycle "SKIP: another $ME cycle already holds the lock; not overlapping it"
+fi
+podman container exists "$CONTAINER" 2>/dev/null || finish 2 error precondition container_unavailable false inspect_container 'ERROR: container is absent or unavailable'
+
+# Keep the existing courtesy query and fail-open behavior for an unmeasurable
+# count. This signal does not prove that the in-server scheduler has recovered.
+active_dumps="$(podman exec "$CONTAINER" psql -X -A -t -U "$(podman exec "$CONTAINER" sh -c 'echo "$POSTGRES_USER"' 2>/dev/null)" \
+  -d "$(podman exec "$CONTAINER" sh -c 'echo "$POSTGRES_DB"' 2>/dev/null)" \
   -c "SELECT count(*) FROM pg_stat_activity WHERE query LIKE 'COPY %TO stdout%' AND pid <> pg_backend_pid();" 2>/dev/null)"
 if [[ "$active_dumps" =~ ^[0-9]+$ ]] && (( active_dumps > 0 )); then
-  echo "SKIP: $active_dumps other COPY-to-stdout backend(s) already running against $CONTAINER; not stacking a second dump" >&2
-  exit 0
+  finish 0 skipped courtesy null true wait_for_active_dump 'SKIP: another COPY-to-stdout backend is running; not stacking a second dump'
 fi
-
-PG_USER="$(podman exec "$CONTAINER" sh -c 'echo "$POSTGRES_USER"')" \
-  || { echo "ERROR: could not read POSTGRES_USER from $CONTAINER" >&2; exit 2; }
-PG_DB="$(podman exec "$CONTAINER" sh -c 'echo "$POSTGRES_DB"')" \
-  || { echo "ERROR: could not read POSTGRES_DB from $CONTAINER" >&2; exit 2; }
+PG_USER="$(podman exec "$CONTAINER" sh -c 'echo "$POSTGRES_USER"' 2>/dev/null)" \
+  || finish 2 error precondition database_identity_unavailable false inspect_container_configuration 'ERROR: could not read database user'
+PG_DB="$(podman exec "$CONTAINER" sh -c 'echo "$POSTGRES_DB"' 2>/dev/null)" \
+  || finish 2 error precondition database_identity_unavailable false inspect_container_configuration 'ERROR: could not read database name'
 [[ -n "$PG_USER" && -n "$PG_DB" ]] \
-  || { echo "ERROR: $CONTAINER did not report POSTGRES_USER/POSTGRES_DB" >&2; exit 2; }
+  || finish 2 error precondition database_identity_unavailable false inspect_container_configuration 'ERROR: database identity is empty'
 
-TS="$(date -u +%Y%m%d-%H%M%S)"
+TS="$(date -u +%Y%m%d-%H%M%S)" \
+  || finish 2 error precondition clock_failed false inspect_clock 'ERROR: cannot create archive timestamp'
+[[ "$TS" =~ ^[0-9]{8}-[0-9]{6}$ ]] \
+  || finish 2 error precondition clock_failed false inspect_clock 'ERROR: invalid archive timestamp'
 FINAL="$BACKUP_DIR/paperclip-${TS}-${TAG}.sql.gz"
-PARTIAL="$FINAL.partial"
-
-if (( DRY_RUN == 1 )); then
-  echo "DRY-RUN: would dump $PG_DB from $CONTAINER as $PG_USER to $FINAL"
-  exit 0
-fi
-
-rm -f -- "$PARTIAL"
-if ! podman exec "$CONTAINER" pg_dump -U "$PG_USER" -d "$PG_DB" --no-owner --no-privileges \
+[[ ! -e "$FINAL" && ! -L "$FINAL" ]] \
+  || finish 1 error publication destination_exists false inspect_existing_archive 'ERROR: archive destination already exists; not overwriting it'
+# mktemp creates exclusively; never reuse or unlink someone else's .partial.
+PARTIAL="$(mktemp "$BACKUP_DIR/.paperclip-${TS}-${TAG}.XXXXXXXX.partial")" \
+  || finish 1 error dump temporary_create_failed false inspect_backup_directory 'ERROR: cannot create owned temporary archive'
+if ! podman exec "$CONTAINER" pg_dump -U "$PG_USER" -d "$PG_DB" --no-owner --no-privileges 2>/dev/null \
     | gzip -c > "$PARTIAL"; then
-  rm -f -- "$PARTIAL"
-  echo "ERROR: pg_dump | gzip pipeline failed" >&2
-  exit 1
+  finish 1 error dump dump_pipeline_failed true inspect_dump_failure 'ERROR: pg_dump | gzip pipeline failed'
 fi
 
-# Verify before the archive is visible under its real name -- the exact
-# failure mode this exists to avoid is a truncated dump masquerading as a
-# good one (case_00b5a2b4/1130's 20-byte empty-gzip residue).
-size="$(stat -c %s "$PARTIAL" 2>/dev/null || echo 0)"
+size="$(stat -c %s "$PARTIAL" 2>/dev/null)" \
+  || finish 1 error verification archive_stat_failed false inspect_archive_verification 'ERROR: cannot measure temporary archive'
+[[ "$size" =~ ^[0-9]+$ ]] \
+  || finish 1 error verification archive_stat_failed false inspect_archive_verification 'ERROR: invalid archive size'
 if (( size < 1024 )); then
-  rm -f -- "$PARTIAL"
-  echo "ERROR: dump is only $size bytes, under the 1024-byte floor" >&2
-  exit 1
+  finish 1 error verification archive_too_small false inspect_dump_failure "ERROR: dump is only $size bytes, under the 1024-byte floor"
 fi
-if ! gzip -t -- "$PARTIAL"; then
-  rm -f -- "$PARTIAL"
-  echo "ERROR: gzip integrity check failed on $PARTIAL" >&2
-  exit 1
-fi
-trailer_count="$(gzip -cd -- "$PARTIAL" | grep -a -c -F -- '-- PostgreSQL database dump complete')"
-if [[ "$trailer_count" != 1 ]]; then
-  rm -f -- "$PARTIAL"
-  echo "ERROR: dump does not end with exactly one completion trailer (found $trailer_count)" >&2
-  exit 1
-fi
-create_count="$(gzip -cd -- "$PARTIAL" | grep -a -c -E '^CREATE TABLE ')"
-if (( create_count < 1 )); then
-  rm -f -- "$PARTIAL"
-  echo "ERROR: dump contains no CREATE TABLE statements" >&2
-  exit 1
+if ! gzip -t -- "$PARTIAL" 2>/dev/null; then
+  finish 1 error verification gzip_integrity_failed false inspect_dump_failure 'ERROR: gzip integrity check failed'
 fi
 
-mv -- "$PARTIAL" "$FINAL"
-echo "host_db_backup=PASS file=$(basename "$FINAL") size_bytes=$size tables=$create_count"
+# Stream through a bounded-state verifier, never SQL execution. COPY rows are
+# data, even if they look exactly like a completion marker or CREATE TABLE.
+# Accept the legacy bare terminal marker and the standard comment block, plus
+# a matching modern pg_dump unrestrict after the footer when restrict is used.
+create_count="$(gzip -cd -- "$PARTIAL" 2>/dev/null | awk '
+  BEGIN { marker="-- PostgreSQL database dump complete" }
+  {
+    if (copy) { if ($0 == "\\.") copy=0; next }
+    if ($0 ~ /^[[:space:]]*$/) next
+    if (footer) {
+      if (footer == 1 && $0 == "--") { footer=2; next }
+      if (footer <= 2 && restrict_key != "" && $0 == "\\unrestrict " restrict_key) { footer=3; next }
+      footer=0
+    }
+    if ($0 ~ /^\\restrict [A-Za-z0-9_]+$/) restrict_key=substr($0, 11)
+    if ($0 == marker) footer=1
+    if ($0 ~ /^CREATE TABLE /) tables++
+    if ($0 ~ /^COPY .* FROM stdin;$/) copy=1
+  }
+  END {
+    if (copy || !footer || (restrict_key != "" && footer != 3)) { print "invalid_trailer"; exit 1 }
+    if (tables < 1) { print "missing_tables"; exit 1 }
+    print tables
+  }')"; verify_rc=$?
+if (( verify_rc != 0 )); then
+  if [[ "$create_count" == missing_tables ]]; then
+    finish 1 error verification missing_create_table false inspect_dump_failure 'ERROR: dump contains no CREATE TABLE statements'
+  fi
+  finish 1 error verification invalid_terminal_trailer false inspect_dump_failure 'ERROR: dump has no valid terminal completion trailer'
+fi
+[[ "$create_count" =~ ^[1-9][0-9]*$ ]] \
+  || finish 1 error verification invalid_terminal_trailer false inspect_dump_failure 'ERROR: unmeasurable dump structure'
 
-# Retention: only ever prune archives THIS script wrote, never a
-# server-authored one.
-cutoff_days="$RETENTION_DAYS"
-pruned=0
+# GNU mv -nT does not replace an existing entry or move into a directory. Some
+# versions return 0 on a no-clobber skip: a surviving source is NOT publication.
+if ! mv -nT -- "$PARTIAL" "$FINAL" 2>/dev/null; then
+  finish 1 error publication atomic_publication_failed false inspect_destination_before_retry 'ERROR: failed to publish archive atomically'
+fi
+if [[ -e "$PARTIAL" || -L "$PARTIAL" || ! -f "$FINAL" || -L "$FINAL" ]]; then
+  finish 1 error publication destination_exists false inspect_existing_archive 'ERROR: archive was not published; destination may already exist'
+fi
+PARTIAL=""
+BACKUP_LANDED=true
+ARCHIVE_ID="\"paperclip-${TS}-${TAG}.sql.gz\""
+if (( ! JSON )); then
+  printf 'host_db_backup=PASS file=%s size_bytes=%s tables=%s\n' "${FINAL##*/}" "$size" "$create_count"
+fi
+
+# Capture traversal AND its exit status before deleting anything. Process
+# substitution hides find failures; an incomplete listing is never zero pruned.
+RETENTION_STATUS=failed
+LIST="$(mktemp "$BACKUP_DIR/.host-db-retention.XXXXXXXX")" \
+  || finish 1 partial retention retention_list_failed false inspect_retention_without_redump 'ERROR: partial cycle; backup landed but retention listing could not be created'
+if ! find "$BACKUP_DIR" -maxdepth 1 -type f -name "paperclip-*-${TAG}.sql.gz" -mtime "+${RETENTION_DAYS}" -print0 > "$LIST" 2>/dev/null; then
+  finish 1 partial retention retention_enumeration_failed false inspect_retention_without_redump 'ERROR: partial cycle; backup landed but retention traversal failed; pruned=unknown'
+fi
+PRUNED=0
+retention_failed=0
 while IFS= read -r -d '' old; do
-  rm -f -- "$old" && pruned=$((pruned + 1))
-done < <(find "$BACKUP_DIR" -maxdepth 1 -type f -name "paperclip-*-${TAG}.sql.gz" -mtime "+${cutoff_days}" -print0 2>/dev/null)
-echo "host_db_backup_retention: pruned=$pruned retention_days=$RETENTION_DAYS"
-
-exit 0
+  [[ "$old" != "$FINAL" ]] || continue
+  if rm -f -- "$old" 2>/dev/null; then
+    PRUNED=$((PRUNED + 1))
+  else
+    retention_failed=1
+  fi
+done < "$LIST"
+if (( retention_failed )); then
+  finish 1 partial retention retention_deletion_failed false inspect_retention_without_redump "ERROR: partial cycle; backup landed but retention deletion failed; pruned=$PRUNED"
+fi
+RETENTION_STATUS=complete
+finish 0 success complete null false none "host_db_backup_retention: pruned=$PRUNED retention_days=$RETENTION_DAYS"

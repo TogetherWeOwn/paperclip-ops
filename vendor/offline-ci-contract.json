@@ -321,6 +321,7 @@
     "api-base-validation suite:1",
     "api-base-validation-python suite:1",
     "review report input integrity holds:1",
+    "host backup publication receipt contract (offline):1",
     "native-ssh citation gate suite:1"
   ],
   "retained": [
@@ -1803,6 +1804,11 @@
       "name": "review report input integrity holds",
       "definition_sha256": "bffa19729a879126ad09b2eba97c28fddbdc6f4fa5e10afa5a536bb291c9dfc4",
       "id": "review report input integrity holds:1"
+    },
+    {
+      "name": "host backup publication receipt contract (offline)",
+      "definition_sha256": "f3220047635007807b551238df97e65b3db9b784bcafb35829fa009c51e3f5f4",
+      "id": "host backup publication receipt contract (offline):1"
     },
     {
       "name": "native-ssh citation gate suite",

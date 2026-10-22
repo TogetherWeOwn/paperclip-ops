@@ -17,9 +17,33 @@ its inventory, classification, review, merge, capacity, hold, or live-run rules.
   without `Z`); an unparseable value is preserved and never crashes a pass.
 - `pr-controller-wakes.patch`: wires request/claim acknowledgement into the
   initial-event and stale-reminder paths. All existing admission/hold guards stay.
+- `pr-controller-ci.patch`: routes the `ci_red` wake decision through the
+  rerun-once / 3-round-cap policy before the normal wake post, and skips
+  stale reminders while a PR is capped. Requires the wakes packet (it anchors
+  on both `post_wake` call sites). A mismatch at install is a stop.
 - `../pr_controller_wakes.py`: correlates the comment id with the server's
   `agent_wakeup_requests` record. The existing read-only SQL client is injected;
   this module performs no database writes or new wake API calls.
+- `../pr_controller_ci.py`: the wake-policy helper. First red on an eligible
+  check reruns once (`gh run rerun <id> --failed`) and holds the wake; a
+  passing retry records one flake, a failing retry wakes verbatim and counts
+  one round; the 3rd red round posts one re-scope comment instead of a wake;
+  3 flakes in 7 days open one `[flake]` card. Deny lists win, unknown shapes
+  wake as today, ledger failures are absorbed. Kill switch:
+  `PR_CONTROLLER_CI_DISABLE=1` or the `PR_CONTROLLER_CI_DISABLE_FILE` flag
+  file restores wake-on-first-red with no code change.
+- `../pr_controller_ci_host.py`: host glue translating the classifier's
+  `detail` payload into helper check rows, resolving paid/private cost via
+  the GitHub API, logging every rerun and cap comment with an UNDO line, and
+  running the 24h log-only shadow under a separate state key.
+- `../flake_ledger.py` additions: `record_flake` (one fail-then-pass pair
+  adds two observations and one flip, atomic write, never overwrites corrupt
+  evidence), `LedgerClient` (never-raising `verdict`, raising `record_flake`
+  for queue-and-retry), and `quarantine_card` (open or update the single
+  `[flake]` card).
+- `../fixtures/pr_controller_ci_before.py`: anchor regions transcribed from
+  the reviewed wakes post-image, used only for offline patch testing. It is
+  not a runtime controller.
 - `pr-controller-notify-guard.patch`: wires the notification-only author-wake
   gate into the live wake path. Four hunks: the `notify_author_wake` entry
   point beside the classification seam, a `required` hoist feeding
@@ -72,8 +96,21 @@ This is not a general repair for parked recovery actions or blocked cards.
   test_pr_controller_notify_guard test_pr_controller_notify_wiring)
 ```
 
+The ci-policy suites (acceptance contract, ops surface, host glue, patch
+packet, ledger recording) run the same way:
+
+```sh
+(cd ops/productivity && python3 -B -m unittest -v \
+  test_pr_controller_ci test_pr_controller_ci_ops test_pr_controller_ci_host \
+  test_pr_controller_ci_patch test_flake_ledger)
+```
+
 The backstop and notify-guard suites apply their patch with `--fuzz=0` to
-their fixture. To test a full staged controller without importing its host
+their fixture, and the ci-patch suite does the same for the ci packet.
+Hunk-shape rule for future packets: GNU `patch --fuzz=0` rejects a hunk
+whose leading context outnumbers its trailing context (change must sit at
+or before the hunk middle), so keep leading context minimal and anchor on
+unique lines. To test a full staged controller without importing its host
 dependencies:
 
 ```sh
@@ -133,3 +170,30 @@ Retain state and pending acknowledgements; never roll back or edit database rows
 remove holds, alter wake configuration, cancel runs, or force a review/merge.
 If step 5 was applied, remove the inserted pump block and restore the preserved
 pump file the same way.
+
+## CI-policy packet installation (rerun-once / 3-round cap)
+
+Requires the wakes packet above (the ci patch anchors on its `post_wake`
+call sites). Pin the host `pr_controller.py` SHA before staging; every step
+below runs against that pinned copy.
+
+1. Preserve the controller, state, metadata and hashes as above, plus a
+   `.bak` of the controller for instant rollback.
+2. Apply `pr-controller-ci.patch` with `patch --batch --fuzz=0 -p1`. A
+   mismatch is a stop: re-pin, do not force or fuzzy-apply.
+3. Stage `pr_controller_ci.py`, `pr_controller_ci_host.py` and the updated
+   `flake_ledger.py` beside the candidate. Run the ci-policy offline suites
+   and the existing host `test_pr_controller.py`. Compile the candidate
+   without executing its `main`.
+4. Shadow first: set `CI_POLICY_SHADOW=1` and run 24h log-only. The live
+   wake path is unchanged; every pass logs a `ci-policy shadow ... would-*`
+   line. Post the would-rerun, would-wake and would-cap counts for review
+   before enable.
+5. Enable by unsetting `CI_POLICY_SHADOW`. Every rerun and every cap comment
+   is logged in `ops/worker-vps/operator-actions.log` with an UNDO.
+6. Kill switch: `PR_CONTROLLER_CI_DISABLE=1` (or the flag file named by
+   `PR_CONTROLLER_CI_DISABLE_FILE`) restores wake-on-first-red immediately
+   with no code change and no restart beyond the next scheduled pass.
+
+Rollback: set the kill switch, or atomically restore the controller `.bak`
+(helpers may stay; they are inert without the call site).

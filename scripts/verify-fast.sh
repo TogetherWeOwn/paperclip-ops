@@ -181,7 +181,7 @@ python3 -m unittest test_case_dcf07273_assignment_bundle || fail "assignment hos
 (cd ops/paperclip && python3 -B -m unittest test_focus_gate_bounds) || fail "focus-gate bounds suite failed"
 (cd ops/lib && python3 -m unittest test_atomic_state) || fail "atomic state suite failed"
 (cd ops/productivity && python3 -m unittest test_stuck_run_state) || fail "stuck-run state suite failed"
-(cd ops/productivity && python3 -m unittest test_idle_waiters_state) || fail "idle-waiter state suite failed"
+(cd ops/productivity && python3 -B -m unittest test_idle_waiters_state test_idle_waiter_live_path test_idle_waiters_cli) || fail "idle-waiter state/live-path/cli suites failed"
 (cd ops/owner-guard && python3 -m unittest test_owner_guard_state) || fail "owner-guard state suite failed"
 (cd ops/review_tier1 && python3 -m unittest test_review_tier1) || fail "review-tier1 suite failed"
 (cd ops/analysis/review-findings && python3 -B -m unittest test_classify) || fail "review-findings classifier suite failed"

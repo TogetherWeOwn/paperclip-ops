@@ -1410,12 +1410,18 @@ jobs:
       # case_f3bda97c: the pr-hygiene owner-match and live-run-guard suites are
       # offline (mocks only), so they run here where CI executes them; the
       # --parse-only tier of verify-fast.sh never reaches them.
+      # The idle-waiter live-path and CLI suites pin the last-moment guard,
+      # rollup deferral and strict CLI modes; without explicit steps they run
+      # only in the full local verify-fast tier, so a regression only they
+      # catch would merge green.
       - name: guard state fail-closed suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: |
           (cd ops/lib && python3 -m unittest -v test_atomic_state)
           (cd ops/productivity && python3 -m unittest -v test_stuck_run_state)
           (cd ops/productivity && python3 -m unittest -v test_idle_waiters_state)
+          (cd ops/productivity && python3 -m unittest -v test_idle_waiter_live_path)
+          (cd ops/productivity && python3 -m unittest -v test_idle_waiters_cli)
           (cd ops/owner-guard && python3 -m unittest -v test_owner_guard_state)
           (cd ops/pr-hygiene && python3 -m unittest -v test_owner_match)
           (cd ops/lib && python3 -m unittest -v test_live_run_guard)

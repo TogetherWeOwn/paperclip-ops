@@ -97,8 +97,21 @@ const RUN_QUEUED = new Set(['QUEUED', 'PENDING', 'REQUESTED', 'WAITING'])
 // and ERROR/FAILURE both mean the status did not pass, so both read as failure.
 const MS_LIMIT = 8.64e15
 
-function requireValue(condition, message) {
-  if (!condition) throw new Error(message)
+class SnapshotReadError extends Error {
+  constructor(message, code) {
+    super(message)
+    this.code = code
+  }
+}
+
+// Only adapter-created errors carry a diagnostic; never echo child streams or
+// arbitrary exception messages into a public Actions log.
+export function snapshotFailureCode(error) {
+  return error instanceof SnapshotReadError ? error.code : 'snapshot-invalid'
+}
+
+function requireValue(condition, message, code = null) {
+  if (!condition) throw code === null ? new Error(message) : new SnapshotReadError(message, code)
 }
 
 function prNumber(number) {
@@ -168,7 +181,23 @@ function normalizeCheck(node) {
   throw new Error('GitHub check entry type is unknown')
 }
 
-function normalizeSnapshot(pr, repository, number, nowMs) {
+// Readiness has no push-age decision. Repeated names are legitimate across
+// workflows/status sources, but none may hide a failure or an unfinished run.
+function readinessChecks(checks) {
+  const rank = (check) => check.status !== 'completed' ? 1
+    : ['success', 'neutral', 'skipped'].includes(check.conclusion) ? 0 : 2
+  const byName = new Map()
+  for (const check of checks) {
+    const prior = byName.get(check.name)
+    if (!prior || rank(check) > rank(prior) ||
+      (rank(check) === rank(prior) && JSON.stringify(check) < JSON.stringify(prior))) {
+      byName.set(check.name, check)
+    }
+  }
+  return [...byName.values()].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+}
+
+function normalizeSnapshot(pr, repository, number, nowMs, readiness = false) {
   requireValue(pr && pr.number === number && pr.baseRepository?.nameWithOwner === repository &&
     pr.url === `https://github.com/${repository}/pull/${number}`, 'GitHub PR identity is incomplete or mismatched')
   requireValue(typeof pr.headRefOid === 'string' && /^[a-f0-9]{40}$/.test(pr.headRefOid) &&
@@ -190,8 +219,9 @@ function normalizeSnapshot(pr, repository, number, nowMs) {
   requireValue(pr.commits && Array.isArray(pr.commits.nodes) && pr.commits.nodes.length > 0,
     'GitHub PR commits are missing')
   const head = pr.commits.nodes.find((n) => n?.commit?.oid === pr.headRefOid)
-  requireValue(head, 'GitHub head commit is outside the snapshot window; the PR moved during the read')
-  const headPushedMs = parseTime(head.commit.pushedDate, 'GitHub head push time is missing or invalid')
+  requireValue(head, 'GitHub head commit is outside the snapshot window; the PR moved during the read', 'head-outside-window')
+  const headPushedMs = readiness && head.commit.pushedDate === null ? null
+    : parseTime(head.commit.pushedDate, 'GitHub head push time is missing or invalid')
   // A null rollup means no checks have ever reported, not a failed read: it
   // becomes an empty set, which closeout reports as missing after its grace
   // period. Inventing entries here would be the silent direction.
@@ -199,19 +229,24 @@ function normalizeSnapshot(pr, repository, number, nowMs) {
   requireValue(rollup === null || (typeof rollup === 'object' &&
     (rollup.contexts === null || rollup.contexts === undefined ||
     (Array.isArray(rollup.contexts?.nodes) && rollup.contexts.pageInfo?.hasNextPage === false))),
-  'GitHub check rollup is incomplete or truncated')
+  'GitHub check rollup is incomplete or truncated', 'check-rollup-incomplete')
   const checks = []
-  const seen = new Set()
+  const counts = new Map()
   for (const node of rollup?.contexts?.nodes ?? []) {
-    const check = normalizeCheck(node)
-    // One entry per name: the rollup already carries the latest per context.
-    // Two entries would make "which one counts" a coin flip on array order.
-    requireValue(!seen.has(check.name), 'GitHub check rollup has duplicate check names')
-    seen.add(check.name)
+    let check
+    try {
+      check = normalizeCheck(node)
+    } catch (error) {
+      if (!readiness) throw error
+      throw new SnapshotReadError('GitHub check entry is malformed', 'check-malformed')
+    }
+    // Closeout is age-sensitive and keeps its original ambiguity guard.
+    requireValue(readiness || !counts.has(check.name), 'GitHub check rollup has duplicate check names')
+    counts.set(check.name, (counts.get(check.name) ?? 0) + 1)
     checks.push(check)
   }
   requireValue(Number.isInteger(nowMs) && nowMs >= 0 && nowMs <= MS_LIMIT, 'snapshot clock is invalid')
-  requireValue(nowMs >= headPushedMs, 'snapshot clock precedes the head push')
+  requireValue(headPushedMs === null || nowMs >= headPushedMs, 'snapshot clock precedes the head push')
   // The body is advisory readiness payload, not closeout evidence: fixtures
   // that predate it (and a PR with no description, which GitHub returns as
   // null) read as null, and the readiness duty treats null as undecidable
@@ -225,7 +260,13 @@ function normalizeSnapshot(pr, repository, number, nowMs) {
     autoMerge: pr.autoMergeRequest !== null,
     labels: pr.labels.nodes.map((l) => l.name),
     mergeableState: pr.mergeStateStatus.toLowerCase(),
-    reviewDecision: pr.reviewDecision, headPushedMs, nowMs, checks,
+    reviewDecision: pr.reviewDecision, headPushedMs, nowMs,
+    checks: readiness ? readinessChecks(checks) : checks,
+    ...(readiness ? { snapshotFacts: {
+      headPushTime: headPushedMs === null ? 'null' : 'present',
+      repeatedNames: [...counts.values()].filter((count) => count > 1).length,
+      repeatedEntries: checks.length - counts.size,
+    } } : {}),
   }
 }
 
@@ -258,11 +299,11 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
     } catch {
       // Child errors include stdout/stderr (potentially credentials or private
       // response bodies). Do not retain a cause or expose either stream.
-      throw new Error('GitHub query failed: transport, timeout, output limit or invalid JSON')
+      throw new SnapshotReadError('GitHub query failed: transport, timeout, output limit or invalid JSON', 'query-transport')
     }
     requireValue(result && typeof result === 'object' && !Array.isArray(result) &&
       (!Object.hasOwn(result, 'errors') || (Array.isArray(result.errors) && result.errors.length === 0)),
-    'GitHub query returned errors or an incomplete response')
+    'GitHub query returned errors or an incomplete response', 'query-response')
     const repo = result.data?.repository
     requireValue(repo && repo.nameWithOwner === repository, 'GitHub repository response is incomplete or mismatched')
     return repo
@@ -287,11 +328,21 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
     return { ...normalizeSnapshot(repo.pullRequest, repository, number, nowMs), isPrivate: repo.isPrivate }
   }
 
+  async function getReadinessSnapshot(repository, number, options = {}) {
+    requireValue(prNumber(number), 'GitHub PR number is invalid')
+    const { nowMs = Date.now() } = options ?? {}
+    const repo = await query(repository, SNAPSHOT_QUERY, ['-F', `number=${number}`])
+    requireValue(typeof repo.isPrivate === 'boolean', 'GitHub repository visibility is missing')
+    return { ...normalizeSnapshot(repo.pullRequest, repository, number, nowMs, true), isPrivate: repo.isPrivate }
+  }
+
   async function disableAutoMerge(repository, number) {
     requireValue(prNumber(number), 'GitHub PR number is invalid')
-    // S6b disarm-only duty (design §2 + §12): the ONLY merge mutation this
-    // adapter performs. It never arms (`--auto`) and never merges: there is
-    // no arm or merge call path in this module to mistake it for. Scoped to
+    // S6b disarm-only duty (design §2 + §12): this duty's ONLY merge
+    // mutation. It never arms (`--auto`) or merges immediately. The module's
+    // only other `gh pr merge` path is the reconcile duty's `enableAutoMerge`
+    // arm below, which can merge immediately when the PR is already eligible.
+    // Scoped to
     // the allowlist like every other call; a failure throws and the caller
     // leaves its cursor unadvanced. Disabling twice is safe (idempotent), so
     // the repair sweep may repeat it.
@@ -548,7 +599,9 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
   async function enableAutoMerge(repository, number, headSha) {
     requireValue(prNumber(number), 'GitHub PR number is invalid')
     // The reconcile duty's ONLY arm path (design: readiness-handler.md). It
-    // never merges: there is no merge call path in this module. Scoped to the
+    // can merge immediately when the PR is already eligible. The only other
+    // `gh pr merge` path is the S6b `disableAutoMerge` disarm above, which
+    // only disables auto-merge. Scoped to the
     // allowlist like every other call; a failure throws and the caller records
     // it. Arming twice is safe (idempotent), so the sweep may repeat it. The
     // head SHA binds the arm to the exact head the gate evaluated
@@ -567,7 +620,7 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
     }
   }
 
-  return { getPullRequest, listOpenPullRequests, getCloseoutSnapshot, getRequiredChecks,
+  return { getPullRequest, listOpenPullRequests, getCloseoutSnapshot, getReadinessSnapshot, getRequiredChecks,
     getRulesetRequiredChecks, updatePullRequestBody, markReadyForReview, convertToDraft,
     enableAutoMerge, disableAutoMerge, getMainHeadChecks }
 }

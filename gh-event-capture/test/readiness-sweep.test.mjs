@@ -51,7 +51,7 @@ function doubles(openPRs, snapshots, { failList = [], events = null } = {}) {
       if (failList.includes(repository)) throw new Error('GitHub open PR scan is incomplete')
       return openPRs.get(repository) ?? []
     },
-    async getCloseoutSnapshot(repository, number) {
+    async getReadinessSnapshot(repository, number) {
       if (events) events.push(['snapshot', repository, number])
       const found = snapshots.get(`${repository}#${number}`)
       if (!found) throw new Error('GitHub query failed: transport, timeout, output limit or invalid JSON')

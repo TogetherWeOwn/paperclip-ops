@@ -388,8 +388,11 @@ class WorkflowInventory(AuditCase):
         self.assertEqual(code, 1, out)
         i5 = [l for l in out.splitlines() if l.startswith("I5 .github/workflows/")]
         for rel in ("a.yaml", "b.yaml", "c.yml"):
-            self.assertIn(f"I5 .github/workflows/{rel}", i5)
-        yaml_lines = [l for l in i5 if l.endswith(".yaml")]
+            self.assertTrue(
+                any(f"I5 .github/workflows/{rel}" in l for l in i5),
+                f"I5 .github/workflows/{rel} not found in {i5}",
+            )
+        yaml_lines = [l for l in i5 if len(l.split()) > 1 and l.split()[1].endswith(".yaml")]
         self.assertEqual(yaml_lines, sorted(yaml_lines))
         code2, out2 = self.run_audit(registry=reg)
         self.assertEqual((code2, out2), (code, out))

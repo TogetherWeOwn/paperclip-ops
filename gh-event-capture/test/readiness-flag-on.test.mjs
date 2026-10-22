@@ -163,10 +163,12 @@ test('A5: skipped heavy evidence refuses the arm even with review passed — a s
 // --- B. arm wake: the review verdict binds THIS head -------------------------
 
 test('B6: missing, pending, or failing review never arms', () => {
+  // Every variant carries heavy success, so these pin the review bind rather
+  // than passing through the heavy bind.
   const variants = {
-    missing: SUITES.map(pass),
-    pending: [...SUITES.map(pass), pending('Paperclip Review')],
-    failing: [...SUITES.map(pass), { name: 'Paperclip Review', status: 'completed', conclusion: 'failure', completedMs: 1 }],
+    missing: [...SUITES.map(pass), pass('suites')],
+    pending: [...SUITES.map(pass), pass('suites'), pending('Paperclip Review')],
+    failing: [...SUITES.map(pass), pass('suites'), { name: 'Paperclip Review', status: 'completed', conclusion: 'failure', completedMs: 1 }],
   }
   for (const [shape, checks] of Object.entries(variants)) {
     const decision = decideReadinessActions(input(6, { checks }), on)
@@ -177,9 +179,10 @@ test('B6: missing, pending, or failing review never arms', () => {
 
 test('B7: the review bind is unconditional — the arm refuses even when review is not required', () => {
   const withoutReview = [...SUITES]
-  // Rulesets without the review check, everything green, review never ran:
-  // still no arm. A ruleset edit can never silently disarm this bind.
-  const refused = decideReadinessActions(input(7, { checks: SUITES.map(pass) }, withoutReview), on)
+  // Rulesets without the review check, everything green plus heavy success,
+  // review never ran: still no arm. A ruleset edit can never silently
+  // disarm this bind.
+  const refused = decideReadinessActions(input(7, { checks: [...SUITES.map(pass), pass('suites')] }, withoutReview), on)
   assert.ok(!refused.actions.includes('enable-automerge'))
   // Control: the same shape with review passed and heavy success on this
   // head arms — the bind refuses, it does not brick.

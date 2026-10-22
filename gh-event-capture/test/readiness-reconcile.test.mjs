@@ -215,8 +215,9 @@ test('auto-merge arms only on a ready PR with CI, the review check and heavy sui
     input(6, { draft: false, autoMerge: false, checks: [...greenChecks(), suitesPass, reviewPass] }), on)
   assert.ok(armed.actions.includes('enable-automerge'))
   assert.ok(!armed.actions.includes('mark-ready'))
-  // Missing review check on this head: no arm, even with green CI.
-  const missing = decideReadinessActions(input(6, { draft: false }), on)
+  // Missing review check on this head: no arm, even with green CI and
+  // heavy success — the suites entry pins the review bind specifically.
+  const missing = decideReadinessActions(input(6, { draft: false, checks: [...greenChecks(), suitesPass] }), on)
   assert.ok(!missing.actions.includes('enable-automerge'))
   // Already armed: no second arm call.
   const already = decideReadinessActions(

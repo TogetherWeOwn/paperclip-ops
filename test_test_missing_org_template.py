@@ -185,13 +185,15 @@ class CliExecutionTest(unittest.TestCase):
     --changed-files-file, label parsing and --coverage-json are behaviour,
     not regex-matchable text."""
 
-    def run_cli(self, args, files=None):
+    def run_cli(self, args, files=None, unreadable=()):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for rel, content in (files or {}).items():
                 dest = root / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(content)
+            for rel in unreadable:
+                (root / rel).chmod(0)
             env = dict(os.environ)
             env.pop("GITHUB_STEP_SUMMARY", None)
             proc = subprocess.run(
@@ -234,6 +236,27 @@ class CliExecutionTest(unittest.TestCase):
         )
         self.assertEqual(rc, 1, out)
         self.assertIn("changed line not covered", out)
+
+    def test_cli_unreadable_test_file_is_a_finding_not_a_silent_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = Path(tmp) / "probe.py"
+            probe.write_text("x = 1\n")
+            probe.chmod(0)
+            try:
+                readable = probe.read_text()
+            except OSError:
+                readable = None
+            if readable is not None:
+                self.skipTest("mode 000 still readable (running as root?)")
+        rc, out = self.run_cli(
+            ["--changed-files", "src/foo.py,tests/test_perm.py",
+             "--mode", "enforce"],
+            files={"src/foo.py": "x = 1\n",
+                   "tests/test_perm.py": "def test_it():\n    x = 1\n"},
+            unreadable=("tests/test_perm.py",),
+        )
+        self.assertEqual(rc, 1, out)
+        self.assertIn("unreadable test file", out)
 
 
 if __name__ == "__main__":

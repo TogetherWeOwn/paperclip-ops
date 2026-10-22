@@ -265,15 +265,19 @@ def main(argv=None) -> int:
               if part.strip()]
     findings = check_src_without_tests(files, labels)
     # Vacuity guards run on every changed test file readable from the
-    # checkout (deleted files are absent, not empty, so they are skipped).
+    # checkout. Deleted files are absent, not empty, so they are skipped;
+    # a present-but-unreadable test file is a finding, never a silent
+    # pass (an unreadable test must not read as covered).
     test_contents = {}
     for path in files:
         if not is_test_path(path):
             continue
         try:
             test_contents[path] = Path(path).read_text(errors="replace")
-        except OSError:
+        except FileNotFoundError:
             continue
+        except OSError:
+            findings.append(f"{path}: unreadable test file")
     findings += check_test_guards(test_contents)
     # Changed-line coverage runs when the caller supplies coverage data.
     if args.coverage_json:

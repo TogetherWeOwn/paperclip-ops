@@ -4,13 +4,18 @@
 # calls the same script, so local and CI run the identical thing.
 # Heavy tier (Postgres, browser, staging e2e, -race, mutation) is CI-only;
 # the PR readiness block reports it from CI — never claim it locally.
-.PHONY: verify-fast verify-fast-parse setup-githooks
+# `make verify-fast-plan` prints the machine-readable suite plan (offline,
+# read-only); inspect scope and prerequisites without running or preparing.
+.PHONY: verify-fast verify-fast-parse verify-fast-plan setup-githooks
 
 verify-fast:
 	./scripts/verify-fast.sh
 
 verify-fast-parse:
 	./scripts/verify-fast.sh --parse-only
+
+verify-fast-plan:
+	./scripts/verify-fast.sh --plan --json
 
 setup-githooks:
 	./scripts/setup-githooks.sh

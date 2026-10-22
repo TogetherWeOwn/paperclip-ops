@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # ===========================================================================
 # test_kofra_preview_parity_json.py — acceptance tests for the preview-parity
-# versioned JSON verdict envelope (TOG-37010, roadmap M11.3 on TOG-36994).
+# versioned JSON verdict envelope (paired acceptance tests, roadmap M11.3).
 #
-# Paired with the build card TOG-37013. The Builder rebases onto this card's
+# Paired with the build card. The Builder rebases onto this card's
 # handoff SHA and MUST NEVER EDIT THIS FILE; CI wiring (.github/workflows)
 # and the implementation land in the build PR, where the orphan-suite
 # ratchet runs against the wired head. This branch never merges standalone.

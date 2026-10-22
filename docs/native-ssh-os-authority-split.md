@@ -117,7 +117,10 @@ the pinned lines instead of copying the live `/app` tree, so it runs in public
 CI. The seam-absent mutation rewrites the seam symbols in place (same-line
 substitution, no line deletes), so the mutated run fails exactly on the three
 seam symbols with no extra `DRIFT`s; whole-line deletes would shift every later
-anchor and bury the seam verdict under drift noise.
+anchor and bury the seam verdict under drift noise. The slice-D preamble's
+point-in-time figures (the 365-line count, the byte-identical gate blob) describe
+the recovery snapshot, not this tree, and are superseded here along with its
+red-by-design note; the §3 pins above track the live tree.
 
 ### What this run could not establish
 
@@ -168,7 +171,7 @@ The migration must first move/chown server-owned state. Starting the service und
 
 ### 3.3 Per-run executor
 
-Put the **entire adapter executor**, not merely its final CLI child, behind a host executor interface. The strongest minimal complete seam is the `adapter.execute(...)` boundary at `/app/server/src/services/heartbeat.ts:15564`: the server starts one IPC-backed worker in the run's OS domain, and logs, lifecycle events, tool callbacks, and the terminal result cross a typed channel. This covers CLI children, ACP agent children, ACP terminal commands, generic process adapters, and dynamically loaded adapter code with one boundary. A narrower `runChildProcess()` integration is acceptable only as a staged prototype and must remain fail-closed for ACP/external-adapter paths until those paths move behind the same executor.
+Put the **entire adapter executor**, not merely its final CLI child, behind a host executor interface. The strongest minimal complete seam is the `adapter.execute(...)` boundary at `/app/server/src/services/heartbeat.ts:25879`: the server starts one IPC-backed worker in the run's OS domain, and logs, lifecycle events, tool callbacks, and the terminal result cross a typed channel. This covers CLI children, ACP agent children, ACP terminal commands, generic process adapters, and dynamically loaded adapter code with one boundary. A narrower `runChildProcess()` integration is acceptable only as a staged prototype and must remain fail-closed for ACP/external-adapter paths until those paths move behind the same executor.
 
 For each run, the server asks systemd to create a transient scope/service with:
 
@@ -218,8 +221,8 @@ Only after all checks pass may it access SSH/provider credentials or create a ch
 
 The complete upstream boundary belongs at the common adapter-execution seam, with the process-launch seam as a subordinate implementation point:
 
-- replace the in-process `adapter.execute(...)` call near `/app/server/src/services/heartbeat.ts:15564` with an IPC-backed per-run executor launched from a server-derived immutable launch-spec reference;
-- within that worker, extend `runChildProcess()` near `/app/packages/adapter-utils/src/server-utils.ts:3194` with the host-executor target used by CLI/process children;
+- replace the in-process `adapter.execute(...)` call near `/app/server/src/services/heartbeat.ts:25879` with an IPC-backed per-run executor launched from a server-derived immutable launch-spec reference;
+- within that worker, extend `runChildProcess()` near `/app/packages/adapter-utils/src/server-utils.ts:4833` with the host-executor target used by CLI/process children;
 - move or adapt both ACPX agent and ACP terminal spawn sites behind the same worker/executor before claiming ACP coverage;
 - make native SSH request a signer-issued envelope before `resolveSpawnTarget()` can construct `ssh`;
 - keep workspace staging separate and explicitly non-authoritative;

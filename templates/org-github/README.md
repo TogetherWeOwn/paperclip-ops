@@ -46,6 +46,7 @@ Operator applies these files there after this PR merges.
 | `ax-metrics/ax_metrics.py` | PRIVATE ops repo `ax-metrics/ax_metrics.py` (ships with the workflow above) |
 | `review/AX-DIMENSION.md` | reference only (stays here; exact AX dimension text for the host-side review owner to install) |
 | `tests/test_ax_org_template.py` | reference only (stays here; structural contract for everything above) |
+| `tests/test_ax_lint_evidence.py` | reference only (stays here; immutable acceptance contract for located evidence + conservative CLI matching) |
 
 > `scripts/ci_policy.py` + `tests/test_ci_policy.py` are a verbatim copy of
 > `paperclip-ops@4fb40122` (PR #656, warn mode). Do not edit the copy:
@@ -188,7 +189,7 @@ PYTHONPATH=templates/org-github/scripts \
   python3 -m unittest discover -s templates/org-github/tests -p 'test_ci_policy.py'
 ./templates/org-github/tests/test_tier0_org_template.sh
 ./templates/org-github/check-staged-drift.sh
-python3 -m unittest discover -s templates/org-github/tests -p 'test_ax_org_template.py'
+python3 -B -m unittest discover -s templates/org-github/tests -p 'test_ax_*py'
 ```
 
 Covers 65 matcher fixtures/controls, 22 actual-workflow tests and five template

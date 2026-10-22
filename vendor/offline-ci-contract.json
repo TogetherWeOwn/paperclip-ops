@@ -320,7 +320,8 @@
     "staging-preflight carrier suite:1",
     "api-base-validation suite:1",
     "api-base-validation-python suite:1",
-    "provider baseline integrity suite:1"
+    "provider baseline integrity suite:1",
+    "review report input integrity holds:1"
   ],
   "retained": [
     {
@@ -1802,6 +1803,11 @@
       "name": "provider baseline integrity suite",
       "definition_sha256": "a61a574a93f9aa493c38694fb68c4c43a4df905ac3721442d5547cf09a665dcd",
       "id": "provider baseline integrity suite:1"
+    },
+    {
+      "name": "review report input integrity holds",
+      "definition_sha256": "bffa19729a879126ad09b2eba97c28fddbdc6f4fa5e10afa5a536bb291c9dfc4",
+      "id": "review report input integrity holds:1"
     }
   ],
   "removed": [

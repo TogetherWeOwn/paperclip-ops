@@ -61,6 +61,14 @@ class Classify(unittest.TestCase):
         self.assertFalse(r["full"])
         self.assertEqual({a for a in cc.AREAS if r[a]}, {"core"})
 
+    def test_migration_standard_doc_wakes_only_core(self):
+        # DocsCanonicalTest in test_migration_evidence_ax.py scores the JSON
+        # contract in docs/migration-standard.md, so a docs-only edit there
+        # must wake the suites job's core area and nothing else.
+        r = self.result("docs/migration-standard.md")
+        self.assertFalse(r["full"])
+        self.assertEqual({a for a in cc.AREAS if r[a]}, {"core"})
+
     def test_acceptance_transport_changes_wake_core(self):
         for path in ("acceptance_transport.sh", "test_acceptance_transport.sh"):
             with self.subTest(path=path):

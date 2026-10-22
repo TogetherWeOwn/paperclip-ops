@@ -56,6 +56,10 @@ execution or deployment checklist; inspect each utility's usage and prerequisite
 before running it. `cliproxy_seam_extract.py` is an exempt one-shot forensic
 parser, not a standing operator command. Test entry points begin with `test_`.
 
+For `host_db_backup.sh`, see the [publication receipt contract](docs/host-db-backup.md)
+for offline discovery, no-write planning, machine outcomes and fixture checks.
+This documentation does not authorize running a backup or changing a host.
+
 | Tool |
 | --- |
 | `public_snapshot_test_support.py` (test-only private-artifact boundary; not a runtime policy or operator command) |
@@ -103,6 +107,7 @@ parser, not a standing operator command. Test entry points begin with `test_`.
 | `native_ssh_citation_gate.py` |
 | `notify_paperclip_issue.sh` |
 | `omniroute_combo_cli.sh` |
+| `op_queue_reject.sh` |
 | `org_provisioner.sh` |
 | `org_request_queue.sh` |
 | `pacer_admission_audit.py` |
@@ -120,6 +125,7 @@ parser, not a standing operator command. Test entry points begin with `test_`.
 | `runner_disk_pressure.sh` |
 | `runner_disk_triage.sh` |
 | `schema_drift.sh` |
+| `shell_subst_guard.py` |
 | `sibling_guard.sh` |
 | `two_bot_staging_precheck.py` |
 | `upstream_draft_pin_audit.sh` |

@@ -40,7 +40,7 @@ export async function loadConsumerConfig(path) {
     requireValue(new URL(config.captureOrigin).protocol === 'https:')
     receiptNamespace(config)
     config.limits = runnerLimits(config.limits)
-    // Optional shadow review/disarm opt-ins. Validate both before credentials/I/O.
+    // Optional review/disarm/red-main/deploy shadow opt-ins. Validate all before credentials/I/O.
     closeoutShadowSettings(config)
     config.stateDirectory = resolve(config.stateDirectory)
     for (const file of [path, config.captureTokenFile, config.boardTokenFile]) {

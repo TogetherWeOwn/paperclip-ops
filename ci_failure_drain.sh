@@ -25,8 +25,20 @@ set -uo pipefail
 #        (needs actions:read; the workflow already grants it, read-only).
 # Requires curl and jq. The token travels in a header FILE, never in argv —
 # /proc/*/cmdline is world-readable and this host is shared (case_3d790dcb).
-# On redirect the log endpoint answers 302 to pre-signed storage; curl -L is
-# the documented way to follow it.
+# REDIRECT SCOPING: the log endpoint answers 302 to pre-signed storage and
+# curl -L follows it — but since curl 7.58.0 (CVE-2018-1000007), plain -L does
+# NOT re-send a custom Authorization header (header file included) to a
+# different host unless --location-trusted is given. This script passes no
+# --location-trusted, assumes curl >= 7.58.0, and runs on ubuntu-latest
+# (curl 8.x), so the storage target never receives this bearer; pre-7.58 curl
+# is the only version that forwards. The redirect residual is what DOES
+# travel: the server-chosen target URL itself, non-credential headers, and a
+# possible protocol downgrade. Any future host allowlist here must therefore
+# cover redirect targets with manual redirect handling and an explicit
+# target-host check (the protection-rule/src/github.js pattern: redirect
+# manual, token to the API origin only) — never with --proto-redir, which
+# restricts redirect PROTOCOLS only. Do not copy this -L+auth pattern to a
+# wider-scoped bearer without that handling.
 # Every curl call below carries --connect-timeout/--max-time (case_e107fefc): a
 # hung endpoint must refuse (exit 3, HTTP 000 reads as a failed measurement),
 # never print "no failures found" over an unmeasured job list.
@@ -177,6 +189,8 @@ for jid in $FAILED_IDS; do
     CODE="$(curl -sS -L --connect-timeout 10 --max-time 60 -o "$TMP/$jid.log" -w '%{http_code}' -H @"$HDR" -H 'Accept: application/vnd.github+json' "$LOGURL" 2>"$TMP/curl-$jid.err")" || CURL_RC=$?
     [[ "$CURL_RC" -eq 0 ]] || refuse "downloading the log for failed job $jid ($JNAME): curl transport failure (exit $CURL_RC)"
     # The log endpoint answers 302 to pre-signed storage; -L follows it to 200.
+    # On curl >= 7.58 Authorization stays with the API host (see REDIRECT
+    # SCOPING); the redirect residual is the target URL itself, not this bearer.
     [[ "$CODE" == "200" ]] || refuse "downloading the log for failed job $jid ($JNAME) returned HTTP $CODE"
     SRC="$TMP/$jid.log"
   fi

@@ -106,6 +106,7 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
         "test_migration_squawk.sh",
         "test_migration_rehearsal.sh",
         "test_migration_drift_gate.py",
+        "test_migration_evidence_ax.py",
         # Harness code, fixtures and scored tables are offline suite inputs.
         "eval/review-bakeoff/",
     ),
@@ -169,6 +170,7 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
         "test_host_ops_broker.py",
         "test_host_ops_install.sh",
         "test_host_ops_prepare_first_install.sh",
+        "test_host_ops_staging_preflight_carrier.py",
     ),
     # case_1d1195e1: the upstream-pipeline family. Every entry below is ALSO
     # listed in ALSO_CORE_PREFIXES (kept deliberately: an upstream PR still
@@ -228,6 +230,9 @@ ALSO_CORE_PREFIXES: tuple[str, ...] = (
     "test_host_ops_broker.py",
     "test_host_ops_install.sh",
     "test_host_ops_prepare_first_install.sh",
+    # staging-preflight carrier: the `staging-preflight carrier suite` step
+    # executes this file in the suites job's core area.
+    "test_host_ops_staging_preflight_carrier.py",
     # mcp/deploy: the bash -n parse gate, acceptance_live_selftest.sh, and the
     # case_b22b58a0 verifier that test_case_bc1705d4_verify_g4.sh drives.
     "mcp/deploy/",
@@ -276,6 +281,10 @@ ALSO_CORE_PREFIXES: tuple[str, ...] = (
     # readme script-index gate: test_readme_script_index.sh parses the README
     # "What is here" table, so a README-only edit must wake offline-suites.
     "README.md",
+    # migration contract doc: DocsCanonicalTest in
+    # test_migration_evidence_ax.py scores this file, so a docs-only edit to
+    # the JSON contract must still wake the suites that guard it.
+    "docs/migration-standard.md",
     # case_1d1195e1: upstream-pipeline family. The suites job's core block
     # executes these tools and suites (upstream-gated steps), so a PR that
     # changes only them must still wake core; without these entries it would

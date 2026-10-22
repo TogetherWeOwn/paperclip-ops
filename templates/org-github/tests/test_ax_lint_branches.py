@@ -1,0 +1,270 @@
+#!/usr/bin/env python3
+"""test_ax_lint_branches.py — pins each ax-lint certification branch.
+
+Hermetic: stdlib only, synthetic fixtures. Run from the repo root:
+
+  python3 -B -m unittest discover -s templates/org-github/tests -p 'test_ax_*py'
+
+Each case writes one flag-taking script that handles only ``--target`` plus
+one shape that must (or must not) certify ``--json``, then asserts whether
+the script-surface rule fires.
+"""
+
+import os
+import sys
+import tempfile
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "ax-lint"))
+
+import ax_lint  # noqa: E402
+
+SH = "#!/bin/sh\n"
+PY = "#!/usr/bin/env python3\n"
+
+
+def surface_findings(name, text):
+    with tempfile.TemporaryDirectory() as root:
+        path = os.path.join(root, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.chmod(path, 0o755)
+        return ax_lint.check_script_surface(root)
+
+
+class CertifyMixin:
+    name = "tool.sh"
+    head = SH
+
+    def certifies(self, body):
+        return not surface_findings(self.name, self.head + body)
+
+
+class ShellComparison(CertifyMixin, unittest.TestCase):
+    def test_positive_forms(self):
+        for body in (
+            '[[ "$1" == "--json" ]]\n--target x\n',
+            '[ "$1" = --json ]\n',
+            '[ --json = "$1" ]\n',
+            '[[ $1 == --json && -n $2 ]]\n',
+        ):
+            self.assertTrue(self.certifies(body), body)
+
+    def test_negative_forms(self):
+        for body in (
+            "echo '[ $1 = --json ]'\n--target x\n",
+            "[ '$1' = --json ]\n--target x\n",
+            '[ "$1" != --json ]\n--target x\n',
+            '[ "$FMT" = --json ]\n--target x\n',
+            'echo "x\\" [ $1 = --json ] y"\n--target x\n',
+            'echo "[ $1 = --json ]"\n--target x\n',
+        ):
+            self.assertFalse(self.certifies(body), body)
+
+    def test_heredoc_body_does_not_certify(self):
+        for opener in ("<<'EOF'", "<<EOF", '<<"EOF"', "<<-EOF"):
+            body = ("cat > /tmp/consumer.sh %s\n"
+                    '[ "$1" = --json ]\nEOF\n--target x\n' % opener)
+            self.assertFalse(self.certifies(body), body)
+        # Tab-indented terminator with `<<-` still ends the span.
+        self.assertFalse(self.certifies(
+            "cat > /tmp/consumer.sh <<-EOF\n"
+            '[ "$1" = --json ]\n\tEOF\n--target x\n'))
+
+    def test_heredoc_guards(self):
+        # A real comparison after the heredoc still certifies.
+        self.assertTrue(self.certifies(
+            "cat > /tmp/c.sh <<'EOF'\nnote --target\nEOF\n"
+            '[ "$1" = --json ]\n'))
+        # A quoted `<<` never opens a span.
+        self.assertTrue(self.certifies(
+            'echo "<<" bogus\n[ "$1" = --json ]\n'))
+
+
+class ShellCase(CertifyMixin, unittest.TestCase):
+    def test_positive(self):
+        self.assertTrue(self.certifies(
+            'case "$1" in\n  --json) emit ;;\n  --target) go ;;\nesac\n'))
+        self.assertTrue(self.certifies(
+            'case "$1" in\n  --target|--json) go ;;\nesac\n'))
+
+    def test_value_case_does_not_certify(self):
+        self.assertFalse(self.certifies(
+            'case "$FORMAT" in\n  --json) emit ;;\nesac\n--target x\n'))
+
+    def test_nested_case_and_body_lines_do_not_certify(self):
+        self.assertFalse(self.certifies(
+            'case "$1" in\n  --target)\n    case "$FORMAT" in\n'
+            '      --json) emit ;;\n    esac\n    ;;\nesac\n'))
+        self.assertFalse(self.certifies(
+            'case "$1" in\n  --target)\n    out=$(run \\\n'
+            '    --json)\n    ;;\nesac\n'))
+
+    def test_quoted_terminator_does_not_rearm(self):
+        for term in (";;", ";&"):
+            self.assertFalse(self.certifies(
+                'case "$1" in\n  --target)\n    msg="done%s ok"\n'
+                '    out=$(run \\\n      --json)\n    ;;\nesac\n' % term))
+
+    def test_nested_one_liner_does_not_rearm(self):
+        self.assertFalse(self.certifies(
+            'case "$1" in\n  --target)\n'
+            '    case "$F" in --json) deep;; esac\n    out=$(run \\\n'
+            '      --json)\n    ;;\nesac\n'))
+        # The one-liner alone warns (no top-level --json branch).
+        self.assertFalse(self.certifies(
+            'case "$1" in\n  --target)\n'
+            '    case "$F" in --json) deep;; esac\n    ;;\nesac\n'
+            '--target\n'))
+
+    def test_heredoc_case_does_not_certify(self):
+        self.assertFalse(self.certifies(
+            "cat > /tmp/consumer.sh <<'EOF'\n"
+            'case "$1" in\n  --json) go ;;\nesac\nEOF\n--target x\n'))
+
+
+class UsageLine(CertifyMixin, unittest.TestCase):
+    def test_positive(self):
+        for body in ("# usage: tool --target X --json\n",
+                     'echo "Usage: tool --json"\n--target\n'):
+            self.assertTrue(self.certifies(body), body)
+
+    def test_exact_token_and_prose_do_not_certify(self):
+        for body in ("# usage: tool --target X --json-file F\n",
+                     "# TODO: usage: --json (not implemented)\n--target\n",
+                     "# see usage: --json elsewhere\n--target\n"):
+            self.assertFalse(self.certifies(body), body)
+
+    def test_call_forms_certify(self):
+        for body in ('print("usage: tool --json")\n',
+                     'puts("usage: tool --json")\n',
+                     'printf("usage: tool --json")\n',
+                     'print"usage: tool --json"\n',
+                     'print ("usage: tool --json")\n'):
+            self.assertTrue(self.certifies(body), body)
+
+
+class HeredocCertification(CertifyMixin, unittest.TestCase):
+    openers = ("<<EOF", "<<'EOF'", '<<"EOF"', r"<<\EOF", r"<<-\EOF")
+
+    def assert_generated_evidence_warns(self, evidence):
+        for opener in self.openers:
+            for flag in ("--json", "--dry-run"):
+                body = (f"cat {opener}\n{evidence.format(flag=flag)}\n"
+                        "EOF\n--target x\n")
+                with self.subTest(opener=opener, flag=flag):
+                    self.assertFalse(self.certifies(body), body)
+
+    def test_usage_inside_heredoc_warns(self):
+        self.assert_generated_evidence_warns("# usage: helper {flag}")
+
+    def test_argparse_inside_heredoc_warns(self):
+        self.assert_generated_evidence_warns("p.add_argument('{flag}')")
+
+    def test_argv_inside_heredoc_warns(self):
+        self.assert_generated_evidence_warns("if '{flag}' in sys.argv:\n    pass")
+
+    def test_backslash_quoted_shell_evidence_warns(self):
+        self.assert_generated_evidence_warns('[ "$1" = {flag} ]')
+        self.assert_generated_evidence_warns(
+            'case "$1" in\n  {flag}) emit ;;\nesac')
+
+    def test_real_evidence_after_heredoc_certifies(self):
+        for opener in self.openers:
+            for flag in ("--json", "--dry-run"):
+                for evidence in (
+                    "# usage: tool {flag}",
+                    "p.add_argument('{flag}')",
+                    "if '{flag}' in sys.argv:\n    pass",
+                    '[ "$1" = {flag} ]',
+                    'case "$1" in\n  {flag}) emit ;;\nesac',
+                ):
+                    body = (f"cat {opener}\ntext --target\nEOF\n"
+                            f"{evidence.format(flag=flag)}\n")
+                    with self.subTest(opener=opener, evidence=evidence, flag=flag):
+                        self.assertTrue(self.certifies(body), body)
+
+    def test_commented_opener_does_not_hide_real_evidence(self):
+        self.assertTrue(self.certifies(
+            "# cat <<EOF\n# usage: tool --json\n--target x\n"))
+
+    def test_terminator_with_comment_does_not_end_body(self):
+        self.assert_generated_evidence_warns(
+            "EOF # still generated text\n[ \"$1\" = {flag} ]")
+
+
+class PythonShapes(CertifyMixin, unittest.TestCase):
+    name = "tool.py"
+    head = PY
+
+    def test_positive(self):
+        for body in (
+            "p.add_argument('--json', action='store_true')\n",
+            "p.add_argument('-j', '--json')\n",
+            "if '--json' in sys.argv:\n    pass\n--target\n",
+        ):
+            self.assertTrue(self.certifies(body), body)
+
+    def test_string_literals_do_not_certify(self):
+        for body in (
+            "p.add_argument('--target', help=\"like '--json' output\")\n",
+            "DOC = \"p.add_argument('--json')\"\n--target\n",
+            "MSG = \"x '--json' in sys.argv\"\n--target\n",
+        ):
+            self.assertFalse(self.certifies(body), body)
+
+
+def dispatch(text):
+    with tempfile.TemporaryDirectory() as root:
+        wf = os.path.join(root, ".github", "workflows")
+        os.makedirs(wf)
+        with open(os.path.join(wf, "w.yml"), "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return ax_lint.check_dispatch_inputs(root), ax_lint.coverage(root)
+
+
+class DispatchScan(unittest.TestCase):
+    def test_comments_do_not_stop_the_scan(self):
+        for text in (
+            "on:\n  workflow_dispatch:\n# note\n    inputs:\n      a:\n"
+            "        description: d\n",
+            "on:\n  workflow_dispatch:\n  # note\n    inputs:\n      a:\n"
+            "        description: d\n",
+            "on:\n  workflow_dispatch:\n    inputs:\n      ok:\n"
+            "        type: string\n    # note\n      a:\n"
+            "        description: d\n",
+        ):
+            findings, _ = dispatch(text)
+            self.assertEqual(["dispatch-inputs/untyped"],
+                             [f["rule_id"] for f in findings], text)
+
+    def test_unsupported_entry_does_not_hide_prior_missing_type(self):
+        findings, cov = dispatch(
+            "on:\n  workflow_dispatch:\n    inputs:\n      first:\n"
+            "        description: d\n      second: &a\n"
+            "        type: string\n")
+        self.assertEqual(1, len(findings))
+        self.assertIn("'first'", findings[0]["message"])
+        self.assertEqual(1, len(cov["unknown"]))
+
+    def test_quoted_entry_is_unknown_covered(self):
+        for name in ('"second"', "'second'"):
+            findings, cov = dispatch(
+                "on:\n  workflow_dispatch:\n    inputs:\n      %s:\n"
+                "        description: d\n" % name)
+            self.assertEqual([], findings)
+            self.assertEqual(1, len(cov["unknown"]), name)
+
+    def test_quoted_entry_does_not_hide_prior_missing_type(self):
+        findings, cov = dispatch(
+            "on:\n  workflow_dispatch:\n    inputs:\n      first:\n"
+            "        description: d\n      \"second\":\n"
+            "        type: string\n")
+        self.assertEqual(1, len(findings))
+        self.assertIn("'first'", findings[0]["message"])
+        self.assertEqual(1, len(cov["unknown"]))
+
+
+if __name__ == "__main__":
+    unittest.main()

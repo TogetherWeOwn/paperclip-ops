@@ -325,6 +325,29 @@ else
   bad "guard refuses a not-found reply for another branch without mutation"
 fi
 
+# The guard binds the database too: a not-found reply naming the requested
+# branch in another database must not confirm absence either.
+export REC="$WORK/rec-show-dbmismatch"; mkdir -p "$REC"
+set +e
+FAKE_PSCALE_SHOW_OUTPUT="Error: branch rehearsal-guard-003 does not exist in database other-db (organization: fake)" \
+FAKE_PSCALE_SHOW_RC=1 env \
+  REHEARSAL_PSCALE_ORG=fake REHEARSAL_PSCALE_DB=fake \
+  PLANETSCALE_SERVICE_TOKEN_ID= PLANETSCALE_SERVICE_TOKEN= \
+  PSCALE_BIN="$WORK/bin/fake-pscale" \
+  "$GATE" run --migrations-dir "$WORK/migs" --provider planetscale \
+    --branch "rehearsal-guard-003" --out "$WORK/guard-dbmismatch.json" \
+    >"$WORK/guard-dbmismatch-output" 2>&1
+guard_dbmismatch_rc=$?
+set -e
+guard_dbmismatch_out="$(cat "$WORK/guard-dbmismatch-output")"
+if [[ "$guard_dbmismatch_rc" -eq 2 ]] && grep -q "could not confirm" <<< "$guard_dbmismatch_out" \
+    && ! grep -q '^create$' "$REC/pscale.argv" \
+    && ! grep -q '^delete$' "$REC/pscale.argv"; then
+  ok "guard refuses a not-found reply for another database without mutation"
+else
+  bad "guard refuses a not-found reply for another database without mutation"
+fi
+
 FAKE_PSCALE_MISSING_DELETE=1 REHEARSAL_PSCALE_ORG=fake REHEARSAL_PSCALE_DB=fake \
   PLANETSCALE_SERVICE_TOKEN_ID= PLANETSCALE_SERVICE_TOKEN= \
   PSCALE_BIN="$WORK/bin/fake-pscale" \
@@ -421,6 +444,18 @@ else
   bad "cleanup marker is retained when branch delete fails"
 fi
 
+# The reusable workflow owns the marker-left-behind path: its sweeper step
+# must stay an always(), planetscale-only, marker-gated cleanup that runs
+# `clean` and removes the marker on success.
+SWEEP_STEP="$(sed -n '/Clean up abandoned PlanetScale clone/,/Upload rehearsal evidence/p' \
+  "$HERE/.github/workflows/reusable-migration-rehearsal.yml")"
+grep -q "if: always() && inputs.provider == 'planetscale'" <<< "$SWEEP_STEP" \
+  && grep -qF '[[ -e "$REHEARSAL_CLEANUP_MARKER" ]] || { echo "No interrupted clone to clean."; exit 0; }' <<< "$SWEEP_STEP" \
+  && grep -q 'migration_rehearsal.sh clean' <<< "$SWEEP_STEP" \
+  && grep -q 'rm -f "$REHEARSAL_CLEANUP_MARKER"' <<< "$SWEEP_STEP" \
+  && ok "workflow sweeper is an always() marker-gated planetscale cleanup" \
+  || bad "workflow sweeper is an always() marker-gated planetscale cleanup"
+
 # 7. --only filters the pending set but applies it in migration filename order;
 # unknown tags are refused.
 "$GATE" plan --migrations-dir "$WORK/migs" --provider pitr --only "0043_b" \
@@ -508,6 +543,67 @@ EOF
 "$GATE" verify --evidence "$WORK/future-evidence.json" --max-age-hours 24 >/dev/null 2>&1 \
   && bad "verify fails a future finished_at" \
   || ok "verify fails a future finished_at"
+# Wrong-shaped evidence must be refused, not crash the embedded evaluator
+# with an AttributeError traceback (same fail-closed shape guard as the
+# drift gate; verify delegates to its validator).
+printf '[1, 2]' > "$WORK/root-list-evidence.json"
+set +e
+"$GATE" verify --evidence "$WORK/root-list-evidence.json" --max-age-hours 24 \
+  >"$WORK/root-list-output" 2>&1
+root_list_rc=$?
+set -e
+if [[ "$root_list_rc" -ne 0 ]] && grep -q "REFUSED" "$WORK/root-list-output" \
+    && ! grep -q "Traceback" "$WORK/root-list-output"; then
+  ok "verify refuses root-list evidence without a traceback"
+else
+  bad "verify refuses root-list evidence without a traceback"
+fi
+python3 - "$WORK/verify-evidence.json" "$WORK/row-string-evidence.json" <<'EOF'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["migrations"] = ["0042_a"]
+json.dump(doc, open(sys.argv[2], "w"))
+EOF
+set +e
+"$GATE" verify --evidence "$WORK/row-string-evidence.json" --max-age-hours 24 \
+  >"$WORK/row-string-output" 2>&1
+row_string_rc=$?
+set -e
+if [[ "$row_string_rc" -ne 0 ]] && grep -q "REFUSED" "$WORK/row-string-output" \
+    && ! grep -q "Traceback" "$WORK/row-string-output"; then
+  ok "verify refuses non-object migration rows without a traceback"
+else
+  bad "verify refuses non-object migration rows without a traceback"
+fi
+# An unreadable --sql-hashes input (non-UTF-8 bytes, or a directory, both of
+# which pass the bash [[ -r ]] precheck) must be refused, not crash the
+# hashes loop with a traceback.
+printf '\xff\xfe not utf-8' > "$WORK/bad-hashes.bin"
+set +e
+"$GATE" verify --evidence "$WORK/verify-evidence.json" \
+  --sql-hashes "$WORK/bad-hashes.bin" --max-age-hours 24 \
+  >"$WORK/bad-hashes-output" 2>&1
+bad_hashes_rc=$?
+set -e
+if [[ "$bad_hashes_rc" -ne 0 ]] && grep -q "REFUSED" "$WORK/bad-hashes-output" \
+    && ! grep -q "Traceback" "$WORK/bad-hashes-output"; then
+  ok "verify refuses non-UTF-8 --sql-hashes without a traceback"
+else
+  bad "verify refuses non-UTF-8 --sql-hashes without a traceback"
+fi
+mkdir -p "$WORK/hashes-dir"
+set +e
+"$GATE" verify --evidence "$WORK/verify-evidence.json" \
+  --sql-hashes "$WORK/hashes-dir" --max-age-hours 24 \
+  >"$WORK/hashes-dir-output" 2>&1
+hashes_dir_rc=$?
+set -e
+if [[ "$hashes_dir_rc" -ne 0 ]] && grep -q "REFUSED" "$WORK/hashes-dir-output" \
+    && ! grep -q "Traceback" "$WORK/hashes-dir-output"; then
+  ok "verify refuses a directory --sql-hashes without a traceback"
+else
+  bad "verify refuses a directory --sql-hashes without a traceback"
+fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

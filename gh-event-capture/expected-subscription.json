@@ -1,7 +1,8 @@
 {
   "_comment": [
     "The subscription gh-event-capture is supposed to have. scripts/check-subscription.sh",
-    "compares GET /app against this and exits non-zero on any difference.",
+    "compares GET /app against this and exits non-zero on any difference",
+    "(an empty hook_url exits 2 PENDING before any comparison).",
     "",
     "This file is the ONLY partial answer we have to the limit stated in README",
     "§ 1: an actor holding organization_administration can unsubscribe the events",

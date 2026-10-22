@@ -379,7 +379,7 @@ def service_start_commands(svc_path):
     """
     try:
         text = Path(svc_path).read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
     found = {directive: [] for directive in _EXEC_DIRECTIVES}
     in_service = False
@@ -647,7 +647,13 @@ def check_repo_timer(entry, root, findings):
                      f"I4 {eid}: timer file {timer_rel} not found", False,
                      "Restore the timer file or fix the registry citation, then re-run the audit.")
         return
-    timer = parse_unit(timer_path)
+    try:
+        timer = parse_unit(timer_path)
+    except (OSError, UnicodeDecodeError, configparser.Error) as exc:
+        findings.add("I4", eid, scope, timer_rel, "violation", "unreadable-source",
+                     f"I4 {eid}: cannot read timer file {timer_rel}: {exc}", False,
+                     "Restore the file as readable UTF-8, then re-run the audit.")
+        return
     if sd_schedule(timer) != entry.get("schedule"):
         findings.add("I4", eid, scope, timer_rel, "violation", "schedule-drift",
                      f"I4 {eid}: schedule {entry.get('schedule')} != {sd_schedule(timer)} in {timer_rel}",
@@ -664,7 +670,13 @@ def check_repo_timer(entry, root, findings):
                      f"I4 {eid}: service {unit} not found next to {timer_rel}", False,
                      "Restore the service file next to the timer, then re-run the audit.")
         return
-    svc = parse_unit(svc_path)
+    try:
+        svc = parse_unit(svc_path)
+    except (OSError, UnicodeDecodeError, configparser.Error) as exc:
+        findings.add("I4", eid, scope, unit, "violation", "unreadable-source",
+                     f"I4 {eid}: cannot read service file {unit}: {exc}", False,
+                     "Restore the file as readable UTF-8, then re-run the audit.")
+        return
     if svc.get("Service", "Type", fallback="simple") != "oneshot":
         findings.add("I3", eid, scope, unit, "violation", "unbounded-service",
                      f"I3 {eid}: {unit} is not Type=oneshot", False,
@@ -711,7 +723,14 @@ def check_plugin_jobs(entries, findings, root):
         # A plugin with both a src and a dist manifest is registered against src.
         if manifest.endswith("dist/manifest.js") and (root / src).is_file():
             continue
-        live = sorted(read_schedules(manifest, root))
+        try:
+            live = sorted(read_schedules(manifest, root))
+        except (OSError, UnicodeDecodeError) as exc:
+            findings.add("I4", None, None, manifest, "violation",
+                         "unreadable-source",
+                         f"I4 {manifest}: cannot read manifest file: {exc}",
+                         False, "Restore the file as readable UTF-8, then re-run the audit.")
+            continue
         if manifest not in declared:
             if live:
                 findings.add("I5", None, None, manifest, "violation",
@@ -750,7 +769,13 @@ def check_workflows(entries, findings, root):
         files.sort(key=lambda p: str(p.relative_to(root)))
     for workflow_path in files:
         rel = str(workflow_path.relative_to(root))
-        crons = CRON_RE.findall(workflow_path.read_text(encoding="utf-8"))
+        try:
+            crons = CRON_RE.findall(workflow_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as exc:
+            findings.add("I4", None, None, rel, "violation", "unreadable-source",
+                         f"I4 {rel}: cannot read workflow file: {exc}",
+                         False, "Restore the file as readable UTF-8, then re-run the audit.")
+            continue
         if crons and rel not in declared:
             findings.add("I5", None, None, rel, "violation", "unregistered-source",
                          f"I5 {rel} has a cron schedule {crons} but no registry entry",

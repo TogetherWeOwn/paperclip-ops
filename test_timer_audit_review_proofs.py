@@ -22,6 +22,9 @@ untouched; these tests pin only the review-driven behavior deltas:
   duration-overflow-finite  durations that overflow to infinity are not finite
   acceptance-suite-in-ci  the immutable suite is executed by the CI host-timer
       step, not just runnable by hand
+  undecodable-repo-bytes  unit/workflow/manifest files with invalid UTF-8
+      (or unparseable unit ini) yield controlled I4 violations with a
+      valid JSON envelope, never a traceback
 
 Offline rules: synthetic tmp trees and supplied live-capture JSON only.
 Every checker invocation runs as a bounded fixture subprocess (timeout:
@@ -137,6 +140,12 @@ class ProofCase(unittest.TestCase):
         p = self.root / "systemd" / name
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text)
+        return p
+
+    def write_bytes_file(self, rel, data):
+        p = self.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
         return p
 
     def write_capture(self, user=(), system=(), user_available=True,
@@ -455,6 +464,84 @@ class AcceptanceSuiteInCI(ProofCase):
     def test_review_proofs_run_in_host_timer_step(self):
         text = CI_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(Path(__file__).stem, text)
+
+
+class UndecodableRepoBytes(ProofCase):
+    """undecodable-repo-bytes: bad file bytes diagnose, never crash."""
+
+    BAD = b"[Service]\nExecStart=/bin/\xff\xfe\n"
+    BOUNDED_SERVICE = ("[Service]\nType=oneshot\nTimeoutStartSec=5min\n"
+                       "ExecStart=/bin/work\n")
+
+    def plant(self, sink):
+        """Clean repo-timer baseline plus one undecodable file; returns marker."""
+        self.write_timer()
+        self.write_service(self.BOUNDED_SERVICE)
+        if sink == "service":
+            self.write_bytes_file("systemd/example.service", self.BAD)
+            return "cannot read service file example.service"
+        if sink == "timer":
+            self.write_bytes_file("systemd/example.timer", self.BAD)
+            return "cannot read timer file systemd/example.timer"
+        if sink == "workflow":
+            self.write_bytes_file(".github/workflows/nightly.yml", self.BAD)
+            return "cannot read workflow file"
+        if sink == "manifest":
+            self.write_bytes_file("plugins/x/src/manifest.ts", self.BAD)
+            return "cannot read manifest file"
+        raise AssertionError(f"unknown sink {sink}")
+
+    SINKS = ("service", "timer", "workflow", "manifest")
+
+    def test_service_start_commands_returns_empty_on_bad_bytes(self):
+        checker = load_checker()
+        path = self.write_bytes_file("systemd/example.service", self.BAD)
+        self.assertEqual(checker.service_start_commands(path), [])
+
+    GARBAGE = "not a unit file \x00 no sections\n"
+
+    def test_garbage_unit_content_is_controlled(self):
+        for sink, marker in (("systemd/example.service",
+                              "cannot read service file"),
+                             ("systemd/example.timer",
+                              "cannot read timer file")):
+            with self.subTest(sink=sink):
+                self.write_timer()
+                self.write_service(self.BOUNDED_SERVICE)
+                (self.root / sink).write_text(self.GARBAGE)
+                code, out = self.check([repo_timer_entry()])
+                self.assertNotIn("Traceback", out)
+                self.assertEqual(code, 1, out)
+                self.assertIn(marker, out)
+                code, doc, combined = self.run_json(
+                    registry=self.write_registry([repo_timer_entry()]))
+                self.assert_valid_envelope(doc)
+                self.assertNotIn("Traceback", combined)
+                self.assertEqual(code, 1, combined)
+                codes = [r.get("code") for r in doc["results"]]
+                self.assertIn("unreadable-source", codes)
+
+    def test_each_sink_is_controlled_text(self):
+        for sink in self.SINKS:
+            with self.subTest(sink=sink):
+                marker = self.plant(sink)
+                code, out = self.check([repo_timer_entry()])
+                self.assertNotIn("Traceback", out)
+                self.assertEqual(code, 1, out)
+                self.assertIn(marker, out)
+
+    def test_each_sink_is_controlled_json(self):
+        for sink in self.SINKS:
+            with self.subTest(sink=sink):
+                marker = self.plant(sink)
+                code, doc, combined = self.run_json(
+                    registry=self.write_registry([repo_timer_entry()]))
+                self.assert_valid_envelope(doc)
+                self.assertNotIn("Traceback", combined)
+                self.assertEqual(code, 1, combined)
+                self.assertIn(marker, combined)
+                codes = [r.get("code") for r in doc["results"]]
+                self.assertIn("unreadable-source", codes)
 
 
 if __name__ == "__main__":

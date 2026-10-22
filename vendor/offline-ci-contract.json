@@ -331,7 +331,8 @@
     "settings-bind rehearsal suite:1",
     "host backup publication receipt contract (offline):1",
     "native-ssh citation gate suite:1",
-    "verify-fast plan suites:1"
+    "verify-fast plan suites:1",
+    "failure-drain JSON suite:1"
   ],
   "retained": [
     {
@@ -1868,6 +1869,11 @@
       "name": "verify-fast plan suites",
       "definition_sha256": "e1b1d3d318e2dff53a23c79b891d4bbab267c426e0d16a9c8dcf8fbef9f8074d",
       "id": "verify-fast plan suites:1"
+    },
+    {
+      "name": "failure-drain JSON suite",
+      "definition_sha256": "320dfb3648a8ea7564b9853519a266ea8ff1ce59a133726ce2362d234222370f",
+      "id": "failure-drain JSON suite:1"
     }
   ],
   "removed": [

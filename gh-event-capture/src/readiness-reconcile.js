@@ -1,6 +1,6 @@
 // Host-side readiness reconcile duty (case_4b213922, under case_2eafff8f).
 //
-// Per open PR it reads one authoritative snapshot (getCloseoutSnapshot: lifecycle,
+// Per open PR it reads one authoritative snapshot (getReadinessSnapshot: lifecycle,
 // head SHA, reviewDecision, mergeStateStatus, autoMergeRequest, head
 // statusCheckRollup), resolves required checks from the base-branch RULESETS
 // (never the payload, never legacy branch protection which 404s on
@@ -26,6 +26,7 @@
 // arming auto-merge under a hold would fight the disarm duty, which would
 // immediately disarm it again.
 
+import { snapshotFailureCode } from './github-adapter.js'
 import {
   REVIEW_CHECK,
   buildReadinessBlock,
@@ -205,13 +206,13 @@ export function emptyCounters() {
 
 /**
  * Dependencies (and deliberately NOTHING else):
- * github.getCloseoutSnapshot, github.getRulesetRequiredChecks,
+ * github.getReadinessSnapshot, github.getRulesetRequiredChecks,
  * github.updatePullRequestBody, github.markReadyForReview,
  * github.convertToDraft, github.enableAutoMerge. There is no merge, no close
  * and no comment call path in this module to mistake for one of these.
  */
 export function createReconciler({ github, policy, nowMs = () => Date.now() }) {
-  requireValue(github && typeof github.getCloseoutSnapshot === 'function' &&
+  requireValue(github && typeof github.getReadinessSnapshot === 'function' &&
     typeof github.getRulesetRequiredChecks === 'function' &&
     typeof github.updatePullRequestBody === 'function' &&
     typeof github.markReadyForReview === 'function' &&
@@ -260,15 +261,18 @@ export function createReconciler({ github, policy, nowMs = () => Date.now() }) {
       seen.add(key)
     }
     const records = []
+    const facts = new Map()
     const counters = emptyCounters()
     for (const ref of references) {
       counters.total++
 
       let snapshot
       try {
-        snapshot = await github.getCloseoutSnapshot(ref.repository, ref.number, { nowMs: now })
-      } catch {
+        snapshot = await github.getReadinessSnapshot(ref.repository, ref.number, { nowMs: now })
+        if (snapshot.snapshotFacts) facts.set(`${ref.repository}#${ref.number}`, snapshot.snapshotFacts)
+      } catch (error) {
         records.push({ ...ref, headSha: null, decision: 'none', reason: 'snapshot-read-failed',
+          snapshotFailure: snapshotFailureCode(error),
           log: logLine(ref.repository, ref.number, 'unknown', 'none', 'snapshot-read-failed'),
           error: 'snapshot-read-failed' })
         counters.errors++
@@ -341,6 +345,10 @@ export function createReconciler({ github, policy, nowMs = () => Date.now() }) {
         steps, reason: decision.reason,
         log: logLine(ref.repository, ref.number, snapshot.headSha, 'acted', decision.reason) })
       counters.acted++
+    }
+    for (const record of records) {
+      const snapshotFacts = facts.get(`${record.repository}#${record.number}`)
+      if (snapshotFacts) record.snapshotFacts = snapshotFacts
     }
     return { records, counters }
   }

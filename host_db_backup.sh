@@ -195,7 +195,7 @@ fi
 # GNU mv -nT does not replace an existing entry or move into a directory. Some
 # versions return 0 on a no-clobber skip: a surviving source is NOT publication.
 if ! mv -nT -- "$PARTIAL" "$FINAL" 2>/dev/null; then
-  finish 1 error publication atomic_publication_failed false inspect_destination_before_retry 'ERROR: atomic archive publication failed'
+  finish 1 error publication atomic_publication_failed false inspect_destination_before_retry 'ERROR: failed to publish archive atomically'
 fi
 if [[ -e "$PARTIAL" || -L "$PARTIAL" || ! -f "$FINAL" || -L "$FINAL" ]]; then
   finish 1 error publication destination_exists false inspect_existing_archive 'ERROR: archive was not published; destination may already exist'

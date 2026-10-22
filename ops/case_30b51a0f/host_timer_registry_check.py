@@ -296,6 +296,11 @@ def service_bound_detail(svc, exec_start, command_count=1):
     return False, "; ".join(parts) if parts else "has no finite positive runtime bound"
 
 
+def display_text(value):
+    """Escape undecodable filename surrogates for display, not file identity."""
+    return str(value).encode("utf-8", errors="backslashreplace").decode("utf-8")
+
+
 class Findings:
     """Paired text lines plus structured JSON results (deterministic on demand)."""
 
@@ -305,6 +310,7 @@ class Findings:
 
     def add(self, invariant, entry, scope, unit, severity, code, message,
             retryable, next_action):
+        message = display_text(message)
         self.out.append(message)
         self.results.append({
             "invariant": invariant, "entry": entry, "scope": scope, "unit": unit,
@@ -788,7 +794,8 @@ def check_workflows(entries, findings, root):
 
 def tracked_timers(root):
     try:
-        res = subprocess.run(["git", "-C", str(root), "ls-files", "*.timer"],
+        res = subprocess.run(["git", "-C", str(root), "-c", "core.quotepath=true",
+                              "ls-files", "*.timer"],
                              capture_output=True, text=True, check=True)
         return sorted(res.stdout.split())
     except (OSError, subprocess.CalledProcessError):
@@ -987,14 +994,14 @@ def run(args):
         if want_json:
             print(json.dumps(malformed_envelope("malformed-registry", message), sort_keys=True))
             return 2
-        print(message, file=sys.stderr)
+        print(display_text(message), file=sys.stderr)
         return 2
     except json.JSONDecodeError as exc:  # pragma: no cover - ValueError subclass, kept explicit
         message = f"unreadable registry: {exc}"
         if want_json:
             print(json.dumps(malformed_envelope("malformed-registry", message), sort_keys=True))
             return 2
-        print(message, file=sys.stderr)
+        print(display_text(message), file=sys.stderr)
         return 2
     findings = Findings()
     check_schema(entries, findings)
@@ -1017,7 +1024,7 @@ def run(args):
                 print(json.dumps(malformed_envelope(
                     "malformed-capture", message, entry_count=len(entries)), sort_keys=True))
                 return 2
-            print(message, file=sys.stderr)
+            print(display_text(message), file=sys.stderr)
             return 2
         except json.JSONDecodeError as exc:  # pragma: no cover - ValueError subclass
             message = f"unreadable capture: {exc}"
@@ -1025,7 +1032,7 @@ def run(args):
                 print(json.dumps(malformed_envelope(
                     "malformed-capture", message, entry_count=len(entries)), sort_keys=True))
                 return 2
-            print(message, file=sys.stderr)
+            print(display_text(message), file=sys.stderr)
             return 2
         unmeasured = check_live(entries, capture, findings)
         scopes = capture.get("scopes", {})
@@ -1056,7 +1063,8 @@ def run(args):
         for waiver in waivers:
             if not isinstance(waiver, dict):
                 continue
-            print(f"WAIVED {entry.get('id')} [{waiver.get('check')}]: {waiver.get('reason')} -> {waiver.get('fix')}")
+            print(display_text(f"WAIVED {entry.get('id')} [{waiver.get('check')}]: "
+                               f"{waiver.get('reason')} -> {waiver.get('fix')}"))
     unverified = sum(1 for entry in entries
                      if isinstance(entry, dict) and not entry.get("verified"))
     print(f"entries={len(entries)} unverified={unverified} "

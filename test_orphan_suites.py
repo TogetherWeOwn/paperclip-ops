@@ -1227,6 +1227,19 @@ class OrphanRatchetTest(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("test_zz_wd_after_root.py", errors[0])
 
+    def test_working_directory_after_long_run_body_scopes_discover(self):
+        body = "".join(f"          echo line {n}\n" for n in range(30))
+        root = repo_with_steps(
+            "      - name: probe\n"
+            "        run: |\n" + body +
+            "          python3 -m unittest discover -p 'test_*.py'\n"
+            "        working-directory: other\n",
+            suites=["other/test_zz_wd_long.py",
+                    "test_zz_wd_long_root.py"])
+        errors = ratchet.check(root, {})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("test_zz_wd_long_root.py", errors[0])
+
     def test_job_defaults_working_directory_fails_closed(self):
         root = make_repo({
             ".github/workflows/ci.yml": (

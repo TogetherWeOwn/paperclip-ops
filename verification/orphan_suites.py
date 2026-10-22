@@ -522,8 +522,9 @@ def _step_working_dir(lines, i, run_indent, forward_from=None):
                     return None
                 return value
         j -= 1
-    k = forward_from if forward_from is not None else i + 1
-    while k < len(lines) and k - i <= 25:
+    start = forward_from if forward_from is not None else i + 1
+    k = start
+    while k < len(lines) and k - start <= 25:
         text = lines[k]
         stripped = text.lstrip()
         if not stripped or stripped.startswith("#"):

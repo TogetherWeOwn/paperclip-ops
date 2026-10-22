@@ -39,6 +39,7 @@ SRC="$ROOT/red_main_poll.sh"
 SUITE="$ROOT/test_red_main_poll.sh"
 [ -f "$SRC" ]   || { echo "FATAL: cannot find red_main_poll.sh above $HERE" >&2; exit 4; }
 [ -f "$SUITE" ] || { echo "FATAL: cannot find test_red_main_poll.sh above $HERE" >&2; exit 4; }
+[ -f "$ROOT/lib/paperclip_api_allowlist.sh" ] || { echo "FATAL: cannot find lib/paperclip_api_allowlist.sh above $HERE" >&2; exit 4; }
 [ -x "$ROOT/gh_ci_status.sh" ] || { echo "FATAL: gh_ci_status.sh missing above $HERE -- run bash scripts/sync-toolkit.sh first (INSTALL.md §3)" >&2; exit 4; }
 
 STAGE="$(mktemp -d)"
@@ -52,10 +53,13 @@ done
 cp "$SRC" "$STAGE/red_main_poll.sh"
 cp "$SUITE" "$STAGE/test_red_main_poll.sh"
 cp "$ROOT/gh_ci_status.sh" "$STAGE/gh_ci_status.sh"
-mkdir -p "$STAGE/ops/case_e77a1e99" "$STAGE/ops/case_4ea7d92e/lib"
+mkdir -p "$STAGE/ops/case_e77a1e99" "$STAGE/ops/case_4ea7d92e/lib" "$STAGE/lib"
 cp "$ROOT/$WRAP_REL" "$STAGE/$WRAP_REL"
 cp "$ROOT/$PF_REL" "$STAGE/$PF_REL"
 cp "$ROOT/$DOC_REL" "$STAGE/$DOC_REL"
+# The poller fail-closes without its allowlist dep; stage it unmodified so
+# the baseline is green and kills stay attributable to the mutated copy.
+cp "$ROOT/lib/paperclip_api_allowlist.sh" "$STAGE/lib/"
 chmod +x "$STAGE"/*.sh "$STAGE/$WRAP_REL"
 
 pass=0; fail=0
@@ -155,7 +159,9 @@ mutate_line "failed resolve of main falls back to the moving ref" \
   "unresolvable main emits no red entry" \
   "unresolvable main names the blind spot on stderr"
 
-WHICH=0 mutate_line "unreadable board asserts incidentExists:false" \
+# Occurrence 0 of this anchor is the allowlist-lib guard (fail-closed on a
+# missing dep); occurrence 1 is the snapshot board-read refusal under test.
+WHICH=1 mutate_line "unreadable board asserts incidentExists:false" \
   'exit 3; }' \
   ': > "$titles_file"; }' \
   "snapshot exits 3 when the board is unreadable" \

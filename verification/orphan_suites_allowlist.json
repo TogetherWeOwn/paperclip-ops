@@ -42,6 +42,7 @@
   "plugins/model-selection/tests/tier-policy/tier-policy-replay.spec.ts": "moved to the toolkit repo; runs in toolkit CI, not here",
   "plugins/model-selection/tests/tool-error-shape-part2.spec.ts": "moved to the toolkit repo; runs in toolkit CI, not here",
   "plugins/model-selection/tests/worker.spec.ts": "moved to the toolkit repo; runs in toolkit CI, not here",
+  "templates/org-github/tests/test_ax_github_pagination.py": "template-repo suite; runs in template consumers' CI, not this repo",
   "templates/org-github/tests/test_ax_lint_branches.py": "template-repo suite; runs in template consumers' CI, not this repo",
   "templates/org-github/tests/test_ax_lint_evidence.py": "template-repo suite; runs in template consumers' CI, not this repo",
   "templates/org-github/tests/test_ax_org_template.py": "template-repo suite; runs in template consumers' CI, not this repo",

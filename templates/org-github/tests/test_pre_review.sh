@@ -1651,6 +1651,45 @@ for declaration in 'api_key: str' 'password: str' 'declare const apiKey: string;
   check_authz_fixture 0 "$file" "R1 control annotation-only $declaration" "$declaration"
 done
 
+# --- 21b. pin typed/subscript branches and lookup-default routing -----------
+# Pins the two review findings on the typed/subscript assignment change. (A) A
+# quoted literal default behind a lookup must fail through typed and subscript
+# assignments, not only the plain form; without these rows the typed/subscript
+# fallback loops are deletable with the suite green. (B) Typed token/secret
+# quoted values and bare typed/subscript values must fail; without these rows
+# token/secret narrowing and bare-value mutants survive. Values are synthetic
+# and assembled here so this file holds no credential shape.
+PIN_LITERAL="fallback""literal12" # 16 chars, quoted lookup default
+PIN_BARE="supersecret""123456" # 17 chars, bare typed value
+PIN_DOTTED_HEAD="SG."
+PIN_DOTTED_MID="abcdefghij"
+PIN_DOTTED_TAIL="klmnopqrst"
+PIN_DOTTED="$PIN_DOTTED_HEAD$PIN_DOTTED_MID.$PIN_DOTTED_TAIL"
+for quote in "'" '"'; do
+  for spacing in spaces tabs; do
+    pad=" "; subpad=""
+    if [[ "$spacing" == tabs ]]; then pad=$' \t '; subpad="$pad"; fi
+    format="api_key:${pad}str${pad}=${pad}os.getenv(${quote}X_API_KEY${quote},${pad}${quote}%s${quote})"
+    check_authz_fixture 1 app.py "pin-A typed-lookup-default quote=$quote $spacing" "${format//%s/$PIN_LITERAL}"
+    format="os.environ${subpad}[${subpad}${quote}X_API_KEY${quote}${subpad}]${pad}=${pad}os.getenv(${quote}X_API_KEY${quote},${pad}${quote}%s${quote})"
+    check_authz_fixture 1 app.py "pin-A subscript-lookup-default quote=$quote $spacing" "${format//%s/$PIN_LITERAL}"
+    for name in token secret; do
+      format="$name:${pad}str${pad}=${pad}${quote}%s${quote}"
+      check_authz_fixture 1 app.py "pin-B typed-quoted $name quote=$quote $spacing" "${format//%s/$R1_LITERAL}"
+    done
+    format="headers${subpad}[${subpad}${quote}x-api-key${quote}${subpad}]${pad}=${pad}%s"
+    check_authz_fixture 1 app.py "pin-B subscript-dotted-bare quote=$quote $spacing" "${format//%s/$PIN_DOTTED}"
+  done
+done
+for spacing in spaces tabs; do
+  pad=" "
+  if [[ "$spacing" == tabs ]]; then pad=$' \t '; fi
+  for bare_shape in password api_key; do
+    format="$bare_shape:${pad}str${pad}=${pad}%s"
+    check_authz_fixture 1 app.py "pin-B typed-bare $bare_shape $spacing" "${format//%s/$PIN_BARE}"
+  done
+done
+
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

@@ -1315,6 +1315,15 @@ jobs:
       - name: quality-gate helper suites
         run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target
 
+      # case_6f2e8a41. Deterministic test-missing gate suites: the unit
+      # contract (wider source suffixes, deleted-file handling, vacuity
+      # rules) plus the staged-copy/CLI regression. Hermetic stdlib
+      # unittest, seconds; no network, no credentials, no writes outside
+      # temp fixtures. Always run: they pin the gate the SDLC standard
+      # inherits, and the gate itself stays warn by default.
+      - name: test-missing gate suites
+        run: python3 -m unittest -v test_blocker_test_checks test_test_missing_org_template
+
       - name: mutmut budget-kill fixture suite
         run: bash ./test_mutmut_changed.sh
 

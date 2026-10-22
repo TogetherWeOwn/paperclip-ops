@@ -322,6 +322,7 @@
     "api-base-validation-python suite:1",
     "provider baseline integrity suite:1",
     "review report input integrity holds:1",
+    "test-missing gate suites:1",
     "orphan-suite ratchet fixtures suite:1",
     "assignment host-source bundle suite:1",
     "stop-guard landing suite:1",
@@ -1818,6 +1819,11 @@
       "name": "review report input integrity holds",
       "definition_sha256": "bffa19729a879126ad09b2eba97c28fddbdc6f4fa5e10afa5a536bb291c9dfc4",
       "id": "review report input integrity holds:1"
+    },
+    {
+      "name": "test-missing gate suites",
+      "definition_sha256": "a245dc744b32a853deac2e14fcb7d52b9582f7862154f7ae954800a7da67dc3a",
+      "id": "test-missing gate suites:1"
     },
     {
       "name": "orphan-suite ratchet fixtures suite",

@@ -245,6 +245,11 @@ python3 -m unittest test_reharden_relative_targets || fail "reharden relative-ta
 python3 -m unittest test_deploy_window_manifest || fail "deploy-window manifest gate suite failed"
 ./test_credential_chain_lockdown.sh || fail "credential-chain lockdown fixture suite failed"
 python3 -m unittest test_ci_required_checks_audit || fail "required-checks audit failed"
+# case_6f2e8a41. Deterministic test-missing gate: unit contract plus
+# staged-copy/CLI regression. Hermetic stdlib unittest, no network, no
+# clock, temp fixtures only.
+python3 -m unittest test_blocker_test_checks test_test_missing_org_template \
+  || fail "test-missing gate suites failed"
 python3 -B test_beszel_adapter.py || fail "beszel adapter suite failed"
 python3 -B test_beszel_discord_forwarder.py || fail "beszel discord forwarder suite failed"
 bash test_fetch_beszel_normalized.sh || fail "beszel fetch wrapper suite failed"

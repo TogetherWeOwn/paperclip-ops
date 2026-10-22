@@ -67,6 +67,7 @@ This documentation does not authorize running a backup or changing a host.
 | `agent_error_proposer.py` |
 | `approval_timeout_probe.sh` |
 | `balancer_silence_guard.py` |
+| `blocker_test_checks.py` |
 | `bridge_row_inventory.py` |
 | `capture_host_evidence.sh` |
 | `capture_host_render.sh` |

@@ -315,7 +315,8 @@ def main():
                             outcome = f"cancelled: {cancelled}" if APPLY else "dry run"
                             print(f"{time.strftime('%H:%M:%SZ', time.gmtime())} non-focus queued: {n} ({outcome})", flush=True)
                 except Exception:  # keep the loop alive, without leaking raw subprocess errors
-                    summary.update(measurement="unmeasured", error_code="query_or_processing_failed",
+                    summary.update(measurement="unmeasured",
+                                   error_code=summary["error_code"] or "query_or_processing_failed",
                                    next_action="inspect_failure_before_retry")
                     log(event="error", error=summary["error_code"])
                     if args.format == "text" and not args.loop:

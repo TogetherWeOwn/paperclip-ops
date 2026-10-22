@@ -106,7 +106,8 @@ def selftest():
     cases = [('200', 0, 'confirmed'), ('403', 0, 'definite_failure'),
              ('500', 0, 'definite_failure'), ('000', 7, 'definite_failure'),
              ('200', 7, 'definite_failure'), ('000', 28, 'unknown'),
-             ('200', 28, 'unknown'), ('000', 0, 'unknown'),
+             ('200', 28, 'unknown'), ('200', 56, 'unknown'),
+             ('000', 0, 'unknown'),
              ('', 0, 'unknown'), ('OK', 0, 'unknown'), ('204', 0, 'unknown')]
     for stdout, returncode, expected in cases:
         result = from_curl(SimpleNamespace(stdout=stdout, returncode=returncode))

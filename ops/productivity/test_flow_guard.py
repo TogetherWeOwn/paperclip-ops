@@ -82,13 +82,19 @@ class TimeoutPass(unittest.TestCase):
     STEPS = ['idle_waiters', 'hide_noop_comments', 'orphan_prs', 'reconcile_replay_blocked']
 
     def run_pass(self, fail=lambda args, kwargs: False, loops='', agents='', returncode=0,
-                 patch_returncode=None, child_stdout='0 rows\n', child_stderr='fixture error'):
+                 patch_returncode=None, child_stdout='0 rows\n', child_stderr='fixture error',
+                 patch_errors=()):
         calls = []
+        errors = list(patch_errors)
 
         def fake_run(args, **kwargs):
             calls.append((args, kwargs))
             if fail(args, kwargs):
                 raise subprocess.TimeoutExpired(args, kwargs['timeout'], output=b'partial fixture output')
+            if args[0] == 'curl' and 'PATCH' in args and errors:
+                err = errors.pop(0)
+                if err is not None:
+                    raise err
             if args[0] == 'docker':
                 out = loops if 'issue_continuation_needed' in kwargs['input'] else agents
             elif args[0] == 'curl':
@@ -181,7 +187,7 @@ class TimeoutPass(unittest.TestCase):
                              for c in log.call_args_list), 2)
 
     def test_nonzero_patch_transport_with_stdout_200_never_arms_or_resets(self):
-        for code in (7, 28):
+        for code in (7, 28, 56):
             with self.subTest(returncode=code):
                 calls, log, _, exit_code = self.run_pass(
                     patch_returncode=code, loops='card-1\tcase_loop_fixture\t6\n',
@@ -190,6 +196,24 @@ class TimeoutPass(unittest.TestCase):
                 self.assertNotEqual(exit_code, 0)
                 messages = [c.args[0] for c in log.call_args_list]
                 self.assertFalse(any('armed 2h monitor' in m or 'reset to idle' in m for m in messages))
+                if code == 56:
+                    # A non-special-cased curl exit pins the generic branch.
+                    self.assertEqual(sum('code=curl_transport_error' in m for m in messages), 2)
+
+    def test_missing_curl_binary_is_a_definite_failure_and_the_batch_continues(self):
+        boom = FileNotFoundError(2, 'No such file or directory', 'curl')
+        calls, log, _, exit_code = self.run_pass(
+            loops='card-1\tcase_loop_fixture\t6\n',
+            agents='agent-1\tFixture\tprocess_lost\n',
+            patch_errors=[boom, None])
+        patches = [a for a, _ in calls if 'PATCH' in a]
+        self.assertEqual(len(patches), 2, 'the batch continues past a missing curl binary')
+        self.assertNotEqual(exit_code, 0)
+        messages = [c.args[0] for c in log.call_args_list]
+        self.assertTrue(any('outcome definite_failure code=curl_unavailable' in m for m in messages),
+                        'the missing binary must classify, not abort')
+        self.assertFalse(any('armed 2h monitor' in m for m in messages))
+        self.assertTrue(any('reset to idle' in m for m in messages))
 
 
 class SafeFlags(unittest.TestCase):

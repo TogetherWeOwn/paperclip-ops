@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
 
 import atomic_state as a  # noqa: E402
 import idle_waiters as w  # noqa: E402
+import live_run_guard  # noqa: E402
 
 DOER = '00000000-0000-4000-8000-000000000055'
 AGENT = '00000000-0000-4000-8000-000000000056'
@@ -63,6 +64,14 @@ class Base(unittest.TestCase):
             patch = mock.patch.object(w, name, value)
             patch.start()
             self.addCleanup(patch.stop)
+        # These synthetic IDs exercise state durability, not live-work lookup.
+        guard = mock.patch.object(live_run_guard, 'issue_has_live_work', return_value=False)
+        guard.start()
+        self.addCleanup(guard.stop)
+        if hasattr(w, 'issue_has_live_work'):
+            imported_guard = mock.patch.object(w, 'issue_has_live_work', return_value=False)
+            imported_guard.start()
+            self.addCleanup(imported_guard.stop)
 
     def write_json(self, obj):
         self.state.write_text(json.dumps(obj))

@@ -312,6 +312,28 @@ class DuplicateExecStartBound(ProofCase):
         code, out = self.check([repo_timer_entry()])
         self.assertEqual(code, 0, out)
 
+    def test_semicolon_separated_second_command_without_bound_fails(self):
+        self.write_timer()
+        self.write_service("[Service]\nType=oneshot\n"
+                           "ExecStart=/usr/bin/timeout 60 /bin/a ; /bin/longwork\n")
+        code, out = self.check([repo_timer_entry()])
+        self.assertEqual(code, 1, out)
+        self.assertIn("I3 timer: example.service runs 2 start commands", out)
+
+    def test_escaped_semicolon_stays_a_literal_argument(self):
+        self.write_timer()
+        self.write_service("[Service]\nType=oneshot\n"
+                           "ExecStart=/usr/bin/timeout 60 /bin/echo \\;\n")
+        code, out = self.check([repo_timer_entry()])
+        self.assertEqual(code, 0, out)
+
+    def test_quoted_semicolon_stays_a_literal_argument(self):
+        self.write_timer()
+        self.write_service('[Service]\nType=oneshot\n'
+                           'ExecStart=/usr/bin/timeout 60 /bin/echo ";"\n')
+        code, out = self.check([repo_timer_entry()])
+        self.assertEqual(code, 0, out)
+
 
 class CaptureAvailableType(ProofCase):
     """capture-available-type: `available` must be a real boolean."""

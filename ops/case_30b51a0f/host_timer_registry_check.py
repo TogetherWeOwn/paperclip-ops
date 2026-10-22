@@ -421,7 +421,34 @@ def service_start_commands(svc_path):
         directive, value = pending
         if value:
             found[directive].append(value)
-    return [cmd for directive in _EXEC_DIRECTIVES for cmd in found[directive]]
+    return [cmd for directive in _EXEC_DIRECTIVES for value in found[directive]
+            for cmd in _split_semicolons(value)]
+
+
+def _split_semicolons(value):
+    """Split one directive value on standalone `;` words (systemd semantics).
+
+    systemd concatenates multiple commands in one ExecStart-style line when
+    separated by a semicolon passed as a separate word; `\\;` (and quoted
+    ";") stays a literal argument. Tokenize quote-aware without unescaping
+    so only a true separator word splits: anything else would hand the
+    wrapper proof a shorter command than systemd runs.
+    """
+    try:
+        tokens = shlex.split(value, posix=False)
+    except ValueError:
+        tokens = value.split()
+    commands, current = [], []
+    for token in tokens:
+        if token == ";":
+            if current:
+                commands.append(" ".join(current))
+                current = []
+        else:
+            current.append(token)
+    if current:
+        commands.append(" ".join(current))
+    return commands
 
 
 def _member(value, allowed):

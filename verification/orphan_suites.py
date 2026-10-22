@@ -2343,6 +2343,11 @@ def is_wired(suite, segments, discovers, counts, tracked=frozenset()):
     for source, text in segments:
         if source == suite:
             continue
+        # Every path, basename or stem match below contains this literal.
+        # Avoid parsing unrelated blocks once for every tracked suite;
+        # discover patterns are still checked independently after this loop.
+        if stem not in text:
+            continue
         python = source.endswith(".py")
         funcs = None if python else _function_bodies(text)
         if "/" in suite:

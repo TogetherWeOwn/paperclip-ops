@@ -208,10 +208,11 @@ test('pending checks never flap a ready PR back to draft', () => {
   assert.ok(!decision.actions.includes('convert-to-draft'))
 })
 
-test('auto-merge arms only on a ready PR with CI and the review check green on this head', () => {
+test('auto-merge arms only on a ready PR with CI, the review check and heavy suites green on this head', () => {
   const reviewPass = { name: 'Paperclip Review', status: 'completed', conclusion: 'success', completedMs: 1 }
+  const suitesPass = { name: 'suites', status: 'completed', conclusion: 'success', completedMs: 1 }
   const armed = decideReadinessActions(
-    input(6, { draft: false, autoMerge: false, checks: [...greenChecks(), reviewPass] }), on)
+    input(6, { draft: false, autoMerge: false, checks: [...greenChecks(), suitesPass, reviewPass] }), on)
   assert.ok(armed.actions.includes('enable-automerge'))
   assert.ok(!armed.actions.includes('mark-ready'))
   // Missing review check on this head: no arm, even with green CI.
@@ -339,8 +340,9 @@ test('a failed write records the step and counts the error without blinding the 
 
 test('the duty never merges, never closes and never comments', async () => {
   const reviewPass = { name: 'Paperclip Review', status: 'completed', conclusion: 'success', completedMs: 1 }
+  const suitesPass = { name: 'suites', status: 'completed', conclusion: 'success', completedMs: 1 }
   const snapshots = new Map([
-    [`${repo}#6`, snapshot(6, { draft: false, checks: [...greenChecks(), reviewPass] })],
+    [`${repo}#6`, snapshot(6, { draft: false, checks: [...greenChecks(), suitesPass, reviewPass] })],
   ])
   const { github, calls } = doubles(snapshots)
   await createReconciler({ github, policy: on })

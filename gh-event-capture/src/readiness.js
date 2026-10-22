@@ -21,6 +21,13 @@ export const READINESS_END = '<!-- readiness:end -->'
 // gate fires BEFORE review runs) and included in the auto-merge gate.
 export const REVIEW_CHECK = 'Paperclip Review'
 
+// Heavy job whose completed success the auto-merge gate demands. ci-ok is an
+// aggregator that passes when every needed job skipped, so a ci-ok success
+// cannot prove heavy CI ran on a head; this names the job that can. Same
+// hardcoding rationale as REVIEW_CHECK: the policy enables exactly one repo,
+// so its job names are stable pins, not guesses.
+export const HEAVY_CHECK = 'suites'
+
 // GitHub treats skipped and neutral as satisfying a required check
 // (same set as src/closeout.js PASSING).
 const PASSING = new Set(['success', 'neutral', 'skipped'])
@@ -290,14 +297,30 @@ export function shouldConvertToDraft(snapshot) {
   return false
 }
 
+// Heavy-CI evidence for the auto-merge gate. Only a COMPLETED SUCCESS
+// counts: skipped (draft selection skips the suites job, and area gating
+// skips it on ready PRs with no selected area) and missing both refuse,
+// because the rollup carries no provenance to tell a draft skip from a
+// path-gated one. Total function: malformed entries refuse, never throw.
+function heavyCompletedSuccess(check) {
+  if (!check || typeof check !== 'object' || Array.isArray(check)) return false
+  if (typeof check.state === 'string') return check.state.toLowerCase() === 'success'
+  if (typeof check.status !== 'string' || check.status.toLowerCase() !== 'completed') return false
+  return typeof check.conclusion === 'string' && check.conclusion.toLowerCase() === 'success'
+}
+
 /**
  * Auto-merge gate: every required check passes on this head AND the
- * `Paperclip Review` check entry in the same rollup passes on this head. The
- * review verdict is bound to the head through the rollup — never through a
+ * `Paperclip Review` check entry in the same rollup passes on this head AND
+ * the heavy `suites` job completed with success on this head. The review
+ * verdict is bound to the head through the rollup — never through a
  * separate score string, which could carry a 5/5 from an earlier head while
- * the review check on the current head is failing. Enabling auto-merge
- * (squash, --match-head-commit) does not merge by itself; the branch
- * rulesets remain the real gate.
+ * the review check on the current head is failing. The heavy bind exists
+ * because ci-ok passes when every needed job skipped (draft selection sets
+ * every area false), so a ci-ok success alone does not prove heavy CI ran
+ * on this head — and a later review pass is not evidence that it did.
+ * Enabling auto-merge (squash, --match-head-commit) does not merge by
+ * itself; the branch rulesets remain the real gate.
  *
  * @param {object} snapshot  { draft, headSha, autoMergeEnabled, checks, requiredChecks }
  * @returns {boolean}
@@ -319,6 +342,12 @@ export function shouldEnableAutoMerge(snapshot) {
   // failing all refuse: only a pass on THIS head arms auto-merge.
   const review = byName.get(REVIEW_CHECK)
   if (!review || checkState(review) !== 'pass') return false
+  // The heavy bind: ci-ok success does not prove heavy CI ran on this head
+  // (draft selection passes ci-ok with every area skipped), so the arm
+  // demands the suites job's own completed success. Skipped or missing
+  // suites refuses — even with review passed — because a later review pass
+  // is not evidence that heavy CI ran.
+  if (!heavyCompletedSuccess(byName.get(HEAVY_CHECK))) return false
   for (const name of requiredChecks) {
     if (name === REVIEW_CHECK) continue
     const found = byName.get(name)

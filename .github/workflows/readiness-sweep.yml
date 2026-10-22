@@ -39,16 +39,23 @@ name: Readiness Sweep
 #     pushes, CI completions from author-triggered runs, label flips).
 #   * A ready-for-review transition made by the sweep does NOT start the heavy
 #     CI selection that a human ready-click would — there is no automatic
-#     heavy-CI handoff on this route, by platform design. The arm therefore
-#     requires exact-head verification: every required check plus the review
-#     check passing on THIS head, and refuses on missing or pending evidence
-#     (proof A). A sweep-readied PR sits ready-but-unarmed, never armed and
-#     never flapping, until a human-driven event re-fires full CI and review;
-#     the merge rulesets (review required on main, verified 2026-10-21) block
-#     merging without that evidence independently. No extra grant
-#     (actions:write, dispatch rights, new credentials) may be inferred to
-#     close this gap — that is a fresh security review, not an edit to this
-#     file.
+#     heavy-CI handoff on this route, by platform design. Worse, draft
+#     selection passes ci-ok with every area skipped, so a ci-ok success on a
+#     sweep-readied head does not prove heavy CI ran there — and a later
+#     review pass is not that proof either (a comment-triggered review can
+#     pass without any human-driven full CI running). The arm therefore
+#     requires exact-head verification (every required check plus the review
+#     check passing on THIS head) PLUS the suites job's own completed
+#     success on THIS head, and refuses on missing, pending, or
+#     skipped-heavy evidence (proof A). A sweep-readied PR sits
+#     ready-but-unarmed, never armed and never flapping, until a full CI run
+#     and review both land on the ready head. Cost of the bind, stated
+#     plainly: ready PRs with no selected area skip suites too, so they
+#     never auto-arm either and merge by hand. The merge rulesets (review
+#     required on main, verified 2026-10-21) block merging without that
+#     evidence independently. No extra grant (actions:write, dispatch
+#     rights, new credentials) may be inferred to close this gap — that is a
+#     fresh security review, not an edit to this file.
 #   * The post-review auto-merge arm has NO wake. Review completion is an App
 #     check-run (not one of the named workflows) and systematically the last
 #     state change, so an enabled PR sits ready-but-unarmed until an unrelated

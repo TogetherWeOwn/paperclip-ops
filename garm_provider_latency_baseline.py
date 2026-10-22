@@ -143,6 +143,16 @@ class InvalidInput(ValueError):
     pass
 
 
+class UnreadableInput(InvalidInput):
+    """Input bytes that could not be read (OSError).
+
+    A subclass of InvalidInput so every existing handler keeps catching
+    it; _refuse_invalid_baseline tests this type (not message text) to
+    choose unreadable_baseline, since refusal messages echo stored values.
+    """
+    pass
+
+
 def _reject(message):
     raise InvalidInput(message)
 
@@ -163,7 +173,7 @@ def _read_json(path, what):
         with open(path, "rb") as handle:
             raw = handle.read(MAX_BYTES + 1)
     except OSError as exc:
-        _reject("%s unreadable: %s" % (what, exc))
+        raise UnreadableInput("%s unreadable: %s" % (what, exc))
     if len(raw) > MAX_BYTES:
         _reject("%s exceeds %d bytes" % (what, MAX_BYTES))
     try:
@@ -607,7 +617,7 @@ def _refuse_invalid_baseline(args, exc, as_json, check_mode, dry_run):
     a damaged baseline is no standing for a measured verdict either way.
     """
     message = str(exc)
-    unreadable = "unreadable" in message
+    unreadable = isinstance(exc, UnreadableInput)
     code = "unreadable_baseline" if unreadable else "invalid_baseline"
     if as_json:
         _print_outcome(_outcome(

@@ -4836,6 +4836,10 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 -m unittest -v test_garm_provider_latency_baseline
 
+      - name: provider baseline integrity suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -m unittest -v test_provider_baseline_integrity
+
       - name: kofra preview parity suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 -m unittest -v test_kofra_preview_parity

@@ -9,7 +9,8 @@ entrypoint, never a copy of its validation/recomputation. Fixtures have literal,
 hand-checked statistics. Only filesystem boundaries are fault-injected.
 
 The new --json wire contract pinned here is deliberately small:
-  schema = garm-provider-latency-outcome.v1; operation = init/record/check;
+  schema = garm-provider-latency-outcome.v1; operation = init/record/check
+  (unknown only for usage errors that precede subcommand parsing);
   baseline_schema and samples_schema name the existing v1 input schemas;
   source = {baseline: <input path>, samples: <input path or null>};
   validity/maturity/coverage each contain a nonempty reason string;
@@ -179,10 +180,15 @@ class ProviderBaselineIntegrityTest(unittest.TestCase):
         if operation == "record":
             argv += ["--recorded-by", "fixture", "--now", NOW]
         argv += list(extra)
+        return self.cli_raw(*argv, fault=fault, baseline=baseline)
+
+    def cli_raw(self, *argv, fault="", baseline=None):
+        baseline = self.baseline if baseline is None else baseline
         try:
             proc = subprocess.run(
                 [sys.executable, "-B", "-c", RUNNER, str(SCRIPT),
-                 str(self.root), str(baseline), fault, json.dumps(argv)],
+                 str(self.root), str(baseline), fault,
+                 json.dumps(list(argv))],
                 cwd=self.root, env={"PATH": str(self.root / "no-commands"),
                                     "HOME": str(self.root), "LC_ALL": "C",
                                     "PYTHONDONTWRITEBYTECODE": "1"},
@@ -607,6 +613,50 @@ class ProviderBaselineIntegrityTest(unittest.TestCase):
             self.assertEqual(doc["code"], "usage_error")
         finally:
             sys.argv = saved_argv
+
+    def test_hostile_stored_word_cannot_flip_baseline_code(self):
+        # A stored value containing "unreadable" is echoed into the refusal
+        # message; the outcome code must still be invalid_baseline, never
+        # the retryable unreadable_baseline reserved for read failures.
+        self.base["operations"]["create"]["min_ms"] = "unreadable"
+        self.write(self.baseline, self.base)
+        before = self.snapshot()
+        for operation, expected in (("record", 1), ("check", 3)):
+            with self.subTest(operation=operation):
+                proc = self.cli(operation, "--json")
+                self.assertEqual(proc.returncode, expected,
+                                 proc.stdout + proc.stderr)
+                doc = self.outcome(proc, operation)
+                self.assertEqual(doc["code"], "invalid_baseline")
+                self.assertFalse(doc["retryable"])
+                self.assertEqual(self.snapshot(), before)
+
+    def test_unreadable_baseline_reports_retryable_code(self):
+        # Positive control for the structural read-failure branch: an
+        # OSError while reading existing bytes reports unreadable_baseline
+        # with retryable true, preserving the pre-fix contract.
+        for operation, expected in (("record", 1), ("check", 3)):
+            with self.subTest(operation=operation):
+                before = self.snapshot()
+                proc = self.cli(operation, "--json", fault="unreadable")
+                self.assertEqual(proc.returncode, expected,
+                                 proc.stdout + proc.stderr)
+                doc = self.outcome(proc, operation)
+                self.assertEqual(doc["code"], "unreadable_baseline")
+                self.assertTrue(doc["retryable"])
+                self.assertEqual(self.snapshot(), before)
+
+    def test_json_usage_error_without_subcommand_reports_unknown_operation(self):
+        # No subcommand precedes parsing, so the operation is unknown; the
+        # outcome still carries the versioned contract and writes nothing.
+        before = self.snapshot()
+        proc = self.cli_raw("--json", "--baseline", str(self.baseline),
+                            "--samples", str(self.samples))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(self.snapshot(), before)
+        doc = self.outcome(proc, "unknown")
+        self.assertEqual(doc["code"], "usage_error")
+        self.assertFalse(doc["retryable"])
 
 
 # Each hostile persisted value must fail BOTH consumers independently. Testing

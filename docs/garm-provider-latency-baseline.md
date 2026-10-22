@@ -56,7 +56,8 @@ has no standing, so the decision must be made on something else and said so.
 
 One object, finite JSON, stable IDs:
 
-- `schema`: `garm-provider-latency-outcome.v1`; `operation`: init/record/check.
+- `schema`: `garm-provider-latency-outcome.v1`; `operation`: init/record/check
+  (`unknown` only for usage errors that precede subcommand parsing).
 - `baseline_schema` / `samples_schema`: the existing v1 input schema IDs.
 - `source`: `{baseline: <input path>, samples: <input path or null>}`.
 - `validity` / `maturity` / `coverage`: each `{ok|mature|adequate: bool,

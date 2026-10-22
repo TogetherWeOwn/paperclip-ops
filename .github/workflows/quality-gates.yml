@@ -106,8 +106,16 @@ jobs:
             echo "${GET_PIP_SHA256}  $RUNNER_TEMP/get-pip.py" | sha256sum -c -
             "$PIP_PY" "$RUNNER_TEMP/get-pip.py" --disable-pip-version-check >/dev/null
           fi
+          # mutmut and glob2 ship sdist-only, and pip's isolated builds
+          # would fetch their setuptools backend outside --require-hashes.
+          # Pre-install the hash-pinned backend first, then install the
+          # main lockfile with build isolation disabled.
           "$PIP_PY" -m pip install --quiet \
             --require-hashes \
+            -r scripts/quality-gates-build-requirements.txt
+          "$PIP_PY" -m pip install --quiet \
+            --require-hashes \
+            --no-build-isolation \
             -r scripts/quality-gates-requirements.txt
           mkdir -p "$RUNNER_TEMP/qgbin"
           cd "$RUNNER_TEMP/qgbin"

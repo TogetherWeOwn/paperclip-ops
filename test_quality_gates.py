@@ -106,6 +106,28 @@ class TestWorkflowComparisonBase(unittest.TestCase):
             2,
         )
 
+    def test_gate_tools_install_is_hash_locked(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "quality-gates.yml").read_text()
+        # The supply-chain fix is pinned, not just present: the tools must
+        # install from the hash-locked file with --require-hashes, never as
+        # bare version-pinned arguments (whose transitive trees pip would
+        # resolve fresh from PyPI on every run). Reverting the install step
+        # to floating direct installs must turn this suite red.
+        self.assertIn("--require-hashes", workflow)
+        self.assertIn("-r scripts/quality-gates-requirements.txt", workflow)
+        for bare in ("ruff==", "semgrep==", "mutmut[patch]==", "zizmor=="):
+            self.assertNotIn(bare, workflow)
+        # mutmut and glob2 ship sdist-only: their builds must run with
+        # build isolation disabled against the pre-installed pinned
+        # backend, never fetching unpinned setuptools into an isolated
+        # build env. The backend install must come first.
+        self.assertIn("--no-build-isolation", workflow)
+        self.assertIn("-r scripts/quality-gates-build-requirements.txt", workflow)
+        self.assertLess(
+            workflow.index("-r scripts/quality-gates-build-requirements.txt"),
+            workflow.index("-r scripts/quality-gates-requirements.txt"),
+        )
+
 class TestScan(unittest.TestCase):
     def _finding(self, file, rule="py-subprocess-timeout"):
         return {"ruleId": rule, "file": file,

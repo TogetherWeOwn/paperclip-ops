@@ -742,7 +742,9 @@ class RequestTransportTest(unittest.TestCase):
     restore) instead of letting raw exceptions escape."""
 
     def client(self):
-        return rec.PaperclipClient("https://paperclip.example", "k", "c")
+        with mock.patch.dict(os.environ,
+                             {"PAPERCLIP_API_ALLOWLIST_TEST": "1"}):
+            return rec.PaperclipClient("https://paperclip.invalid", "k", "c")
 
     def test_dropped_connection_becomes_reconcile_error(self):
         client = self.client()

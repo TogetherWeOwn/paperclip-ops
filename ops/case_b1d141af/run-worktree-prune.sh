@@ -15,7 +15,7 @@
 #
 # WHY THE CODE TRAVELS ON STDIN. Agents run inside that container as `node`
 # and can write anywhere node can. A copy of the pruner left in the container
-# would be mutable code executed with --apply. So this script streams the three
+# would be mutable code executed with --apply. So this script streams the four
 # reviewed modules from the root-owned, SHA256-checked host release into a
 # private (0700) temp dir in the container, runs them there, and deletes them.
 #
@@ -33,6 +33,7 @@ RELEASE_ROOT="${PAPERCLIP_WORKTREE_PRUNE_RELEASE_ROOT:-$(cd -- "$SCRIPT_DIR/../.
 TOOL_REL="ops/case_b1d141af/terminal_worktree_prune.py"
 CORE_REL="ops/case_b5184419/terminal_worktree_cache_reclaim.py"
 LIB_REL="ops/lib/atomic_state.py"
+ALLOWLIST_REL="lib/paperclip_api_allowlist.py"
 # The host runs the Paperclip server container under podman (README, runbooks).
 ENGINE="${PAPERCLIP_WORKTREE_PRUNE_ENGINE:-/usr/bin/podman}"
 # Backstop inside the container: an exec that outlives its client keeps running.
@@ -46,6 +47,7 @@ refuse() {
 [[ -f "$RELEASE_ROOT/$TOOL_REL" ]] || refuse "pruner module is missing: $RELEASE_ROOT/$TOOL_REL"
 [[ -f "$RELEASE_ROOT/$CORE_REL" ]] || refuse "reclaim core is missing: $RELEASE_ROOT/$CORE_REL"
 [[ -f "$RELEASE_ROOT/$LIB_REL" ]] || refuse "atomic-state lib is missing: $RELEASE_ROOT/$LIB_REL"
+[[ -f "$RELEASE_ROOT/$ALLOWLIST_REL" ]] || refuse "allowlist lib is missing: $RELEASE_ROOT/$ALLOWLIST_REL"
 [[ -x "$ENGINE" ]] || refuse "container engine is not executable: $ENGINE"
 [[ -n "${PAPERCLIP_WORKTREE_PRUNE_CONTAINER:-}" ]] \
   || refuse "PAPERCLIP_WORKTREE_PRUNE_CONTAINER is unset (env file not loaded?)"
@@ -61,7 +63,7 @@ MAX_REMOVE="${PAPERCLIP_WORKTREE_PRUNE_MAX_REMOVE:-0}"
 [[ "$BOUND_SECONDS" =~ ^[1-9][0-9]*$ ]] \
   || refuse "PAPERCLIP_WORKTREE_PRUNE_BOUND_SECONDS='$BOUND_SECONDS' is not a positive integer"
 
-# Runs in the container under `python3 -c`. Reads a tar of exactly the three
+# Runs in the container under `python3 -c`. Reads a tar of exactly the four
 # reviewed modules from stdin, writes them into a private temp dir, runs the
 # pruner there with the remaining argv, and always removes the dir. Anything
 # else in the stream is refused: this is the only code path that turns bytes
@@ -70,7 +72,8 @@ BOOTSTRAP='
 import io, os, runpy, shutil, sys, tarfile, tempfile
 want = {"ops/case_b1d141af/terminal_worktree_prune.py",
         "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
-        "ops/lib/atomic_state.py"}
+        "ops/lib/atomic_state.py",
+        "lib/paperclip_api_allowlist.py"}
 data = sys.stdin.buffer.read()
 root = tempfile.mkdtemp(prefix="wtprune-")
 try:
@@ -78,7 +81,7 @@ try:
     with tarfile.open(fileobj=io.BytesIO(data)) as tar:
         members = tar.getmembers()
         if {m.name for m in members} != want or not all(m.isreg() for m in members):
-            raise SystemExit("REFUSED: bundle members are not the reviewed triple")
+            raise SystemExit("REFUSED: bundle members are not the reviewed quad")
         for m in members:
             dest = os.path.join(root, m.name)
             os.makedirs(os.path.dirname(dest), mode=0o700, exist_ok=True)
@@ -101,10 +104,10 @@ TOOL_ARGS=(
 ENV_ARGS=(-e PAPERCLIP_API_URL -e PAPERCLIP_API_KEY -e PAPERCLIP_COMPANY_ID)
 [[ -n "${WORKTREE_PRUNE_DISABLED:-}" ]] && ENV_ARGS+=(-e WORKTREE_PRUNE_DISABLED)
 
-# A deterministic tar (sorted, fixed owner and mtime) of the three modules only.
+# A deterministic tar (sorted, fixed owner and mtime) of the four modules only.
 # stdin of `podman exec -i` is that tar; the pruner reads no other stdin.
 tar --create --format=ustar --sort=name --owner=0 --group=0 --numeric-owner \
-    --mtime='@0' --directory "$RELEASE_ROOT" "$CORE_REL" "$TOOL_REL" "$LIB_REL" \
+    --mtime='@0' --directory "$RELEASE_ROOT" "$ALLOWLIST_REL" "$CORE_REL" "$TOOL_REL" "$LIB_REL" \
   | "$ENGINE" exec -i -u node "${ENV_ARGS[@]}" "$PAPERCLIP_WORKTREE_PRUNE_CONTAINER" \
       timeout --signal=TERM --kill-after=30s "$BOUND_SECONDS" \
       python3 -c "$BOOTSTRAP" "${TOOL_ARGS[@]}"

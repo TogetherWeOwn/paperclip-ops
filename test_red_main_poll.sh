@@ -654,6 +654,10 @@ ok "token never appears on stdout"
 # behaviour of the real issues API, so these cases cannot be kinder than prod.
 # ---------------------------------------------------------------------------
 STUB_BASE="http://127.0.0.1:$PORT"
+# The allowlist test hatch: every live-read base in this suite is the
+# loopback stub, so opt in once and let the poll assertions see the tool,
+# not the gate.
+export PAPERCLIP_API_ALLOWLIST_TEST="1"
 board_snapshot() { # <company> <repos...> -> OUT/RC/ERR through the live read path
   local co="$1"; shift
   OUT="$(env -u INCIDENT_SOURCE_CMD PAPERCLIP_API_URL="$STUB_BASE" PAPERCLIP_COMPANY_ID="$co" RED_MAIN_API_KEY=canary-board-key-000 "$TOOL" snapshot "$@" 2>"$WORK/err.txt")"; RC=$?; ERR="$(cat "$WORK/err.txt")"

@@ -276,6 +276,9 @@ for _ in $(seq 1 50); do [[ -s "$TMP/port.txt" ]] && break; sleep 0.1; done
 PORT="$(tr -d '\n' < "$TMP/port.txt")"
 [[ -n "$PORT" ]] || { echo "test_sibling_guard: stub server did not start: $(cat "$TMP/stub.err")" >&2; exit 2; }
 BASE="http://127.0.0.1:$PORT"
+# The allowlist test hatch: the base in this suite is the loopback stub, so
+# opt in once and let the guard assertions see the tool, not the gate.
+export PAPERCLIP_API_ALLOWLIST_TEST="1"
 
 # ---------------------------------------------------------------------------
 # Git fixtures. A bare "origin" plus clones. Real refs, real ancestry, no

@@ -437,6 +437,7 @@ STUB10CURL
   rm -rf "$TOOLTMP10"; mkdir -p "$TOOLTMP10"
   OUT10="$(env -i PATH="$STUB10/bin:/usr/bin:/bin" TMPDIR="$TOOLTMP10" \
     PAPERCLIP_API_URL="https://health-stub.invalid" PAPERCLIP_API_KEY="$CANARY" \
+    PAPERCLIP_API_ALLOWLIST_TEST="1" \
     STUB10_CMDLOG="$CMD10" STUB10_CFGLOG="$CFG10" \
     "$TOOL" --log "$WORK/healthy.log" --backup-dir "$WORK/good" --json 2>"$STUB10/tool.err")"
   RC10=$?
@@ -475,6 +476,7 @@ STUB10CURL
   rm -rf "$TOOLTMP10"; mkdir -p "$TOOLTMP10"
   OUT10U="$(env -i PATH="$STUB10/bin:/usr/bin:/bin" TMPDIR="$TOOLTMP10" \
     PAPERCLIP_API_URL="https://health-stub.invalid" \
+    PAPERCLIP_API_ALLOWLIST_TEST="1" \
     STUB10_CMDLOG="$CMD10" STUB10_CFGLOG="$CFG10" \
     "$TOOL" --log "$WORK/healthy.log" --backup-dir "$WORK/good" --json 2>"$STUB10/tool-u.err")"
   RC10U=$?

@@ -42,6 +42,11 @@ env = {"PATH": os.environ["PATH"], "HOME": "/nonexistent"}
 for n in names:
     if n in os.environ:
         env[n] = os.environ[n]
+# Test-harness-only hatch bridge for section 7: the wrapper deliberately does
+# not forward the allowlist test hatch into the container, so mirror the
+# outer value only here. Production forwarding still follows ENV_ARGS.
+if "PAPERCLIP_API_ALLOWLIST_TEST" in os.environ:
+    env["PAPERCLIP_API_ALLOWLIST_TEST"] = os.environ["PAPERCLIP_API_ALLOWLIST_TEST"]
 os.execvpe(cmd[0], cmd, env)
 PY
 chmod +x "$FAKE_DOCKER"
@@ -49,7 +54,10 @@ chmod +x "$FAKE_DOCKER"
 # ---- a fake release tree: stub modules, same layout as the real one -----
 make_release() {
   local dir="$1" code="${2:-0}"
-  mkdir -p "$dir/ops/case_b1d141af" "$dir/ops/case_b5184419" "$dir/ops/lib"
+  mkdir -p "$dir/ops/case_b1d141af" "$dir/ops/case_b5184419" "$dir/ops/lib" "$dir/lib"
+  cat > "$dir/lib/paperclip_api_allowlist.py" <<'PY'
+MARK = "allowlist-imported"
+PY
   cat > "$dir/ops/lib/atomic_state.py" <<'PY'
 MARK = "lib-imported"
 PY
@@ -160,6 +168,14 @@ else
   fail "missing lib not refused: rc=$rc"
 fi
 
+make_release "$WORK/no-allowlist" 0; rm "$WORK/no-allowlist/lib/paperclip_api_allowlist.py"
+rc=0; RELEASE="$WORK/no-allowlist" run_wrapper "$WORK/o6c" "${BASE[@]}" || rc=$?
+if [[ $rc -eq 2 ]] && grep -q "allowlist lib is missing" "$WORK/o6c.err"; then
+  ok "a release without the allowlist lib is refused"
+else
+  fail "missing allowlist lib not refused: rc=$rc"
+fi
+
 rc=0; run_wrapper "$WORK/o7" "${BASE[@]}" \
   PAPERCLIP_WORKTREE_PRUNE_ENGINE="$WORK/no-such-docker" || rc=$?
 if [[ $rc -eq 2 ]] && grep -q "container engine is not executable" "$WORK/o7.err"; then
@@ -265,7 +281,7 @@ import json, os, sys
 assert not os.path.exists(json.load(open(sys.argv[1]))["dir"])
 PY
 
-# ---- 6. the bootstrap accepts only the reviewed triple ------------------
+# ---- 6. the bootstrap accepts only the reviewed quad --------------------
 python3 - "$WRAPPER" "$WORK/bootstrap.py" <<'PY'
 import re, sys
 text = open(sys.argv[1]).read()
@@ -291,7 +307,8 @@ def build(name, entries):
                 info.linkname = ent[2]
                 tar.addfile(info)
     open(os.path.join(work, name), "wb").write(buf.getvalue())
-good = [("ops/lib/atomic_state.py", "file", b"MARK = 'x'\n"),
+good = [("lib/paperclip_api_allowlist.py", "file", b"MARK = 'x'\n"),
+        ("ops/lib/atomic_state.py", "file", b"MARK = 'x'\n"),
         ("ops/case_b5184419/terminal_worktree_cache_reclaim.py", "file", b"MARK = 'x'\n"),
         ("ops/case_b1d141af/terminal_worktree_prune.py", "file", b"print('ran')\n")]
 build("tar_good", good)
@@ -305,7 +322,7 @@ PY
 rm -f "${TMPDIR:-/tmp}/escape.py" "$(dirname "$WORK")/escape.py"
 before=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'wtprune-*' 2>/dev/null | wc -l)
 rc=0; python3 -c "$(cat "$WORK/bootstrap.py")" < "$WORK/tar_good" > "$WORK/b_good" 2>&1 || rc=$?
-[[ $rc -eq 0 && "$(cat "$WORK/b_good")" == "ran" ]] && ok "the bootstrap runs a well-formed reviewed triple" || fail "good tar: rc=$rc $(cat "$WORK/b_good")"
+[[ $rc -eq 0 && "$(cat "$WORK/b_good")" == "ran" ]] && ok "the bootstrap runs a well-formed reviewed quad" || fail "good tar: rc=$rc $(cat "$WORK/b_good")"
 for bad in tar_extra tar_missing tar_traversal tar_symlink tar_garbage; do
   rc=0; python3 -c "$(cat "$WORK/bootstrap.py")" < "$WORK/$bad" > "$WORK/b_$bad" 2>&1 || rc=$?
   if [[ $rc -ne 0 ]] && ! grep -q "^ran$" "$WORK/b_$bad" && ! grep -q "^evil$" "$WORK/b_$bad"; then
@@ -323,6 +340,7 @@ rc=0
 env -i PATH="$PATH" HOME="$WORK" FAKE_DOCKER_LOG="$WORK/docker.log" \
   PAPERCLIP_WORKTREE_PRUNE_ENGINE="$FAKE_DOCKER" PAPERCLIP_WORKTREE_PRUNE_RELEASE_ROOT="$REPO" \
   PAPERCLIP_WORKTREE_PRUNE_CONTAINER=paperclip-server PAPERCLIP_API_URL=http://127.0.0.1:1 \
+  PAPERCLIP_API_ALLOWLIST_TEST=1 \
   PAPERCLIP_API_KEY=k PAPERCLIP_COMPANY_ID=c WORKTREE_PRUNE_DISABLED=1 \
   bash "$WRAPPER" > "$WORK/real.out" 2> "$WORK/real.err" || rc=$?
 if [[ $rc -eq 2 ]] && grep -q "URLError" "$WORK/real.err" && grep -q "KILL-SWITCH" "$WORK/real.err"; then

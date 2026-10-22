@@ -115,6 +115,7 @@ run_case() {
   : > "$WORK/patch.json"; : > "$WORK/detector-argv.log"
   timeout 5s env -i PATH="$WORK/bin:$PATH" HOME="$WORK" TMPDIR="$WORK" \
     PAPERCLIP_API_URL="${MONITOR_TEST_API_URL:-https://paperclip.invalid/api}" \
+    PAPERCLIP_API_ALLOWLIST_TEST="1" \
     PAPERCLIP_API_KEY="pc_CANARY_backup_monitor_key" \
     PAPERCLIP_TASK_ID="issue-monitor" \
     DB_BACKUP_STALL_MONITOR_NOW="2026-09-05T20:00:00Z" \

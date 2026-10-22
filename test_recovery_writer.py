@@ -27,6 +27,18 @@ from unittest.mock import mock_open, patch
 
 import recovery_writer as rw
 
+
+def setUpModule():
+    # Every client in this suite uses a test-only base (board.invalid or
+    # loopback); the hatch lets the allowlist layer through without a host
+    # file so the policy assertions below see the writer, not the gate.
+    os.environ["PAPERCLIP_API_ALLOWLIST_TEST"] = "1"
+
+
+def tearDownModule():
+    os.environ.pop("PAPERCLIP_API_ALLOWLIST_TEST", None)
+
+
 CEO = "00000000-0000-4000-8000-000000000031"
 OWNER_USER = "u-owner-0000-1111-2222-333333333333"
 OWNER_AGENT = "a-owner-0000-1111-2222-333333333333"

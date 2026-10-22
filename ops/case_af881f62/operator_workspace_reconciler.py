@@ -97,6 +97,11 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "..", "lib"))
+from paperclip_api_allowlist import (  # noqa: E402
+    AllowlistRefused, check_api_base_allowed)
+
 OPERATOR_AGENT_ID = "00000000-0000-4000-8000-000000000052"
 BACKUP_VERSION = 1
 FLIP_PREFERENCE = "agent_default"
@@ -269,6 +274,10 @@ class PaperclipClient:
         if not _valid_api_base(base):
             raise ReconcileError(
                 "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
+        try:
+            check_api_base_allowed(base, sender="operator_workspace_reconciler")
+        except AllowlistRefused as exc:
+            raise ReconcileError(str(exc)) from exc
         self.base = base
         self.key = api_key
         self.company = company_id

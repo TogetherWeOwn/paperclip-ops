@@ -26,6 +26,10 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from paperclip_api_allowlist import (  # noqa: E402
+    AllowlistRefused, check_api_base_allowed)
+
 BURST_GAP_MINUTES = 15
 
 EXIT_SILENT = 0
@@ -219,6 +223,10 @@ def fetch_runs(api_url, api_key, company_id, limit):
     if not _valid_api_base(base):
         raise ValueError(
             "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
+    try:
+        check_api_base_allowed(base, sender="process_lost_probe")
+    except AllowlistRefused as exc:
+        raise ValueError(str(exc)) from exc
     # NOTE: this company-wide request returns at most the newest 1,000 rows.
     # The route accepts agentId and limit, but this probe does not request an
     # agent-scoped page and the API has no cursor/offset pagination. Deep

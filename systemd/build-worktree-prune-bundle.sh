@@ -36,6 +36,7 @@ WORK_DIR=$(mktemp -d)
 OUTPUT=$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$OUTPUT")
 trap 'rm -rf "$WORK_DIR"' EXIT
 files=(
+  lib/paperclip_api_allowlist.py
   ops/case_b1d141af/run-worktree-prune.sh
   ops/case_b1d141af/terminal_worktree_prune.py
   ops/case_b5184419/terminal_worktree_cache_reclaim.py

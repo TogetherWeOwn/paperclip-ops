@@ -109,6 +109,10 @@ import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
 from atomic_state import write_json_atomic  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "..", "lib"))
+from paperclip_api_allowlist import (  # noqa: E402
+    AllowlistRefused, check_api_base_allowed)
 
 DEP_CACHE_NAMES = frozenset({
     "node_modules", "vendor", ".venv", "venv", "__pycache__",
@@ -544,6 +548,10 @@ class ApiClient:
         if not _valid_api_base(base):
             raise ReclaimError(
                 "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
+        try:
+            check_api_base_allowed(base, sender="terminal_worktree_cache_reclaim")
+        except AllowlistRefused as exc:
+            raise ReclaimError(str(exc)) from exc
         self.base = base + "/api/companies/" + company_id
         self.plain = base + "/api"
         self.headers = {"Authorization": "Bearer " + api_key}

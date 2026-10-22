@@ -136,6 +136,7 @@ class ScheduledMonitorTests(unittest.TestCase):
             "OMNIROUTE_API_KEY": "router-canary",
             "PAPERCLIP_API_URL": "https://paperclip.invalid/api",
             "PAPERCLIP_API_KEY": "paperclip-canary",
+            "PAPERCLIP_API_ALLOWLIST_TEST": "1",
             "PAPERCLIP_TASK_ID": "issue-123",
             "PAPERCLIP_RUN_ID": "run-123",
         }
@@ -340,6 +341,7 @@ class FetchRunSecretTests(unittest.TestCase):
         self.env = {
             "PAPERCLIP_API_URL": "https://paperclip.invalid/api",
             "PAPERCLIP_API_KEY": "paperclip-canary",
+            "PAPERCLIP_API_ALLOWLIST_TEST": "1",
         }
 
     @mock.patch("urllib.request.urlopen")

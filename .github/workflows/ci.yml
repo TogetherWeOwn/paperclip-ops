@@ -2125,6 +2125,28 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 -B -m unittest -v test_paperclip_api_base_validation_py
 
+      # API host allowlist (shell senders): exact-origin match, fail-closed
+      # host-file behavior, bridge/hatch matrices, shadow warning + counter,
+      # and the --check dry-run. Hermetic (fixture files, env -i), no
+      # network, no credentials.
+      - name: api-allowlist suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_paperclip_api_allowlist.sh
+
+      # API host allowlist (Python senders): same contract as the shell suite
+      # above, for the shared Python helper. Hermetic (fixture files,
+      # explicit environ dicts), no network, no credentials.
+      - name: api-allowlist-python suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -B -m unittest -v test_paperclip_api_allowlist_py
+
+      # Allowlist test-hatch gate: the test-only hatch stays out of prod
+      # units, env examples, operator templates, and workflows, and never
+      # defaults on in senders or helpers. Hermetic static checks only.
+      - name: allowlist-hatch-absent gate
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_allowlist_hatch_absent.sh
+
       # case_acb41886. The capability gate — the sibling of the provisioning queue,
       # for asks whose object is a CAPABILITY rather than an org seat. It runs
       # here for the same reason the three above do: it fabricates its whole

@@ -98,6 +98,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 import terminal_worktree_cache_reclaim as reclaim  # noqa: E402
 from atomic_state import write_json_atomic  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "..", "lib"))
+from paperclip_api_allowlist import (  # noqa: E402
+    AllowlistRefused, check_api_base_allowed)
 
 TERMINAL_STATUSES = reclaim.TERMINAL_STATUSES
 MIN_AGE_HOURS_DEFAULT = 24
@@ -622,6 +626,16 @@ def main(argv=None, run=None, api=None, env=None):
                     "a clean http(s) base: the bearer would misdirect")
             raise PruneError(
                 "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
+        # Quiet pre-check: ApiClient below owns the log + counter, so a
+        # shadow mismatch warns once per send, not twice.
+        try:
+            check_api_base_allowed(base.rstrip("/"),
+                                   sender="terminal_worktree_prune",
+                                   quiet=True)
+        except AllowlistRefused as exc:
+            if opts.apply:
+                raise SafetyRefusal(str(exc)) from exc
+            raise PruneError(str(exc)) from exc
         api = reclaim.ApiClient(base, company, key)
     try:
         summary = run_tool(opts, run, api, env)

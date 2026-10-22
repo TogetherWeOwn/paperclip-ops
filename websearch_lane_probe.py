@@ -40,6 +40,10 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from paperclip_api_allowlist import (  # noqa: E402
+    AllowlistRefused, check_api_base_allowed)
+
 PROBE_PROMPT = (
     "Use the web_search tool to find what RFC 9110 is titled. "
     "Reply with only the title."
@@ -364,6 +368,11 @@ def _paperclip_api_base(environ: Mapping[str, str]) -> str:
     if not _valid_api_base(base):
         raise ValueError(
             "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
+    try:
+        check_api_base_allowed(base, sender="websearch_lane_probe",
+                               environ=environ)
+    except AllowlistRefused as exc:
+        raise ValueError(str(exc)) from exc
     return base
 
 

@@ -105,6 +105,10 @@ build_sandbox() {
   cp -r "$SRC" "$SBX/case_4ea7d92e-dir"
   mkdir -p "$SBX/ops"
   mv "$SBX/case_4ea7d92e-dir" "$SBX/ops/case_4ea7d92e"
+  # The wrappers' post_finding.sh sources the shared allowlist lib by
+  # repo-relative path; mirror that lib into the sandbox checkout.
+  mkdir -p "$SBX/lib"
+  cp "$REPO_ROOT/lib/paperclip_api_allowlist.sh" "$SBX/lib/"
   mkdir -p "$SBX/ws/repo/.git"
   printf '[remote "origin"]\n\turl = https://person-f431cd1b@example.invalid/o/r.git\n' > "$SBX/ws/repo/.git/config"
 }
@@ -140,6 +144,7 @@ run_wrapper() { # run_wrapper <sandbox-dir> <wrapper.sh> [EXTRA=env ...] -> prin
   env -u BASH_ENV \
     PATH="$WORK/bin:$PATH" \
     PAPERCLIP_API_URL="http://127.0.0.1:$PORT" \
+    PAPERCLIP_API_ALLOWLIST_TEST="1" \
     PAPERCLIP_AGENT_API_KEY="$SENTINEL_KEY" \
     PAPERCLIP_COMPANY_ID="test-company" \
     PAPERCLIP_ASSIGNEE_AGENT_ID="test-agent" \

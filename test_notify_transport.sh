@@ -60,6 +60,9 @@ chmod +x "$BIN/curl"
 export ARGV_CAPTURE="$ARGV" CFG_CAPTURE="$CFGCOPY"
 export PAPERCLIP_API_URL="https://paperclip.invalid/api"
 export PAPERCLIP_API_KEY="CANARY-KEY-DO-NOT-LEAK-4f19ab"
+# The allowlist test hatch: every base in this suite is .invalid, so opt in
+# explicitly and let the transport assertions see the notifier, not the gate.
+export PAPERCLIP_API_ALLOWLIST_TEST="1"
 
 reset() { : > "$ARGV"; : > "$CFGCOPY"; }
 

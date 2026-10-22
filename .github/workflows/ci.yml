@@ -1673,7 +1673,10 @@ jobs:
       # probe bundle; no network or credentials.
       - name: staging login-smoke probe suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: ./test_case_00b2eb59_probe.sh
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_staging_login_journey
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_staging_login_journey_guards
+          ./test_case_00b2eb59_probe.sh
 
       # case_71e7a4e9. Runner-disk Gatus module (host / + inodes, LXD pool
       # used/total, per-VM root disks; warn 80 / crit 90): fragment shape,

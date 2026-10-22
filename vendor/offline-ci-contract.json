@@ -555,7 +555,7 @@
     },
     {
       "name": "staging login-smoke probe suite",
-      "definition_sha256": "00e0dda681157127078945f992899071099bfa097dcb7fafbb02570a1a5e14e1",
+      "definition_sha256": "74896b139efb11ffcedb06a4d90192eb99732132f8fbfe82d18802ab71dbecea",
       "id": "staging login-smoke probe suite:1"
     },
     {

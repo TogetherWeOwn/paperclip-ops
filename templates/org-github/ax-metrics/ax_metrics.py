@@ -31,6 +31,11 @@ window_start/window_end demonstrably matching the report window;
 bare totals, mismatching windows, and unsupported periods withhold
 the ratio. Truncated or failed issue scans withhold the escalation
 metric instead of yielding an ordinary complete-population value.
+GitHub reads page within explicit bounds (MAX_SEARCH_PAGES /
+MAX_SEARCH_ITEMS / MAX_CHECK_RUN_PAGES); an incomplete_results page
+or a bound hit withholds the GitHub ratios with a search_* reason,
+and unreconciled check runs degrade that PR to unknown, counted in
+the green metric's sampled/known/pending/unknown counts.
 """
 
 import argparse
@@ -47,6 +52,16 @@ SCHEMA_VERSION = 2
 MAX_PRS_PER_REPO = 30
 MAX_ISSUE_PAGES = 5
 ISSUES_PER_PAGE = 100
+
+# Explicit bounds for paginated GitHub reads. A merged-PR search that
+# needs more pages/items, or per-commit check-runs that need more
+# pages, is refused (ratios withheld / PR degraded to unknown) rather
+# than silently truncated.
+MAX_SEARCH_PAGES = 5
+MAX_SEARCH_ITEMS = 500
+MAX_CHECK_RUN_PAGES = 5
+SEARCH_PER_PAGE = 100
+CHECK_RUNS_PER_PAGE = 100
 
 # Period labels that can never verify a report window. Anything else
 # without an explicit window_start/window_end pair is unverified, not
@@ -74,6 +89,121 @@ def _github_headers(token):
             "X-GitHub-Api-Version": "2022-11-28"}
 
 
+class SearchRefused(Exception):
+    """A merged-PR search that must withhold the GitHub ratios.
+
+    Raised by fetch_merged_prs when the search is incomplete or hits
+    an explicit bound; collect_live catches it per repo and records
+    the raw pages so the report path refuses uniformly with replay.
+    """
+
+    def __init__(self, repo, refusal, total, pages, fetch_stop):
+        super().__init__(refusal["reason"])
+        self.repo = repo
+        self.refusal = refusal
+        self.total = total
+        self.pages = pages
+        self.fetch_stop = fetch_stop
+
+
+def _fetch_search_pages(repo, since_iso, token):
+    """Raw merged-PR search pages: (pages, fetch_stop).
+
+    Pages within MAX_SEARCH_PAGES / MAX_SEARCH_ITEMS; fetch_stop is
+    "complete", "page_bound", or "item_bound". HTTP failures raise
+    RuntimeError naming github (a failed search fails the run).
+    """
+    query = f"repo:{repo} is:pr is:merged merged:>={since_iso[:10]}"
+    base = ("https://api.github.com/search/issues?q="
+            + urllib.parse.quote(query)
+            + f"&per_page={SEARCH_PER_PAGE}")
+    pages = []
+    fetched = 0
+    expected = None
+    for page_num in range(1, MAX_SEARCH_PAGES + 1):
+        url = base if page_num == 1 else f"{base}&page={page_num}"
+        try:
+            data = _http_get_json(url, _github_headers(token))
+        except Exception as exc:
+            raise RuntimeError(f"github search failed for {repo}: {exc}")
+        raw_items = data.get("items", []) if isinstance(data, dict) else []
+        items = [{"number": it["number"], "closed_at": it.get("closed_at")}
+                 for it in raw_items
+                 if isinstance(it, dict) and "number" in it]
+        total = data.get("total_count") if isinstance(data, dict) else None
+        if isinstance(total, bool) or not isinstance(total, int):
+            total = None
+        if expected is None:
+            expected = total
+        incomplete = bool(isinstance(data, dict)
+                          and data.get("incomplete_results"))
+        pages.append({"items": items, "total_count": total,
+                      "incomplete_results": incomplete})
+        fetched += len(items)
+        if incomplete:
+            return pages, "complete"
+        if expected is not None:
+            if fetched >= expected:
+                return pages, "complete"
+        elif len(items) < SEARCH_PER_PAGE:
+            return pages, "complete"
+        if fetched >= MAX_SEARCH_ITEMS:
+            return pages, "item_bound"
+    return pages, "page_bound"
+
+
+def _consume_search_pages(repo, pages, fetch_stop="complete"):
+    """Interpret raw search pages: (items, total, refusal or None).
+
+    Shared by live fetch and --from-file replay. A null/failed page
+    raises RuntimeError naming github; incomplete_results or a bound
+    hit returns a refusal dict (code/reason) instead of items.
+    """
+    for index, page in enumerate(pages):
+        if page is None or (isinstance(page, dict) and "error" in page):
+            raise RuntimeError(
+                f"github search failed for {repo}: "
+                f"page {index + 1} did not load")
+        if not isinstance(page, dict):
+            raise RuntimeError(
+                f"github search failed for {repo}: "
+                f"page {index + 1} is not a page object")
+    total = pages[0].get("total_count") if pages else None
+    if isinstance(total, bool) or not isinstance(total, int):
+        total = None
+    item_count = sum(len(page.get("items", []) or []) for page in pages)
+    if total is None:
+        total = item_count
+    if fetch_stop == "page_bound" or len(pages) > MAX_SEARCH_PAGES:
+        return [], total, {
+            "code": "search_page_bound",
+            "reason": (f"github search for {repo} hit the page bound "
+                       f"({len(pages)} pages, bound {MAX_SEARCH_PAGES}); "
+                       f"withholding GitHub ratios over a partial "
+                       f"population"),
+        }
+    if fetch_stop == "item_bound" or item_count > MAX_SEARCH_ITEMS:
+        return [], total, {
+            "code": "search_item_bound",
+            "reason": (f"github search for {repo} hit the item bound "
+                       f"({item_count} items, bound {MAX_SEARCH_ITEMS}); "
+                       f"withholding GitHub ratios over a partial "
+                       f"population"),
+        }
+    if any(page.get("incomplete_results") for page in pages):
+        return [], total, {
+            "code": "search_incomplete",
+            "reason": (f"github search for {repo} returned "
+                       f"incomplete_results; withholding GitHub ratios "
+                       f"over a partial population"),
+        }
+    items = [{"number": it["number"],
+              "merged_at": (it.get("closed_at") or "")}
+             for page in pages for it in (page.get("items", []) or [])
+             if isinstance(it, dict) and "number" in it]
+    return items, total, None
+
+
 def fetch_merged_prs(repo, since_iso, token):
     """Merged PRs in window: (sample, truncated, total).
 
@@ -82,22 +212,16 @@ def fetch_merged_prs(repo, since_iso, token):
     total_count, which drives the merged_prs metric so windows over
     30 PRs are not undercounted. (Search caps total_count at 1000;
     weekly windows stay far below that.)
+
+    The search pages within MAX_SEARCH_PAGES / MAX_SEARCH_ITEMS. An
+    incomplete or over-bound search raises SearchRefused (the caller
+    withholds the GitHub ratios); an HTTP failure raises RuntimeError.
     """
-    query = f"repo:{repo} is:pr is:merged merged:>={since_iso[:10]}"
-    url = ("https://api.github.com/search/issues?q="
-           + urllib.parse.quote(query) + "&per_page=100")
-    try:
-        data = _http_get_json(url, _github_headers(token))
-    except Exception as exc:
-        raise RuntimeError(f"github search failed for {repo}: {exc}")
-    items = data.get("items", [])
-    prs = [{"number": it["number"],
-            "merged_at": (it.get("closed_at") or "")}
-           for it in items if "number" in it]
-    total = data.get("total_count", len(prs))
-    if not isinstance(total, int):
-        total = len(prs)
-    sample = prs[:MAX_PRS_PER_REPO]
+    pages, fetch_stop = _fetch_search_pages(repo, since_iso, token)
+    items, total, refusal = _consume_search_pages(repo, pages, fetch_stop)
+    if refusal is not None:
+        raise SearchRefused(repo, refusal, total, pages, fetch_stop)
+    sample = items[:MAX_PRS_PER_REPO]
     return sample, total > len(sample), total
 
 
@@ -141,22 +265,116 @@ def combine_commit_state(status_payload, check_runs):
     return None
 
 
+def _fetch_check_run_pages(repo, sha, token):
+    """Raw check-runs pages for one commit: (pages, fetch_stop).
+
+    Pages within MAX_CHECK_RUN_PAGES until fetched runs cover
+    total_count. A failed page is recorded as {"error": ...} and stops
+    the fetch (the read degrades to unknown); this helper never
+    raises for check-runs failures.
+    """
+    base = (f"https://api.github.com/repos/{repo}/commits/"
+            f"{sha}/check-runs?per_page={CHECK_RUNS_PER_PAGE}")
+    pages = []
+    fetched = 0
+    expected = None
+    for page_num in range(1, MAX_CHECK_RUN_PAGES + 1):
+        url = base if page_num == 1 else f"{base}&page={page_num}"
+        try:
+            data = _http_get_json(url, _github_headers(token))
+        except Exception as exc:
+            pages.append({"error": f"{type(exc).__name__}: {exc}"})
+            return pages, "error"
+        runs = data.get("check_runs", []) if isinstance(data, dict) else []
+        total = data.get("total_count") if isinstance(data, dict) else None
+        pages.append({"total_count": total, "check_runs": runs})
+        if isinstance(runs, list):
+            fetched += len(runs)
+        if isinstance(total, bool) or not isinstance(total, int):
+            return pages, "complete"
+        if expected is None:
+            expected = total
+        if fetched >= expected:
+            return pages, "complete"
+    if expected is not None and fetched >= expected:
+        return pages, "complete"
+    return pages, "page_bound"
+
+
+def _reconcile_check_runs(pages, legacy_single=False):
+    """Concatenated check runs, or None when unreconciled.
+
+    Reconciled only when every page succeeded, the page count is
+    within MAX_CHECK_RUN_PAGES, every page carries an agreeing
+    total_count, and fetched runs equal that total. With
+    legacy_single, one lone page without total_count is accepted as
+    complete (the pre-pagination shape; the real API always sends
+    total_count).
+    """
+    if not isinstance(pages, list) or not pages:
+        return None
+    if len(pages) > MAX_CHECK_RUN_PAGES:
+        return None
+    if legacy_single and len(pages) == 1:
+        only = pages[0]
+        if (isinstance(only, dict) and "error" not in only
+                and only.get("total_count") is None):
+            runs = only.get("check_runs", [])
+            return list(runs) if isinstance(runs, list) else None
+    expected = None
+    runs = []
+    for page in pages:
+        if not isinstance(page, dict) or "error" in page:
+            return None
+        total = page.get("total_count")
+        if isinstance(total, bool) or not isinstance(total, int):
+            return None
+        if total < 0:
+            return None
+        if expected is None:
+            expected = total
+        if total != expected:
+            return None
+        batch = page.get("check_runs", [])
+        if not isinstance(batch, list):
+            return None
+        runs.extend(batch)
+    if len(runs) != expected:
+        return None
+    return runs
+
+
 def fetch_first_commit_state(repo, pr_number, token):
-    """First-commit state from legacy status plus check runs, or None."""
+    """First-commit state from legacy status plus check runs, or None.
+
+    Check runs page within MAX_CHECK_RUN_PAGES and reconcile against
+    total_count; an unreconciled read degrades to None (unknown).
+    Commit/status fetch failures still raise RuntimeError.
+    """
     commits_url = (f"https://api.github.com/repos/{repo}/pulls/"
                    f"{pr_number}/commits?per_page=1")
     try:
         commits = _http_get_json(commits_url, _github_headers(token))
-        if not commits:
-            return None
+    except Exception as exc:
+        raise RuntimeError(f"github status failed for {repo}#{pr_number}: {exc}")
+    if not commits:
+        return None
+    try:
         sha = commits[0]["sha"]
-        status_url = (f"https://api.github.com/repos/{repo}/commits/"
-                      f"{sha}/status")
-        runs_url = (f"https://api.github.com/repos/{repo}/commits/"
-                    f"{sha}/check-runs?per_page=100")
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"github status failed for {repo}#{pr_number}: {exc}")
+    status_url = (f"https://api.github.com/repos/{repo}/commits/"
+                  f"{sha}/status")
+    try:
         status = _http_get_json(status_url, _github_headers(token))
-        runs = _http_get_json(runs_url, _github_headers(token))
-        return combine_commit_state(status, runs.get("check_runs", []))
+    except Exception as exc:
+        raise RuntimeError(f"github status failed for {repo}#{pr_number}: {exc}")
+    pages, _stop = _fetch_check_run_pages(repo, sha, token)
+    runs = _reconcile_check_runs(pages, legacy_single=True)
+    if runs is None:
+        return None
+    try:
+        return combine_commit_state(status, runs)
     except Exception as exc:
         raise RuntimeError(f"github status failed for {repo}#{pr_number}: {exc}")
 
@@ -213,6 +431,101 @@ def compute_tokens_per_pr(cost_tokens, merged_count):
     if cost_tokens is None or not merged_count:
         return None
     return cost_tokens / merged_count
+
+
+def _derive_pr_states(numbers, pr_evidence):
+    """First-commit states for sampled PRs from raw per-PR evidence.
+
+    Reconciled check runs merge with the legacy status under the
+    existing combine_commit_state semantics. A searched PR with no
+    evidence entry, a bare entry, or unreconciled check pages degrades
+    to None (unknown); evidence for unsampled PRs is ignored.
+    """
+    by_number = {}
+    for entry in pr_evidence or []:
+        if isinstance(entry, dict) and "number" in entry:
+            try:
+                by_number[entry["number"]] = entry
+            except TypeError:
+                continue
+    states = []
+    for number in numbers:
+        try:
+            entry = by_number.get(number)
+        except TypeError:
+            entry = None
+        if not isinstance(entry, dict):
+            states.append(None)
+            continue
+        status = entry.get("status")
+        if not isinstance(status, dict):
+            status = None
+        pages = entry.get("check_run_pages")
+        if pages is None or "check_run_pages" not in entry:
+            if status is None:
+                states.append(None)
+            else:
+                states.append(combine_commit_state(status, []))
+            continue
+        runs = _reconcile_check_runs(pages)
+        if runs is None:
+            states.append(None)
+        else:
+            states.append(combine_commit_state(status, runs))
+    return states
+
+
+def _classify_states(states):
+    """(green, known, pending, unknown) over first-commit states."""
+    green = known = pending = unknown = 0
+    for state in states or []:
+        if state in ("success", "failure", "error"):
+            known += 1
+            if state == "success":
+                green += 1
+        elif state == "pending":
+            pending += 1
+        else:
+            unknown += 1
+    return green, known, pending, unknown
+
+
+def _resolve_github_rows(github_rows):
+    """Normalize rows; raw search_pages win over legacy keys.
+
+    Returns (resolved rows, search refusal or None). A refused search
+    zeroes every row's states (no first-commit states are evaluated);
+    a null/failed search page raises RuntimeError naming github.
+    """
+    resolved = []
+    refusal = None
+    for row in github_rows or []:
+        row = row if isinstance(row, dict) else {}
+        if "search_pages" not in row:
+            resolved.append(dict(row))
+            continue
+        repo = row.get("repo", "")
+        pages = row.get("search_pages") or []
+        fetch_stop = row.get("search_fetch_stop", "complete")
+        items, total, row_refusal = _consume_search_pages(
+            repo, pages, fetch_stop)
+        out = dict(row)
+        out["merged_prs"] = total
+        if row_refusal is not None:
+            out["truncated"] = True
+            out["first_commit_states"] = []
+            if refusal is None:
+                refusal = dict(row_refusal, repo=repo, total=total)
+        else:
+            numbers = [item["number"] for item in items]
+            out["truncated"] = False
+            out["first_commit_states"] = _derive_pr_states(
+                numbers, row.get("pr_evidence"))
+        resolved.append(out)
+    if refusal is not None:
+        for out in resolved:
+            out["first_commit_states"] = []
+    return resolved, refusal
 
 
 _UNSET = object()
@@ -378,22 +691,39 @@ def _verify_cost_window(evidence, report_start, report_end):
     return "unverified", period
 
 
-def _green_metric(states, merged_total, report_window):
+def _green_metric(states, merged_total, report_window,
+                  search_refusal=None):
     """first_push_green_rate with its validity envelope."""
     definition = ("merged PRs green on their first commit / merged PRs "
                   "with any commit status or check run (v0 proxy for "
                   "first-attempt success)")
     provenance = "github commit status + check runs"
-    known = [s for s in states if s in ("success", "failure", "error")]
+    if search_refusal is not None:
+        return _metric(None, definition, provenance,
+                       validity="withheld",
+                       reason_code=search_refusal["code"],
+                       reason=search_refusal["reason"],
+                       next_action="narrow the window or split the repo "
+                                   "list, then re-run",
+                       completeness="partial",
+                       source_window=dict(report_window),
+                       numerator=0, denominator=0,
+                       numerator_source=provenance,
+                       denominator_source=provenance,
+                       counts={"sampled": 0, "known": 0, "pending": 0,
+                               "unknown": 0})
+    green, known, pending, unknown = _classify_states(states)
+    counts = {"sampled": known + pending + unknown, "known": known,
+              "pending": pending, "unknown": unknown}
     if known:
-        green = sum(1 for s in known if s == "success")
-        return _metric(green / len(known), definition, provenance,
+        return _metric(green / known, definition, provenance,
                        validity="valid", reason_code="ok",
                        completeness="complete",
                        source_window=dict(report_window),
-                       numerator=green, denominator=len(known),
+                       numerator=green, denominator=known,
                        numerator_source=provenance,
-                       denominator_source=provenance)
+                       denominator_source=provenance,
+                       counts=counts)
     if not merged_total:
         return _metric(None, definition, provenance,
                        validity="withheld", reason_code="no_prs",
@@ -404,7 +734,8 @@ def _green_metric(states, merged_total, report_window):
                        source_window=dict(report_window),
                        numerator=0, denominator=0,
                        numerator_source=provenance,
-                       denominator_source=provenance)
+                       denominator_source=provenance,
+                       counts=counts)
     return _metric(None, definition, provenance,
                    validity="withheld", reason_code="no_evidence",
                    reason="no commit-status or check-run evidence "
@@ -414,11 +745,12 @@ def _green_metric(states, merged_total, report_window):
                    source_window=dict(report_window),
                    numerator=0, denominator=0,
                    numerator_source=provenance,
-                   denominator_source=provenance)
+                   denominator_source=provenance,
+                   counts=counts)
 
 
 def _tokens_metric(cost_tokens, cost_evidence, merged_total, report_window,
-                   paperclip_reason):
+                   paperclip_reason, search_refusal=None):
     """tokens_per_merged_pr, valid only on a verified cost window."""
     definition = ("paperclip cost-window tokens / merged PRs "
                   "(experimental)")
@@ -436,6 +768,18 @@ def _tokens_metric(cost_tokens, cost_evidence, merged_total, report_window,
         if claimed:
             num_source = claimed
     den_source = "github search total_count"
+    if search_refusal is not None:
+        return _metric(None, definition, provenance,
+                       validity="withheld",
+                       reason_code=search_refusal["code"],
+                       reason=search_refusal["reason"],
+                       next_action="narrow the window or split the repo "
+                                   "list, then re-run",
+                       completeness="partial",
+                       source_window=dict(report_window),
+                       numerator=tokens, denominator=merged_total,
+                       numerator_source=num_source,
+                       denominator_source=den_source)
     report_start = report_window["start"]
     report_end = report_window["end"]
     if (tokens is None and not isinstance(cost_evidence, dict)
@@ -657,8 +1001,9 @@ def build_report(github_rows, cost_tokens, issues, window_start, window_days,
     """
     scan_reason = (paperclip_reason if issues_reason is _UNSET
                    else issues_reason)
-    merged_total = sum(r["merged_prs"] for r in github_rows)
-    states = [s for r in github_rows for s in r["first_commit_states"]]
+    resolved_rows, search_refusal = _resolve_github_rows(github_rows)
+    merged_total = sum(r["merged_prs"] for r in resolved_rows)
+    states = [s for r in resolved_rows for s in r["first_commit_states"]]
     window_end = _window_end_iso(window_start, window_days)
     report_window = {"start": window_start, "end": window_end,
                      "days": window_days}
@@ -668,15 +1013,15 @@ def build_report(github_rows, cost_tokens, issues, window_start, window_days,
         "window_days": window_days,
         "window_start": window_start,
         "window_end": window_end,
-        "repos": github_rows,
+        "repos": resolved_rows,
         "merged_prs_total": merged_total,
         "issues_truncated": issues_truncated,
         "metrics": {
             "first_push_green_rate": _green_metric(
-                states, merged_total, report_window),
+                states, merged_total, report_window, search_refusal),
             "tokens_per_merged_pr": _tokens_metric(
                 cost_tokens, cost_evidence, merged_total, report_window,
-                paperclip_reason),
+                paperclip_reason, search_refusal),
             "escalations_per_100_cards": _escalations_metric(
                 issues, window_start, report_window, scan_reason,
                 issues_truncated),
@@ -690,7 +1035,18 @@ def collect_live(args, window_start):
         raise RuntimeError(f"missing github token env {args.github_token_env}")
     github_rows = []
     for repo in args.repos:
-        prs, truncated, total = fetch_merged_prs(repo, window_start, token)
+        try:
+            prs, truncated, total = fetch_merged_prs(
+                repo, window_start, token)
+        except SearchRefused as exc:
+            github_rows.append({
+                "repo": repo, "merged_prs": exc.total,
+                "truncated": True, "first_commit_states": [],
+                "search_pages": exc.pages,
+                "search_fetch_stop": exc.fetch_stop,
+                "pr_evidence": [],
+            })
+            continue
         states = [fetch_first_commit_state(repo, pr["number"], token)
                   for pr in prs]
         github_rows.append({
@@ -799,6 +1155,24 @@ def main(argv=None):
                "partial\n"
                "  scans. Consume reason_code, never prose.\n"
                "\n"
+               "github pagination and incomplete evidence:\n"
+               "  merged-PR search pagination is bounded: at most "
+               "MAX_SEARCH_PAGES\n"
+               "  (5) pages and MAX_SEARCH_ITEMS (500) items; "
+               "per-commit\n"
+               "  check-runs page within MAX_CHECK_RUN_PAGES (5) and "
+               "reconcile\n"
+               "  against total_count. A page with "
+               "incomplete_results,\n"
+               "  or a read beyond its bound, withholds the GitHub "
+               "ratios\n"
+               "  with a search_* reason_code (exit 0); unreconciled\n"
+               "  check-runs degrade that PR to unknown. "
+               "first_push_green_rate\n"
+               "  always carries sampled counts {sampled, known, "
+               "pending,\n"
+               "  unknown} with sampled == known+pending+unknown.\n"
+               "\n"
                "report schema example:\n"
                "  {\"tool\": \"ax-metrics\", \"schema_version\": 2,\n"
                "   \"window_start\": ..., \"window_end\": ..., "
@@ -833,7 +1207,11 @@ def main(argv=None):
         print("ax-metrics: error: --days must be >= 1", file=sys.stderr)
         return 2
     if args.from_file:
-        report = collect_from_file(args.from_file, args.days)
+        try:
+            report = collect_from_file(args.from_file, args.days)
+        except RuntimeError as exc:
+            print(f"ax-metrics: error: {exc}", file=sys.stderr)
+            return 1
     else:
         repos = parse_repos(args.repos, args.repos_file)
         if not repos:

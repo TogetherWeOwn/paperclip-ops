@@ -20,8 +20,20 @@ its inventory, classification, review, merge, capacity, hold, or live-run rules.
 - `../pr_controller_wakes.py`: correlates the comment id with the server's
   `agent_wakeup_requests` record. The existing read-only SQL client is injected;
   this module performs no database writes or new wake API calls.
+- `pr-controller-notify-guard.patch`: adds the notification-only author-wake
+  gate (`notify_author_wake`) beside the classification seam. Suppress fires
+  only for `ci_red` with no author-actionable failure (empty red list, or
+  only known shared-base checks red while the required set is known);
+  verdicts, eligibility, checks and gates are unchanged. Unknown required
+  sets fail closed to `wake`.
+- `../pr_controller_wake_guard.py`: the pure-stdlib decision module behind
+  that gate (`actionable_red`, `author_wake`, `KNOWN_BASE_EXECUTED`).
+  Deterministic, no I/O, no host imports.
 - `../fixtures/pr_controller_backstop_before.py`: exact pre-fix function, used
   only for offline patch testing. It is not a runtime controller.
+- `../fixtures/pr_controller_notify_before.py`: exact pre-fix
+  `latest_check_contexts`/`classify`/`wake_text` seam for the notify-guard
+  patch tests. Evidence only; not a runtime controller.
 
 A comment's HTTP success records a pending request, not delivery. Subsequent
 inventory passes observe a queued/deferred request without posting duplicates.
@@ -45,11 +57,13 @@ This is not a general repair for parked recovery actions or blocked cards.
 
 ```sh
 (cd ops/productivity && python3 -B -m unittest -v \
-  test_pr_controller_backstop test_pr_controller_wakes)
+  test_pr_controller_backstop test_pr_controller_wakes \
+  test_pr_controller_notify_guard)
 ```
 
-The backstop suite applies the patch with `--fuzz=0` to its fixture. To test a full
-staged controller without importing its host dependencies:
+The backstop and notify-guard suites apply their patch with `--fuzz=0` to
+their fixture. To test a full staged controller without importing its host
+dependencies:
 
 ```sh
 PR_CONTROLLER_SOURCE=/path/to/staged/pr_controller.py \
@@ -67,12 +81,14 @@ required CI and Paperclip Review 5/5. Never install this entire public snapshot.
 
 1. Preserve the existing controller, helper if present, state, metadata and hashes.
 2. In a separate staging directory containing `ops/productivity/pr_controller.py`,
-   apply the backstop patch followed by the wake patch with `patch --batch
-   --fuzz=0 -p1`. A mismatch is a stop, not permission to force or fuzzy-apply it.
-3. Stage `pr_controller_wakes.py` beside the candidate. Run the offline suites on
-   the candidate and the existing host controller tests. Compare the complete
-   candidate diff: unrelated classification, hold, review and merge code must be
-   unchanged. Compile the candidate without executing its `main`.
+   apply the backstop patch followed by the wake patch followed by the
+   notify-guard patch with `patch --batch --fuzz=0 -p1`. A mismatch is a
+   stop, not permission to force or fuzzy-apply it.
+3. Stage `pr_controller_wakes.py` and `pr_controller_wake_guard.py` beside the
+   candidate. Run the offline suites on the candidate and the existing host
+   controller tests. Compare the complete candidate diff: unrelated
+   classification, hold, review and merge code must be unchanged. Compile the
+   candidate without executing its `main`.
 4. Atomically install the helper first, then the candidate, preserving host file
    ownership/mode. Use the existing scheduled invocation; this packet requires no
    Paperclip, database, or model-proxy restart, agent config change, or gate change.

@@ -28,7 +28,10 @@ again before each parking PATCH. This protects issueId/taskId running, queued an
 scheduled_retry work (due or not). The guard is fail-closed: only explicit False
 permits a park. True conflates live work and lookup failure, so reports call it
 live_or_unmeasured; exceptions are guard_lookup_failed. Both mean retry_later,
-never permission to park. A run arriving during receipt persistence skips the
+never permission to park. The CEO rollup comment is guarded the same way: when
+the rollup card has live or unmeasured work, flagging is deferred to the next
+tick (retry_later) with no flagged receipts and no POST, so the comment cannot
+supersede a scheduled retry. A run arriving during receipt persistence skips the
 PATCH and triggers removal of the provisional receipt. If that removal cannot
 be saved, StateError stops the run; a stale receipt may suppress retries for 24h
 until expiry or explicit operator reconciliation. DB checks and HTTP PATCH are not
@@ -250,6 +253,7 @@ order by n.k desc;""")
     for iid, ident, _, _ in parked[MAX_PARK:]:
         report['skipped'].append({'issue': ident, 'issue_id': iid, 'reason': 'park_limit', 'next_action': 'retry_later'})
     new_flags = [(i, t) for i, t in nodoer if i not in state['flagged']]
+    flagged_count = 0
     if new_flags:
         roll = psql(f"""select id from issues where company_id='{CID}' and title='{ROLLUP_TITLE}'
                     and status not in ('done','cancelled') limit 1""")
@@ -257,22 +261,36 @@ order by n.k desc;""")
         body = (f'{len(new_flags)} more card(s) keep waking with nothing new, and no open card is doing what they wait on. '
                 'For each one: assign the work to someone (a doer card), then block the waiter on it; or close the '
                 f'waiter if the wait is no longer needed.\n\n{lines}')
-        # Saved before the POST: a failed save posts nothing, and a posted notice is never repeated.
-        for i, _ in new_flags:
-            state['flagged'][i] = now
-        persist(state)
-        report['flagged'] = [e for e in report['no_doer'] if e['issue'] in dict(new_flags)]
-        if roll:
-            api('POST', f'issues/{roll[0][0]}/comments', {'body': body})
+        roll_skip = parking_skip(roll[0][0], ROLLUP_TITLE) if roll else None
+        if roll_skip is not None:
+            # The rollup comment would supersede live or unmeasured work on the
+            # rollup card, so defer flagging: no flagged receipts, no POST, and
+            # every waiter keeps its notice for the next tick (retry_later).
+            waiter_iids = {e['issue']: e['issue_id'] for e in report['no_doer']}
+            for i, _ in new_flags:
+                report['skipped'].append({'issue': i, 'issue_id': waiter_iids.get(i, ''),
+                                          'reason': roll_skip['reason'],
+                                          'error_code': roll_skip['error_code'],
+                                          'next_action': 'retry_later'})
+                print(f'  SKIP flag {i} {roll_skip["reason"]}; next_action=retry_later')
         else:
-            api('POST', f'companies/{CID}/issues', {
-                'title': ROLLUP_TITLE, 'status': 'todo', 'priority': 'medium', 'assigneeAgentId': CEO,
-                'description': ('Fed by the idle-waiter guard (ops/productivity/idle_waiters.py, owner GO 2026-10-05). '
-                                'These cards poll with no-op wakes, but nothing is actively producing what they wait for. '
-                                'Never fix this by blocking a waiter on a passive tracker.\n\n' + body)})
-        log(f'flagged {len(new_flags)} no-doer waiter(s) to the CEO rollup: {", ".join(i for i, _ in new_flags)}')
+            # Saved before the POST: a failed save posts nothing, and a posted notice is never repeated.
+            for i, _ in new_flags:
+                state['flagged'][i] = now
+            persist(state)
+            report['flagged'] = [e for e in report['no_doer'] if e['issue'] in dict(new_flags)]
+            if roll:
+                api('POST', f'issues/{roll[0][0]}/comments', {'body': body})
+            else:
+                api('POST', f'companies/{CID}/issues', {
+                    'title': ROLLUP_TITLE, 'status': 'todo', 'priority': 'medium', 'assigneeAgentId': CEO,
+                    'description': ('Fed by the idle-waiter guard (ops/productivity/idle_waiters.py, owner GO 2026-10-05). '
+                                    'These cards poll with no-op wakes, but nothing is actively producing what they wait for. '
+                                    'Never fix this by blocking a waiter on a passive tracker.\n\n' + body)})
+            log(f'flagged {len(new_flags)} no-doer waiter(s) to the CEO rollup: {", ".join(i for i, _ in new_flags)}')
+            flagged_count = len(new_flags)
     persist(state)
-    print(f'parked {done}, flagged {len(new_flags)}')
+    print(f'parked {done}, flagged {flagged_count}')
     return report
 
 

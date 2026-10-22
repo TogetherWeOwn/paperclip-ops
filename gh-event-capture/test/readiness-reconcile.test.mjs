@@ -324,3 +324,27 @@ test('policy defaults to flag-off everywhere and rejects bad repos', () => {
   assert.throws(() => readinessPolicy({ enabledRepositories: [repo, repo] }))
   assert.throws(() => createReconciler({ github: {}, policy: on }))
 })
+
+test('readiness-only reader reconciles a snapshot without push age', async () => {
+  // Readiness snapshots carry headPushedMs: null for an explicit null
+  // pushedDate. With only getReadinessSnapshot present, the reconciler
+  // must use it and reconcile instead of recording snapshot-read-failed.
+  const snap = snapshot(1, { headPushedMs: null })
+  const snapshots = new Map([[`${repo}#1`, snap]])
+  const { github, calls } = doubles(snapshots)
+  // The shared double already defines ONLY getReadinessSnapshot; older
+  // doubles define ONLY getCloseoutSnapshot. Normalize to readiness-only
+  // without clobbering the reader, and pin the legacy reader absent.
+  if (typeof github.getReadinessSnapshot !== 'function') {
+    github.getReadinessSnapshot = github.getCloseoutSnapshot
+  }
+  delete github.getCloseoutSnapshot
+  assert.equal(typeof github.getReadinessSnapshot, 'function')
+  assert.equal(github.getCloseoutSnapshot, undefined)
+  const { records, counters } = await createReconciler({ github, policy: on })
+    .runReconcile({ references: [{ repository: repo, number: 1 }], nowMs: NOW })
+  assert.equal(records[0].decision, 'acted')
+  assert.deepEqual(records[0].actions, ['update-body', 'mark-ready'])
+  assert.equal(counters.errors, 0)
+  assert.ok(calls.some(([op]) => op === 'read-snapshot'))
+})

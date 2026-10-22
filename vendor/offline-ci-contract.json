@@ -323,7 +323,8 @@
     "review report input integrity holds:1",
     "api-allowlist suite:1",
     "api-allowlist-python suite:1",
-    "allowlist-hatch-absent gate:1"
+    "allowlist-hatch-absent gate:1",
+    "host backup publication receipt contract (offline):1"
   ],
   "retained": [
     {
@@ -1820,6 +1821,11 @@
       "name": "allowlist-hatch-absent gate",
       "definition_sha256": "83b5df16e75c5f159cf75c11727bae9e4e3633b206120a7e6a0d9ab6c5c8860f",
       "id": "allowlist-hatch-absent gate:1"
+    },
+    {
+      "name": "host backup publication receipt contract (offline)",
+      "definition_sha256": "f3220047635007807b551238df97e65b3db9b784bcafb35829fa009c51e3f5f4",
+      "id": "host backup publication receipt contract (offline):1"
     }
   ],
   "removed": [

@@ -67,22 +67,39 @@ if [[ -z "$BASE" ]]; then
 fi
 BASE="$(git rev-parse "$BASE" 2>/dev/null || echo "")"
 [[ -z "$BASE" ]] && { echo "cannot resolve diff base" >&2; exit 2; }
+SCRATCH_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pre-review.XXXXXX")" || { echo "cannot create scratch directory" >&2; exit 2; }
+trap 'rm -rf -- "$SCRATCH_DIR"' EXIT
 
-mapfile -t CHANGED < <(git diff --name-only -z "$BASE"...HEAD -- 2>/dev/null | tr '\0' '\n' | grep -v '^$' || true)
-mapfile -t ADDED_FILES < <(git diff --name-status "$BASE"...HEAD -- 2>/dev/null | awk '$1=="A"{print $2}' || true)
-ADDED_LINES="$(git diff -U0 "$BASE"...HEAD -- 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
+CHANGED=() ADDED_FILES=() UNTRACKED=()
+if ! git diff --name-only -z "$BASE"...HEAD -- >"$SCRATCH_DIR/changed-paths" 2>/dev/null; then
+  echo "cannot collect changed paths" >&2; exit 2
+fi
+while IFS= read -r -d '' path; do CHANGED+=("$path"); done <"$SCRATCH_DIR/changed-paths"
+if ! git diff --diff-filter=A --name-only -z "$BASE"...HEAD -- >"$SCRATCH_DIR/added-paths" 2>/dev/null; then
+  echo "cannot collect added paths" >&2; exit 2
+fi
+while IFS= read -r -d '' path; do ADDED_FILES+=("$path"); done <"$SCRATCH_DIR/added-paths"
+if ! git diff -U0 "$BASE"...HEAD -- >"$SCRATCH_DIR/added.diff" 2>/dev/null; then
+  echo "cannot collect added content" >&2; exit 2
+fi
+ADDED_LINES="$(grep -E '^\+' "$SCRATCH_DIR/added.diff" | grep -vE '^\+\+\+' || true)"
 # Untracked files are invisible to git diff but fully part of the change:
 # review their whole content as added lines (new files count as Added).
-UNTRACKED=()
-while IFS= read -r u; do
+if ! git ls-files --others --exclude-standard -z >"$SCRATCH_DIR/untracked-paths" 2>/dev/null; then
+  echo "cannot collect untracked paths" >&2; exit 2
+fi
+while IFS= read -r -d '' u; do
   [[ -n "$u" ]] || continue
   CHANGED+=("$u")
   ADDED_FILES+=("$u")
   UNTRACKED+=("$u")
-  if [[ -f "$u" ]] && grep -Iq . "$u" 2>/dev/null; then
-    ADDED_LINES+=$'\n'"$(sed 's/^/+/' "$u" || true)"
+  if [[ -f "$u" ]] && grep -Iq . -- "$u" 2>/dev/null; then
+    if ! sed 's/^/+/' -- "$u" >"$SCRATCH_DIR/untracked-content" 2>/dev/null; then
+      echo "cannot read untracked file: $u" >&2; exit 2
+    fi
+    ADDED_LINES+=$'\n'"$(<"$SCRATCH_DIR/untracked-content")"
   fi
-done < <(git ls-files --others --exclude-standard -z 2>/dev/null | tr '\0' '\n' || true)
+done <"$SCRATCH_DIR/untracked-paths"
 
 printf '%-4s  %-15s  %s\n' "STAT" "BUCKET" "DETAIL"
 echo "---  ---------------  ------------------------------------------------"
@@ -330,18 +347,505 @@ echo "$ADDED_LINES" | grep -E 'catch\s*(\([^)]*\))?\s*\{\s*\}' >/dev/null \
   && warn "unhandled-errors" "empty catch block in added JS/TS — handle or explain"
 
 # --- 7. authz ----------------------------------------------------------------
-# Quoted values need a 12+ non-space, non-quote run; bare values must be
-# a full 12+ run ending at a value boundary (space, comma, semicolon,
-# quote, comment hash, or end of line) — parens and dots after the run
-# mark calls or attribute access (e.g. match.group(1)), not a credential.
-# Angle brackets are excluded from the bare-value run so generic type shapes
-# such as Option<String> read as declarations, not literals. They are not a
-# trailing boundary: a 12+ type-path run before `<` (long generics such as
-# CredentialEnvelope<String>, turbofish `from_str::<T>`) is a type, not a
-# credential, so a bare secret glued to a bracket is left unflagged.
-SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[bap]-[A-Za-z0-9-]{8,}|api[_-]?key["'"'"' ]*[:=]["'"'"' ]+[A-Za-z0-9_.-]{12,}|(token|secret|password)["'"'"' ]*[:=](["'"'"' ]*["'"'"'][^"'"'"' ]{12,}|["'"'"' ]+[^"'"'"' ().<>]{12,}(["'"'"' ,;#]|$)))'
-
-if grep -Eq "$SECRET_RE" <<<"$ADDED_LINES"; then
+# Keep the canonical literal checks, while recognizing values immediately
+# before delimiters the bare-value branch intentionally excludes. A narrowly
+# recognized Rust type span (line-leading fields, or inline fn-parameter and
+# struct-field positions) may suppress only a match wholly inside that span;
+# strong credential families are checked first against original added lines.
+# Generic-shape detection is per-occurrence: only `<` inside the colon's own
+# type position with a non-type generic argument flags. Paren/call values
+# must be quoted literals or literal-shaped runs; typed parameters, bare
+# identifiers, dotted paths and method-chain receivers are not credentials.
+SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[bap]-[A-Za-z0-9-]{8,}|(token|secret|password)["'"'"' ]*[:=](["'"'"' ]*["'"'"'][^"'"'"' ]{12,}|["'"'"' ]+[^"'"'"' ().<>]{12,}(["'"'"' ,;#]|$)))'
+# Strong credential families are always checked against the original added
+# bytes, before any language-specific match-span classification. The api-key
+# family is checked separately (api_key_literal_hit) because its unquoted value
+# keeps dots: a SendGrid-style SG.<segment>.<segment> key is a credential, and
+# only values that start with a known environment/config lookup are dropped.
+STRONG_SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[bap]-[A-Za-z0-9-]{8,})'
+RUST_TYPE_NAME='(Option|String|str|Arc|Result|Vec|HashMap|HashSet|Box|Cow|SecretString|SensitiveString|PasswordHash|SecretWrapper|bool|char|f32|f64|[iu](8|16|32|64|128|size)|[A-Z][A-Za-z0-9_]*(Type|Envelope[0-9]*|Response|Error))'
+API_KEY_SECRET_RE="api[_-]?key[\"'[:space:]]*[:=][\"'[:space:]]*([\"'][A-Za-z0-9_.-]{12,}[\"']|[A-Za-z0-9_.-]{12,})"
+# An unquoted api-key value that starts with one of these is a lookup, not a
+# credential (process.env.X, os.environ[...], import.meta.env.X, ENV.X,
+# settings.X, config.X). Quoted values never qualify, since a quoted lookup
+# is a string literal, and the check is case-sensitive on the lookup prefix.
+API_KEY_LOOKUP_RE="^[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][\"'[:space:]]*[:=][[:space:]]*(process\\.env\\.|os\\.environ(\\.|$)|import\\.meta\\.env\\.|ENV\\.|settings\\.|config\\.)"
+RUST_TYPE_PATH="(([A-Za-z_][A-Za-z0-9_]*::)*${RUST_TYPE_NAME})"
+RUST_TYPE_GENERIC_REF="(&[[:space:]]*(mut[[:space:]]+)?('[[:alpha:]_][[:alnum:]_]*[[:space:]]*)?)?"
+RUST_TYPE_GENERIC_ARG1="${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}([[:space:]]*<${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}(,[[:space:]]*${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH})*[[:space:]]*>)?"
+RUST_TYPE_GENERIC_ARG2="${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}([[:space:]]*<${RUST_TYPE_GENERIC_ARG1}(,[[:space:]]*${RUST_TYPE_GENERIC_ARG1})*[[:space:]]*>)?"
+RUST_TYPE_GENERIC_ARG3="${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}([[:space:]]*<${RUST_TYPE_GENERIC_ARG2}(,[[:space:]]*${RUST_TYPE_GENERIC_ARG2})*[[:space:]]*>)?"
+RUST_TYPE_GENERIC="([[:space:]]*<${RUST_TYPE_GENERIC_ARG3}(,[[:space:]]*${RUST_TYPE_GENERIC_ARG3})*[[:space:]]*>)?"
+RUST_TYPE_SPAN_RE="^[+][[:space:]]*(pub([[:space:]]*[(][^)]*[)])?[[:space:]]+)?(let[[:space:]]+(mut[[:space:]]+)?)?[[:alnum:]_]*([Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])[[:space:]]*:[[:space:]]*(&[[:space:]]*(mut[[:space:]]+)?('[[:alpha:]_][[:alnum:]_]*[[:space:]]*)?|[*](const|mut)[[:space:]]+|dyn[[:space:]]+|impl[[:space:]]+)?([[][^]]+;[[:space:]]*[0-9]+[]]|${RUST_TYPE_PATH}${RUST_TYPE_GENERIC})[[:space:]]*([,;=]|$)"
+# A trailing dot ends a value only at end of line or before whitespace
+# (sentence terminators); a dot before an identifier is a method call or
+# attribute path, so receiver.method() chains are not credentials.
+EDGE_VALUE_RE="(token|secret|password)[\"'[:space:]]*[:=][\"'[:space:]]*[A-Za-z0-9_-]{12,}([\"'[:space:],;#=]|\.[[:space:]]|\.$|$)"
+EDGE_ANGLE_RE="(token|secret|password)[\"'[:space:]]*[:=][\"'[:space:]]*<?[A-Za-z0-9_-]{12,}(<[A-Za-z0-9_][A-Za-z0-9_]*>|>)"
+# Paren values are quoted literals or dotless 12+ runs; whether an unquoted
+# run is a literal is decided by edge_paren_value_is_literal. Typed
+# parameters (fn new(token: String)), bare identifiers (secret_name_value)
+# and CamelCase types (AccessTokenValue) before ')' are not credentials,
+# while credential-shaped runs (Q7m2V9z4L6p8R1s3, abcdefghijklmnop) still fail.
+EDGE_PAREN_RE="(token|secret|password)[\"'[:space:]]*[:=][\"'[:space:]]*[(]?[\"'[:space:]]*(\"[^\"]{12,}\"|'[^']{12,}'|[A-Za-z0-9_-]{12,})={0,}[\"'[:space:]]*[)]"
+EDGE_CALL_RE="(token|secret|password)[\"'[:space:]]*[(][\"'[:space:]]*(\"[^\"]{12,}\"|'[^']{12,}'|[A-Za-z0-9_-]{12,})={0,}[\"'[:space:]]*[)]"
+RUST_LITERAL_RE="(token|secret|password)[^;\"/]*[:=][^;\"/]*\"[^\"[:space:]]{12,}\""
+# A credential word with optional block comments up to its colon. Case
+# variants are explicit so byte offsets from case-sensitive grep stay valid.
+RUST_TOKEN_COLON_RE='([Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])([[:space:]]|/\*([^*]|\*+[^*/])*\*/)*:'
+# Inline recognized type spans: fn parameters and inline struct fields shaped
+# like the line-leading RUST_TYPE_SPAN_RE, anchored after (, comma or {.
+# A match wholly inside one of these spans is a declaration, not a secret.
+RUST_INLINE_TYPE_SPAN_RE="[(,{][[:space:]]*[[:alnum:]_]*([Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])[[:space:]]*:[[:space:]]*(&[[:space:]]*(mut[[:space:]]+)?('[[:alpha:]_][[:alnum:]_]*[[:space:]]*)?|[*](const|mut)[[:space:]]+|dyn[[:space:]]+|impl[[:space:]]+)?([[][^]]+;[[:space:]]*[0-9]+[]]|${RUST_TYPE_PATH}${RUST_TYPE_GENERIC})[[:space:]]*([,;=)}]|$)"
+# True when a paren/call candidate holds a literal: a quoted 12+ value, or an
+# unquoted dotless 12+ run shaped like a credential. Base64 padding (`=`)
+# after the run is part of the value. Runs containing an underscore are
+# bare identifiers (secret_name_value) and runs with uppercase but no digit
+# or dash are type references (AccessTokenValue); neither counts.
+# Digit/dash runs and solid lowercase runs are literals.
+edge_paren_value_is_literal() {
+  local cand="$1" val
+  if [[ "$cand" =~ [\"\']([^\"\']{12,})[\"\'][[:space:]]*\)?$ ]]; then
+    return 0
+  fi
+  if [[ "$cand" =~ [^A-Za-z0-9_.-]([A-Za-z0-9_-]{12,})=*[\"\'[:space:]]*\)?$ ]]; then
+    val="${BASH_REMATCH[1]}"
+    [[ "$val" == *[_]* ]] && return 1
+    [[ "$val" =~ [0-9-] ]] && return 0
+    [[ "$val" =~ ^[a-z]+$ ]] && return 0
+  fi
+  return 1
+}
+# Scan each lookup RHS with quote and delimiter context. Regex alone cannot
+# distinguish a key-name argument from a nested default, or traverse argument
+# whitespace without interpreting operators inside quoted key names. Only the
+# second argument of actual environment-default calls is a default; config and
+# settings calls keep their section/key exemption. Stop at the RHS boundary so
+# an unrelated sibling property or statement does not become a credential.
+api_key_fallback_hit() {
+  # A scanner error is a hit (fail closed). No pipeline/early grep can truncate
+  # input or turn an error into a clean result.
+  ! awk '
+    function fallback(s,    i,j,ch,q,word,depth,want,args,defaults,closer) {
+      depth = 0; want = 0; word = ""
+      for (i = 1; i <= length(s); i++) {
+        ch = substr(s, i, 1)
+        if (ch ~ /[[:space:]]/) continue
+        if (ch == "\"" || ch == sq) {
+          q = ch; j = i + 1
+          while (j <= length(s)) {
+            ch = substr(s, j, 1)
+            if (ch == "\\") { j += 2; continue }
+            if (ch == q) break
+            j++
+          }
+          if (want && j - i - 1 >= 12) return 1
+          i = j; word = ""; want = 0; continue
+        }
+        if (ch ~ /[[:alnum:]_.$]/) {
+          j = i
+          while (substr(s, j, 1) ~ /[[:alnum:]_.$]/ && j <= length(s)) j++
+          word = substr(s, i, j - i)
+          # Inside argument 2 of a defaults call the pending flag survives
+          # words: a `name=` label (default="...") or a string prefix
+          # (f"...") is part of the default argument, not a new expression.
+          if (!(defaults[depth] && args[depth] == 2)) want = (word == "or")
+          i = j - 1; continue
+        }
+        if (ch == "(" || ch == "[" || ch == "{") {
+          depth++
+          closer[depth] = (ch == "(" ? ")" : (ch == "[" ? "]" : "}"))
+          defaults[depth] = (ch == "(" && word ~ /^(os[.]environ[.](get|setdefault|pop)|os[.]getenv|ENV[.]fetch)$/)
+          args[depth] = 1
+          # Grouping parentheses retain a pending literal, calls do not.
+          if (ch != "(" || (word != "" && word != "or")) want = 0
+          word = ""; continue
+        }
+        if (ch == ")" || ch == "]" || ch == "}") {
+          if (depth == 0) break
+          if (ch != closer[depth]) return 1
+          depth--; word = ""; want = 0; continue
+        }
+        if (ch == ",") {
+          if (depth == 0) break
+          args[depth]++
+          want = (defaults[depth] && args[depth] == 2)
+          word = ""; continue
+        }
+        if (substr(s, i, 2) == "||" || substr(s, i, 2) == "??") {
+          want = 1; word = ""; i++; continue
+        }
+        if (ch == ";" && depth == 0) break
+        # `=` after a `name` label inside argument 2 keeps the pending
+        # default; any other operator outside a default resets it.
+        word = ""
+        if (!(defaults[depth] && args[depth] == 2)) want = 0
+      }
+      return 0
+    }
+    BEGIN {
+      sq = sprintf("%c", 39)
+      assignment = "[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][\"" sq "[:space:]]*[:=][[:space:]]*"
+      lookup = "^(process[.]env[.]|os[.]environ([.]|[[]|$)|os[.]getenv[[:space:]]*[(]|import[.]meta[.]env[.]|ENV[.]|settings[.]|config[.])"
+    }
+    {
+      rest = $0
+      while (match(rest, assignment)) {
+        rest = substr(rest, RSTART + RLENGTH)
+        if (rest ~ lookup && fallback(rest)) hit = 1
+      }
+    }
+    END { exit (hit ? 1 : 0) }
+  ' <<<"$1"
+}
+# True when the text holds an api-key assignment whose value is not an
+# environment/config lookup, or a lookup followed by a quoted 12+ literal
+# fallback/default: the lookup exempts its own value, never a literal that
+# rides behind it.
+# Matches are collected first and filtered after: a pipeline into `grep -q`
+# could be cut short by SIGPIPE and read as a miss.
+api_key_literal_hit() {
+  local matches
+  matches="$(grep -Eoi "$API_KEY_SECRET_RE" <<<"$1" || true)"
+  if [[ -n "$matches" && -n "$(grep -Ev "$API_KEY_LOOKUP_RE" <<<"$matches" || true)" ]]; then
+    return 0
+  fi
+  api_key_fallback_hit "$1"
+}
+# True when the byte range [off, off+len) lies wholly inside one region of a
+# space-separated "start:end ..." region list.
+offset_in_regions() {
+  local off="$1" len="$2" regions="$3" r rs re
+  for r in $regions; do
+    rs="${r%%:*}"; re="${r##*:}"
+    if [[ "$off" -ge "$rs" && $((off + len)) -le "$re" ]]; then return 0; fi
+  done
+  return 1
+}
+# True when a generic argument list (the text inside `<...>`) holds something
+# that looks like a literal rather than a type. Type syntax is open-ended
+# (Option<Token>, impl AsRef<[u8]>, Arc<RwLock<String>>, Cow<'a, str>), so
+# the test is inverted: only literal-shaped arguments flag. An argument is
+# literal-shaped when it holds a character outside type syntax (quote, slash,
+# dot, backslash, ...) or an identifier run of 12+ characters that is
+# lowercase-initial or carries a digit or dash. Module path prefixes
+# (a::b::) are dropped first; CamelCase runs without digits are type names.
+# Prints the text from the start of $1 to the `>` that closes the generic
+# list opened just before it (nested lists included; `->` is not a closer).
+# Returns 1 when the list does not close on this line.
+rust_generic_args_text() {
+  local s="$1" i ch prev="" depth=1
+  for ((i = 0; i < ${#s}; i++)); do
+    ch="${s:i:1}"
+    if [[ "$ch" == "<" ]]; then
+      depth=$((depth + 1))
+    elif [[ "$ch" == ">" && "$prev" != "-" ]]; then
+      depth=$((depth - 1))
+      if [[ "$depth" -eq 0 ]]; then
+        printf '%s' "${s:0:i}"
+        return 0
+      fi
+    fi
+    prev="$ch"
+  done
+  return 1
+}
+# `!` is macro invocation (Token![..]) and the never type; `#`, `$`, `{`, `}`
+# are macro and const-generic syntax. All are type syntax, not literals.
+RUST_NON_TYPE_CHAR_RE='[^][A-Za-z0-9_[:space:]:<>&'"'"';,()+?*={}$#!-]'
+rust_generic_arg_is_literal() {
+  local LC_ALL=C
+  local rest="$1" tok
+  [[ "$rest" =~ $RUST_NON_TYPE_CHAR_RE ]] && return 0
+  while [[ "$rest" =~ [A-Za-z_][A-Za-z0-9_]*:: ]]; do
+    rest="${rest/"${BASH_REMATCH[0]}"/}"
+  done
+  while [[ "$rest" =~ ([A-Za-z0-9_-]{12,}) ]]; do
+    tok="${BASH_REMATCH[1]}"
+    [[ "$tok" =~ ^[a-z] || "$tok" =~ [0-9-] ]] && return 0
+    rest="${rest#*"$tok"}"
+  done
+  return 1
+}
+# Per-occurrence generic check for lines without a line-leading type span.
+# Flags only occurrences whose colon is followed, within one type position
+# (no = ; , ( ) { } - between), by `<` opening a literal-shaped generic
+# argument (rust_generic_arg_is_literal). Occurrences inside a recognized
+# span are declarations and never flag.
+rust_generic_occurrence_is_suspicious() {
+  local LC_ALL=C
+  local line="$1" lexical="$2" tks="$3" te="$4" regions="$5"
+  local off omatch rest arg
+  while IFS=: read -r off omatch; do
+    [[ -n "$omatch" ]] || continue
+    if [[ "$lexical" -eq 1 ]] && [[ "$tks" -ge 0 ]] \
+      && [[ "$off" -ge "$tks" ]] && [[ $((off + ${#omatch})) -le "$te" ]]; then
+      continue
+    fi
+    if [[ "$lexical" -eq 1 ]] && offset_in_regions "$off" "${#omatch}" "$regions"; then
+      continue
+    fi
+    rest="${line:off}"
+    if [[ "$rest" =~ ^${RUST_TOKEN_COLON_RE}[^=\;,(){}-]*\< ]]; then
+      # The whole generic list when it closes on this line; otherwise only
+      # the first argument, so trailing line text is not read as a type.
+      if ! arg="$(rust_generic_args_text "${rest#*<}")"; then
+        arg="${rest#*<}"
+        arg="${arg%%[,>]*}"
+      fi
+      rust_generic_arg_is_literal "$arg" && return 0
+      continue
+    fi
+  done < <(LC_ALL=C grep -Ebo "$RUST_TOKEN_COLON_RE" <<<"$line" || true)
+  return 1
+}
+authz_file_lines() {
+  local file="$1" untracked=0 path
+  for path in "${UNTRACKED[@]}"; do [[ "$path" == "$file" ]] && { untracked=1; break; }; done
+  if [[ "$untracked" -eq 1 ]]; then
+    [[ -f "$file" ]] || return 1
+    if [[ -s "$file" ]] && ! grep -Iq . -- "$file" 2>/dev/null; then
+      return 1
+    fi
+    awk '{ print NR "|+" $0 }' <"$file"
+  else
+    # Gitlinks carry no collectible text in the superproject: a submodule
+    # pointer bump adds no lines, so it passes. Read the tracked mode first;
+    # any listing failure fails closed.
+    ls_out=""
+    if ! ls_out="$(git --literal-pathspecs ls-tree HEAD -- "$file" 2>/dev/null)"; then
+      return 1
+    fi
+    if [[ "$ls_out" =~ ^160000[[:space:]] ]]; then
+      return 0 # gitlink: no added text to scan
+    fi
+    if git cat-file -e "HEAD:$file" 2>/dev/null; then
+      : # present in HEAD: continue to diff collection below
+    elif [[ -n "$ls_out" ]]; then
+      return 1 # present in HEAD but cat-file failed: query error, fail closed
+    else
+      return 0 # verified absent in HEAD: deleted, no added content
+    fi
+    if ! git --literal-pathspecs diff -U0 "$BASE"...HEAD -- "$file" >"$SCRATCH_DIR/file.diff" 2>/dev/null; then
+      return 1
+    fi
+    if grep -q '^Binary files ' "$SCRATCH_DIR/file.diff"; then
+      return 1
+    fi
+    awk '
+      /^@@ / {
+        if (!match($0, /\+[0-9]+(,[0-9]+)?/)) exit 1
+        range = substr($0, RSTART + 1, RLENGTH - 1)
+        split(range, parts, ",")
+        line = parts[1]
+        next
+      }
+      /^\+\+\+/ { next }
+      /^\+/ { print line "|+" substr($0, 2); line++; next }
+      /^ / { line++; next }
+    ' "$SCRATCH_DIR/file.diff"
+  fi
+}
+rust_plain_code_lines() {
+  awk '
+    function raw_open(rest,    prefix, hashes) {
+      if (!match(rest, /^(br|r)#*"/)) return 0
+      prefix = substr(rest, 1, RLENGTH)
+      hashes = prefix
+      sub(/^(br|r)/, "", hashes)
+      sub(/"$/, "", hashes)
+      raw_end = "\"" hashes
+      return RLENGTH
+    }
+    {
+      text = $0
+      safe = 1
+      i = 1
+      while (i <= length(text)) {
+        rest = substr(text, i)
+        ch = substr(text, i, 1)
+        if (raw_end != "") {
+          safe = 0
+          if (substr(text, i, length(raw_end)) == raw_end) {
+            i += length(raw_end)
+            raw_end = ""
+          } else i++
+          continue
+        }
+        if (string_state) {
+          safe = 0
+          if (escaped) { escaped = 0; i++; continue }
+          if (ch == "\\") { escaped = 1; i++; continue }
+          if (ch == "\"") string_state = 0
+          i++
+          continue
+        }
+        if (block_depth > 0) {
+          safe = 0
+          if (substr(text, i, 2) == "/*") { block_depth++; i += 2; continue }
+          if (substr(text, i, 2) == "*/") { block_depth--; i += 2; continue }
+          i++
+          continue
+        }
+        if (substr(text, i, 2) == "//") { safe = 0; break }
+        if (substr(text, i, 2) == "/*") { safe = 0; block_depth = 1; i += 2; continue }
+        consumed = raw_open(rest)
+        if (consumed > 0) { safe = 0; i += consumed; continue }
+        if (ch == "\"") { safe = 0; string_state = 1; i++; continue }
+        if (ch == sprintf("%c", 39)) {
+          safe = 0
+          if (substr(text, i + 1, 1) == "\\") i += 4
+          else if (substr(text, i + 2, 1) == sprintf("%c", 39)) i += 3
+          # A lifetime is code, but it must never restore safe=1 after
+          # string, raw-string or comment content was seen on the same
+          # line. A line with no literal content stays safe (safe is still
+          # 1 from line start); a line with any is not plain code.
+          else { i++ }
+          continue
+        }
+        i++
+      }
+      if (safe && raw_end == "" && block_depth == 0 && !string_state) print NR
+      if (string_state && escaped) escaped = 0
+    }
+  ' "$1"
+}
+rust_line_has_secret_match() {
+  local LC_ALL=C
+  local line="$1" line_number="$2" safe_lines="$3" pattern offset candidate lexical=0
+  local type_end=-1 type_key_start=-1 type_key_match type_shape=0
+  local inline_regions="" ioff imatch
+  grep -Fxq "$line_number" <<<"$safe_lines" && lexical=1
+  if [[ "+$line" =~ $RUST_TYPE_SPAN_RE ]]; then
+    type_shape=1
+    if [[ "$lexical" -eq 1 ]]; then
+      type_end=$((${#BASH_REMATCH[0]} - 1))
+      while IFS=: read -r offset type_key_match; do
+        [[ -n "$type_key_match" ]] || continue
+        type_key_start="$offset"
+        break
+      done < <(grep -Eboi '(token|secret|password)[[:space:]]*:' <<<"$line" || true)
+    fi
+  fi
+  # Inline recognized type spans (fn parameters, inline struct fields) exempt
+  # matches the way the line-leading span does. Strings and comments are
+  # never exempt: regions apply only to lexically plain-code lines.
+  if [[ "$lexical" -eq 1 ]]; then
+    while IFS=: read -r ioff imatch; do
+      [[ -n "$imatch" ]] || continue
+      inline_regions+="${ioff}:$((ioff + ${#imatch})) "
+    done < <(LC_ALL=C grep -Ebo "$RUST_INLINE_TYPE_SPAN_RE" <<<"$line" || true)
+  fi
+  if [[ "$type_shape" -eq 0 ]] \
+    && rust_generic_occurrence_is_suspicious "$line" "$lexical" "$type_key_start" "$type_end" "$inline_regions"; then
+    return 0
+  fi
+  for pattern in "$SECRET_RE" "$EDGE_VALUE_RE" "$EDGE_ANGLE_RE" "$EDGE_PAREN_RE" "$EDGE_CALL_RE" "$RUST_LITERAL_RE"; do
+    while IFS=: read -r offset candidate; do
+      [[ -n "$candidate" ]] || continue
+      # Paren/call candidates must hold a literal, not a bare identifier.
+      if [[ "$pattern" == "$EDGE_PAREN_RE" || "$pattern" == "$EDGE_CALL_RE" ]] \
+        && ! edge_paren_value_is_literal "$candidate"; then
+        continue
+      fi
+      if [[ "$lexical" -eq 1 && "$type_key_start" -ge 0 \
+        && "$offset" -ge "$type_key_start" \
+        && $((offset + ${#candidate})) -le "$type_end" ]]; then
+        continue
+      fi
+      if [[ "$lexical" -eq 1 ]] \
+        && offset_in_regions "$offset" "${#candidate}" "$inline_regions"; then
+        continue
+      fi
+      return 0
+    done < <(LC_ALL=C grep -Eboi "$pattern" <<<"$line" || true)
+  done
+  return 1
+}
+RUST_TYPED_VALUE_RE='(token|secret|password)[[:space:]]*:[^=;]*=([A-Za-z0-9_-]{12,}[=),;[:space:].:/+]|[^;]*[[:space:](,.:/+=][A-Za-z0-9_-]{12,}[=),;[:space:].:/+])'
+# Generic-shape detection is per-occurrence now (rust_generic_occurrence_is_suspicious):
+# only a `<` inside the colon's own type position with a non-type generic
+# argument flags. The old whole-line `[^=;]*<` reached return types and other
+# fields, failing ordinary fn signatures.
+AUTHZ_NON_RUST_LINES=""
+AUTHZ_RUST_PATTERN_HIT=0
+AUTHZ_COLLECTION_FAILED=0
+STRONG_SECRET_HIT=0
+if grep -Eiq "$STRONG_SECRET_RE" <<<"$ADDED_LINES" \
+  || api_key_literal_hit "$ADDED_LINES"; then
+  STRONG_SECRET_HIT=1
+fi
+for file in "${CHANGED[@]}"; do
+  if ! file_lines="$(authz_file_lines "$file")"; then
+    fail "authz" "cannot collect added lines for changed file: $file"
+    AUTHZ_COLLECTION_FAILED=1
+    continue
+  fi
+  if [[ "$file" == *.rs ]]; then
+    if [[ -n "$file_lines" ]]; then
+      is_untracked=0
+      for path in "${UNTRACKED[@]}"; do [[ "$path" == "$file" ]] && { is_untracked=1; break; }; done
+      if [[ "$is_untracked" -eq 1 ]]; then
+        if ! cp -- "$file" "$SCRATCH_DIR/rust-source" 2>/dev/null; then
+          fail "authz" "cannot read Rust lexical context: $file"
+          AUTHZ_COLLECTION_FAILED=1
+          continue
+        fi
+      elif ! git cat-file blob "HEAD:$file" >"$SCRATCH_DIR/rust-source" 2>/dev/null; then
+        fail "authz" "cannot collect committed Rust lexical context: $file"
+        AUTHZ_COLLECTION_FAILED=1
+        continue
+      fi
+      if ! safe_lines="$(rust_plain_code_lines "$SCRATCH_DIR/rust-source")"; then
+        fail "authz" "cannot classify Rust lexical context: $file"
+        AUTHZ_COLLECTION_FAILED=1
+        continue
+      fi
+    else
+      safe_lines=""
+    fi
+    while IFS= read -r numbered; do
+      [[ -n "$numbered" ]] || continue
+      line_number="${numbered%%|*}"
+      added_line="${numbered#*|}"
+      if rust_line_has_secret_match "${added_line#+}" "$line_number" "$safe_lines" \
+        || grep -Eiq "$RUST_TYPED_VALUE_RE" <<<"$added_line"; then
+        AUTHZ_RUST_PATTERN_HIT=1
+      fi
+    done <<<"$file_lines"
+  else
+    non_rust_lines=""
+    while IFS= read -r numbered; do
+      [[ -n "$numbered" ]] || continue
+      non_rust_lines+=$'\n'"${numbered#*|}"
+    done <<<"$file_lines"
+    AUTHZ_NON_RUST_LINES+=$'\n'"$non_rust_lines"
+  fi
+done
+# Paren/call candidates on non-Rust lines use the same literal-shape gate as
+# the Rust path: bare identifiers and dotted paths before ')' are not secrets.
+non_rust_edge_call_hit() {
+  local numbered linematch pat
+  while IFS= read -r numbered; do
+    [[ -n "$numbered" ]] || continue
+    for pat in "$EDGE_PAREN_RE" "$EDGE_CALL_RE"; do
+      while IFS= read -r linematch; do
+        [[ -n "$linematch" ]] || continue
+        edge_paren_value_is_literal "$linematch" && return 0
+      done < <(grep -Eoi "$pat" <<<"$numbered" || true)
+    done
+  done <<<"$AUTHZ_NON_RUST_LINES"
+  return 1
+}
+EDGE_ANGLE_MATCHES="$(grep -Eio "$EDGE_ANGLE_RE" <<<"$AUTHZ_NON_RUST_LINES" || true)"
+if [[ "$AUTHZ_COLLECTION_FAILED" -eq 1 ]] \
+  || [[ "$STRONG_SECRET_HIT" -eq 1 ]] \
+  || grep -Eiq "$SECRET_RE" <<<"$AUTHZ_NON_RUST_LINES" \
+  || grep -Eiq "$EDGE_VALUE_RE" <<<"$AUTHZ_NON_RUST_LINES" \
+  || [[ -n "$EDGE_ANGLE_MATCHES" ]] \
+  || non_rust_edge_call_hit \
+  || [[ "$AUTHZ_RUST_PATTERN_HIT" -eq 1 ]];
+then
   fail "authz" "possible secret in added lines — move to a credential store"
 else
   pass "authz" "no secret patterns in added lines"

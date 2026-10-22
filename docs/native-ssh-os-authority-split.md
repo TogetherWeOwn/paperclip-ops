@@ -122,6 +122,22 @@ point-in-time figures (the 365-line count, the byte-identical gate blob) describ
 the recovery snapshot, not this tree, and are superseded here along with its
 red-by-design note; the §3 pins below track the live tree.
 
+### 1.4 Review hardening on 2026-10-22 (per-file lexical checks)
+
+The gate now checks each seam independently in each file: the required-file
+`occurrences` count is from `server-utils.ts` only, and `ssh_occurrences` must be
+zero. Relocating a seam into `ssh.ts` or adding a second copy there fails.
+Counts skip comments and quoted/regular-expression literals and match whole
+identifiers. The historical `HostExecutor` label includes the exact deployed
+identifiers `NativeSshHostExecutorTarget` and `getActiveNativeSshHostExecutor`,
+not arbitrary identifiers containing that substring. The live counts remain
+9/5/1, with all ten anchors unchanged and zero occurrences in `ssh.ts`.
+
+This remains a lexical citation guard, not a TypeScript parser or proof of an
+executed authorization path. Template literals are conservatively excluded in
+full, including interpolation. The host preflight and hostile-agent suite in §5
+remain mandatory; this gate cannot authorize activation.
+
 ### What this run could not establish
 
 An agent container cannot prove the host's systemd unit definitions, host uid database, root-owned filesystem layout, SELinux/AppArmor policy, or cgroup delegation configuration. Those are mandatory operator preflight inputs, not assumptions to fill from inside the container.
@@ -396,11 +412,11 @@ blockers did not close.
 
 ### 8.2 The gap the blockers did NOT close
 
-case_e4054a66 is `done` and its seam was accepted, but that seam **is not in `/app`** (§1.0).
-The deployed native-SSH carrier has no authority guard at all today. Closing case_e4054a66 did
-not change the running system, and no acceptance on this chain should be read as though
-it did. This is a deployment gap, not a design gap, and it is tracked where deployment
-is owned — not re-litigated here.
+The 2026-08-31 deployment gap (§1.0) is superseded by §§1.2–1.3: case_e4054a66
+is `done` and its accepted seam is live but dormant in `/app`. Activation remains
+prohibited. Neither closing that case nor finding its source identifiers establishes
+the OS authority split or the installed runtime's fail-closed behavior. Those require
+the host preflight and hostile-agent acceptance evidence in §5.
 
 ### 8.3 The single remaining actor
 
@@ -422,6 +438,6 @@ authorizes no host mutation. Therefore:
    both re-verified by commit and tree hash on 2026-08-31), replace the fail-closed stub
    with the reviewed signer protocol, then request activation approval separately.
 
-Until step 1 completes, native SSH must remain fail-closed. That is the correct resting
-state: the preserved core candidate already fails it closed, and no partial protection
-should be claimed from a seam that is accepted but undeployed.
+Until step 1 completes, native SSH activation must remain prohibited. The preserved
+core candidate fails closed, but that does not establish the installed runtime's
+fail-closed behavior. A live but dormant seam is not hostile-agent acceptance.

@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
@@ -126,9 +127,24 @@ PRESENT_EXPECTED: tuple[tuple[str, str], ...] = (
     ("authorizeLaunch", "signer-issued launch authorization"),
 )
 
-PRESENT_SCAN_FILES: tuple[str, ...] = (
-    "/app/packages/adapter-utils/src/server-utils.ts",
-    "/app/packages/adapter-utils/src/ssh.ts",
+PRESENT_FILE = "/app/packages/adapter-utils/src/server-utils.ts"
+ABSENT_FILE = "/app/packages/adapter-utils/src/ssh.ts"
+
+# HostExecutor is the historical seam label, not a standalone type in tog.22.
+# Match its two deployed identifiers explicitly rather than arbitrary substrings.
+SYMBOL_IDENTIFIERS = {
+    "HostExecutor": {"HostExecutor", "NativeSshHostExecutorTarget", "getActiveNativeSshHostExecutor"},
+}
+
+# Skip comments and quoted text before matching complete identifiers. Template
+# literals are conservatively excluded in full. This is a lexical citation check,
+# not a TypeScript parser or proof that an authorization path actually executes.
+SOURCE_TOKENS = re.compile(
+    r"//[^\r\n]*|/\*.*?(?:\*/|\Z)|"
+    r"/(?![/*])(?:\\.|\[(?:\\.|[^\]\\\r\n])*\]|[^/\\\[\r\n])+/[a-z]*|"
+    r'''"(?:\\.|[^"\\])*(?:"|\Z)|'''
+    r"'(?:\\.|[^'\\])*(?:'|\Z)|`(?:\\.|[^`\\])*(?:`|\Z)|(?P<identifier>[$\w]+)",
+    re.DOTALL,
 )
 
 
@@ -155,7 +171,8 @@ def count_symbol(path: Path, symbol: str) -> int | None:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    return text.count(symbol)
+    identifiers = SYMBOL_IDENTIFIERS.get(symbol, {symbol})
+    return sum(match.group("identifier") in identifiers for match in SOURCE_TOKENS.finditer(text))
 
 
 def main(argv: list[str]) -> int:
@@ -202,23 +219,24 @@ def main(argv: list[str]) -> int:
 
     present_results: list[dict[str, Any]] = []
     for symbol, why in PRESENT_EXPECTED:
-        total = 0
-        unreadable = False
-        for raw_path in PRESENT_SCAN_FILES:
-            n = count_symbol(resolve(raw_path), symbol)
-            if n is None:
-                unreadable = True
-            else:
-                total += n
-        if unreadable:
+        present_count = count_symbol(resolve(PRESENT_FILE), symbol)
+        absent_count = count_symbol(resolve(ABSENT_FILE), symbol)
+        if present_count is None or absent_count is None:
             verdict, audit_errors = "error", audit_errors + 1
-        elif total == 0:
-            # Absent means the ADR's "deployed" finding no longer holds.
+        elif present_count == 0:
             verdict, failures = "unexpectedly_absent", failures + 1
+        elif absent_count != 0:
+            verdict, failures = "unexpectedly_present_in_ssh", failures + 1
         else:
             verdict = "present_as_expected"
         present_results.append(
-            {"symbol": symbol, "occurrences": total, "verdict": verdict, "why": why}
+            {
+                "symbol": symbol,
+                "occurrences": present_count,
+                "ssh_occurrences": absent_count,
+                "verdict": verdict,
+                "why": why,
+            }
         )
 
     if args.json:
@@ -249,6 +267,8 @@ def main(argv: list[str]) -> int:
         for r in present_results:
             mark = "ok  " if r["verdict"] == "present_as_expected" else "FAIL"
             print(f"  [{mark}] {r['symbol']}: {r['occurrences']} occurrence(s)")
+            if r["verdict"] != "present_as_expected":
+                print(f"           {r['verdict']}; ssh.ts: {r['ssh_occurrences']} occurrence(s)")
         print()
         print(f"failures={failures} audit_errors={audit_errors}")
 

@@ -51,6 +51,11 @@ Builder interfaces accepted by these tests (backward compatible):
   w.issue_has_live_work / w.live_run_guard when present). A builder that
   duplicates the query instead of calling the shared guard will fail the
   behavioral tests by design.
+- A run arriving during durable touched-receipt persistence must be caught by
+  the second guard; remove only that provisional receipt, preserve unrelated
+  touched/flagged entries, and report the live skip without a board write.
+- Only literal False permits parking at either guard; unexpected values are
+  unmeasured skips. A post-persist refusal removes the provisional receipt.
 - Candidate SQL: the selection query ('with n as') MUST contain
   'scheduled_retry' and 'taskId' (coalesce issueId/taskId) while retaining
   'running' and 'queued'.
@@ -361,6 +366,85 @@ class LiveGuardBeforePark(Base):
             self.fail('guard exception must be treated as unmeasured/skip, not crash')
         self.assertEqual(self.patch_calls(), [])
         self.assertNotIn(WAITER_IDENT, self.disk().get('touched', {}))
+
+    def test_run_arriving_during_receipt_persistence_removes_provisional_receipt(self):
+        # Catches a missing post-persist guard or missing receipt rollback.
+        self.waiter_with_doer()
+        prior = {'touched': {'case_prior_waiter': time.time()},
+                 'flagged': {'case_prior_flag': time.time()}}
+        self.write_json(prior)
+        live = False
+        observed_receipts = []
+        real_persist = w.persist
+
+        def persist_then_arrive(state):
+            nonlocal live
+            real_persist(state)
+            if WAITER_IDENT in self.disk()['touched']:
+                live = True
+
+        def guard_after_arrival(iid):
+            self.assertEqual(iid, WAITER_IID)
+            observed_receipts.append(WAITER_IDENT in self.disk()['touched'])
+            return live
+
+        self.patch_guard(side_effect=guard_after_arrival)
+        with mock.patch.object(w, 'persist', side_effect=persist_then_arrive):
+            ret, out = self.run_apply_capture()
+        self.assertTrue(live, 'fixture must inject arrival after a real durable receipt')
+        self.assertGreaterEqual(len(observed_receipts), 2)
+        self.assertFalse(observed_receipts[0], 'first guard must precede the receipt')
+        self.assertIn(True, observed_receipts[1:], 'a second guard must see the provisional receipt')
+        self.api.assert_not_called()
+        self.assertEqual(self.disk(), prior, 'rollback must preserve unrelated touched/flagged entries')
+        report = extract_report(ret, out)
+        self.assertIsNotNone(report)
+        parked, skipped = report_lists(report)
+        self.assertEqual(parked, [])
+        match = [e for e in skipped if entry_iid(e) == WAITER_IID]
+        self.assertTrue(match)
+        self.assertIn('live', entry_reason(match[0]).lower())
+        self.assertTrue(any(k in entry_next(match[0]).lower() for k in NEXT_ACTIONS))
+
+    def test_only_literal_false_permits_parking_at_either_guard(self):
+        # Catches truthiness/equality checks accepting 0, empty or malformed results.
+        for stage in ('before_receipt', 'after_receipt'):
+            for value in (None, 0, '', [], {}, 'false', 1, object()):
+                with self.subTest(stage=stage, value=value):
+                    self.waiter_with_doer()
+                    prior = {'touched': {'case_prior_waiter': time.time()},
+                             'flagged': {'case_prior_flag': time.time()}}
+                    self.write_json(prior)
+                    self.api.reset_mock()
+                    receipts = []
+
+                    def unexpected_guard(iid):
+                        self.assertEqual(iid, WAITER_IID)
+                        has_receipt = WAITER_IDENT in self.disk()['touched']
+                        receipts.append(has_receipt)
+                        if stage == 'after_receipt' and not has_receipt:
+                            return False
+                        return value
+
+                    self.patch_guard(side_effect=unexpected_guard)
+                    ret, out = self.run_apply_capture()
+                    self.assertTrue(receipts, 'parking must consult the shared guard')
+                    self.assertFalse(receipts[0])
+                    if stage == 'after_receipt':
+                        self.assertIn(True, receipts, 'exercise the post-persist guard')
+                    else:
+                        self.assertNotIn(True, receipts, 'unknown first result must not permit a receipt')
+                    self.api.assert_not_called()
+                    self.assertEqual(self.disk(), prior)
+                    report = extract_report(ret, out)
+                    self.assertIsNotNone(report)
+                    parked, skipped = report_lists(report)
+                    self.assertEqual(parked, [])
+                    match = [e for e in skipped if entry_iid(e) == WAITER_IID]
+                    self.assertTrue(match, 'unexpected guard result requires a diagnostic')
+                    self.assertTrue(any(k in entry_reason(match[0]).lower()
+                                        for k in ('unmeasured', 'error', 'fail', 'unknown', 'guard')))
+                    self.assertTrue(any(k in entry_next(match[0]).lower() for k in NEXT_ACTIONS))
 
     def test_positive_control_no_live_work_parks_once(self):
         self.waiter_with_doer()

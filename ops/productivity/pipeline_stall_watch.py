@@ -97,16 +97,20 @@ def carry_auth_errors():
 def capacity_collapse():
     """(latest C*, highest C* in the 2 h before it) from model-capacity-caps lines, or None."""
     tail = sh('tail', '-n', '6000', str(LOG)).splitlines()
-    cutoff = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 7200))
+    cutoff = time.time() - 7200
     vals = []
     for line in tail:
-        if line[:20] >= cutoff and 'model-capacity-caps' in line:
-            m = re.search(r'C\*=([0-9.]+)', line)
-            if m:
-                try:
-                    vals.append(float(m.group(1)))
-                except ValueError:
-                    continue  # Malformed capacity value (e.g. C*=1.2.3): skip, keep scanning.
+        if 'model-capacity-caps' not in line:
+            continue
+        t = _parse_log_ts(line)
+        if t is None or t < cutoff:
+            continue  # Malformed timestamp or stale (>2h): skip, keep scanning.
+        m = re.search(r'C\*=([0-9.]+)', line)
+        if m:
+            try:
+                vals.append(float(m.group(1)))
+            except ValueError:
+                continue  # Malformed capacity value (e.g. C*=1.2.3): skip, keep scanning.
     return (vals[-1], max(vals[:-1])) if len(vals) >= 2 else None
 
 

@@ -66,6 +66,7 @@ parser, not a standing operator command. Test entry points begin with `test_`.
 | `bridge_row_inventory.py` |
 | `capture_host_evidence.sh` |
 | `capture_host_render.sh` |
+| `check_workflow_job_permissions.py` |
 | `case_8abb7523-measure.mjs` |
 | `ci_dark_steps.sh` |
 | `ci_failure_drain.sh` |

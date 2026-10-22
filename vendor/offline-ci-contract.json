@@ -2161,7 +2161,7 @@
       "plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|v0.2.2"
     ]
   },
-  "suites_job_sha256": "5d0d517daadcbf5743afdf5f9b131afb162bfaed3980a112ba9c4824d546726c",
+  "suites_job_sha256": "54852a057a5260f18c96016eaeb90c9813fd05f8e20f2cf286d29983ba6e393f",
   "manifest_sha256": "45002e0b5e92e94f5bda7df2d92c40384f1c6d7b054f1a7ede163f5c3999b13e",
   "restored_files_sha256": {
     "acceptance_org_lib.sh": "8db92e9d11f5a21776dbc1f71296b752291e6758ddc2a5ad67a129a86a5ed00a",

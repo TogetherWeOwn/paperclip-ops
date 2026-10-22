@@ -1642,6 +1642,50 @@ assert "$(grep -q "evil.example.invalid" "$TMP/sibcurlspy.log" && echo 1 || echo
   "a refused board gets zero transport calls" "$(cat "$TMP/sibcurlspy.log")"
 
 # ===========================================================================
+hdr "Allowlist enforce blinds the remote lookups with zero transport."
+# Wiring pins for the three remote sites (GENERIC, SAMEHEAD, SAMESHA):
+# detector 1 refuses the evil base first, but the remote detectors still
+# run, so each must refuse on its own check. Deleting any one site lets
+# its lookup curl the evil base and fails the zero-transport assertion.
+# Reuses the curl spy from the pin above; the BASH_ENV drop is the same
+# anti-unshadowing guard as the malformed-base trio above.
+SG_REMOTE_BASH_ENV_SAVED="${BASH_ENV-}"; unset BASH_ENV
+SG_OLD_HATCH="$PAPERCLIP_API_ALLOWLIST_TEST"
+export PAPERCLIP_API_ALLOWLIST_TEST='' PAPERCLIP_API_ALLOWLIST_MODE=enforce
+: > "$TMP/sibcurlspy.log"
+PATH="$TMP/spybin:$PATH" OVERRIDE_PAPERCLIP_API_URL="https://evil.example.invalid" run_guard "$CLEAN" 11111111-2222-3333-4444-555555555555 --repo=stub/crossforeign
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "an allowlist-refused cross-branch lookup exits 3, not 0" "rc=$RC out=$OUT"
+assert "$(grep -q "cross-branch ownership check refused by API host allowlist" <<< "$OUT" && echo 0 || echo 1)" \
+  "the cross-branch refusal names the allowlist" "$OUT"
+assert "$(grep -q "evil.example.invalid" "$TMP/sibcurlspy.log" && echo 1 || echo 0)" \
+  "the refused cross-branch lookup makes zero evil-base calls" "$(cat "$TMP/sibcurlspy.log")"
+: > "$TMP/sibcurlspy.log"
+PATH="$TMP/spybin:$PATH" OVERRIDE_PAPERCLIP_API_URL="https://evil.example.invalid" run_guard "$MYPR" 11111111-2222-3333-4444-555555555555 --repo=stub/foreign --phase=prepush
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "an allowlist-refused prepush lookup exits 3, not 0" "rc=$RC out=$OUT"
+assert "$(grep -q "prepush ownership check refused by API host allowlist" <<< "$OUT" && echo 0 || echo 1)" \
+  "the prepush refusal names the allowlist" "$OUT"
+assert "$(grep -q "evil.example.invalid" "$TMP/sibcurlspy.log" && echo 1 || echo 0)" \
+  "the refused prepush lookup makes zero evil-base calls" "$(cat "$TMP/sibcurlspy.log")"
+# The vacuous block above repointed the stub SHA file at its own HEAD; the
+# same-commit fixture needs the caller head under test again.
+(cd "$SHAHEAD" && git rev-parse HEAD > "$TMP/sha.txt")
+: > "$TMP/sibcurlspy.log"
+PATH="$TMP/spybin:$PATH" OVERRIDE_PAPERCLIP_API_URL="https://evil.example.invalid" run_guard "$SHAHEAD" 11111111-2222-3333-4444-555555555555 --repo=stub/shaforeign
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "an allowlist-refused same-commit lookup exits 3, not 0" "rc=$RC out=$OUT"
+assert "$(grep -q "same-commit ownership check refused by API host allowlist" <<< "$OUT" && echo 0 || echo 1)" \
+  "the same-commit refusal names the allowlist" "$OUT"
+assert "$(grep -q "evil.example.invalid" "$TMP/sibcurlspy.log" && echo 1 || echo 0)" \
+  "the refused same-commit lookup makes zero evil-base calls" "$(cat "$TMP/sibcurlspy.log")"
+export PAPERCLIP_API_ALLOWLIST_TEST="$SG_OLD_HATCH"
+unset PAPERCLIP_API_ALLOWLIST_MODE
+if [[ -n "${SG_REMOTE_BASH_ENV_SAVED-}" ]]; then export BASH_ENV="$SG_REMOTE_BASH_ENV_SAVED"; fi
+unset SG_REMOTE_BASH_ENV_SAVED
+unset OVERRIDE_PAPERCLIP_API_URL
+
+# ===========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
 exit 0

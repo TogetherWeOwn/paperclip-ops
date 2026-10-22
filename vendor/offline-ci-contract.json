@@ -321,7 +321,8 @@
     "api-base-validation suite:1",
     "api-base-validation-python suite:1",
     "review report input integrity holds:1",
-    "test-missing gate suites:1"
+    "test-missing gate suites:1",
+    "host backup publication receipt contract (offline):1"
   ],
   "retained": [
     {
@@ -1808,6 +1809,11 @@
       "name": "test-missing gate suites",
       "definition_sha256": "a245dc744b32a853deac2e14fcb7d52b9582f7862154f7ae954800a7da67dc3a",
       "id": "test-missing gate suites:1"
+    },
+    {
+      "name": "host backup publication receipt contract (offline)",
+      "definition_sha256": "f3220047635007807b551238df97e65b3db9b784bcafb35829fa009c51e3f5f4",
+      "id": "host backup publication receipt contract (offline):1"
     }
   ],
   "removed": [

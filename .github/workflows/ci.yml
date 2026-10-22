@@ -1670,6 +1670,15 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_host_disk.sh
 
+      # Native-SSH citation gate: anchor-text pins for the OS authority-split
+      # ADR plus the expected-present seam-symbol contract. Hermetic
+      # (synthesized fixtures at the pinned lines, mktemp only); the pins
+      # themselves are re-validated against the deployed tree out of band
+      # and recorded in docs/native-ssh-os-authority-split.md.
+      - name: native-ssh citation gate suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_native_ssh_citation_gate.sh
+
       # case_be75d8d7. Ingress-independent two-bot-next staging deploy
       # pre-checks (staging deploy-surface validation + built-image digest
       # record, no ingress/credential/network): hostile offline suite with

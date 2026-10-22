@@ -156,8 +156,9 @@ def _consume_search_pages(repo, pages, fetch_stop="complete"):
     """Interpret raw search pages: (items, total, refusal or None).
 
     Shared by live fetch and --from-file replay. A null/failed page
-    raises RuntimeError naming github; incomplete_results or a bound
-    hit returns a refusal dict (code/reason) instead of items.
+    raises RuntimeError naming github; incomplete_results, a bound
+    hit, or pages covering fewer items than total_count returns a
+    refusal dict (code/reason) instead of items.
     """
     for index, page in enumerate(pages):
         if page is None or (isinstance(page, dict) and "error" in page):
@@ -196,6 +197,14 @@ def _consume_search_pages(repo, pages, fetch_stop="complete"):
             "reason": (f"github search for {repo} returned "
                        f"incomplete_results; withholding GitHub ratios "
                        f"over a partial population"),
+        }
+    if item_count < total:
+        return [], total, {
+            "code": "search_incomplete",
+            "reason": (f"github search for {repo} pages cover "
+                       f"{item_count} of {total} items (incomplete); "
+                       f"withholding GitHub ratios over a partial "
+                       f"population"),
         }
     items = [{"number": it["number"],
               "merged_at": (it.get("closed_at") or "")}
@@ -1160,14 +1169,18 @@ def main(argv=None):
                "MAX_SEARCH_PAGES\n"
                "  (5) pages and MAX_SEARCH_ITEMS (500) items; "
                "per-commit\n"
-               "  check-runs page within MAX_CHECK_RUN_PAGES (5) and "
-               "reconcile\n"
-               "  against total_count. A page with "
-               "incomplete_results,\n"
-               "  or a read beyond its bound, withholds the GitHub "
-               "ratios\n"
-               "  with a search_* reason_code (exit 0); unreconciled\n"
-               "  check-runs degrade that PR to unknown. "
+               "  check-runs page within MAX_CHECK_RUN_PAGES (5). "
+               "Both\n"
+               "  reconcile fetched items against total_count: a "
+               "page with\n"
+               "  incomplete_results, a read beyond its bound, or "
+               "search\n"
+               "  pages covering fewer items than total_count "
+               "withhold\n"
+               "  the GitHub ratios with a search_* reason_code "
+               "(exit 0);\n"
+               "  unreconciled check-runs degrade that PR to "
+               "unknown. "
                "first_push_green_rate\n"
                "  always carries sampled counts {sampled, known, "
                "pending,\n"

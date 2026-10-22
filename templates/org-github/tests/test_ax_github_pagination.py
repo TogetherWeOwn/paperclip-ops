@@ -254,13 +254,14 @@ def run_main(args):
     return code, report, text, err.getvalue()
 
 
-def run_from_file(fixture, days=REPORT_DAYS):
+def run_from_file(fixture, days=REPORT_DAYS, extra_args=()):
     with tempfile.NamedTemporaryFile(
             "w", suffix=".json", delete=False) as fh:
         json.dump(fixture, fh)
         path = fh.name
     try:
-        return run_main(["--from-file", path, "--days", str(days)])
+        return run_main(["--from-file", path, "--days", str(days),
+                         *extra_args])
     finally:
         os.unlink(path)
 
@@ -479,6 +480,23 @@ class IncompleteSearchTest(unittest.TestCase):
         code, report, _text, _err = run_from_file(fixture)
         self.assertEqual(code, 0)
         assert_search_withheld(self, report, 3)
+
+    def test_short_pages_withhold(self):
+        fixture = paginated_fixture(
+            [search_page([101, 102], total=3),
+             search_page([], total=3)],
+            [pr(101, status=status_only("success")),
+             pr(102, status=status_only("success"))])
+        code, report, _text, _err = run_from_file(fixture)
+        self.assertEqual(code, 0)
+        assert_search_withheld(self, report, 3)
+        for name in ("first_push_green_rate", "tokens_per_merged_pr"):
+            metric = report["metrics"][name]
+            self.assertEqual(metric["reason_code"], "search_incomplete")
+            reason = str(metric["reason"]).lower()
+            self.assertIn(
+                "2 of 3", reason,
+                f"{name} reason must name the coverage shortfall")
 
 
 class OverBoundSearchTest(unittest.TestCase):
@@ -831,15 +849,20 @@ class OfflineAndDeterminismTest(unittest.TestCase):
                 "TEST_SYNTHETIC_PC_KEY_PG",
                 "TEST_SYNTHETIC_PC_URL_PG",
                 "TEST_SYNTHETIC_PC_COMPANY_PG")
+        flags = ["--github-token-env", keys[0],
+                 "--paperclip-key-env", keys[1],
+                 "--paperclip-url-env", keys[2],
+                 "--paperclip-company-env", keys[3]]
         for key in keys:
             os.environ.pop(key, None)
-        _c1, _r1, without, _e1 = run_from_file(fixture)
+        _c1, _r1, without, _e1 = run_from_file(fixture, extra_args=flags)
         os.environ[keys[0]] = "synthetic-gh-token-001"
         os.environ[keys[1]] = "synthetic-key-001"
         os.environ[keys[2]] = "synthetic-base-001"
         os.environ[keys[3]] = SYNTHETIC_COMPANY
         try:
-            _c2, _r2, with_creds, _e2 = run_from_file(fixture)
+            _c2, _r2, with_creds, _e2 = run_from_file(
+                fixture, extra_args=flags)
         finally:
             for key in keys:
                 os.environ.pop(key, None)

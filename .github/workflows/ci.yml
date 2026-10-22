@@ -3556,8 +3556,8 @@ jobs:
       # three public forks were classified "upstream-authored" and never
       # examined. A gate that skips the finding reports PASS.
       #
-      # 26 identities, 20 of them negative cases taken from this org's actual
-      # forks plus five adversarial near-misses. The negative half is the
+      # 34 identities, 26 of them negative cases taken from this org's actual
+      # forks plus eleven adversarial near-misses. The negative half is the
       # load-bearing half: matching `users.noreply.github.com` broadly would
       # claim every GitHub user as ours and turn the allowlist into a rubber
       # stamp. Verified non-vacuous -- reverting to the pre-case_c04b8883 regex

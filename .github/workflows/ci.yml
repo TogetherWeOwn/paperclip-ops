@@ -5527,7 +5527,7 @@ jobs:
 
       - name: org-request-mcp regression suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.mcp == 'true'
-        run: node --test mcp/test/org-request-mcp.test.mjs
+        run: node --test mcp/test/own-inbox-diagnostics.test.mjs mcp/test/org-request-mcp.test.mjs
 
       # A suite that cannot fail is decoration, and this one guards an IDENTITY
       # boundary — the property the whole epic rests on. Every mutation below is
@@ -5777,7 +5777,7 @@ jobs:
           # rows are all present. Pinned by an exact-argv assertion, because
           # "did my rows come back" cannot see this and never will.
           mcp_mutation_check "read-returns-every-agents-requests" \
-            'return ["inbox", "--for", identity.agentId];' \
+            'return ["inbox", "--for", identity.agentId, "--json"];' \
             'return ["list", "--status", "all"];' || rc=1
 
           # Give the read tool a property. The tool declares NONE, and that is

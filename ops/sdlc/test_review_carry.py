@@ -119,6 +119,24 @@ class LatestReviewTest(unittest.TestCase):
         newer = check(check_id=2, conclusion="failure")
         self.assertIsNone(rc.latest_review([older, newer], HEAD, 73))
 
+    def test_newer_other_pr_check_does_not_displace_own_55(self):
+        # Same head H shared by PR #73 (valid 5/5, id 1) and PR #10 with a
+        # newer check (id 2): PR #73's carry still resolves to its own check.
+        own = check(check_id=1)
+        other = check(check_id=2, external_id="endpoint:10:" + HEAD)
+        got = rc.latest_review([own, other], HEAD, 73)
+        self.assertIsNotNone(got)
+        self.assertEqual(got["id"], 1)
+
+    def test_mixed_prs_newer_failed_same_pr_still_invalidates(self):
+        # Own newer failure (id 2) invalidates own older 5/5 (id 1) even
+        # when another PR holds a newer 5/5 (id 3) on the same head.
+        older = check(check_id=1)
+        newer_failed = check(check_id=2, conclusion="failure")
+        other = check(check_id=3, external_id="endpoint:10:" + HEAD)
+        self.assertIsNone(
+            rc.latest_review([older, newer_failed, other], HEAD, 73))
+
     def test_rejects_carry_prefixed(self):
         carried = check(external_id=rc.PREFIX + "0" * 40)
         self.assertIsNone(rc.latest_review([carried], HEAD, 73))

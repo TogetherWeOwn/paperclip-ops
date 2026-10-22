@@ -262,15 +262,19 @@ class GitCache:
 def latest_review(checks, head, number):
     matches = [c for c in checks if c.get('name') == CHECK and
                c.get('app', {}).get('id') == APP_ID and c.get('head_sha') == head]
-    if not matches:
+    # Bind to the queued PR before selecting latest: the check-runs API lists
+    # runs for the head ref, so a newer check for another PR sharing this
+    # head must not displace this PR's own latest check.
+    bound = [c for c in matches
+             if str(c.get('external_id') or '').endswith(f':{number}:{head}')]
+    if not bound:
         return None
     # A newer queued/failed assessment invalidates an older successful one.
-    latest = max(matches, key=lambda c: int(c['id']))
+    latest = max(bound, key=lambda c: int(c['id']))
     external_id = str(latest.get('external_id') or '')
     if (latest.get('status') != 'completed' or latest.get('conclusion') != 'success'
             or latest.get('output', {}).get('title', '').strip() != '5/5'
-            or external_id.startswith(PREFIX)
-            or not external_id.endswith(f':{number}:{head}')):
+            or external_id.startswith(PREFIX)):
         return None
     return latest
 

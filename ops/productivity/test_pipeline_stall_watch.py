@@ -35,6 +35,12 @@ service-failure counts pass. Post-fix: the full file passes.
 Post e8cb63c9 review fixes (9247ca2): the Main* threshold, stale-history,
 carry-auth, and torn-state cases fail on e8cb63c9 behavior where applicable
 and pass at head; the 25 original tests stay green.
+Post 0a89ecd capacity-window fix: CapacityCollapseWindow and
+MainCapacityCollapseWindow pin parsed-timestamp window gating (malformed /
+undated / stale lines skipped, 2h window unchanged). The malformed, undated,
+short, and main-guard cases fail on 97c5609 behavior; the stale and boundary
+cases pass on both revisions and pin the 2h cutoff against deletion; all 49
+earlier tests stay green.
 """
 
 import calendar
@@ -458,6 +464,78 @@ class CapacityCollapseRobustness(unittest.TestCase):
         self.assertEqual(capacity_for_log(log), (4.0, 8.0))
 
 
+class CapacityCollapseWindow(unittest.TestCase):
+    """capacity_collapse() admits only well-formed lines inside the 2h window.
+
+    Malformed-timestamp, undated, and short marker lines must be skipped: on
+    97c5609 they sort in-window via raw string prefix compare and forge a
+    false low latest (0.5, 12.0). Stale (>2h) well-formed lines are excluded
+    on both revisions (string compare already excludes them); those tests pin
+    the 2h cutoff against deletion instead.
+    """
+
+    def _recent_pair(self):
+        return [
+            capacity_line(ts_before(minutes=90), "12.0"),
+            capacity_line(ts_before(minutes=30), "11.0"),
+        ]
+
+    def test_malformed_timestamp_low_line_is_skipped(self):
+        log = "\n".join(self._recent_pair() + [
+            "BAD-TIMESTAMP model-capacity-caps: C*=0.5 pool=main",
+        ])
+        self.assertEqual(capacity_for_log(log), (11.0, 12.0),
+                         "malformed-ts low line must not forge the latest")
+
+    def test_undated_marker_line_is_skipped(self):
+        log = "\n".join(self._recent_pair() + [
+            "model-capacity-caps: C*=0.5 (undated marker, no timestamp)",
+        ])
+        self.assertEqual(capacity_for_log(log), (11.0, 12.0),
+                         "undated marker line must not forge the latest")
+
+    def test_short_marker_line_is_skipped(self):
+        log = "\n".join(self._recent_pair() + [
+            "model-capacity-caps C*=0.5",
+        ])
+        self.assertEqual(capacity_for_log(log), (11.0, 12.0),
+                         "short undated line must not forge the latest")
+
+    def test_stale_low_line_last_is_excluded(self):
+        # A clock-skewed old low appended after recent lines: including it
+        # (cutoff deleted) would forge latest 0.5.
+        log = "\n".join(self._recent_pair() + [
+            capacity_line(ts_before(minutes=125), "0.5"),
+        ])
+        self.assertEqual(capacity_for_log(log), (11.0, 12.0),
+                         "stale (>2h) low line must be excluded from the window")
+
+    def test_stale_high_line_first_is_excluded(self):
+        # Including it (cutoff deleted) would forge prior max 99.0.
+        log = "\n".join([
+            capacity_line(ts_before(minutes=180), "99.0"),
+        ] + self._recent_pair())
+        self.assertEqual(capacity_for_log(log), (11.0, 12.0),
+                         "stale (>2h) high line must not join the prior max")
+
+    def test_exactly_2h_line_is_in_window(self):
+        log = "\n".join([
+            capacity_line(ts_before(minutes=120), "12.0"),
+            capacity_line(ts_before(minutes=30), "11.0"),
+        ])
+        self.assertEqual(capacity_for_log(log), (11.0, 12.0),
+                         "exactly-2h line is inside the window (>= cutoff)")
+
+    def test_just_over_2h_line_is_excluded(self):
+        log = "\n".join([
+            capacity_line(ts_before(minutes=120, seconds=1), "12.0"),
+            capacity_line(ts_before(minutes=30), "11.0"),
+            capacity_line(ts_before(minutes=5), "10.5"),
+        ])
+        self.assertEqual(capacity_for_log(log), (10.5, 11.0),
+                         "just-over-2h line must fall outside the window")
+
+
 class UtcTimestampParsing(unittest.TestCase):
     """`Z` ticks parse as UTC even on DST-observing hosts (review finding)."""
 
@@ -603,6 +681,55 @@ class MainCapacityBounds(unittest.TestCase):
                           tail6000=self._cap_tail(9.9, 0.2))
         self.assertNotIn("capacity-collapse", result["keys"],
                          "collapsed latest with low prior must stay quiet")
+
+
+class MainCapacityCollapseWindow(unittest.TestCase):
+    """Production capacity-collapse window pinned through the real main().
+
+    Malformed/undated low lines must not forge a collapse alert (both fail on
+    97c5609 with a false 'capacity-collapse' alert); a stale low line is
+    quiet on both revisions and pins the 2h cutoff through main(); the
+    genuine recent collapse is the no-false-quiet control.
+    """
+
+    def _recent_tick(self):
+        return gate_line(ts_before(minutes=5), "gate admits 1 head")
+
+    def _recent_pair_tail(self):
+        return "\n".join([
+            capacity_line(ts_before(minutes=90), "12.0"),
+            capacity_line(ts_before(minutes=30), "11.0"),
+        ])
+
+    def test_malformed_low_line_quiet_via_main(self):
+        tail6000 = self._recent_pair_tail() + "\nBAD-TIMESTAMP model-capacity-caps: C*=0.5 pool=main"
+        result = run_main(tail4000=self._recent_tick(), tail6000=tail6000)
+        self.assertNotIn("capacity-collapse", result["keys"],
+                         f"malformed-ts low line must not alert, got {result['keys']}")
+        self.assertEqual(result["keys"], [])
+
+    def test_undated_low_line_quiet_via_main(self):
+        tail6000 = self._recent_pair_tail() + "\nmodel-capacity-caps: C*=0.5 (undated marker)"
+        result = run_main(tail4000=self._recent_tick(), tail6000=tail6000)
+        self.assertNotIn("capacity-collapse", result["keys"],
+                         f"undated low line must not alert, got {result['keys']}")
+        self.assertEqual(result["keys"], [])
+
+    def test_stale_low_line_last_quiet_via_main(self):
+        tail6000 = self._recent_pair_tail() + "\n" + capacity_line(ts_before(minutes=125), "0.5")
+        result = run_main(tail4000=self._recent_tick(), tail6000=tail6000)
+        self.assertNotIn("capacity-collapse", result["keys"],
+                         f"stale low line must not alert, got {result['keys']}")
+        self.assertEqual(result["keys"], [])
+
+    def test_genuine_recent_collapse_alerts_via_main(self):
+        tail6000 = "\n".join([
+            capacity_line(ts_before(minutes=90), "12.0"),
+            capacity_line(ts_before(minutes=10), "0.5"),
+        ])
+        result = run_main(tail4000=self._recent_tick(), tail6000=tail6000)
+        self.assertIn("capacity-collapse", result["keys"],
+                      f"genuine recent collapse must alert, got {result['keys']}")
 
 
 class MainStaleHistory(unittest.TestCase):

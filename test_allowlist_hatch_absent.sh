@@ -62,18 +62,24 @@ done
 # Default-on shapes: a direct =1 assignment, a shell :-1} default, or a
 # mapping .get with a "1" default (literal or via the HATCH_VAR constant).
 # Plain `== "1"` comparisons never match these.
-if grep -rnE "$HATCH\"?\]?\s*=[^=]" "${SCOPE_B[@]}" 2>/dev/null | grep -vE '==' | grep -q .; then
-  bad "no direct hatch assignment in senders/helpers" "$(grep -rnE "$HATCH\"?\]?\s*=[^=]" "${SCOPE_B[@]}" | grep -vE '==' | head -n 5)"
+# Capture first, then test the capture: piping a producer straight into an
+# early-exiting `grep -q` under pipefail lets SIGPIPE read a match as a
+# miss (case_c25c4d3f).
+hits_b_assign="$(grep -rnE "$HATCH\"?\]?\s*=[^=]" "${SCOPE_B[@]}" 2>/dev/null | grep -vE '==')"
+if grep -q . <<<"$hits_b_assign"; then
+  bad "no direct hatch assignment in senders/helpers" "$(head -n 5 <<<"$hits_b_assign")"
 else
   ok "no direct hatch assignment in senders/helpers"
 fi
-if grep -rnE "${HATCH}:-[^}]*1" "${SCOPE_B[@]}" 2>/dev/null | grep -q .; then
-  bad "no shell default-on in senders/helpers" "$(grep -rnE "${HATCH}:-[^}]*1" "${SCOPE_B[@]}" | head -n 5)"
+hits_b_shell="$(grep -rnE "${HATCH}:-[^}]*1" "${SCOPE_B[@]}" 2>/dev/null)"
+if grep -q . <<<"$hits_b_shell"; then
+  bad "no shell default-on in senders/helpers" "$(head -n 5 <<<"$hits_b_shell")"
 else
   ok "no shell default-on in senders/helpers"
 fi
-if grep -rnE "\.get\(\s*(HATCH_VAR|[\"']$HATCH[\"'])\s*,\s*[\"']?1" "${SCOPE_B[@]}" 2>/dev/null | grep -q .; then
-  bad "no mapping default-on in senders/helpers" "$(grep -rnE "\.get\(\s*(HATCH_VAR|[\"']$HATCH[\"'])\s*,\s*[\"']?1" "${SCOPE_B[@]}" | head -n 5)"
+hits_b_map="$(grep -rnE "\.get\(\s*(HATCH_VAR|[\"']$HATCH[\"'])\s*,\s*[\"']?1" "${SCOPE_B[@]}" 2>/dev/null)"
+if grep -q . <<<"$hits_b_map"; then
+  bad "no mapping default-on in senders/helpers" "$(head -n 5 <<<"$hits_b_map")"
 else
   ok "no mapping default-on in senders/helpers"
 fi
@@ -100,7 +106,8 @@ grep -qE "\.get\(\s*(HATCH_VAR|[\"']$HATCH[\"'])\s*,\s*[\"']?1" "$WORK/getmap.py
 # The legitimate comparison shape must NOT trip the assignment grep.
 printf 'if [[ "${%s:-}" == "1" ]]; then\n' "$HATCH" > "$WORK/legit.sh"
 printf 'if env.get(HATCH_VAR, "") == "1":\n' > "$WORK/legit.py"
-if grep -E "$HATCH\"?\]?\s*=[^=]" "$WORK/legit.sh" "$WORK/legit.py" | grep -vE '==' | grep -q .; then
+hits_legit="$(grep -E "$HATCH\"?\]?\s*=[^=]" "$WORK/legit.sh" "$WORK/legit.py" | grep -vE '==')"
+if grep -q . <<<"$hits_legit"; then
   bad "legitimate comparisons do not trip the gate"
 else
   ok "legitimate comparisons do not trip the gate"

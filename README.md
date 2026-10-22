@@ -137,6 +137,13 @@ This documentation does not authorize running a backup or changing a host.
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
 
+## Verification
+
+Run the fast tier with `make verify-fast` (`make verify-fast-parse` for the
+parse gate only). To inspect suite scope and prerequisites without running or
+preparing anything, use `make verify-fast-plan` (offline, read-only;
+`scripts/verify-fast.sh --plan --json`).
+
 ## Contributing
 
 Use a feature branch and a reviewed pull request. Report actual tests and their

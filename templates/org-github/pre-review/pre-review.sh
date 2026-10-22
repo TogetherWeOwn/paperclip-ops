@@ -447,9 +447,13 @@ api_key_fallback_hit() {
           while (substr(s, j, 1) ~ /[[:alnum:]_.$]/ && j <= length(s)) j++
           word = substr(s, i, j - i)
           # Inside argument 2 of a defaults call the pending flag survives
-          # words: a `name=` label (default="...") or a string prefix
+          # other words: a `name=` label (default="...") or a string prefix
           # (f"...") is part of the default argument, not a new expression.
-          if (!(defaults[depth] && args[depth] == 2)) want = (word == "or")
+          # A bare word `or` still arms the flag wherever it appears: an
+          # `or`-fallback behind a call, grouping or short literal inside
+          # argument 2 is a credential, per the documented `or "..."` guarantee.
+          if (word == "or") want = 1
+          else if (!(defaults[depth] && args[depth] == 2)) want = 0
           i = j - 1; continue
         }
         if (ch == "(" || ch == "[" || ch == "{") {

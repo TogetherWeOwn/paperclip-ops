@@ -294,5 +294,14 @@ deliver "$(payload "1111-2222" "$BIG_BODY")"
   && ok "a second delivery of the same payload refuses identically — retry cannot succeed" \
   || bad "the retry behaved differently (rc=$RC, curl-ran=$([ -s "$ARGV" ] && echo yes || echo no))"
 
+hdr "8. Allowlist enforce refuses with zero transport"
+# Wiring pin: deleting the paperclip_allowlist_check call must fail the
+# zero-transport assertion (the notifier would curl the evil base).
+reset
+OUT="$(printf '%s' "$(payload 'ISS-1')" | PAPERCLIP_API_URL="https://evil.example.invalid/api" PAPERCLIP_API_ALLOWLIST_TEST='' PAPERCLIP_API_ALLOWLIST_MODE=enforce PATH="$BIN:$PATH" "$NOTIFY" 2>&1)"; RC=$?
+[[ $RC -eq 65 ]] && ok "enforce refuses the unallowlisted base (rc 65)" || bad "enforce refuses the unallowlisted base (rc 65)" "rc=$RC out=$OUT"
+[[ ! -s "$ARGV" ]] && ok "refusal makes zero transport calls" || bad "refusal makes zero transport calls" "$(cat "$ARGV")"
+[[ "$OUT" == *"allowlist"* ]] && ok "refusal names the allowlist" || bad "refusal names the allowlist" "$OUT"
+
 printf '\n\033[1mRESULT: %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

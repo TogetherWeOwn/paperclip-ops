@@ -288,7 +288,6 @@ import json, sys
 r = json.load(open(sys.argv[1]))
 assert r["checked_base"] == "http://paperclip.invalid:3100", r["checked_base"]
 PY
-
 # ---- 5. the code that runs in the container -----------------------------
 python3 - "$WORK/a1" <<'PY' && ok "the bootstrap runs the pruner as __main__ and its sibling core imports" || fail "bootstrap run is wrong"
 import json, os, sys
@@ -306,6 +305,19 @@ i = argv.index("paperclip-server")
 assert argv[i + 1:i + 7] == ["timeout", "--signal=TERM", "--kill-after=30s", "1500", "python3", "-c"], argv[i + 1:i + 7]
 assert argv[-3:] == ["--apply", "--max-remove", "0"], argv[-3:]
 PY
+
+# Enforce wiring pin (placed after the bound assertion because run_wrapper
+# clears docker.log, which that assertion reads): deleting the wrapper's
+# paperclip_allowlist_check call must fail this case — the wrapper would
+# run the engine against the evil base.
+rc=0; run_wrapper "$WORK/v4" "${BASE[@]}" \
+  PAPERCLIP_API_URL=https://evil.example.invalid \
+  PAPERCLIP_API_ALLOWLIST_TEST= PAPERCLIP_API_ALLOWLIST_MODE=enforce || rc=$?
+if [[ $rc -eq 2 ]] && grep -q "host allowlist verdict" "$WORK/v4.err" && [[ ! -s "$WORK/docker.log" ]]; then
+  ok "an enforce-refused base is refused on the host before the engine runs"
+else
+  fail "enforce verdict refusal wrong: rc=$rc log=$(cat "$WORK/docker.log") err=$(cat "$WORK/v4.err")"
+fi
 
 for code in 1 2 3; do
   make_release "$WORK/rel$code" "$code"

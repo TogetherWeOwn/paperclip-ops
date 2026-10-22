@@ -161,6 +161,14 @@ f="$(fixture malformed "https://board.example.invalid" "garbage{{{")"
 out="$("${RUN_ENV[@]}" "$HERE/lib/paperclip_api_allowlist.sh" --check "https://board.example.invalid" --file "$f" 2>"$WORK/err.txt")"; rc=$?
 [[ "$rc" -eq 1 && "$out" == REFUSE* ]] && grep -q "malformed origin" "$WORK/err.txt" \
   && ok "malformed file refuses rc 1" || bad "malformed file refuses rc 1" "rc=$rc out=$out"
+# The dry-run mirrors the senders: hatch/bridge verdicts never consult the
+# file, so a missing file must not flip them to REFUSE.
+out="$("${RUN_ENV[@]}" PAPERCLIP_API_ALLOWLIST_TEST=1 "$HERE/lib/paperclip_api_allowlist.sh" --check "https://board.example.invalid" --file "$MISSING" 2>"$WORK/err.txt")"; rc=$?
+[[ "$rc" -eq 0 && "$out" == ALLOW*"entries=?" ]] && ok "hatch allows with missing file" || bad "hatch allows with missing file" "rc=$rc out=$out"
+out="$("${RUN_ENV[@]}" PAPERCLIP_API_BRIDGE_MODE=queue_v1 "$HERE/lib/paperclip_api_allowlist.sh" --check "http://127.0.0.1:38035/" --file "$MISSING" 2>"$WORK/err.txt")"; rc=$?
+[[ "$rc" -eq 0 && "$out" == ALLOW*"entries=?" ]] && ok "bridge allows with missing file" || bad "bridge allows with missing file" "rc=$rc out=$out"
+out="$("${RUN_ENV[@]}" "$HERE/lib/paperclip_api_allowlist.sh" --check "https://evil.example.com" --file "$MISSING" 2>"$WORK/err.txt")"; rc=$?
+[[ "$rc" -eq 1 && "$out" == REFUSE*"entries=?" ]] && ok "missing file still refuses without hatch" || bad "missing file still refuses without hatch" "rc=$rc out=$out"
 out="$("${RUN_ENV[@]}" "$HERE/lib/paperclip_api_allowlist.sh" --bogus 2>/dev/null)"; rc=$?
 [[ "$rc" -eq 2 ]] && ok "usage error rc 2" || bad "usage error rc 2" "rc=$rc"
 # A dangling flag must refuse, not spin: `timeout` bounds the regression.

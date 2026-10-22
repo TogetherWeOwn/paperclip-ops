@@ -1991,5 +1991,24 @@ class ApiClientDelegationTests(unittest.TestCase):
                           allowlist_checked_base=self.BASE)
 
 
+class AllowlistEnforceWiring(unittest.TestCase):
+    def test_enforce_refuses_before_any_transport(self):
+        # Wiring pin: deleting the check_api_base_allowed call in
+        # ApiClient.__init__ must fail this test (construction would
+        # succeed and _get would proceed to urlopen).
+        env = dict(os.environ)
+        env.pop("PAPERCLIP_API_ALLOWLIST_TEST", None)
+        env.pop("PAPERCLIP_API_BRIDGE_MODE", None)
+        env["PAPERCLIP_API_ALLOWLIST_MODE"] = "enforce"
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch("paperclip_api_allowlist.load_allowlist",
+                           return_value=set()), \
+                mock.patch("urllib.request.urlopen") as urlopen:
+            with self.assertRaises(ReclaimError) as raised:
+                reclaim_mod.ApiClient("https://evil.example.com", "c", "k")
+        self.assertIn("mode=enforce", str(raised.exception))
+        urlopen.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

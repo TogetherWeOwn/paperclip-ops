@@ -395,5 +395,24 @@ class FetchRunSecretTests(unittest.TestCase):
         self.assertIn("fetch_run_secret cliproxy_agent_api_key: OSError", stderr.getvalue())
 
 
+class AllowlistEnforceWiring(unittest.TestCase):
+    def test_enforce_refuses_before_any_transport(self):
+        # Wiring pin: deleting the check_api_base_allowed call in
+        # _paperclip_api_base must fail this test (post_board_alarm would
+        # proceed to urlopen with the unvetted base).
+        environ = {"PAPERCLIP_API_URL": "https://evil.example.com/api",
+                   "PAPERCLIP_API_KEY": "KEY",
+                   "PAPERCLIP_TASK_ID": "tid",
+                   "PAPERCLIP_RUN_ID": "rid",
+                   "PAPERCLIP_API_ALLOWLIST_MODE": "enforce"}
+        with mock.patch("paperclip_api_allowlist.load_allowlist",
+                        return_value=set()), \
+                mock.patch("urllib.request.urlopen") as urlopen:
+            with self.assertRaises(ValueError) as raised:
+                probe.post_board_alarm([], environ)
+        self.assertIn("mode=enforce", str(raised.exception))
+        urlopen.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -148,10 +148,10 @@ def load_allowlist(path: str = DEFAULT_ALLOWLIST_FILE) -> set[str]:
     try:
         with open(path, encoding="utf-8") as handle:
             lines = handle.read().splitlines()
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise AllowlistRefused(
             "refusing: allowlist file missing or unreadable: %s (%s)"
-            % (path, exc.strerror or exc.__class__.__name__)
+            % (path, getattr(exc, "strerror", None) or exc.__class__.__name__)
         ) from exc
     origins: set[str] = set()
     for lineno, raw in enumerate(lines, start=1):
@@ -300,22 +300,27 @@ def _check_command(argv: list[str]) -> int:
     env = dict(os.environ)
     if args.mode is not None:
         env[MODE_VAR] = args.mode
-    try:
-        allowed = load_allowlist(args.file)
-    except AllowlistRefused as exc:
-        _log("%s sender=%s" % (exc, args.sender))
-        print("REFUSE base=%s file=%s entries=? reason=file" % (
-            _sanitize(args.check), args.file))
-        return 1
+    # The verdict runs the exact sender path first (bridge/hatch before the
+    # file): with a hatch/bridge base and a missing file the senders allow
+    # without consulting the file, so --check must too. The entries count is
+    # display-only and degrades to "?" when the file is unreadable.
     try:
         verdict = check_api_base_allowed(
             args.check, args.sender, allowlist_path=args.file, environ=env)
     except AllowlistRefused as exc:
-        print("REFUSE base=%s file=%s entries=%d reason=%s" % (
-            _sanitize(args.check), args.file, len(allowed), exc))
+        refused = exc
+    else:
+        refused = None
+    try:
+        entries = str(len(load_allowlist(args.file)))
+    except AllowlistRefused:
+        entries = "?"
+    if refused is not None:
+        print("REFUSE base=%s file=%s entries=%s reason=%s" % (
+            _sanitize(args.check), args.file, entries, refused))
         return 1
-    print("ALLOW base=%s file=%s entries=%d verdict=%s" % (
-        _sanitize(args.check), args.file, len(allowed), verdict))
+    print("ALLOW base=%s file=%s entries=%s verdict=%s" % (
+        _sanitize(args.check), args.file, entries, verdict))
     return 0
 
 

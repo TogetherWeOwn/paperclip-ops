@@ -172,6 +172,14 @@ class FileFailureModes(FixtureCase):
         with self.assertRaises(AllowlistRefused):
             check("https://board.example.invalid", path=self.tmp.name)
 
+    def test_undecodable_file_refuses_as_allowlist_refused(self):
+        path = os.path.join(self.tmp.name, "allowed-api-hosts")
+        with open(path, "wb") as handle:
+            handle.write(b"https://board.example.invalid\n\xff\xfe\n")
+        with self.assertRaises(AllowlistRefused) as raised:
+            check("https://board.example.invalid", path=path)
+        self.assertIn("missing or unreadable", str(raised.exception))
+
     def test_malformed_lines_refuse_naming_the_line(self):
         bad_lines = [
             "http://board.example.invalid",
@@ -389,6 +397,35 @@ class CheckCommand(FixtureCase):
         self.assertEqual(proc.returncode, 1)
         self.assertIn("REFUSE", proc.stdout)
         self.assertIn("malformed origin", proc.stderr)
+
+    def test_hatch_allows_with_missing_file(self):
+        # The dry-run mirrors the senders: hatch/bridge verdicts never
+        # consult the file, so a missing file must not flip them to REFUSE.
+        missing = os.path.join(self.tmp.name, "definitely-not-here")
+        proc = self.run_check("--check", "https://board.example.invalid",
+                              "--file", missing,
+                              env={"PAPERCLIP_API_ALLOWLIST_TEST": "1"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ALLOW", proc.stdout)
+        self.assertIn("verdict=hatch", proc.stdout)
+        self.assertIn("entries=?", proc.stdout)
+
+    def test_bridge_allows_with_missing_file(self):
+        missing = os.path.join(self.tmp.name, "definitely-not-here")
+        proc = self.run_check("--check", "http://127.0.0.1:38035/",
+                              "--file", missing,
+                              env={"PAPERCLIP_API_BRIDGE_MODE": "queue_v1"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ALLOW", proc.stdout)
+        self.assertIn("verdict=bridge", proc.stdout)
+
+    def test_missing_file_still_refuses_without_hatch(self):
+        missing = os.path.join(self.tmp.name, "definitely-not-here")
+        proc = self.run_check("--check", "https://evil.example.com",
+                              "--file", missing)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("REFUSE", proc.stdout)
+        self.assertIn("entries=?", proc.stdout)
 
     def test_usage_error(self):
         proc = self.run_check("--bogus")

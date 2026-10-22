@@ -856,5 +856,24 @@ class RestoreGuardTest(unittest.TestCase):
                 rec.original_fields(row))
 
 
+class AllowlistEnforceWiring(unittest.TestCase):
+    def test_enforce_refuses_before_any_transport(self):
+        # Wiring pin: deleting the check_api_base_allowed call in
+        # PaperclipClient.__init__ must fail this test (construction
+        # would succeed and _request would proceed to urlopen).
+        env = dict(os.environ)
+        env.pop("PAPERCLIP_API_ALLOWLIST_TEST", None)
+        env.pop("PAPERCLIP_API_BRIDGE_MODE", None)
+        env["PAPERCLIP_API_ALLOWLIST_MODE"] = "enforce"
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch("paperclip_api_allowlist.load_allowlist",
+                           return_value=set()), \
+                mock.patch("urllib.request.urlopen") as urlopen:
+            with self.assertRaises(rec.ReconcileError) as raised:
+                rec.PaperclipClient("https://evil.example.com", "KEY", "c")
+        self.assertIn("mode=enforce", str(raised.exception))
+        urlopen.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

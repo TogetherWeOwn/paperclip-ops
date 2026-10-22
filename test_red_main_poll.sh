@@ -1006,6 +1006,29 @@ for needle in RED_MAIN_ROLLUP_PARENT_ID parentIssueIds 'checks:read' RED_MAIN_TO
 done
 if grep -qF 'no `actions:read`' "$INSTALL"; then ok "INSTALL.md withholds actions:read"; else bad "INSTALL.md withholds actions:read" "missing"; fi
 
+hdr "Allowlist enforce refuses the live board read with zero transport"
+# Wiring pin: deleting the paperclip_allowlist_check call must fail the
+# zero-transport assertion below (the poller would curl the evil base and
+# only then fail the read). A logging curl shim stands in front of the real
+# one so stub traffic still flows while every argv is recorded.
+REAL_CURL_BIN="$(command -v curl)"
+mkdir -p "$WORK/spybin"
+cat > "$WORK/spybin/curl" <<SPYEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$WORK/curlspy.log"
+exec "$REAL_CURL_BIN" "\$@"
+SPYEOF
+chmod +x "$WORK/spybin/curl"
+: > "$WORK/curlspy.log"
+OUT="$(env -u INCIDENT_SOURCE_CMD PAPERCLIP_API_URL="https://evil.example.invalid" PAPERCLIP_COMPANY_ID=co-spy RED_MAIN_API_KEY=canary-board-key-000 PAPERCLIP_API_ALLOWLIST_TEST= PAPERCLIP_API_ALLOWLIST_MODE=enforce PATH="$WORK/spybin:$PATH" "$TOOL" snapshot o/green 2>"$WORK/err.txt")"; RC=$?; ERR="$(cat "$WORK/err.txt")"
+[[ "$RC" -eq 3 && -z "$OUT" ]] && ok "enforce refusal is unreadable: exit 3, no fragment" || bad "enforce refusal is unreadable: exit 3, no fragment" "rc=$RC out=$OUT err=$ERR"
+[[ "$ERR" == *"allowlist"* ]] && ok "refusal names the allowlist" || bad "refusal names the allowlist" "$ERR"
+if grep -q "evil.example.invalid" "$WORK/curlspy.log"; then
+  bad "refused base gets zero transport calls" "$(cat "$WORK/curlspy.log")"
+else
+  ok "refused base gets zero transport calls"
+fi
+
 echo
 printf 'red_main_poll: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

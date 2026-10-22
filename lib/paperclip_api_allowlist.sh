@@ -214,17 +214,23 @@ if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]]; then
         *) echo "unknown argument: $1" >&2; return 2;;
       esac
     done
-    if ! _pca_load "$file"; then
-      _pca_log "refusing: $_PCA_FILE_ERROR sender=$sender"
-      printf 'REFUSE base=%s file=%s entries=? reason=file\n' "$(_pca_sanitize "$base")" "$file"
-      return 1
+    # The verdict runs the exact sender path first (bridge/hatch before the
+    # file): with a hatch/bridge base and a missing file the senders allow
+    # without consulting the file, so --check must too. The entries count is
+    # display-only and degrades to "?" when the file is unreadable.
+    local sane_base refused=0
+    sane_base="$(_pca_sanitize "$base")"
+    paperclip_allowlist_check "$base" "$sender" "$file" || refused=1
+    if _pca_load "$file" 2>/dev/null; then
+      entries="$(grep -c . <<<"$_PCA_ALLOWED")"
+    else
+      entries="?"
     fi
-    entries="$(grep -c . <<<"$_PCA_ALLOWED")"
-    if paperclip_allowlist_check "$base" "$sender" "$file"; then
-      printf 'ALLOW base=%s file=%s entries=%d\n' "$(_pca_sanitize "$base")" "$file" "$entries"
+    if (( refused == 0 )); then
+      printf 'ALLOW base=%s file=%s entries=%s\n' "$sane_base" "$file" "$entries"
       return 0
     fi
-    printf 'REFUSE base=%s file=%s entries=%d\n' "$(_pca_sanitize "$base")" "$file" "$entries"
+    printf 'REFUSE base=%s file=%s entries=%s\n' "$sane_base" "$file" "$entries"
     return 1
   }
   _pca_main "$@"

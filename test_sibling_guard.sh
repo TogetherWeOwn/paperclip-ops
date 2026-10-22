@@ -1614,6 +1614,34 @@ assert "$(grep -q "comparing against local master" <<< "$OUT" && echo 0 || echo 
   "the local-only base comparison is named in the report" "$OUT"
 
 # ===========================================================================
+hdr "Allowlist enforce blinds the control plane with zero transport."
+# Wiring pin: deleting any paperclip_allowlist_check call must fail the
+# zero-transport assertion (that detector would curl the evil base). A
+# logging curl shim stands in front of the real one so stub traffic still
+# flows while every argv is recorded.
+SGC="$TMP/spyguard"; mkclone "$SGC"
+SG_REAL_CURL="$(command -v curl)"
+mkdir -p "$TMP/spybin"
+cat > "$TMP/spybin/curl" <<SPYEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$TMP/sibcurlspy.log"
+exec "$SG_REAL_CURL" "\$@"
+SPYEOF
+chmod +x "$TMP/spybin/curl"
+: > "$TMP/sibcurlspy.log"
+SG_OLD_HATCH="$PAPERCLIP_API_ALLOWLIST_TEST"
+export PAPERCLIP_API_ALLOWLIST_TEST='' PAPERCLIP_API_ALLOWLIST_MODE=enforce
+PATH="$TMP/spybin:$PATH" OVERRIDE_PAPERCLIP_API_URL="https://evil.example.invalid" run_guard "$SGC" EXAMPLE-900 --repo=stub/none
+export PAPERCLIP_API_ALLOWLIST_TEST="$SG_OLD_HATCH"
+unset PAPERCLIP_API_ALLOWLIST_MODE
+assert "$([[ "$RC" -eq 3 ]] && echo 0 || echo 1)" \
+  "an allowlist-refused board exits 3, never 0" "rc=$RC out=$OUT"
+assert "$(grep -q "refused by API host allowlist" <<< "$OUT" && echo 0 || echo 1)" \
+  "the blindness names the allowlist refusal" "$OUT"
+assert "$(grep -q "evil.example.invalid" "$TMP/sibcurlspy.log" && echo 1 || echo 0)" \
+  "a refused board gets zero transport calls" "$(cat "$TMP/sibcurlspy.log")"
+
+# ===========================================================================
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
 exit 0

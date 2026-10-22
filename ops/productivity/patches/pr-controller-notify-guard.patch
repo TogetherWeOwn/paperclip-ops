@@ -23,3 +23,30 @@
  def latest_check_contexts(contexts):
      """Collapse proven Actions attempts only; other workflows and non-Actions contexts remain gates."""
      latest, unknown = {}, []
+@@ -642,7 +642,8 @@
+                 print(f'{key}: check inventory truncated; skipped rather than infer green')
+                 continue
+             pr['_contexts'] = contexts.get('nodes') or []
+-            cur, detail = classify(pr, required_checks(full, pr['baseRefName'], env), reviews, full)
++            required = required_checks(full, pr['baseRefName'], env)
++            cur, detail = classify(pr, required, reviews, full)
+             if cur == 'passed' and f"{full.split('/')[-1]}#{pr['number']}@{pr['headRefOid']}".lower() in ejected_heads():
+                 # Green alone, red in the merge group; nobody re-enqueues this head, so only its owner can move it
+                 # (10-17: two-bot-next#1008 sat 12 h as 'passed' after update-branch was refused).
+@@ -719,6 +719,16 @@
+             if cur == 'ci_red' and detail.get('pending') and (NOW - parse(rec['red_since'])) / 60 < RED_SETTLE_MIN:
+                 continue
+             wkey = f'{cur}@{head}'
++            if cur == 'ci_red':
++                # Notification-only gate: a ci_red state with no author-actionable
++                # failure (empty red list, or only known shared-base checks red)
++                # pages nobody. Verdicts, eligibility and gates are unchanged.
++                verdict = notify_author_wake(cur, detail, required)[0]
++                rec['notify_verdict'] = {'head': head, 'verdict': verdict}
++                if verdict == 'suppress':
++                    if SHADOW:
++                        log(f'would suppress author wake for {key}: {cur} @ {head[:8]} (no actionable failure)')
++                    continue
+             if rec.get('woke') == wkey and cards:
+                 name_l = full.split('/')[-1].lower()
+                 stale_h = STALE_H_DRAFT if cur == 'draft_idle' else (STALE_H_FOCUS if name_l in FOCUS_REPOS else STALE_H_OTHER)

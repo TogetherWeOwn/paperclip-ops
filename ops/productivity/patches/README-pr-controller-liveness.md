@@ -20,20 +20,28 @@ its inventory, classification, review, merge, capacity, hold, or live-run rules.
 - `../pr_controller_wakes.py`: correlates the comment id with the server's
   `agent_wakeup_requests` record. The existing read-only SQL client is injected;
   this module performs no database writes or new wake API calls.
-- `pr-controller-notify-guard.patch`: adds the notification-only author-wake
-  gate (`notify_author_wake`) beside the classification seam. Suppress fires
-  only for `ci_red` with no author-actionable failure (empty red list, or
-  only known shared-base checks red while the required set is known);
-  verdicts, eligibility, checks and gates are unchanged. Unknown required
-  sets fail closed to `wake`.
+- `pr-controller-notify-guard.patch`: wires the notification-only author-wake
+  gate into the live wake path. Three hunks: the `notify_author_wake` entry
+  point beside the classification seam, a `required` hoist feeding
+  `classify()`, and a `ci_red` consult inside `main()` right after the wake
+  key is computed. Suppress fires only for `ci_red` with no
+  author-actionable failure (empty red list, or only known shared-base
+  checks red while the required set is known); the verdict is recorded on
+  the state record (`rec['notify_verdict']`) every pass for the pump, and a
+  suppressed wake skips render and post without consuming the wake cap or
+  marking the transition delivered (a later genuine failure on the same
+  head still wakes). Verdicts, eligibility, checks and gates are unchanged.
+  Unknown required sets fail closed to `wake`.
 - `../pr_controller_wake_guard.py`: the pure-stdlib decision module behind
   that gate (`actionable_red`, `author_wake`, `KNOWN_BASE_EXECUTED`).
   Deterministic, no I/O, no host imports.
 - `../fixtures/pr_controller_backstop_before.py`: exact pre-fix function, used
   only for offline patch testing. It is not a runtime controller.
 - `../fixtures/pr_controller_notify_before.py`: exact pre-fix
-  `latest_check_contexts`/`classify`/`wake_text` seam for the notify-guard
-  patch tests. Evidence only; not a runtime controller.
+  `latest_check_contexts`/`classify`/`wake_text` seam (lines 1-99,
+  byte-identical to the original evidence) plus live lines 335 through EOF
+  appended verbatim for the wiring hunks. Evidence only; not a runtime
+  controller.
 
 A comment's HTTP success records a pending request, not delivery. Subsequent
 inventory passes observe a queued/deferred request without posting duplicates.
@@ -58,7 +66,7 @@ This is not a general repair for parked recovery actions or blocked cards.
 ```sh
 (cd ops/productivity && python3 -B -m unittest -v \
   test_pr_controller_backstop test_pr_controller_wakes \
-  test_pr_controller_notify_guard)
+  test_pr_controller_notify_guard test_pr_controller_notify_wiring)
 ```
 
 The backstop and notify-guard suites apply their patch with `--fuzz=0` to
@@ -92,10 +100,29 @@ required CI and Paperclip Review 5/5. Never install this entire public snapshot.
 4. Atomically install the helper first, then the candidate, preserving host file
    ownership/mode. Use the existing scheduled invocation; this packet requires no
    Paperclip, database, or model-proxy restart, agent config change, or gate change.
-5. Record exact public head, before/after hashes, commands and verification receipt.
+5. Apply the pump skip on the host (the pump file itself is host-only and is
+   not part of this packet). In `pr_pump.py` `main()`, inside the
+   `for key, rec in act:` loop, immediately after the per-(card, PR, state,
+   head) signature-dedup `continue` and before the `full, num` split, insert:
+   ```python
+   if rec.get('state') == 'ci_red':
+       nv = rec.get('notify_verdict') or {}
+       if (nv.get('verdict') == 'suppress' and rec.get('head')
+               and nv.get('head') == rec.get('head'):
+           continue
+   ```
+   The controller re-records the verdict every pass, so only a fresh
+   same-head suppress skips; missing or stale verdicts fail closed to the
+   legacy pump. Preserve the pump file and its hash before editing; compile
+   it; dry-run the pump (no `--apply`) and confirm a suppressed record no
+   longer appears as `would pump` while a genuinely actionable `ci_red`
+   still does.
+6. Record exact public head, before/after hashes, commands and verification receipt.
    Observe a real backstop trigger with no intervening re-arm and a skipped event
    followed by a claimed run. Offline green alone does not satisfy live acceptance.
 
 Rollback: atomically restore the preserved controller and any previous helper.
 Retain state and pending acknowledgements; never roll back or edit database rows,
 remove holds, alter wake configuration, cancel runs, or force a review/merge.
+If step 5 was applied, remove the inserted pump block and restore the preserved
+pump file the same way.

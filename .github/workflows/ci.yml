@@ -1446,7 +1446,7 @@ jobs:
       # Reconciler holds and hide-noop predicates, backlog-promoter, board-jobs, orphan-PRs and focus-gate fail-closed timeouts, PR-supply card text, flow-guard stages and host-pressure gate fail-closed contract. Offline: temp files and stubs.
       - name: review reconciler and ops guard suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes) && (cd ops/paperclip && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -p 'test_focus*.py')
+        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_ci test_pr_controller_ci_ops test_pr_controller_ci_host test_pr_controller_ci_patch) && (cd ops/paperclip && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -p 'test_focus*.py')
       # case_0d0fab73. reviewer-eval survival report atomic write: the eval
       # report persists through write_json_atomic (same-dir temp, fsync,
       # atomic rename) and a failing write exits non-zero with the previous
@@ -5535,7 +5535,7 @@ jobs:
 
       - name: org-request-mcp regression suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.mcp == 'true'
-        run: node --test mcp/test/org-request-mcp.test.mjs
+        run: node --test mcp/test/own-inbox-diagnostics.test.mjs mcp/test/org-request-mcp.test.mjs
 
       # A suite that cannot fail is decoration, and this one guards an IDENTITY
       # boundary — the property the whole epic rests on. Every mutation below is
@@ -5785,7 +5785,7 @@ jobs:
           # rows are all present. Pinned by an exact-argv assertion, because
           # "did my rows come back" cannot see this and never will.
           mcp_mutation_check "read-returns-every-agents-requests" \
-            'return ["inbox", "--for", identity.agentId];' \
+            'return ["inbox", "--for", identity.agentId, "--json"];' \
             'return ["list", "--status", "all"];' || rc=1
 
           # Give the read tool a property. The tool declares NONE, and that is

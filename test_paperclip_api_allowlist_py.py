@@ -24,12 +24,12 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+
+import paperclip_api_allowlist as allowlist
+from paperclip_api_allowlist import AllowlistRefused
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "lib"))
-
-import paperclip_api_allowlist as allowlist  # noqa: E402
-from paperclip_api_allowlist import AllowlistRefused  # noqa: E402
-
 SENDER = "suite_probe"
 MISSING = os.path.join("definitely", "not", "here", "allowed-api-hosts")
 

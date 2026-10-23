@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
-from paperclip_api_allowlist import (  # noqa: E402
+from paperclip_api_allowlist import (
     AllowlistRefused, check_api_base_allowed)
 
 PROBE_PROMPT = (

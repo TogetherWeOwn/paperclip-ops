@@ -111,7 +111,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from atomic_state import write_json_atomic  # noqa: E402
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "lib"))
-from paperclip_api_allowlist import (  # noqa: E402
+from paperclip_api_allowlist import (
     AllowlistRefused, check_api_base_allowed)
 
 DEP_CACHE_NAMES = frozenset({

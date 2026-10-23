@@ -9,6 +9,7 @@ set -Eeuo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 cd "$ROOT"
+
 GATE="$ROOT/verification/case_d5bc7950-ci-gating.sh"
 WORKFLOW="$ROOT/.github/workflows/ci.yml"
 TMP=$(mktemp -d)
@@ -144,6 +145,8 @@ mutate private-mutation-restore-dropped '  private-mutation-gates:
     if: github.event_name == '\''pull_request'\'' && (needs.changes.outputs.full == '\''true'\'' || needs.changes.outputs.private_mutation == '\''true'\'')
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -156,6 +159,8 @@ mutate private-mutation-restore-dropped '  private-mutation-gates:
     if: github.event_name == '\''pull_request'\'' && (needs.changes.outputs.full == '\''true'\'' || needs.changes.outputs.private_mutation == '\''true'\'')
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

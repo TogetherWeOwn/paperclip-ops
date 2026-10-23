@@ -48,6 +48,9 @@ jobs:
     # Keep the existing required check name.
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Checkout plus local lint scripts; no API use, so contents:read.
+    permissions:
+      contents: read
     steps:
       - name: Require a GitHub-hosted runner
         shell: bash

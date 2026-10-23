@@ -35,6 +35,7 @@ import argparse
 import configparser
 import json
 import math
+import os
 import re
 import shlex
 import subprocess
@@ -794,10 +795,9 @@ def check_workflows(entries, findings, root):
 
 def tracked_timers(root):
     try:
-        res = subprocess.run(["git", "-C", str(root), "-c", "core.quotepath=true",
-                              "ls-files", "*.timer"],
-                             capture_output=True, text=True, check=True)
-        return sorted(res.stdout.split())
+        res = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "*.timer"],
+                             capture_output=True, check=True)
+        return sorted(os.fsdecode(path) for path in res.stdout.split(b"\0") if path)
     except (OSError, subprocess.CalledProcessError):
         return sorted(str(p.relative_to(root)) for p in root.rglob("*.timer"))
 

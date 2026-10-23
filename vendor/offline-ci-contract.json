@@ -332,7 +332,9 @@
     "settings-bind rehearsal suite:1",
     "host backup publication receipt contract (offline):1",
     "native-ssh citation gate suite:1",
-    "verify-fast plan suites:1"
+    "verify-fast plan suites:1",
+    "review-only fence Python acceptance suite:1",
+    "review-only fence Node acceptance suite:1"
   ],
   "retained": [
     {
@@ -1874,6 +1876,16 @@
       "name": "verify-fast plan suites",
       "definition_sha256": "e1b1d3d318e2dff53a23c79b891d4bbab267c426e0d16a9c8dcf8fbef9f8074d",
       "id": "verify-fast plan suites:1"
+    },
+    {
+      "name": "review-only fence Python acceptance suite",
+      "definition_sha256": "51d9b8f52d7bdfb983f2c9da7cb8defd811c9663485136eecdaffc08f53cf4fb",
+      "id": "review-only fence Python acceptance suite:1"
+    },
+    {
+      "name": "review-only fence Node acceptance suite",
+      "definition_sha256": "4919f978741ec05e79974a0ae5ae6ef89cecc17b1ea6bb8cc8c11e0e3ba32bf9",
+      "id": "review-only fence Node acceptance suite:1"
     }
   ],
   "removed": [

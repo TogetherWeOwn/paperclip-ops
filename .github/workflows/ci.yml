@@ -1147,6 +1147,20 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: node --test plugins/pr-tracker/test/collect-rest.test.mjs plugins/pr-tracker/test/poll-prs.test.mjs plugins/pr-tracker/test/setup.test.mjs plugins/pr-tracker/test/upstream-watcher.test.mjs plugins/pr-tracker/test/view-model.test.mjs
 
+      # Review-only fence acceptance: real senders with trapped external I/O.
+      # Run on every suites execution, including capture-only changes.
+      # Keep the Node preload before production imports; failures stay fatal.
+      - name: review-only fence Python acceptance suite
+        env:
+          PAPERCLIP_RUN_SCRATCH_DIR: ${{ runner.temp }}
+        run: python3 -B -m unittest discover -s tests/pr_action_fence -p 'test_*.py' -v
+
+      - name: review-only fence Node acceptance suite
+        env:
+          PAPERCLIP_RUN_SCRATCH_DIR: ${{ runner.temp }}
+          TMPDIR: ${{ runner.temp }}
+        run: node --import=./tests/pr_action_fence/offline-preload.mjs --test tests/pr_action_fence/readiness-boundaries.test.mjs tests/pr_action_fence/wake-boundaries.test.mjs
+
       # Settings-bind rehearsal: the file-bind source contract suite
       # (baseline, read-only bound-file, kill-switch and rollback phases)
       # with synthetic inputs and stub Docker — no live home, no network,

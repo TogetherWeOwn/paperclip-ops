@@ -457,6 +457,10 @@ jobs:
     # docker/sudo.
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Every job states its own permissions (job level replaces the top
+    # level). This job fetches and diffs, so it repeats contents:read.
+    permissions:
+      contents: read
     outputs:
       full: ${{ steps.detect.outputs.full }}
       privilege: ${{ steps.detect.outputs.privilege }}
@@ -560,6 +564,10 @@ jobs:
     # unlike the other jobs that may use approved included-minutes overflow.
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Hermetic local suites (own Postgres cluster, stub API): checkout
+    # only, so contents:read and nothing else.
+    permissions:
+      contents: read
     env:
       PGHOST: 127.0.0.1
       PGUSER: postgres
@@ -831,6 +839,11 @@ jobs:
     # and idle-ttl-contracts.json ttl_min must cover this timeout;
     # test_isolated_garm_drain.py pins the coupling, so move them together.
     timeout-minutes: 210
+    # Checkout plus the dark-step reporter, which reads the jobs/steps API
+    # with the job token, so contents:read and actions:read.
+    permissions:
+      contents: read
+      actions: read
     steps:
       # -- shared prelude (was offline-suites, runs on every suites execution) --
       - name: Prove the private runner selected this job
@@ -979,6 +992,11 @@ jobs:
       - name: coolify decommission capacity suite
         run: ./test_coolify_capacity_headroom.sh
 
+      # Versioned offline evidence contract. The real CLI runs behind Landlock
+      # and seccomp; unsupported sandbox environments fail closed.
+      - name: capacity evidence and CLI refusal contract
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_capacity_evidence_contract
+
       # case_d0cad227. The required checks named in required_checks.json (a pinned
       # copy of the main rulesets) must each be produced by a real job that
       # runs on a pull request and cannot report green without running. A
@@ -1003,6 +1021,18 @@ jobs:
 
       - name: change-gating contract holds
         run: ./test_ci_gating.sh
+
+      # Explicit workflow job permissions gate: every job in every workflow
+      # must declare its own least-privilege `permissions:` block. Runs the
+      # checker over the live tree plus its acceptance suite. A separate
+      # contract-pinned step (not lines inside test_ci_gating.sh) so deleting
+      # it fails the offline-ci contract instead of silently unwiring
+      # enforcement. No step-level `if:`: it runs on every suites execution,
+      # exactly like the change-gating step above.
+      - name: explicit workflow job permissions gate
+        run: |
+          python3 check_workflow_job_permissions.py
+          python3 -m unittest -v test_check_workflow_job_permissions
 
       # case_6bf2cca9. The review-routing contract is load-bearing for review-model
       # spend: a red router that CI never executes would silently misroute
@@ -1074,6 +1104,24 @@ jobs:
       - name: public-comment hygiene gate suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_public_comment_hygiene_gate.sh
+
+      # verify-fast plan/list/no-prepare contract: the acceptance suite plus the
+      # strict inventory-to-execution drift check and the --no-prepare guard
+      # check. Offline: stdlib unittest, synthetic PATH stubs, no network or
+      # credentials. Without this step the suites run only in the full local
+      # verify-fast tier while CI runs --parse-only (which never invokes the
+      # planner nor compiles scripts/*.py), so a planner or guard regression
+      # would merge green. scripts/verify-fast* and the two test files classify
+      # to the core area through the root fallthrough.
+      - name: verify-fast plan suites
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        env:
+          STATIC_LABEL_PYTHON: ${{ steps.static-label-python.outputs.python-path || '/usr/bin/python3' }}
+          PYTHONPATH: ${{ runner.temp }}/static-label-guard-deps
+        run: |
+          # The copied inventory probes PyYAML through child python3 processes.
+          export PATH="$(dirname "$STATIC_LABEL_PYTHON"):$PATH"
+          python3 -B -m unittest -v test_verify_fast_plan test_verify_fast_plan_gates
 
       - name: Syntax check every script
         run: ./scripts/verify-fast.sh --parse-only
@@ -1303,6 +1351,15 @@ jobs:
       - name: quality-gate helper suites
         run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target
 
+      # case_6f2e8a41. Deterministic test-missing gate suites: the unit
+      # contract (wider source suffixes, deleted-file handling, vacuity
+      # rules) plus the staged-copy/CLI regression. Hermetic stdlib
+      # unittest, seconds; no network, no credentials, no writes outside
+      # temp fixtures. Always run: they pin the gate the SDLC standard
+      # inherits, and the gate itself stays warn by default.
+      - name: test-missing gate suites
+        run: python3 -m unittest -v test_blocker_test_checks test_test_missing_org_template
+
       - name: mutmut budget-kill fixture suite
         run: bash ./test_mutmut_changed.sh
 
@@ -1501,6 +1558,16 @@ jobs:
           (cd ops/pr-hygiene && python3 -m unittest -v test_owner_match)
           (cd ops/lib && python3 -m unittest -v test_live_run_guard)
 
+      # Serena navigation guards must execute here: CI's parse-only tier
+      # never reaches the suite in the full local verify-fast tier. Reuse the
+      # hash-pinned YAML parser and its interpreter prepared above.
+      - name: code-nav read-only and resource guard suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        env:
+          STATIC_LABEL_PYTHON: ${{ steps.static-label-python.outputs.python-path || '/usr/bin/python3' }}
+          PYTHONPATH: ${{ runner.temp }}/static-label-guard-deps
+        run: (cd ops/agent-tooling/serena-pilot-b && "$STATIC_LABEL_PYTHON" -B -m unittest -v test_code_nav)
+
       # case_8c53addb. Tier-1 cheap-model review checks: fixed verdict schemas
       # (block/hold/pass, never approve), deterministic prefilters, eval math
       # and the labelled-set classifier. Offline: stdlib unittest, no network.
@@ -1510,10 +1577,29 @@ jobs:
           (cd ops/review_tier1 && python3 -m unittest -v test_review_tier1)
           (cd ops/analysis/review-findings && python3 -m unittest -v test_classify)
 
+      # Paginated review-gate acceptance: paginated inventory plus exact
+      # fair-order admission. Offline: fixtures under ops/review_gate.
+      - name: paginated review-gate acceptance suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        env:
+          PAPERCLIP_RUN_SCRATCH_DIR: ${{ runner.temp }}
+        run: python3 -B verification/review_gate_acceptance/run.py --source-dir ops/review_gate --legacy
+
       # Reconciler holds and hide-noop predicates, backlog-promoter, board-jobs, orphan-PRs and focus-gate fail-closed timeouts, PR-supply card text, flow-guard stages and host-pressure gate fail-closed contract. Offline: temp files and stubs.
       - name: review reconciler and ops guard suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_flake_ledger_report test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_ci test_pr_controller_ci_ops test_pr_controller_ci_host test_pr_controller_ci_patch) && (cd ops/paperclip && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -p 'test_focus*.py')
+        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_flake_ledger_report test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pr_controller_ci test_pr_controller_ci_ops test_pr_controller_ci_host test_pr_controller_ci_patch test_pipeline_stall_watch) && (cd ops/paperclip && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -p 'test_focus*.py')
+
+      # sdlc-review-carry. Merge-queue 5/5 carry gate logic: patch
+      # normalization/digest, PR-bound latest-review selection, hint-file
+      # degraded outcomes and the carry decision. Offline: stdlib unittest
+      # with stubbed host-only imports, no network or credentials. Without
+      # this step the suite runs only in the full local verify-fast tier
+      # while CI runs --parse-only, so a regression only it catches would
+      # merge green.
+      - name: sdlc review-carry suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: (cd ops/sdlc && python3 -m unittest -v test_review_carry)
       # case_0d0fab73. reviewer-eval survival report atomic write: the eval
       # report persists through write_json_atomic (same-dir temp, fsync,
       # atomic rename) and a failing write exits non-zero with the previous
@@ -1673,7 +1759,10 @@ jobs:
       # probe bundle; no network or credentials.
       - name: staging login-smoke probe suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: ./test_case_00b2eb59_probe.sh
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_staging_login_journey
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_staging_login_journey_guards
+          ./test_case_00b2eb59_probe.sh
 
       # case_71e7a4e9. Runner-disk Gatus module (host / + inodes, LXD pool
       # used/total, per-VM root disks; warn 80 / crit 90): fragment shape,
@@ -2955,6 +3044,18 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_ci_failure_drain.sh
 
+      # case_821f1653 (M12.3). The machine-readable twin of the failure
+      # log-drain: --json writes failure-summary.json (schema version, run
+      # id, per-job rows, summary counts, error triple) beside the md, so
+      # triage parses instead of scraping prose. Same hermetic fixtures,
+      # same byte-stability contract: the flag adds one file and changes
+      # no other byte.
+      - name: failure-drain JSON suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        # Keep default fixture attribution independent of this Actions run;
+        # the suite separately supplies a run id to verify explicit attribution.
+        run: env -u GITHUB_RUN_ID ./test_ci_failure_drain_json.sh
+
       # case_50dca137. The dark-step reporter's own vacuity gate.
       #
       # This reporter exists to make an invisible failure visible, so the way it
@@ -3268,6 +3369,13 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_db_backup_stall.sh
 
+      - name: database backup observation contract
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: |
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          TMPDIR="$work" PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_backup_observation_contract test_backup_observation_regressions
+
       # A correct detector that nothing runs measures nothing. The suite above
       # drives db_backup_stall.sh against fixture directories, so it can never
       # testify about this host -- and on 2026-09-05 the scheduler wedged at
@@ -3556,8 +3664,8 @@ jobs:
       # three public forks were classified "upstream-authored" and never
       # examined. A gate that skips the finding reports PASS.
       #
-      # 26 identities, 20 of them negative cases taken from this org's actual
-      # forks plus five adversarial near-misses. The negative half is the
+      # 34 identities, 26 of them negative cases taken from this org's actual
+      # forks plus eleven adversarial near-misses. The negative half is the
       # load-bearing half: matching `users.noreply.github.com` broadly would
       # claim every GitHub user as ours and turn the allowlist into a rubber
       # stamp. Verified non-vacuous -- reverting to the pre-case_c04b8883 regex
@@ -4950,6 +5058,10 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 -m unittest -v test_kofra_preview_parity
 
+      - name: kofra preview parity JSON envelope suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -m unittest -v test_kofra_preview_parity_json
+
       - name: upstream draft pin audit suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_upstream_draft_pin_audit.sh
@@ -6090,6 +6202,8 @@ jobs:
     if: github.event_name == 'pull_request' && (needs.changes.outputs.full == 'true' || needs.changes.outputs.private_mutation == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -6119,6 +6233,10 @@ jobs:
     if: needs.changes.outputs.full == 'true' || needs.changes.outputs.trivy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Local filesystem scan (table output, no SARIF upload); checkout
+    # only, so contents:read.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -6150,6 +6268,9 @@ jobs:
     # isolated pool delays every merge gate.
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Local secret scan over the checkout; no API use, so contents:read.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -6267,6 +6388,9 @@ jobs:
     # aggregator needs no checkout and must not occupy an isolated runner
     # while heavy suites queue.
     runs-on: ubuntu-latest
+    # No checkout, no token use: the verdict reads only the needs
+    # context, so the job claims no scopes at all.
+    permissions: {}
     needs:
       - changes
       - secret-scan

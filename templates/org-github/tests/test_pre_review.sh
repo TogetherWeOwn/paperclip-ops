@@ -1413,6 +1413,17 @@ for fallback_shape in \
   '@K@ = os.environ.get("@E@", default="@F@")~~fallbackliteral12' \
   '@K@ = os.getenv("@E@", default="@F@")~~fallbackliteral12' \
   '@K@ = os.getenv("@E@", f"@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.get("@E@", get_default() or "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.get("@E@", "dev" or "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.get("@E@", "" or "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.get("@E@", (opts) or "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.get("A", os.environ.get("B", "x") or "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.get("@E@", default="dev" or "@F@")~~fallbackliteral12' \
+  '@K@ = os.getenv("@E@", "dev" or "@F@")~~fallbackliteral12' \
+  '@K@ = ENV.fetch("@E@", "dev" or "@F@")~~fallbackliteral12' \
+  '@K@ = os.getenv("@E@", f"{x}" or "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.setdefault("@E@", "dev" or "@F@")~~fallbackliteral12' \
+  '@K@ = os.environ.pop("@E@", "dev" or "@F@")~~fallbackliteral12' \
   '@K@ = ENV.fetch("@E@", "@F@")~~fallbackliteral12' \
   '@K@ = config.get("credentials", "openai_api_key") or "@F@"~~fallbackliteral12' \
   '@K@ = config.get("credentials", "openai_api_key") || "@F@"~~fallbackliteral12' \
@@ -1562,6 +1573,133 @@ run_check
 [[ "$RC" -eq 0 ]] && ! has_row FAIL authz \
   && ok "submodule bump passes authz" \
   || bad "submodule bump passes authz (rc=$RC)"
+
+# --- 21. typed and subscript credential assignments ---------------------------
+# Each invocation gets a fresh repo with test/doc plumbing: another bucket
+# must not mask a missed literal or make a clean control fail. Fixture source
+# is static scanner input only; none of the Python/TypeScript is executed.
+check_authz_fixture() {
+  local expected_rc="$1" file="$2" label="$3" source="$4"
+  new_repo
+  printf '%s\n' "$source" > "$REPO_DIR/$file"
+  printf 'def test_app(): pass\n' > "$REPO_DIR/test_app.py"
+  printf '# Static scanner fixture\n' > "$REPO_DIR/notes.md"
+  commit_change "test(authz): add isolated assignment fixture"
+  run_check
+  if [[ "$expected_rc" -eq 1 ]]; then
+    if [[ "$RC" -eq 1 ]] && has_row FAIL authz; then
+      ok "$label"
+    else
+      bad "$label (expected exit=1 and FAIL authz, rc=$RC)"
+    fi
+  else
+    if [[ "$RC" -eq 0 ]] && ! has_row FAIL authz; then
+      ok "$label"
+    else
+      bad "$label (expected exit=0 and no FAIL authz, rc=$RC)"
+    fi
+  fi
+  printf '    observed %s: exit=%s\n' "$label" "$RC"
+  grep -E '^(PASS|FAIL|WARN|SKIP)  +authz([[:space:]]|$)' <<<"$OUT" || true
+}
+
+# Synthetic literals are assembled here, never committed as credential values
+# in this suite. Exercise both quoting styles and ordinary spaces/tabs.
+R1_LITERAL="synthetic""123" # exactly 12 characters, the minimum rejected length
+R1_SHORT="short-""r1-12" # 11 characters, below the 12-character threshold
+for quote in "'" '"'; do
+  for spacing in spaces tabs; do
+    pad=" "; subpad=""
+    if [[ "$spacing" == tabs ]]; then pad=$' \t '; subpad="$pad"; fi
+    for shape in python-api-key python-password typescript-api-key environ-store header-store; do
+      file=app.py
+      case "$shape" in
+        python-api-key) format="api_key:${pad}str${pad}=${pad}${quote}%s${quote}" ;;
+        python-password) format="password:${pad}str${pad}=${pad}${quote}%s${quote}" ;;
+        typescript-api-key)
+          file=app.ts
+          format="const apiKey:${pad}string${pad}=${pad}${quote}%s${quote};" ;;
+        environ-store)
+          format="os.environ${subpad}[${subpad}${quote}X_API_KEY${quote}${subpad}]${pad}=${pad}${quote}%s${quote}" ;;
+        header-store)
+          format="headers${subpad}[${subpad}${quote}x-api-key${quote}${subpad}]${pad}=${pad}${quote}%s${quote}" ;;
+      esac
+      check_authz_fixture 1 "$file" "R1 literal $shape quote=$quote $spacing" "${format//%s/$R1_LITERAL}"
+      if [[ "$spacing" == spaces ]]; then
+        check_authz_fixture 0 "$file" "R1 short $shape quote=$quote" "${format//%s/$R1_SHORT}"
+      fi
+    done
+  done
+
+  # Lookup key names are not values, including section/key overloads. These
+  # controls remain required even on runners with inherited lookup false reds.
+  while IFS='|' read -r label file format; do
+    check_authz_fixture 0 "$file" "R1 control $label quote=$quote" "${format//%s/$quote}"
+  done <<'EOF'
+getenv|app.py|api_key = os.getenv(%sX_API_KEY%s)
+environ-get|app.py|api_key = os.environ.get(%sX_API_KEY%s)
+config-get|app.py|api_key = config.get(%sapi_key%s)
+settings-get|app.py|password = settings.get(%spassword%s)
+settings-long-key|app.py|password = settings.get(%sDATABASE_PASSWORD%s)
+config-long-key|app.py|api_key = config.get(%sSERVICE_API_KEY%s)
+config-section-key|app.py|api_key = config.get(%sauth%s, %sapi_key%s)
+settings-section-key|app.py|password = settings.get(%sauth%s, %spassword%s)
+typed-api-key-runtime|app.py|api_key: str = os.getenv(%sX_API_KEY%s)
+typed-password-runtime|app.py|password: str = settings.get(%spassword%s)
+environ-runtime-store|app.py|os.environ[%sX_API_KEY%s] = os.getenv(%sX_API_KEY%s)
+header-runtime-store|app.py|headers[%sx-api-key%s] = settings.get(%sapi_key%s)
+EOF
+  for key in content-type mode; do
+    check_authz_fixture 0 app.py "R1 control noncredential-key=$key quote=$quote" \
+      "$(printf 'headers[%s%s%s] = %s%s%s\n' "$quote" "$key" "$quote" "$quote" "$R1_LITERAL" "$quote")"
+  done
+done
+check_authz_fixture 0 app.ts "R1 control typed-typescript-runtime" \
+  'const apiKey: string = process.env.X_API_KEY;'
+for declaration in 'api_key: str' 'password: str' 'declare const apiKey: string;'; do
+  file=app.py
+  if [[ "$declaration" == declare* ]]; then file=app.ts; fi
+  check_authz_fixture 0 "$file" "R1 control annotation-only $declaration" "$declaration"
+done
+
+# --- 21b. pin typed/subscript branches and lookup-default routing -----------
+# Pins the two review findings on the typed/subscript assignment change. (A) A
+# quoted literal default behind a lookup must fail through typed and subscript
+# assignments, not only the plain form; without these rows the typed/subscript
+# fallback loops are deletable with the suite green. (B) Typed token/secret
+# quoted values and bare typed/subscript values must fail; without these rows
+# token/secret narrowing and bare-value mutants survive. Values are synthetic
+# and assembled here so this file holds no credential shape.
+PIN_LITERAL="fallback""literal12" # 16 chars, quoted lookup default
+PIN_BARE="supersecret""123456" # 17 chars, bare typed value
+PIN_DOTTED_HEAD="SG."
+PIN_DOTTED_MID="abcdefghij"
+PIN_DOTTED_TAIL="klmnopqrst"
+PIN_DOTTED="$PIN_DOTTED_HEAD$PIN_DOTTED_MID.$PIN_DOTTED_TAIL"
+for quote in "'" '"'; do
+  for spacing in spaces tabs; do
+    pad=" "; subpad=""
+    if [[ "$spacing" == tabs ]]; then pad=$' \t '; subpad="$pad"; fi
+    format="api_key:${pad}str${pad}=${pad}os.getenv(${quote}X_API_KEY${quote},${pad}${quote}%s${quote})"
+    check_authz_fixture 1 app.py "pin-A typed-lookup-default quote=$quote $spacing" "${format//%s/$PIN_LITERAL}"
+    format="os.environ${subpad}[${subpad}${quote}X_API_KEY${quote}${subpad}]${pad}=${pad}os.getenv(${quote}X_API_KEY${quote},${pad}${quote}%s${quote})"
+    check_authz_fixture 1 app.py "pin-A subscript-lookup-default quote=$quote $spacing" "${format//%s/$PIN_LITERAL}"
+    for name in token secret; do
+      format="$name:${pad}str${pad}=${pad}${quote}%s${quote}"
+      check_authz_fixture 1 app.py "pin-B typed-quoted $name quote=$quote $spacing" "${format//%s/$R1_LITERAL}"
+    done
+    format="headers${subpad}[${subpad}${quote}x-api-key${quote}${subpad}]${pad}=${pad}%s"
+    check_authz_fixture 1 app.py "pin-B subscript-dotted-bare quote=$quote $spacing" "${format//%s/$PIN_DOTTED}"
+  done
+done
+for spacing in spaces tabs; do
+  pad=" "
+  if [[ "$spacing" == tabs ]]; then pad=$' \t '; fi
+  for bare_shape in password api_key; do
+    format="$bare_shape:${pad}str${pad}=${pad}%s"
+    check_authz_fixture 1 app.py "pin-B typed-bare $bare_shape $spacing" "${format//%s/$PIN_BARE}"
+  done
+done
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "run_id": "fixture",
+  "status": "no_failures",
+  "jobs": [],
+  "summary": {"total_jobs": 2, "failed_jobs": 0, "drained_jobs": 0},
+  "error": {"code": "ok", "retryable": false, "next_action": "none", "unmeasured": null}
+}

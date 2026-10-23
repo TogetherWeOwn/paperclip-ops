@@ -200,20 +200,41 @@ function reviewPass() {
   return { name: REVIEW_CHECK, status: 'completed', conclusion: 'success', completedMs: 1 }
 }
 
-test('auto-merge arms only when CI and the review check pass on THIS head', () => {
-  const base = { draft: false, headSha: HEAD, autoMergeEnabled: false, checks: [...snapshotChecks(), reviewPass()], requiredChecks: ['ci-ok', 'gitleaks', 'pr-lint'] }
+function heavyPass() {
+  return { name: 'suites', status: 'completed', conclusion: 'success', completedMs: 1 }
+}
+
+test('auto-merge arms only when CI, the review check and heavy suites pass on THIS head', () => {
+  const base = { draft: false, headSha: HEAD, autoMergeEnabled: false, checks: [...snapshotChecks(), heavyPass(), reviewPass()], requiredChecks: ['ci-ok', 'gitleaks', 'pr-lint'] }
   assert.equal(shouldEnableAutoMerge(base), true)
   assert.equal(shouldEnableAutoMerge({ ...base, draft: true }), false, 'never arm a draft')
   assert.equal(shouldEnableAutoMerge({ ...base, autoMergeEnabled: true }), false, 'already armed: no-op')
   // The verdict is bound through the rollup, never a score string: a missing,
-  // pending or failing review check on this head refuses, even with green CI.
-  assert.equal(shouldEnableAutoMerge({ ...base, checks: snapshotChecks() }), false, 'missing review check never arms')
-  const pendingReview = [...snapshotChecks(), { name: REVIEW_CHECK, status: 'in_progress' }]
+  // pending or failing review check on this head refuses, even with green CI
+  // AND heavy success — the suites entry keeps these pinning the review bind
+  // rather than passing through the heavy bind.
+  assert.equal(shouldEnableAutoMerge({ ...base, checks: [...snapshotChecks(), heavyPass()] }), false, 'missing review check never arms')
+  const pendingReview = [...snapshotChecks(), heavyPass(), { name: REVIEW_CHECK, status: 'in_progress' }]
   assert.equal(shouldEnableAutoMerge({ ...base, checks: pendingReview }), false, 'pending review never arms')
-  const failingReview = [...snapshotChecks(), { name: REVIEW_CHECK, status: 'completed', conclusion: 'failure', completedMs: 1 }]
+  const failingReview = [...snapshotChecks(), heavyPass(), { name: REVIEW_CHECK, status: 'completed', conclusion: 'failure', completedMs: 1 }]
   assert.equal(shouldEnableAutoMerge({ ...base, checks: failingReview }), false, 'failing review never arms')
   const failingCi = [...snapshotChecks().map((c) => (c.name === 'ci-ok' ? { ...c, conclusion: 'failure' } : c)), reviewPass()]
   assert.equal(shouldEnableAutoMerge({ ...base, checks: failingCi }), false, 'red CI never arms')
+  // The heavy bind: a ci-ok success alone does not prove heavy CI ran on
+  // this head (draft selection passes ci-ok with every area skipped), so
+  // skipped or missing suites refuses even with review passed.
+  const skippedHeavy = [...snapshotChecks(), { ...heavyPass(), conclusion: 'skipped' }, reviewPass()]
+  assert.equal(shouldEnableAutoMerge({ ...base, checks: skippedHeavy }), false, 'skipped suites never arms')
+  assert.equal(shouldEnableAutoMerge({ ...base, checks: [...snapshotChecks(), reviewPass()] }), false, 'missing suites never arms')
+})
+
+test('auto-merge refuses on malformed heavy evidence instead of throwing', () => {
+  const base = { draft: false, headSha: HEAD, autoMergeEnabled: false, requiredChecks: ['ci-ok'] }
+  const ci = { name: 'ci-ok', status: 'completed', conclusion: 'success', completedMs: 1 }
+  for (const heavy of [{ name: 'suites' }, { name: 'suites', status: 'completed' },
+    { name: 'suites', status: 'bogus' }, { name: 'suites', state: 'weird' }]) {
+    assert.equal(shouldEnableAutoMerge({ ...base, checks: [ci, heavy, reviewPass()] }), false, `malformed suites refuses: ${JSON.stringify(heavy)}`)
+  }
 })
 
 // --- event filter ---------------------------------------------------------

@@ -2004,7 +2004,7 @@ cmd_inbox() {
     esac
   done
   [[ -n "$who" ]] || die "usage: inbox --for <ROLE|AGENT_ID>"
-  [[ -f "$QUEUE" ]] || { echo "(no decisions)"; return 0; }
+  [[ -f "$QUEUE" ]] || { [[ "$json" == "yes" ]] || echo "(no decisions)"; return 0; }
   reap_expired
 
   # Match the AGENT ID as well as the role. `--for` names ONE principal, but the
@@ -2016,8 +2016,13 @@ cmd_inbox() {
   # What it stops is one agent's inbox being split in two by which door it
   # happened to submit through, which would make a decision unreadable to the
   # very principal it was addressed to. (case_381dbc95)
-  local rows; rows="$(notify_states | jq -c --arg w "$who" 'select(.role==$w or .agent==$w)')"
-  if [[ "$json" == "yes" ]]; then printf '%s\n' "${rows:-}"; return 0; fi
+  # Do not let a failed reader/parser masquerade as an empty inbox. Capture
+  # separately so this holds even when the caller has not enabled pipefail.
+  local states rows
+  states="$(notify_states)" || { printf 'ERROR: inbox backend unavailable\n' >&2; return 1; }
+  rows="$(jq -c --arg w "$who" 'select(.role==$w or .agent==$w)' <<<"$states")" \
+    || { printf 'ERROR: inbox output could not be parsed\n' >&2; return 1; }
+  if [[ "$json" == "yes" ]]; then [[ -z "$rows" ]] || printf '%s\n' "$rows"; return 0; fi
   [[ -n "$rows" ]] || { echo "(no decisions for $who)"; return 0; }
 
   jq -r '"\(.rid)\t\(.status|ascii_upcase)\t\(.at)\t\(.state)"' <<<"$rows" \

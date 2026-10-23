@@ -1,7 +1,7 @@
 {
   "version": 1,
   "ghExecutable": "/usr/bin/gh",
-  "enabledRepositories": [],
+  "enabledRepositories": ["TogetherWeOwn/paperclip-ops"],
   "scanRepositories": ["TogetherWeOwn/paperclip-ops"],
   "holdLabels": ["hold"]
 }

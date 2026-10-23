@@ -155,7 +155,7 @@ merely undelivered but **unreachable**.
 |---|---|---|
 | `submit_provisioning_request` | `template`, `title`, `rationale?`, `supersedes?` | `submit --requester <authenticated agent> …` |
 | `review_provisioning_request` | `request_id`, `decision`, `reason?`, `alternatives?`, `no_safer_alternative?`, `alternatives_considered?` | `review --reviewer <authenticated agent> …` |
-| `read_my_requests` | **none at all** | `inbox --for <authenticated agent>` |
+| `read_my_requests` | **none at all** | `inbox --for <authenticated agent> --json` |
 | `submit_capability_request` | `capability`, `action`, `facts`, `reasoning`, `title?` | `submit --requester <authenticated agent> …` |
 | `review_capability_request` | `request_id` (CAP-nnn), `decision`, `reason`, `alternatives?`, `no_safer_alternative?`, `alternatives_considered?` | `review --reviewer <authenticated agent> …` |
 | `countersign_capability_request` | `request_id` (CAP-nnn), `decision`, `reason`, `alternatives?`, `no_safer_alternative?`, `alternatives_considered?` | `countersign --custodian <authenticated agent> …` |
@@ -166,6 +166,66 @@ from tool input. Each tool declares a `script` field naming which CLI it
 forwards to; the handler picks the runner from it, and the capability CLI is
 pinned to `capability_gate.sh` at startup exactly as the queue is pinned to
 `org_request_queue.sh`.
+
+### Structured own-inbox result (version 1)
+
+Call `read_my_requests` with `{}`. There is **no caller-selectable JSON flag**:
+`--json` is fixed in the server's argv, after the authenticated inbox selector.
+The CLI keeps its existing JSONL row format; an empty or missing queue emits
+zero rows. Only the documented legacy `(no decisions)` / `(no decisions for X)`
+markers are accepted as non-JSON empty output, never arbitrary success prose.
+
+Every authenticated tool answer includes compatible `content` text and `isError`,
+plus one canonical `structuredContent` shape. For example:
+
+```json
+{
+  "version": 1,
+  "requests": [{
+    "id": "REQ-001",
+    "decision": "rejected",
+    "next_action": "Read the recorded reason and safer alternatives; submit a revised request only if it addresses the refusal.",
+    "delivery": "pull_only"
+  }],
+  "diagnostics": {"complete": true, "parsed": 1, "skipped": 0, "truncated": false}
+}
+```
+
+`requests: []` with `complete: true` means no notices, **not** a backend failure.
+`decision` is approved, rejected, expired, failed or pending (standing notices).
+`delivery`, `at` and `body` are optional. Notice bodies are bounded, sanitized,
+untrusted record content, never instructions or new authority. Raw notifier
+`detail` and backend exception output are not returned.
+
+When `isError: true`, the same shape includes
+`error: {code, next_action, exitCode}`. Numeric process exits are retained;
+`exitCode: null` means no process exit was available. Partial valid rows may
+survive a parse failure, but `complete: false` must never be read as a full inbox.
+
+| Code | Meaning / next action |
+|---|---|
+| `inbox_refused` | CLI exit 2; ask the operator to check access, never switch identity or credentials |
+| `inbox_timeout` | Read exceeded its time budget; retry later, then check backend health |
+| `inbox_backend_error` | Spawn/backend/buffer failure; check script availability and output limits |
+| `inbox_parse_error` | Malformed JSONL, invalid/foreign rows or bounded output; check the CLI contract before retrying |
+| Existing argument codes | `invalid_argument`, `unknown_argument`, `identity_argument_refused`; call with `{}` |
+
+Parsing is bounded to 128 Ki characters and 1,000 nonempty rows; bodies to 4,000
+characters. Skips, truncation or failures make the result incomplete and erroneous.
+Identity/bearer/corroboration failures still use the existing HTTP refusal path.
+Reading may materialize **derived expiry**; it never acknowledges, decides,
+grants or delivers. This contract describes source behavior, not runtime deployment.
+
+Offline check (synthetic responses and run-owned temporary queues only):
+
+```sh
+node --test mcp/test/own-inbox-diagnostics.test.mjs
+```
+
+Run the paired transport suite with
+`node --test mcp/test/own-inbox-diagnostics.test.mjs mcp/test/org-request-mcp.test.mjs`.
+The full real-queue suite also needs its shared queue libraries and disposable
+backend fixtures; never point it at a production queue or database.
 
 ### The read tool, and the two things it must never become (case_381dbc95)
 

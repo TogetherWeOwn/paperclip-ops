@@ -319,7 +319,19 @@
     "queue-packet reject offline suite:1",
     "staging-preflight carrier suite:1",
     "api-base-validation suite:1",
-    "api-base-validation-python suite:1"
+    "api-base-validation-python suite:1",
+    "provider baseline integrity suite:1",
+    "review report input integrity holds:1",
+    "orphan-suite ratchet fixtures suite:1",
+    "assignment host-source bundle suite:1",
+    "stop-guard landing suite:1",
+    "warn-first inventory suite:1",
+    "regen dry-run receipt suite:1",
+    "pr-tracker suite:1",
+    "settings-bind rehearsal suite:1",
+    "host backup publication receipt contract (offline):1",
+    "native-ssh citation gate suite:1",
+    "verify-fast plan suites:1"
   ],
   "retained": [
     {
@@ -509,12 +521,12 @@
     },
     {
       "name": "guard state fail-closed suites",
-      "definition_sha256": "e2a9927bc5def107f7280a8d0673f31718926a45a28cff6a4e64790ebecabbc3",
+      "definition_sha256": "cc4f8a604969e0c70933c2fff7b461c71ae4ae29645bc2e34e3df8f4fa45498f",
       "id": "guard state fail-closed suites:1"
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "27ac44120e09f66eb760b819f40612ea5afd7a9185518e26439f0de1d9ee32e2",
+      "definition_sha256": "e2fe400f0373e1bdbd1970c8726ec1a9a9d21bab59730f234a7f99a133d7f8c6",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -544,7 +556,7 @@
     },
     {
       "name": "staging login-smoke probe suite",
-      "definition_sha256": "00e0dda681157127078945f992899071099bfa097dcb7fafbb02570a1a5e14e1",
+      "definition_sha256": "74896b139efb11ffcedb06a4d90192eb99732132f8fbfe82d18802ab71dbecea",
       "id": "staging login-smoke probe suite:1"
     },
     {
@@ -1439,12 +1451,12 @@
     },
     {
       "name": "org-request-mcp regression suite",
-      "definition_sha256": "6a37e701118978e49e914ea7f43137fb9231f77ca7931038db102951bf952db6",
+      "definition_sha256": "70cacf39bc8b9ab3ad16703a6f67d24d5606b0aa7f8a5e55a61c58da9e5599c2",
       "id": "org-request-mcp regression suite:1"
     },
     {
       "name": "Prove the suite rejects each tempting simplification",
-      "definition_sha256": "daab40cb177c5d1b468350902a86792ef3d9a6d7315bad1b05cbb14106ed0fb1",
+      "definition_sha256": "7bee64d7c7030048d2e8126c8d51d002897a9eeef74bbfa7d0f4024f8d5ee29a",
       "id": "Prove the suite rejects each tempting simplification:1"
     },
     {
@@ -1796,6 +1808,66 @@
       "name": "api-base-validation-python suite",
       "definition_sha256": "2a8399fe0cbc1e8d57ee3a482f7cc5ed1fa9df2045dd18a28579609545b2e33d",
       "id": "api-base-validation-python suite:1"
+    },
+    {
+      "name": "provider baseline integrity suite",
+      "definition_sha256": "a61a574a93f9aa493c38694fb68c4c43a4df905ac3721442d5547cf09a665dcd",
+      "id": "provider baseline integrity suite:1"
+    },
+    {
+      "name": "review report input integrity holds",
+      "definition_sha256": "bffa19729a879126ad09b2eba97c28fddbdc6f4fa5e10afa5a536bb291c9dfc4",
+      "id": "review report input integrity holds:1"
+    },
+    {
+      "name": "orphan-suite ratchet fixtures suite",
+      "definition_sha256": "6a78bd74cf80ae987f05bdf0de08f83fd58cbc9b94d89517c714db382c093835",
+      "id": "orphan-suite ratchet fixtures suite:1"
+    },
+    {
+      "name": "assignment host-source bundle suite",
+      "definition_sha256": "ca3888d1e7ca664228f085cb9bdce9ea8338184849a2bfe9c50da0ac7898323f",
+      "id": "assignment host-source bundle suite:1"
+    },
+    {
+      "name": "stop-guard landing suite",
+      "definition_sha256": "00cac3c8a7eb04bfd64d386f096695c1c95c99cce6b7fafc9e2af84eb4ebbb64",
+      "id": "stop-guard landing suite:1"
+    },
+    {
+      "name": "warn-first inventory suite",
+      "definition_sha256": "9b7f38337b97884c46ab9ccbaaa639e0bfac67046f92defd79e4896e0ddbd16c",
+      "id": "warn-first inventory suite:1"
+    },
+    {
+      "name": "regen dry-run receipt suite",
+      "definition_sha256": "dc5d726ee40872397c5d9d4f72ccc035bfb7f571fbca24ddadb6b338591eee5d",
+      "id": "regen dry-run receipt suite:1"
+    },
+    {
+      "name": "pr-tracker suite",
+      "definition_sha256": "43f5da6f262e2c3e8fd380c20fcdd78127a99992b60d39bb808a2dc4c8011425",
+      "id": "pr-tracker suite:1"
+    },
+    {
+      "name": "settings-bind rehearsal suite",
+      "definition_sha256": "bb309c4b15965281fffe7f9190063f90688cd4a7cb1c00f659918423a5bde7fd",
+      "id": "settings-bind rehearsal suite:1"
+    },
+    {
+      "name": "host backup publication receipt contract (offline)",
+      "definition_sha256": "f3220047635007807b551238df97e65b3db9b784bcafb35829fa009c51e3f5f4",
+      "id": "host backup publication receipt contract (offline):1"
+    },
+    {
+      "name": "native-ssh citation gate suite",
+      "definition_sha256": "34cafcd66f97b170ff90432448cfed1b909cc5f20b905b42c6b09b6651c10694",
+      "id": "native-ssh citation gate suite:1"
+    },
+    {
+      "name": "verify-fast plan suites",
+      "definition_sha256": "e1b1d3d318e2dff53a23c79b891d4bbab267c426e0d16a9c8dcf8fbef9f8074d",
+      "id": "verify-fast plan suites:1"
     }
   ],
   "removed": [

@@ -1,29 +1,20 @@
 #!/usr/bin/env python3
-"""CLIProxy lane-feed contract: exact servedModels + durable exclusions (case_0b2823ef).
+"""Synthetic helpers for the CLIProxy lane-feed carrier (case_0b2823ef).
 
-Source-only prerequisite for host cards case_b9ae3ea2 (served IDs in the lane
-feed) and case_ad9f6568 (durable zen-free exclusion). This module is the reviewed,
-unit-tested home of the two narrow behaviors the Operator installs into the
-host producer ``live_accounts.py`` (host SHA256
-``d8cab34855fee1507b8c72eae8c05ae76cb6da1e03250a650c1acdf29e2baa2d``):
+The install patch in this directory carries only the reviewed ``servedModels``
+behavior onto host ``live_accounts.py`` base SHA256
+``93a99797b20726182f14938b394f58c4ec6b3adcc87fdfc7bcce787e465bf75e``. It does
+not alter the host's exclusions or other feed behavior. In particular, any
+`durable` exclusion semantics represented by the local helper functions below
+are NOT installed by this patch; the current host continues its existing
+`until` behavior. Those helpers remain covered by prior hermetic tests only.
 
-1. ``servedModels``: top-level ``string[]`` of the EXACT CLIProxy
-   ``GET /v1/models`` ``data[].id`` values on each feed refresh. No prefix
-   stripping, no derivation from per-account ``models``, no frozen snapshot.
-   A missing/failed/empty/malformed oracle yields ``None`` and the key is
-   OMITTED (fail-open: the model-capacity consumer treats absence as "no
-   authoritative list"). Stale IDs are never re-served as current, and a
-   fresh authoritative empty list is never fabricated.
-2. Durable exclusions: an entry ``{"durable": true, ...}`` excludes forever.
-   Every other shape keeps the current expiring-``until`` semantics, so all
-   existing entries and all unrelated provider/model exclusions behave
-   exactly as before. Invalid input (non-dict entry, non-boolean ``durable``,
-   unparseable ``until``) never means forever.
-
-This module performs no I/O at import and needs no credentials: the fetch
-transport is injected, so tests use synthetic fixtures and the host patch
-supplies the real loopback opener. Never import the host producer here:
-its module-level ``load_key()`` opens a host-only file.
+``servedModels`` is a top-level ``string[]`` of exact CLIProxy
+``GET /v1/models`` ``data[].id`` values on every feed build. The oracle's
+transport is injected for tests; failures and empty/malformed lists omit the
+field rather than inventing an authoritative empty list or reusing stale IDs.
+Never import the live producer here: its module-level ``load_key()`` opens a
+host-only file.
 """
 
 import datetime as _dt
@@ -33,8 +24,7 @@ import time as _time
 import urllib.request as _urllib_request
 
 # Default oracle location: same host+port the producer already uses for the
-# management API, OpenAI-compatible path. Overridable on the host via the
-# CLIPROXY_SERVED_MODELS_URL environment variable (see RUNBOOK.md).
+# management API, OpenAI-compatible path. Overridable via the environment.
 SERVED_MODELS_URL_DEFAULT = "http://127.0.0.1:8317/v1/models"
 SERVED_MODELS_TIMEOUT = 15
 
@@ -61,8 +51,13 @@ def served_bearer(key_file="", fallback_key=""):
         with open(key_file) as f:
             for line in f:
                 line = line.strip()
-                if line and not line.startswith("#"):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'") if "=" in line else line
+                if not line or line.startswith("#"):
+                    continue
+                bearer = line.split("=", 1)[1].strip() if "=" in line else line
+                if len(bearer) >= 2 and bearer[0] == bearer[-1] and bearer[0] in "\"'":
+                    bearer = bearer[1:-1]
+                if bearer:
+                    return bearer
         raise ServedModelsError("no bearer in CLIPROXY_SERVED_MODELS_KEY_FILE")
     return fallback_key
 
@@ -101,8 +96,9 @@ def extract_served_ids(payload):
     authoritative list: non-dict payload, missing/non-list ``data``, or zero
     usable ids (empty oracle). Order is preserved, first-seen wins on
     duplicates, and values are kept VERBATIM: provider prefixes are never
-    stripped and nothing is canonicalized. Non-string or blank entries are
-    skipped as malformed oracle rows, not as model policy.
+    stripped and nothing is canonicalized. Only object rows with nonblank
+    string ``id`` values are accepted; malformed rows are skipped, not treated
+    as model policy.
     """
     if not isinstance(payload, dict):
         raise ServedModelsError("oracle payload is not an object")
@@ -111,8 +107,8 @@ def extract_served_ids(payload):
         raise ServedModelsError("oracle payload has no data[] list")
     ids = []
     for row in data:
-        mid = row.get("id") if isinstance(row, dict) else row
-        if isinstance(mid, str) and mid:
+        mid = row.get("id") if isinstance(row, dict) else None
+        if isinstance(mid, str) and mid.strip():
             if mid not in ids:
                 ids.append(mid)
     if not ids:

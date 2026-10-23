@@ -56,6 +56,10 @@ execution or deployment checklist; inspect each utility's usage and prerequisite
 before running it. `cliproxy_seam_extract.py` is an exempt one-shot forensic
 parser, not a standing operator command. Test entry points begin with `test_`.
 
+For `host_db_backup.sh`, see the [publication receipt contract](docs/host-db-backup.md)
+for offline discovery, no-write planning, machine outcomes and fixture checks.
+This documentation does not authorize running a backup or changing a host.
+
 | Tool |
 | --- |
 | `public_snapshot_test_support.py` (test-only private-artifact boundary; not a runtime policy or operator command) |
@@ -132,6 +136,13 @@ parser, not a standing operator command. Test entry points begin with `test_`.
 | `upstream_watch.sh` |
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
+
+## Verification
+
+Run the fast tier with `make verify-fast` (`make verify-fast-parse` for the
+parse gate only). To inspect suite scope and prerequisites without running or
+preparing anything, use `make verify-fast-plan` (offline, read-only;
+`scripts/verify-fast.sh --plan --json`).
 
 ## Contributing
 

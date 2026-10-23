@@ -335,6 +335,7 @@
     "host backup publication receipt contract (offline):1",
     "native-ssh citation gate suite:1",
     "code-nav read-only and resource guard suite:1",
+    "sdlc review-carry suite:1",
     "verify-fast plan suites:1",
     "kofra preview parity JSON envelope suite:1"
   ],
@@ -1888,6 +1889,11 @@
       "name": "code-nav read-only and resource guard suite",
       "definition_sha256": "f4f3c272c75249ae5430663c6689ba7c058a33074edc105dc8e55352d488af05",
       "id": "code-nav read-only and resource guard suite:1"
+    },
+    {
+      "name": "sdlc review-carry suite",
+      "definition_sha256": "4cc0a1b7421746981ba556684ba8d20bc0d9d06de46e69d5c78b33a48b763100",
+      "id": "sdlc review-carry suite:1"
     },
     {
       "name": "verify-fast plan suites",

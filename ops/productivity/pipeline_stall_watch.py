@@ -12,6 +12,7 @@ Any hit opens (or comments once per hour on) a CEO card "[pipeline-stall] <check
 changes pipeline state itself. Rollback: systemctl --user disable --now pipeline-stall-watch.timer
 """
 import calendar
+import importlib
 import json
 import re
 import subprocess
@@ -20,7 +21,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
-import atomic_state  # noqa: E402
+atomic_state = importlib.import_module('atomic_state')
 
 ROOT = Path('/home/ubuntu/paperclip-enterprise-company')
 LOG = ROOT / 'ops/worker-vps/operator-actions.log'

@@ -8,6 +8,8 @@
 # Exit: 0 all checks pass | 1 a check failed | 2 refused (bad environment)
 # ===========================================================================
 set -uo pipefail
+# Keep child shells on fixture PATH; user startup files are not test inputs.
+unset BASH_ENV ENV
 umask 077
 
 ME="${BASH_SOURCE[0]##*/}"
@@ -22,7 +24,7 @@ for bin in bash jq sha256sum flock df awk stat; do
   command -v "$bin" >/dev/null 2>&1 || { printf 'REFUSED: %s: %s is missing\n' "$ME" "$bin" >&2; exit 2; }
 done
 
-ROOT="$(mktemp -d)"
+ROOT="$(mktemp -d "${PAPERCLIP_RUN_SCRATCH_DIR:-${PAPERCLIP_SCRATCH_DIR:-${TMPDIR:-/tmp}}}/prestart-fixture.XXXXXX")"
 trap '((FAIL == 0)) && rm -rf "$ROOT"' EXIT
 mkdir -p -m 0700 "$ROOT/stub" "$ROOT/data/.local/bin" "$ROOT/data/plugin-packages-root" \
   "$ROOT/data/.cache/two-bot-next-bounded/slot-a" "$ROOT/lockdir" "$ROOT/bin"
@@ -164,6 +166,11 @@ case "$cmd" in
   backup) printf 'x\n' > "$state/backup_at" ;;
   restart)
     grep -q -- '--expect-file' "$STUB_DRAIN_LOG.args" || { echo "stub drain: restart lacks --expect-file" >&2; exit 43; }
+    if [[ -n "${STUB_DRAIN_REAL_PRECHECK:-}" ]]; then
+      DOCKER="${STUB_DRAIN_PRECHECK_DOCKER:?}" "$PAPERCLIP_UPGRADE_PRECHECK" \
+        --state-dir "$state" --backup-dir "${STUB_DRAIN_PRECHECK_BACKUP:?}" \
+        --max-backup-age-mins 120 --ack-orphans 0 --require 0280 --require 0281 || exit 1
+    fi
     printf 'x\n' > "$state/restart_started_at"; printf 'x\n' > "$state/restarted_at"; printf 'img id\n' > "$state/restart-image" ;;
   verify)
     [[ -n "${STUB_DRAIN_VERIFY_FAIL:-}" ]] && { echo "stub drain: verify forced fail" >&2; exit 1; }
@@ -854,6 +861,42 @@ if [[ -n "$gate_line" && -n "$up_line" ]] && ((gate_line < up_line)); then
   pass "restart gate: pending_migrations_gate runs in cmd_restart before any compose_up"
 else
   oops "restart gate: pending_migrations_gate call site missing or after compose_up (gate=$gate_line up=$up_line)"
+fi
+
+# --- 9. activation consumer + independent continuation acceptance --------------
+# Exercise the wrapper with its pinned, real guard at the restart boundary.
+# The drain/backup and Docker transport remain hermetic fixture doubles.
+export PAPERCLIP_DATA="$ROOT/data"
+for count in 0 2; do
+  printf '%s\n' "$count" > "$STUB/pending_count"
+  reset_logs
+  state="$ROOT/state-continuation-$count"
+  if ((count == 0)); then
+    expect_ok "activation reaches and passes the real continuation precheck" -- \
+      env STUB_DRAIN_REAL_PRECHECK=1 STUB_DRAIN_PRECHECK_DOCKER="$ROOT/bin/docker-precheck" \
+        STUB_DRAIN_PRECHECK_BACKUP="$ROOT/pre-backup" \
+        bash "$ACT" run --manifest "$MAN" --state-dir "$state" --live
+    if [[ -s "$state/restarted_at" ]]; then
+      pass "zero pending: fixture activation restarted"
+    else
+      oops "zero pending: fixture activation never reached restart"
+    fi
+  else
+    expect_refused "activation refuses when the real continuation guard fails" "pending" -- \
+      env STUB_DRAIN_REAL_PRECHECK=1 STUB_DRAIN_PRECHECK_DOCKER="$ROOT/bin/docker-precheck" \
+        STUB_DRAIN_PRECHECK_BACKUP="$ROOT/pre-backup" \
+        bash "$ACT" run --manifest "$MAN" --state-dir "$state" --live
+    if [[ ! -e "$state/restart_started_at" && ! -e "$state/undrained_at" ]]; then
+      pass "pending continuation: restart never started and hold preserved"
+    else
+      oops "pending continuation crossed restart or undrain boundary"
+    fi
+  fi
+done
+if python3 "$HERE/test_pre_restart_continuation.py"; then
+  pass "independent pre-restart continuation acceptance"
+else
+  oops "independent pre-restart continuation acceptance"
 fi
 
 say "test-activation-offline: $CHECKS checks, FAIL=$FAIL"

@@ -3292,6 +3292,13 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_db_backup_stall.sh
 
+      - name: database backup observation contract
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: |
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          TMPDIR="$work" PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_backup_observation_contract test_backup_observation_regressions
+
       # A correct detector that nothing runs measures nothing. The suite above
       # drives db_backup_stall.sh against fixture directories, so it can never
       # testify about this host -- and on 2026-09-05 the scheduler wedged at

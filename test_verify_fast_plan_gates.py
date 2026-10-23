@@ -1,7 +1,7 @@
 """Strict gates for the verify-fast plan: inventory drift and --no-prepare guards.
 
 Complements test_verify_fast_plan.py (the acceptance contract, left as is) with
-two checks its first-token / parse-only coverage cannot make:
+three checks its first-token / parse-only coverage cannot make:
 
 * DriftTest: the inventory's fast-tier commands and the execution lines of
   scripts/verify-fast.sh are the same ordered list of commands, compared in
@@ -12,6 +12,9 @@ two checks its first-token / parse-only coverage cannot make:
   toolkit files or installs typescript, even if readiness at probe time and at
   guard time disagree. The guards at the two preparation sites are the only
   thing enforcing that, and every other test exits before reaching them.
+* BackupObservationWrapperTest: the real suite wrapper propagates Python's exit
+  status and removes its scratch directory on success and failure; a refused
+  mktemp never reaches Python. Returning zero or omitting cleanup must fail.
 
 Run: python3 -B -m unittest -v test_verify_fast_plan_gates
 Offline, stdlib only, no network or credentials.
@@ -257,6 +260,80 @@ class PrepareGuardTest(unittest.TestCase):
         self.assertIn("restoring stale", combined)
         self.assertIn("installing pinned typescript", combined)
         self.assertIn("npm install", calls)
+
+
+class BackupObservationWrapperTest(unittest.TestCase):
+    def _run(self, suite_rc=0, mktemp_fails=False):
+        # Extract only the real function, not the top-level verifier's probes or
+        # suites. The stub suite leaves nested files so cleanup is non-vacuous.
+        wrappers = re.findall(
+            r"^run_backup_observation_contract\(\) \{\n.*?^\}",
+            VERIFY_FAST.read_text(), re.MULTILINE | re.DOTALL)
+        self.assertEqual(len(wrappers), 1, "expected one real backup suite wrapper")
+        with scratch_dir() as tmp:
+            tmp = Path(tmp)
+            work = tmp / "tmp"
+            work.mkdir()
+            stubs = tmp / "stubs"
+            stubs.mkdir()
+            for command in ("mkdir", "rm"):
+                (stubs / command).symlink_to(shutil.which(command))
+            write_executable(stubs / "mktemp", '''#!/bin/bash
+printf '%s\\n' "$@" > "$STUB_DIR/mktemp.calls"
+if [[ "$MKTEMP_FAILS" == 1 ]]; then exit 23; fi
+exec "''' + shutil.which("mktemp") + '''" "$@"
+''')
+            write_executable(stubs / "python3", '''#!/bin/bash
+printf '%s\\n' "$TMPDIR" "${PYTHONDONTWRITEBYTECODE-unset}" "$@" > "$STUB_DIR/python.calls"
+[[ -d "$TMPDIR" ]] || exit 98
+mkdir -p "$TMPDIR/suite-owned/nested" || exit 99
+printf 'suite evidence\\n' > "$TMPDIR/suite-owned/nested/result"
+exit "$SUITE_RC"
+''')
+            script = tmp / "wrapper.sh"
+            script.write_text("set -euo pipefail\n" + wrappers[0]
+                              + "\nrun_backup_observation_contract\n")
+            # Allowlist rather than inherit: no BASH_ENV, credentials, exported
+            # shell functions, Python hooks or control-plane configuration.
+            env = {
+                "PATH": str(stubs), "HOME": str(tmp), "LC_ALL": "C",
+                "TMPDIR": str(work), "PAPERCLIP_SCRATCH_DIR": str(work),
+                "STUB_DIR": str(stubs), "SUITE_RC": str(suite_rc),
+                "MKTEMP_FAILS": "1" if mktemp_fails else "0",
+            }
+            completed = subprocess.run(
+                [shutil.which("bash"), str(script)], cwd=tmp, env=env,
+                capture_output=True, text=True, timeout=TIMEOUT)
+            combined = completed.stdout + completed.stderr
+            self.assertTrue((stubs / "mktemp.calls").is_file(), combined)
+            calls = stubs / "python.calls"
+            if mktemp_fails:
+                self.assertFalse(calls.exists(), "Python ran after mktemp failed")
+            else:
+                self.assertTrue(calls.is_file(), combined)
+                directory, bytecode, *args = calls.read_text().splitlines()
+                self.assertEqual(Path(directory).parent, work)
+                self.assertTrue(Path(directory).name.startswith("backup-observation."))
+                self.assertEqual(bytecode, "1")
+                self.assertEqual(args, [
+                    "-m", "unittest", "-v", "test_backup_observation_contract",
+                    "test_backup_observation_regressions",
+                ])
+            self.assertEqual(list(work.iterdir()), [],
+                             "wrapper left suite scratch behind: " + combined)
+            return completed
+
+    def test_suite_success_returns_zero_and_cleans_scratch(self):
+        completed = self._run()
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_suite_failure_propagates_exit_seven_and_cleans_scratch(self):
+        completed = self._run(suite_rc=7)
+        self.assertEqual(completed.returncode, 7, completed.stderr)
+
+    def test_mktemp_failure_never_invokes_python_or_leaves_scratch(self):
+        completed = self._run(mktemp_fails=True)
+        self.assertNotEqual(completed.returncode, 0, completed.stderr)
 
 
 if __name__ == "__main__":

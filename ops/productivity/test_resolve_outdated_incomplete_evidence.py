@@ -510,7 +510,10 @@ class SearchShapeRegressions(unittest.TestCase):
                                          'items': items}])
 
     def test_malformed_repository_url_discards_valid_item(self):
-        for url in (None, 42, [], {}, 'not-a-repository-url'):
+        for url in (None, 42, [], {}, 'not-a-repository-url',
+                    'https://api.github.com/repos/a/b/c',
+                    'https://api.github.com/repos/onlyone',
+                    'https://api.github.com/repos/a/'):
             with self.subTest(url=url):
                 self.assert_search_refused([
                     {'total_count': 2, 'incomplete_results': False,

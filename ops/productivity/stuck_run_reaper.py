@@ -492,6 +492,10 @@ def parse_report_args(args):
                     report_usage_error('--min-idle-hours must be a non-negative number')
                 if not (min_idle >= 0 and min_idle != float('inf') and min_idle == min_idle):
                     report_usage_error('--min-idle-hours must be a non-negative number')
+                try:
+                    dt.timedelta(hours=min_idle)
+                except OverflowError:
+                    report_usage_error('--min-idle-hours is too large')
         else:
             report_usage_error(f'unknown argument {args[i]!r}')
         i += 1
@@ -540,8 +544,8 @@ def build_report(now, top, min_idle_hours):
         row['rank'] = rank
         del row['idle_seconds']
 
-    unmeasured_rows = [{'run_id': u.get('run'), 'run': u.get('run'), 'agent': u.get('agent'),
-                        'issue_id': u.get('issue'), 'issue': u.get('issue'),
+    unmeasured_rows = [{'run_id': u.get('run'), 'agent': u.get('agent'),
+                        'issue_id': u.get('issue'),
                         'diagnostic': u.get('diagnostic', '')} for u in unmeasured]
 
     ranked_loops, deferred = [], []

@@ -87,6 +87,7 @@ Reason-code allowlists (builder picks the most specific; tests accept the
 set so the builder can be precise without breaking the contract):
 """
 
+import argparse
 import io
 import json
 import os
@@ -95,6 +96,8 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BASE = os.path.dirname(HERE)
@@ -982,6 +985,250 @@ class SyntheticHygieneTest(unittest.TestCase):
         self.assertNotIn("github.com/", blob)
         for repo in fixture["github_rows"]:
             self.assertTrue(repo["repo"].startswith("Example/"))
+
+
+class SearchPopulationIntegrityTest(unittest.TestCase):
+    """Immutable follow-up: a search population must reconcile exactly.
+
+    Catch accepting excess items, comparing only the first total, and
+    treating bool as an integer total. Keep the interpreter and report
+    builder real; replace only external I/O. Do not change these tests to
+    fit an implementation: return a disputed contract to the test author.
+    """
+
+    def replay(self, pages):
+        evidence = [pr(item["number"], status=status_only("success"))
+                    for page in pages for item in page["items"]]
+        fixture = paginated_fixture(pages, evidence)
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.object(ax_metrics, "_http_get_json",
+                             side_effect=AssertionError("unexpected HTTP")), \
+                patch.object(ax_metrics, "paperclip_get",
+                             side_effect=AssertionError("unexpected API")), \
+                patch.object(ax_metrics.urllib.request, "urlopen",
+                             side_effect=AssertionError("unexpected network")):
+            code, report, text, err = run_from_file(fixture)
+            repeat = run_from_file(fixture)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(err, "")
+        self.assertEqual((code, report, text, err), repeat,
+                         "population replay must be deterministic")
+        self.assert_compatibility(report)
+        return report
+
+    def live(self, pages):
+        """Fetch real paginated search/commit evidence over synthetic HTTP.
+
+        Full 100-item first pages force a second real fetch even for
+        clients that stop when a page is short. No fetch/interpreter or
+        ratio computation is stubbed.
+        """
+        def fake_http(url, headers):
+            parsed = urlparse(url)
+            if parsed.path == "/search/issues":
+                page = int(parse_qs(parsed.query).get("page", ["1"])[0])
+                self.assertGreaterEqual(page, 1)
+                self.assertLessEqual(page, len(pages),
+                                     "unexpected extra search page")
+                return pages[page - 1]
+            if re.fullmatch(r"/repos/Example/a/pulls/\d+/commits",
+                            parsed.path):
+                return [{"sha": "synthetic-commit-001"}]
+            if parsed.path == "/repos/Example/a/commits/synthetic-commit-001/status":
+                return status_only("success")
+            if parsed.path == "/repos/Example/a/commits/synthetic-commit-001/check-runs":
+                return check_page([], total=0)
+            raise AssertionError(f"unexpected synthetic HTTP route: {url}")
+
+        def fake_paperclip(base, key, path):
+            if path == f"/api/companies/{SYNTHETIC_COMPANY}/costs/summary":
+                return {"totalTokens": 1000,
+                        "window_start": REPORT_WINDOW_START,
+                        "window_end": REPORT_WINDOW_END}, None
+            raise AssertionError(f"unexpected synthetic API route: {path}")
+
+        env = {"TEST_SYNTHETIC_POP_GH": "synthetic-gh-token-001",
+               "TEST_SYNTHETIC_POP_URL": "https://example.invalid",
+               "TEST_SYNTHETIC_POP_KEY": "synthetic-key-001",
+               "TEST_SYNTHETIC_POP_COMPANY": SYNTHETIC_COMPANY}
+        args = argparse.Namespace(
+            repos=["Example/a"], days=REPORT_DAYS,
+            github_token_env="TEST_SYNTHETIC_POP_GH",
+            paperclip_url_env="TEST_SYNTHETIC_POP_URL",
+            paperclip_key_env="TEST_SYNTHETIC_POP_KEY",
+            paperclip_company_env="TEST_SYNTHETIC_POP_COMPANY")
+        with patch.dict(os.environ, env, clear=True), \
+                patch.object(ax_metrics, "_http_get_json", fake_http), \
+                patch.object(ax_metrics, "paperclip_get", fake_paperclip), \
+                patch.object(ax_metrics, "fetch_paperclip_issues",
+                             return_value=(issues_two_touched_one_blocked(),
+                                           False, None)), \
+                patch.object(ax_metrics.urllib.request, "urlopen",
+                             side_effect=AssertionError("unexpected network")):
+            report = ax_metrics.collect_live(args, REPORT_WINDOW_START)
+        self.assert_compatibility(report)
+        return report
+
+    def assert_compatibility(self, report):
+        self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(report["tool"], "ax-metrics")
+        self.assertEqual(report["window_days"], REPORT_DAYS)
+        self.assertEqual(report["window_start"], REPORT_WINDOW_START)
+        self.assertEqual(report["window_end"], REPORT_WINDOW_END)
+        self.assertFalse(report["issues_truncated"])
+        self.assertIs(type(report["merged_prs_total"]), int)
+        self.assertEqual(len(report["repos"]), 1)
+        row = report["repos"][0]
+        self.assertEqual(row["repo"], "Example/a")
+        for key in ("merged_prs", "truncated", "first_commit_states"):
+            self.assertIn(key, row, f"lost legacy repo field {key}")
+        self.assertEqual(set(report["metrics"]), {
+            "first_push_green_rate", "tokens_per_merged_pr",
+            "escalations_per_100_cards"})
+        for name, metric in report["metrics"].items():
+            assert_machine_readable(self, metric, name)
+        esc = report["metrics"]["escalations_per_100_cards"]
+        self.assertEqual(esc["validity"], "valid")
+        self.assertEqual(esc["reason_code"], "ok")
+        self.assertEqual(esc["completeness"], "complete")
+        self.assertEqual((esc["numerator"], esc["denominator"]), (1, 2))
+        self.assertEqual(esc["value"], 50.0)
+
+    def assert_refused(self, report, total, observed, drifting=False):
+        # Require the specific code, not just any reason in SEARCH_CODES.
+        assert_search_withheld(self, report, total)
+        for name in ("first_push_green_rate", "tokens_per_merged_pr"):
+            metric = report["metrics"][name]
+            self.assertEqual(metric["reason_code"], "search_incomplete")
+            self.assertNotEqual(metric["completeness"], "complete")
+            reason = metric["reason"].lower()
+            for count in (total, observed):
+                self.assertRegex(reason, rf"\b{count}\b",
+                                 "reason must identify conflicting counts")
+            if drifting:
+                self.assertRegex(reason,
+                                 r"chang|drift|inconsisten|mismatch|differ")
+            else:
+                self.assertRegex(reason,
+                                 r"over|exceed|more|mismatch|inconsisten|count|total")
+
+    def assert_valid(self, report, total):
+        self.assertEqual(report["merged_prs_total"], total)
+        green = report["metrics"]["first_push_green_rate"]
+        self.assertEqual(green["validity"], "valid")
+        self.assertEqual(green["value"], 1.0)
+        self.assertGreater(green["denominator"], 0)
+        self.assertEqual(green["numerator"], green["denominator"])
+        assert_sampled_counts(self, green, green["denominator"],
+                              green["denominator"], 0, 0)
+        tokens = report["metrics"]["tokens_per_merged_pr"]
+        self.assertEqual(tokens["validity"], "valid")
+        self.assertEqual(tokens["numerator"], 1000)
+        self.assertEqual(tokens["denominator"], total)
+        self.assertAlmostEqual(tokens["value"], 1000 / total)
+
+    def test_replay_overfull_single_page(self):
+        report = self.replay([search_page([101, 102], total=1)])
+        self.assert_refused(report, 1, 2)
+
+    def test_replay_zero_total_with_an_item(self):
+        report = self.replay([search_page([101], total=0)])
+        self.assert_refused(report, 0, 1)
+
+    def test_replay_overfull_across_pages(self):
+        report = self.replay([search_page([101], total=1),
+                              search_page([102], total=1)])
+        self.assert_refused(report, 1, 2)
+
+    def test_replay_increasing_total(self):
+        report = self.replay([search_page([101], total=2),
+                              search_page([102], total=3)])
+        self.assert_refused(report, 2, 3, drifting=True)
+
+    def test_replay_decreasing_total(self):
+        report = self.replay([search_page([101], total=2),
+                              search_page([102], total=1)])
+        self.assert_refused(report, 2, 1, drifting=True)
+
+    def test_replay_middle_total_drift_cannot_be_hidden_by_last_page(self):
+        report = self.replay([search_page([101], total=3),
+                              search_page([102], total=4),
+                              search_page([103], total=3)])
+        self.assert_refused(report, 3, 4, drifting=True)
+
+    def test_live_overfull_single_page(self):
+        report = self.live([search_page([101, 102], total=1)])
+        self.assert_refused(report, 1, 2)
+
+    def test_live_overfull_across_pages(self):
+        report = self.live([search_page(list(range(1, 101)), total=101),
+                            search_page([101, 102], total=101)])
+        self.assert_refused(report, 101, 102)
+
+    def test_live_increasing_total(self):
+        report = self.live([search_page(list(range(1, 101)), total=101),
+                            search_page([101], total=102)])
+        self.assert_refused(report, 101, 102, drifting=True)
+
+    def test_live_decreasing_total(self):
+        report = self.live([search_page(list(range(1, 101)), total=101),
+                            search_page([101], total=100)])
+        self.assert_refused(report, 101, 100, drifting=True)
+
+    def test_live_middle_total_drift_cannot_be_hidden_by_last_page(self):
+        report = self.live([search_page(list(range(1, 101)), total=201),
+                            search_page(list(range(101, 201)), total=202),
+                            search_page([201], total=201)])
+        self.assert_refused(report, 201, 202, drifting=True)
+
+    def test_replay_exact_single_page_control(self):
+        self.assert_valid(self.replay([search_page([101, 102], total=2)]), 2)
+
+    def test_replay_exact_multi_page_control(self):
+        self.assert_valid(self.replay([search_page([101], total=2),
+                                       search_page([102], total=2)]), 2)
+
+    def test_live_exact_single_page_control(self):
+        self.assert_valid(self.live([search_page([101, 102], total=2)]), 2)
+
+    def test_live_exact_multi_page_control(self):
+        self.assert_valid(self.live([
+            search_page(list(range(1, 101)), total=101),
+            search_page([101], total=101)]), 101)
+
+    def test_replay_missing_and_invalid_total_compatibility(self):
+        missing = search_page([101, 102])
+        missing.pop("total_count")
+        self.assert_valid(self.replay([missing]), 2)
+        for invalid in (None, "2", 2.0, True, False):
+            with self.subTest(total=invalid):
+                page = search_page([101, 102])
+                page["total_count"] = invalid
+                self.assert_valid(self.replay([page]), 2)
+
+    def test_replay_later_bool_is_not_integer_population_drift(self):
+        for invalid in (True, False):
+            with self.subTest(total=invalid):
+                self.assert_valid(self.replay([
+                    search_page([101], total=2),
+                    search_page([102], total=invalid)]), 2)
+
+    def test_live_missing_and_invalid_total_compatibility(self):
+        missing = search_page([101, 102])
+        missing.pop("total_count")
+        self.assert_valid(self.live([missing]), 2)
+        for invalid in (None, "2", 2.0, True, False):
+            with self.subTest(total=invalid):
+                page = search_page([101, 102])
+                page["total_count"] = invalid
+                self.assert_valid(self.live([page]), 2)
+
+    def test_live_later_bool_is_not_integer_population_drift(self):
+        for invalid in (True, False):
+            with self.subTest(total=invalid):
+                self.assert_valid(self.live([
+                    search_page(list(range(1, 101)), total=101),
+                    search_page([101], total=invalid)]), 101)
 
 
 if __name__ == "__main__":

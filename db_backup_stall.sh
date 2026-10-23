@@ -106,11 +106,6 @@
 # ===========================================================================
 set -uo pipefail
 
-# shellcheck source=lib/paperclip_api_allowlist.sh
-_PC_ALLOWLIST_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/paperclip_api_allowlist.sh"
-_PC_ALLOWLIST_LIB_OK=""
-if [[ -r "$_PC_ALLOWLIST_LIB" ]]; then source "$_PC_ALLOWLIST_LIB"; _PC_ALLOWLIST_LIB_OK=1; fi
-
 LOG_FILE="${PAPERCLIP_SERVER_LOG:-/paperclip/instances/default/logs/server.log}"
 BACKUP_DIR="${PAPERCLIP_DB_BACKUP_DIR:-/paperclip/instances/default/data/backups}"
 PREFIX="paperclip"
@@ -643,6 +638,11 @@ if (( CHECK_HEALTH == 1 )) && [[ -n "${PAPERCLIP_API_URL:-}" ]] && command -v cu
     fi
   fi
   if (( base_ok == 1 )); then
+    # Load only after argument validation and only for health corroboration.
+    # shellcheck source=lib/paperclip_api_allowlist.sh
+    _PC_ALLOWLIST_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/paperclip_api_allowlist.sh"
+    _PC_ALLOWLIST_LIB_OK=""
+    if [[ -r "$_PC_ALLOWLIST_LIB" ]]; then source "$_PC_ALLOWLIST_LIB"; _PC_ALLOWLIST_LIB_OK=1; fi
     if [[ -z "${_PC_ALLOWLIST_LIB_OK:-}" ]]; then
       echo "db_backup_stall: WARNING: API allowlist lib missing; skipping health corroboration" >&2
       base_ok=0

@@ -333,7 +333,8 @@
     "settings-bind rehearsal suite:1",
     "host backup publication receipt contract (offline):1",
     "native-ssh citation gate suite:1",
-    "verify-fast plan suites:1"
+    "verify-fast plan suites:1",
+    "hook spawn guard JSON envelope suite:1"
   ],
   "retained": [
     {
@@ -1880,6 +1881,11 @@
       "name": "verify-fast plan suites",
       "definition_sha256": "e1b1d3d318e2dff53a23c79b891d4bbab267c426e0d16a9c8dcf8fbef9f8074d",
       "id": "verify-fast plan suites:1"
+    },
+    {
+      "name": "hook spawn guard JSON envelope suite",
+      "definition_sha256": "3ef6b415dd2d568ca85ea2d5169aba174f85536d5d19d61d4b2185f7240cc2ba",
+      "id": "hook spawn guard JSON envelope suite:1"
     }
   ],
   "removed": [

@@ -14,7 +14,8 @@
 # the hook timeout kills), so at burst prompt rates the orphans accumulate
 # faster than they exit.
 #
-# WHAT IT CHECKS. `check --settings <fleet-settings.json> [--hooks-dir <dir>]`
+# WHAT IT CHECKS. `check --settings <fleet-settings.json> [--hooks-dir <dir>]
+# [--format text|json]`
 #   F1 detached-spawn: a hook command — or the script body it points at — that
 #      backgrounds work. Detached children outlive the hook timeout kill and
 #      are the OOM mechanism above.
@@ -39,6 +40,14 @@
 #
 # Offline: reads one JSON file and optionally script bodies. No network, no
 # credential, no /paperclip read. Exit 0 clean · 2 refused · 3 finding.
+#
+# OUTPUT. Default `--format text` prints `FINDING <rule> <detail>` lines (or
+# `clean`); `--format json` prints one versioned envelope object instead.
+# Exits are identical in both formats. Envelope (schema_version 1):
+# verdict clean|finding|refused, rows [{rule, location, detail, next_action}],
+# summary {findings, detached_spawn, missing_timeout}, error ({code,
+# retryable, next_action} or null), next_action. Refusal codes:
+# settings_unreadable, settings_unparseable, hooks_dir_unreadable.
 # ===========================================================================
 set -uo pipefail
 
@@ -47,21 +56,71 @@ EXIT_OK=0; EXIT_REFUSED=2; EXIT_FINDING=3
 
 die() { printf '%s: %s\n' "$ME" "$*" >&2; exit $EXIT_REFUSED; }
 
-usage() { die "usage: $ME check --settings <file> [--hooks-dir <dir>]"; }
+usage() { die "usage: $ME check --settings <file> [--hooks-dir <dir>] [--format text|json]"; }
 
-SETTINGS=""; HOOKS_DIR=""
+# JSON string escaping via stdlib only (python3 is already required below).
+# One spawn per field; findings are few, so correctness beats cleverness.
+json_escape() {
+  python3 -c 'import json,sys; sys.stdout.write(json.dumps(sys.argv[1])[1:-1])' "$1"
+}
+
+ROWS_JSON=""
+json_row() { # json_row <rule> <location> <detail> <next_action>
+  local frag
+  frag="$(printf '{"rule":"%s","location":"%s","detail":"%s","next_action":"%s"}' \
+    "$1" "$(json_escape "$2")" "$(json_escape "$3")" "$(json_escape "$4")")"
+  if [ -n "$ROWS_JSON" ]; then ROWS_JSON="$ROWS_JSON,$frag"; else ROWS_JSON="$frag"; fi
+}
+
+emit_json() { # emit_json <verdict> <top_next_action> — clean/finding envelope
+  printf '{"schema_version":1,"tool":"hook_spawn_guard","command":"check","verdict":"%s","rows":[%s],"summary":{"findings":%d,"detached_spawn":%d,"missing_timeout":%d},"error":null,"next_action":"%s"}\n' \
+    "$1" "$ROWS_JSON" "$FINDINGS" "$DETACHED_N" "$MISSING_N" "$(json_escape "$2")"
+}
+
+emit_json_refused() { # emit_json_refused <code> <next_action>
+  local esc
+  esc="$(json_escape "$2")"
+  printf '{"schema_version":1,"tool":"hook_spawn_guard","command":"check","verdict":"refused","rows":[],"summary":{"findings":0,"detached_spawn":0,"missing_timeout":0},"error":{"code":"%s","retryable":false,"next_action":"%s"},"next_action":"%s"}\n' \
+    "$1" "$esc" "$esc"
+}
+
+refuse() { # refuse <code> <message> — exit 2 in both formats (fail closed)
+  local next_action=""
+  case "$1" in
+    settings_unreadable) next_action="point --settings at a readable fleet-settings JSON file" ;;
+    settings_unparseable) next_action="fix the JSON syntax in the fleet-settings file" ;;
+    hooks_dir_unreadable) next_action="point --hooks-dir at a readable hooks directory" ;;
+  esac
+  if [ -n "$2" ]; then printf '%s: %s\n' "$ME" "$2" >&2; fi
+  if [ "$FORMAT" = "json" ]; then emit_json_refused "$1" "$next_action"; fi
+  exit $EXIT_REFUSED
+}
+
+SETTINGS=""; HOOKS_DIR=""; FORMAT="text"
 CMD="${1:-}"; shift 2>/dev/null || true
 [ "$CMD" = "check" ] || usage
 while [ $# -gt 0 ]; do
   case "$1" in
     --settings) SETTINGS="${2:-}"; shift 2 ;;
     --hooks-dir) HOOKS_DIR="${2:-}"; shift 2 ;;
+    --format)
+      if [ $# -lt 2 ]; then usage; fi
+      case "${2:-}" in
+        text|json) FORMAT="$2"; shift 2 ;;
+        *) usage ;;
+      esac
+      ;;
     *) usage ;;
   esac
 done
 [ -n "$SETTINGS" ] || usage
-[ -f "$SETTINGS" ] || die "not a file: $SETTINGS"
-[ -z "$HOOKS_DIR" ] || [ -d "$HOOKS_DIR" ] || die "not a directory: $HOOKS_DIR"
+[ -f "$SETTINGS" ] || refuse settings_unreadable "not a file: $SETTINGS"
+[ -z "$HOOKS_DIR" ] || [ -d "$HOOKS_DIR" ] || refuse hooks_dir_unreadable "not a directory: $HOOKS_DIR"
+# An unreadable hooks dir must refuse, never silently skip bodies: body
+# findings would go missing and a dirty tree would read clean (fail closed).
+if [ -n "$HOOKS_DIR" ] && { [ ! -r "$HOOKS_DIR" ] || [ ! -x "$HOOKS_DIR" ]; }; then
+  refuse hooks_dir_unreadable "unreadable directory: $HOOKS_DIR"
+fi
 
 command -v python3 >/dev/null 2>&1 || die "python3 is required (stdlib json only)"
 
@@ -73,9 +132,15 @@ ENTRIES="$(python3 - "$SETTINGS" <<'PY'
 import json, sys
 try:
     doc = json.load(open(sys.argv[1]))
-except (OSError, ValueError) as e:
+except OSError as e:
     print("unreadable settings: %s" % e, file=sys.stderr)
-    sys.exit(2)
+    sys.exit(10)
+except ValueError as e:
+    print("unreadable settings: %s" % e, file=sys.stderr)
+    sys.exit(11)
+if not isinstance(doc, dict):
+    print("unreadable settings: top-level JSON must be an object", file=sys.stderr)
+    sys.exit(11)
 hooks = doc.get("hooks")
 if not isinstance(hooks, dict):
     sys.exit(0)
@@ -95,10 +160,27 @@ for event, groups in hooks.items():
                 h.get("timeout") if isinstance(h.get("timeout"), int) else "",
                 cmd))
 PY
-)" || exit $EXIT_REFUSED
+)"
+PY_RC=$?
+if [ "$PY_RC" -eq 11 ]; then
+  refuse settings_unparseable ""
+elif [ "$PY_RC" -ne 0 ]; then
+  refuse settings_unreadable ""
+fi
 
-FINDINGS=0
-finding() { FINDINGS=$((FINDINGS+1)); printf 'FINDING %s %s\n' "$1" "$2"; }
+FINDINGS=0; DETACHED_N=0; MISSING_N=0
+finding() { # finding <rule> <location> <detail> <next_action> <text_detail>
+  FINDINGS=$((FINDINGS+1))
+  case "$1" in
+    detached-spawn) DETACHED_N=$((DETACHED_N+1)) ;;
+    missing-timeout) MISSING_N=$((MISSING_N+1)) ;;
+  esac
+  if [ "$FORMAT" = "json" ]; then
+    json_row "$1" "$2" "$3" "$4"
+  else
+    printf 'FINDING %s %s\n' "$1" "$5"
+  fi
+}
 
 # A bare & that backgrounds: neither `&&` (list operator), `&>` (redirect to
 # file) nor `>&` (fd duplication, as in `2>&1`). ERE has no lookbehind, so the
@@ -118,17 +200,26 @@ scan_body() {
   case "$ext" in
     sh)
       if grep -qwE 'setsid|nohup|disown' <<<"$code" || has_background_op "$code"; then
-        finding "detached-spawn" "$where body $path detaches (setsid/nohup/bare-&/disown)"
+        finding "detached-spawn" "$path" \
+          "body detaches (setsid/nohup/bare-&/disown)" \
+          "remove detached spawning from the hook body" \
+          "$where body $path detaches (setsid/nohup/bare-&/disown)"
       fi
       ;;
     mjs|js|cjs)
       if grep -qE 'detached|fork[[:space:]]*\(' <<<"$code"; then
-        finding "detached-spawn" "$where body $path detaches (detached/fork)"
+        finding "detached-spawn" "$path" \
+          "body detaches (detached/fork)" \
+          "remove detached spawning from the hook body" \
+          "$where body $path detaches (detached/fork)"
       fi
       ;;
     py)
       if grep -qE 'start_new_session|os\.fork|os\.setsid|daemon' <<<"$code"; then
-        finding "detached-spawn" "$where body $path detaches (fork/setsid/daemon)"
+        finding "detached-spawn" "$path" \
+          "body detaches (fork/setsid/daemon)" \
+          "remove detached spawning from the hook body" \
+          "$where body $path detaches (fork/setsid/daemon)"
       fi
       ;;
   esac
@@ -157,16 +248,29 @@ while IFS=$'\x1f' read -r event idx timeout cmd; do
   [ -n "$cmd" ] || continue
   where="$event[$idx] ${cmd:0:80}"
   if [[ "$cmd" =~ setsid || "$cmd" =~ nohup || "$cmd" =~ disown ]] || has_background_op "$cmd"; then
-    finding "detached-spawn" "$where command detaches (setsid/nohup/bare-&/disown)"
+    finding "detached-spawn" "${event}[$idx]" \
+      "command detaches (setsid/nohup/bare-&/disown)" \
+      "remove detached spawning from the hook command" \
+      "$where command detaches (setsid/nohup/bare-&/disown)"
   fi
   if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
-    finding "missing-timeout" "$where has no numeric hook timeout"
+    finding "missing-timeout" "${event}[$idx]" \
+      "has no numeric hook timeout" \
+      "add a numeric timeout to the hook entry" \
+      "$where has no numeric hook timeout"
   fi
   check_body "$cmd" "$where"
 done <<<"$ENTRIES"
 
 if [ "$FINDINGS" -gt 0 ]; then
   printf '%s: %d finding(s)\n' "$ME" "$FINDINGS" >&2
+  if [ "$FORMAT" = "json" ]; then
+    emit_json "finding" "resolve the $FINDINGS finding(s): remove detached spawning, add numeric hook timeouts"
+  fi
   exit $EXIT_FINDING
 fi
-echo "$ME: clean"
+if [ "$FORMAT" = "json" ]; then
+  emit_json "clean" ""
+else
+  echo "$ME: clean"
+fi

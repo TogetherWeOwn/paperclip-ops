@@ -333,11 +333,14 @@
     "pr-tracker suite:1",
     "settings-bind rehearsal suite:1",
     "host backup publication receipt contract (offline):1",
+    "paginated review-gate acceptance suite:1",
     "native-ssh citation gate suite:1",
     "code-nav read-only and resource guard suite:1",
+    "sdlc review-carry suite:1",
     "verify-fast plan suites:1",
     "failure-drain JSON suite:1",
-    "kofra preview parity JSON envelope suite:1"
+    "kofra preview parity JSON envelope suite:1",
+    "capacity evidence and CLI refusal contract:1"
   ],
   "retained": [
     {
@@ -1881,6 +1884,11 @@
       "id": "host backup publication receipt contract (offline):1"
     },
     {
+      "name": "paginated review-gate acceptance suite",
+      "definition_sha256": "4db540a9f06f2feae7401389daad82217a87a46fc82816dcf64018d4a558d63d",
+      "id": "paginated review-gate acceptance suite:1"
+    },
+    {
       "name": "native-ssh citation gate suite",
       "definition_sha256": "34cafcd66f97b170ff90432448cfed1b909cc5f20b905b42c6b09b6651c10694",
       "id": "native-ssh citation gate suite:1"
@@ -1889,6 +1897,11 @@
       "name": "code-nav read-only and resource guard suite",
       "definition_sha256": "f4f3c272c75249ae5430663c6689ba7c058a33074edc105dc8e55352d488af05",
       "id": "code-nav read-only and resource guard suite:1"
+    },
+    {
+      "name": "sdlc review-carry suite",
+      "definition_sha256": "4cc0a1b7421746981ba556684ba8d20bc0d9d06de46e69d5c78b33a48b763100",
+      "id": "sdlc review-carry suite:1"
     },
     {
       "name": "verify-fast plan suites",
@@ -1904,6 +1917,11 @@
       "name": "kofra preview parity JSON envelope suite",
       "definition_sha256": "a0094f56081eb743136ae6f39b7d8fdd9ed0c6d23676899258f469260542743f",
       "id": "kofra preview parity JSON envelope suite:1"
+    },
+    {
+      "name": "capacity evidence and CLI refusal contract",
+      "definition_sha256": "e9a220734a881e501043a8136282204e7683ef1f7857cfe160c3c02d68e12248",
+      "id": "capacity evidence and CLI refusal contract:1"
     }
   ],
   "removed": [

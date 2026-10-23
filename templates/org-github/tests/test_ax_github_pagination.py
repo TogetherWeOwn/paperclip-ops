@@ -87,6 +87,7 @@ Reason-code allowlists (builder picks the most specific; tests accept the
 set so the builder can be precise without breaking the contract):
 """
 
+import argparse
 import io
 import json
 import os
@@ -95,6 +96,8 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BASE = os.path.dirname(HERE)
@@ -497,6 +500,212 @@ class IncompleteSearchTest(unittest.TestCase):
             self.assertIn(
                 "2 of 3", reason,
                 f"{name} reason must name the coverage shortfall")
+
+
+class SearchPopulationConsistencyTest(unittest.TestCase):
+    """A population is usable only when valid page totals agree exactly.
+
+    These catch accepting extra items or keeping the first total after a
+    later page changes it. Non-integer totals remain legacy evidence,
+    not contradictory integer populations (in particular, bool is not int).
+    """
+
+    def replay(self, pages):
+        fixture = paginated_fixture(
+            pages, [pr(101, status=status_only("success")),
+                    pr(102, status=status_only("failure"))])
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.object(ax_metrics, "_http_get_json",
+                             side_effect=AssertionError("replay HTTP")), \
+                patch.object(ax_metrics, "paperclip_get",
+                             side_effect=AssertionError("replay Paperclip")), \
+                patch.object(ax_metrics.urllib.request, "urlopen",
+                             side_effect=AssertionError("real network")):
+            code, report, _text, err = run_from_file(fixture)
+        self.assertEqual(code, 0, err)
+        return report
+
+    def live(self, pages):
+        """Keep search, state reconciliation and reporting real; fake I/O."""
+        state_reads = []
+
+        def fake_http(url, headers):
+            parsed = urlsplit(url)
+            if parsed.netloc != "api.github.com":
+                raise AssertionError(f"unexpected HTTP URL {url}")
+            if parsed.path == "/search/issues":
+                page = int(parse_qs(parsed.query).get("page", ["1"])[0])
+                if not 1 <= page <= len(pages):
+                    raise AssertionError(f"unexpected search page {page}")
+                return pages[page - 1]
+            match = re.fullmatch(r"/repos/Example/a/pulls/(\d+)/commits",
+                                 parsed.path)
+            if match:
+                state_reads.append(int(match.group(1)))
+                return [{"sha": "synthetic-commit-001"}]
+            commit_path = "/repos/Example/a/commits/synthetic-commit-001"
+            if parsed.path == commit_path + "/status":
+                return status_only("success")
+            if parsed.path == commit_path + "/check-runs":
+                return check_page([], total=0)
+            raise AssertionError(f"unexpected GitHub path {parsed.path}")
+
+        def fake_paperclip(base_url, api_key, path):
+            root = f"/api/companies/{SYNTHETIC_COMPANY}"
+            if path == root + "/costs/summary":
+                return {"totalTokens": 1000,
+                        "window_start": REPORT_WINDOW_START,
+                        "window_end": REPORT_WINDOW_END}, None
+            if path.startswith(root + "/issues?"):
+                return issues_two_touched_one_blocked(), None
+            raise AssertionError(f"unexpected Paperclip path {path}")
+
+        env = {"TEST_SYNTHETIC_SEARCH_GH": "synthetic-gh-token-001",
+               "TEST_SYNTHETIC_SEARCH_URL": "https://example.invalid",
+               "TEST_SYNTHETIC_SEARCH_KEY": "synthetic-key-001",
+               "TEST_SYNTHETIC_SEARCH_COMPANY": SYNTHETIC_COMPANY}
+        args = argparse.Namespace(
+            repos=["Example/a"], days=REPORT_DAYS,
+            github_token_env="TEST_SYNTHETIC_SEARCH_GH",
+            paperclip_url_env="TEST_SYNTHETIC_SEARCH_URL",
+            paperclip_key_env="TEST_SYNTHETIC_SEARCH_KEY",
+            paperclip_company_env="TEST_SYNTHETIC_SEARCH_COMPANY")
+        with patch.dict(os.environ, env, clear=True), \
+                patch.object(ax_metrics, "_http_get_json", fake_http), \
+                patch.object(ax_metrics, "paperclip_get", fake_paperclip), \
+                patch.object(ax_metrics.urllib.request, "urlopen",
+                             side_effect=AssertionError("real network")):
+            # Inspect the adapter output as well as its consumer: withholding
+            # ratios must not hide a partial PR list returned to other callers.
+            try:
+                search = ax_metrics.fetch_merged_prs(
+                    "Example/a", REPORT_WINDOW_START,
+                    env[args.github_token_env])
+            except ax_metrics.SearchRefused as exc:
+                search = exc
+            report = ax_metrics.collect_live(args, REPORT_WINDOW_START)
+        return report, search, state_reads
+
+    def assert_live_refused(self, report, search, total, reads):
+        self.assert_refused(report, total)
+        # The existing refusal exception prevents any partial PR sample
+        # escaping the adapter; collect_live must also skip all PR states.
+        self.assertIsInstance(search, ax_metrics.SearchRefused)
+        self.assertEqual(search.total, total)
+        self.assertEqual(search.refusal["code"], "search_incomplete")
+        self.assertEqual(reads, [], "refused search must not fetch PR states")
+
+    def assert_refused(self, report, total):
+        assert_search_withheld(self, report, total)
+        for name in ("first_push_green_rate", "tokens_per_merged_pr"):
+            self.assertEqual(report["metrics"][name]["reason_code"],
+                             "search_incomplete")
+
+    def assert_accepted(self, report, total, green_value, sampled):
+        self.assertEqual(report["merged_prs_total"], total)
+        green = report["metrics"]["first_push_green_rate"]
+        tokens = report["metrics"]["tokens_per_merged_pr"]
+        for metric, name in ((green, "first_push_green_rate"),
+                             (tokens, "tokens_per_merged_pr")):
+            assert_machine_readable(self, metric, name)
+            self.assertEqual(metric["validity"], "valid")
+        self.assertAlmostEqual(green["value"], green_value)
+        assert_sampled_counts(self, green, sampled, sampled, 0, 0)
+        self.assertEqual(tokens["numerator"], 1000)
+        self.assertEqual(tokens["denominator"], total)
+        self.assertAlmostEqual(tokens["value"], 1000 / total)
+        esc = report["metrics"]["escalations_per_100_cards"]
+        self.assertEqual(esc["validity"], "valid")
+        self.assertAlmostEqual(esc["value"], 50.0)
+
+    def test_replay_overfull_items_withhold_without_partial_sample(self):
+        report = self.replay([search_page([101, 102], total=1)])
+        self.assert_refused(report, 1)
+
+    def test_replay_changed_integer_total_withholds(self):
+        for later_total in (3, 1):
+            with self.subTest(later_total=later_total):
+                report = self.replay([search_page([101], total=2),
+                                      search_page([102], total=later_total)])
+                self.assert_refused(report, 2)
+
+    def test_live_overfull_items_withhold_without_partial_sample(self):
+        report, search, reads = self.live(
+            [search_page([101, 102], total=1)])
+        self.assert_live_refused(report, search, 1, reads)
+
+    def test_live_existing_incomplete_refusal_discards_sample(self):
+        report, search, reads = self.live(
+            [search_page([101, 102], total=2, incomplete=True)])
+        self.assert_live_refused(report, search, 2, reads)
+
+    def test_live_changed_integer_total_withholds(self):
+        # A full first HTTP page ensures a genuine second-page read. The
+        # fetched item count equals the FIRST total, isolating total drift
+        # from the already-covered under-count refusal.
+        for later_total in (102, 100):
+            with self.subTest(later_total=later_total):
+                report, search, reads = self.live([
+                    search_page(range(1, 101), total=101),
+                    search_page([101], total=later_total)])
+                self.assert_live_refused(report, search, 101, reads)
+
+    def test_replay_exact_agreeing_totals_remain_accepted(self):
+        report = self.replay([search_page([101], total=2),
+                              search_page([102], total=2)])
+        self.assert_accepted(report, 2, 0.5, 2)
+
+    def test_live_exact_agreeing_totals_remain_accepted(self):
+        report, search, reads = self.live([
+            search_page(range(1, 101), total=101),
+            search_page([101], total=101)])
+        self.assertIsInstance(search, tuple)
+        sample, truncated, total = search
+        self.assertEqual(total, 101)
+        self.assertEqual(len(sample), ax_metrics.MAX_PRS_PER_REPO)
+        self.assertTrue(truncated, "legacy per-repo sampling is retained")
+        self.assertTrue(reads, "accepted search still evaluates PR states")
+        self.assert_accepted(report, 101, 1.0, ax_metrics.MAX_PRS_PER_REPO)
+
+    def test_live_non_integer_or_missing_total_keeps_legacy_compatibility(self):
+        totals = [{"total_count": value}
+                  for value in (True, False, None, "101", 101.0, {}, [])]
+        totals.append({})
+        for fields in totals:
+            with self.subTest(later_fields=fields):
+                last = search_page([101], total=101)
+                del last["total_count"]
+                last.update(fields)
+                report, search, reads = self.live([
+                    search_page(range(1, 101), total=101), last])
+                self.assertIsInstance(search, tuple)
+                sample, truncated, total = search
+                self.assertEqual(total, 101)
+                self.assertEqual(len(sample), ax_metrics.MAX_PRS_PER_REPO)
+                self.assertTrue(truncated)
+                self.assertTrue(reads)
+                self.assert_accepted(report, 101, 1.0,
+                                     ax_metrics.MAX_PRS_PER_REPO)
+
+    def test_replay_non_integer_totals_keep_legacy_compatibility(self):
+        for value in (True, False, None, "2", 2.0, {}, []):
+            for position in ("first", "last", "both"):
+                with self.subTest(value=value, position=position):
+                    pages = [search_page([101], total=2),
+                             search_page([102], total=2)]
+                    for index in ({"first": (0,), "last": (1,),
+                                   "both": (0, 1)}[position]):
+                        pages[index]["total_count"] = value
+                    self.assert_accepted(self.replay(pages), 2, 0.5, 2)
+
+    def test_replay_missing_totals_keep_legacy_compatibility(self):
+        for indexes in ((0,), (1,), (0, 1)):
+            with self.subTest(missing_on=indexes):
+                pages = [search_page([101], total=2),
+                         search_page([102], total=2)]
+                for index in indexes:
+                    del pages[index]["total_count"]
+                self.assert_accepted(self.replay(pages), 2, 0.5, 2)
 
 
 class OverBoundSearchTest(unittest.TestCase):

@@ -4,8 +4,8 @@ what is the best smart way to solve this so it is never an issue again?").
 
 Finishing open work beats starting new work. At 19:10Z 92 PRs were open but only 21 had an active card. The supply
 planner (an LLM with a strict READY rule) did not count open PRs as supply, and orphan_prs.py was never on a timer, so
-~70 PRs sat unowned while 0/12 roles had work. This is deterministic, with no model judgement: every open PR in REPOS
-always has an owning card and its agent is told the single next action, derived from GitHub state:
+~70 PRs sat unowned while 0/12 roles had work. This is deterministic, with no model judgement: within complete listing
+coverage, every open PR in REPOS gets an owning card and its agent is told the single next action, derived from GitHub state:
 
   draft            -> finish it and mark it ready (gh pr ready), or close it with a reason if superseded
   conflicts        -> rebase/merge the base branch and resolve conflicts
@@ -64,21 +64,34 @@ the other repos. An empty token refuses before `gh` is called. A tick with any f
 leaves merge-ready-held.txt unchanged. If every repo's listing fails in one tick the script exits
 non-zero (never a healthy empty run).
 Over-bound detection: `gh pr list` asks for PR_SUPPLY_LIST_BOUND+1 rows (101) in one call. When the
-probe row arrives the repo holds more open PRs than the bound: list_prs returns the first 100 and
-logs `pr-supply: list incomplete for <repo>: bound 100 observed 101+`, and an --apply tick records
-`<repo>:list-incomplete` {bound, observed, at} in state for the next tick (dry-run stays zero-write).
-The bounded set is still
-reconciled within MAX_ACTIONS/MAX_NEW_CARDS; the summary counts bounded PRs only and
-merge-ready-held.txt stays unchanged, exactly as on a failed listing. A later complete listing
-clears the marker.
+probe row arrives the repo holds more open PRs than the bound: probe_prs returns ListingResult
+(first 100 rows, incomplete=True); list_prs is a legacy rows-only adapter, never the health path.
+Read-only probe diagnostics go to stdout, including
+`pr-supply: list incomplete for <repo>: bound 100 observed 101+`. An --apply tick records
+`<repo>:list-incomplete` {bound, observed, observed_min, at} in state for the next tick;
+observed and observed_min are both 101, a lower bound, never an exact repository total.
+The bounded set is still reconciled within MAX_ACTIONS/MAX_NEW_CARDS; the summary counts
+bounded PRs only and merge-ready-held.txt stays unchanged, exactly as on a failed listing.
+A later complete listing clears the marker. ANY incomplete tick returns status 2 after its
+bounded work (including dry-run); __main__ propagates it. All-failed refusal stays status 1.
+The first 100 preserve gh's newest-first listing order; unseen PRs have no coverage or
+fairness guarantee. gh 2.102.0 cursor-paginates internally past its 100-row PAGE cap to
+honor --limit 101, within the same bounded subprocess; no separate count query is used.
+Apply ticks hold a nonblocking flock on the stable STATE-sibling `<state-name>.lock`
+from before state reads through all actions, marker/receipt saves and HELD handling.
+Contenders skip with stdout only, before listing or state access; the lock inode is never
+unlinked. Close releases it on exceptions too. PAUSE/pressure skips and dry-run create no lock;
+dry-run creates no log, state or HELD file either.
 """
 import calendar
+import fcntl
 import json
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import review_error_rerequest as rr  # noqa: E402  (psql, gh_env, comment, CID, ROOT)
@@ -257,29 +270,28 @@ def api(method, path, body):
         return {}
 
 
-def log(msg):
+def log(msg, *, persist=True):
     line = f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} pr-supply: {msg}"
     print(line)
-    if APPLY:
+    if APPLY and persist:
         with LOG.open('a') as f:
             f.write(line + '\n')
 
 
-class _BoundedListing(list):
-    """list_prs result: at most PR_SUPPLY_LIST_BOUND rows plus the probe verdict.
+class ListingResult(NamedTuple):
+    """Bounded rows and explicit probe verdict; copying rows cannot erase health."""
 
-    Behaves as a plain list (equality, len, iteration); `incomplete` is True
-    when the probe row arrived and was dropped, i.e. the repo holds more open
-    PRs than the bound. main() turns the flag into the `:list-incomplete`
-    state marker the next tick can see.
-    """
-
-    def __init__(self, rows, incomplete):
-        super().__init__(rows)
-        self.incomplete = incomplete
+    rows: list
+    incomplete: bool
 
 
 def list_prs(full, env):
+    """Legacy rows-only adapter. Reconciliation must use probe_prs for coverage."""
+    result = probe_prs(full, env)
+    return result.rows if result is not None else None
+
+
+def probe_prs(full, env):
     """Open-PR listing for one repo, or None when the listing failed.
 
     Probes with `--limit BOUND+1` in a single call. On timeout, non-zero exit,
@@ -291,7 +303,7 @@ def list_prs(full, env):
     `pr-supply: list incomplete for <repo>: bound <B> observed <B+1>+` is logged.
     """
     if not (env or {}).get('GH_TOKEN'):
-        log(f'list failed for {full}: empty token')
+        log(f'list failed for {full}: empty token', persist=False)
         return None
     try:
         r = subprocess.run(['gh', 'pr', 'list', '-R', full, '--state', 'open', '--limit',
@@ -299,26 +311,27 @@ def list_prs(full, env):
                             'number,title,url,isDraft,mergeStateStatus,headRefOid,statusCheckRollup,createdAt'],
                            capture_output=True, text=True, env=env, timeout=PR_SUPPLY_GH_TIMEOUT_S)
     except subprocess.TimeoutExpired:
-        log(f'list failed for {full}: timeout after {PR_SUPPLY_GH_TIMEOUT_S:g}s')
+        log(f'list failed for {full}: timeout after {PR_SUPPLY_GH_TIMEOUT_S:g}s', persist=False)
         return None
     if r.returncode != 0:
-        log(f'list failed for {full}: gh exit {r.returncode}')
+        log(f'list failed for {full}: gh exit {r.returncode}', persist=False)
         return None
     if not (r.stdout or '').strip():
-        log(f'list failed for {full}: empty output')
+        log(f'list failed for {full}: empty output', persist=False)
         return None
     try:
         prs = json.loads(r.stdout)
     except ValueError:
-        log(f'list failed for {full}: invalid JSON')
+        log(f'list failed for {full}: invalid JSON', persist=False)
         return None
     if not isinstance(prs, list):
-        log(f'list failed for {full}: invalid JSON')
+        log(f'list failed for {full}: invalid JSON', persist=False)
         return None
     if len(prs) > PR_SUPPLY_LIST_BOUND:
-        log(f'list incomplete for {full}: bound {PR_SUPPLY_LIST_BOUND} observed {PR_SUPPLY_LIST_BOUND + 1}+')
-        return _BoundedListing(prs[:PR_SUPPLY_LIST_BOUND], True)
-    return _BoundedListing(prs, False)
+        log(f'list incomplete for {full}: bound {PR_SUPPLY_LIST_BOUND} observed {PR_SUPPLY_LIST_BOUND + 1}+',
+            persist=False)
+        return ListingResult(prs[:PR_SUPPLY_LIST_BOUND], True)
+    return ListingResult(prs, False)
 
 
 def main():
@@ -330,6 +343,21 @@ def main():
         return
     if PAUSE.exists():
         return
+    if not APPLY:
+        return _reconcile()
+    # Lock a stable sibling inode, not STATE (which save_state atomically replaces).
+    # Closing on every return/exception releases it; never unlink a shared lock.
+    with STATE.with_name(f'{STATE.name}.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print('pr-supply: apply tick already running; skipped')
+            return
+        return _reconcile()
+
+
+def _reconcile():
+    """Read/reconcile/write one tick; main holds the apply lock for its full lifetime."""
     env = rr.gh_env()
     state = json.loads(STATE.read_text()) if STATE.exists() else {}
     agents = {r[0]: r[1] for r in rr.psql(f"select name, id from agents where company_id='{rr.CID}' and status<>'terminated'")}
@@ -340,20 +368,26 @@ def main():
     markers_dirty = False
     for repo, (who, proj, rank) in REPOS.items():
         full = f'TogetherWeOwn/{repo}'
-        prs = list_prs(full, env)
-        if prs is None:
+        result = probe_prs(full, env)
+        if result is None:
             list_failed += 1
             continue
-        if getattr(prs, 'incomplete', False):
+        if (not isinstance(result, ListingResult) or type(result.incomplete) is not bool
+                or not isinstance(result.rows, list) or len(result.rows) > PR_SUPPLY_LIST_BOUND):
+            log(f'list failed for {full}: invalid listing result')
+            list_failed += 1
+            continue
+        if result.incomplete:
             list_incomplete += 1
             if APPLY:
                 state[f'{full}:list-incomplete'] = {
                     'bound': PR_SUPPLY_LIST_BOUND, 'observed': PR_SUPPLY_LIST_BOUND + 1,
+                    'observed_min': PR_SUPPLY_LIST_BOUND + 1,
                     'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
                 markers_dirty = True
         elif APPLY and state.pop(f'{full}:list-incomplete', None) is not None:
             markers_dirty = True
-        for p in prs:
+        for p in result.rows:
             need = classify(p)
             if not need or p['title'].startswith('chore(main): release'):
                 continue
@@ -598,7 +632,8 @@ def main():
             parts.append(f'{list_incomplete} incomplete')
         log(f"merge-ready-held.txt kept unchanged: {', '.join(parts)} repo listing(s) this tick")
     print(f'{len(todo)} actionable open PRs; {actions} actions this run')
+    return 2 if list_incomplete else 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

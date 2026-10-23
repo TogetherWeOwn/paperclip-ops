@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "run_id": "fixture",
+  "status": "refused",
+  "jobs": [],
+  "summary": {"total_jobs": 3, "failed_jobs": 2, "drained_jobs": 0},
+  "error": {"code": "refused_log_missing", "retryable": false, "next_action": "fetch_missing_log", "unmeasured": "9003"}
+}

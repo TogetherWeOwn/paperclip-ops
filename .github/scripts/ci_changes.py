@@ -68,6 +68,7 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
         "test_provider_baseline_integrity.py",
         "kofra_preview_parity.py",
         "test_kofra_preview_parity.py",
+        "test_kofra_preview_parity_json.py",
         "upstream_draft_pin_audit.sh",
         "test_upstream_draft_pin_audit.sh",
         "ops/case_80989a33/cliproxy_config_gate.py",

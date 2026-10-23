@@ -59,6 +59,8 @@ env:
 jobs:
   quality-gates:
     name: quality-gates
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 9
     steps:

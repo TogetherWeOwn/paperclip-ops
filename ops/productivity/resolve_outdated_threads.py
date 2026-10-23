@@ -163,8 +163,8 @@ def head_is_5of5(check_runs, head):
 def open_prs(e):
     """Open org PRs with completeness. Returns (prs, complete).
 
-    complete is False when any search page reports incomplete_results, when the
-    MAX_PRS bound stops pagination (the bound governs: the set may be truncated
+    complete is False when a search page lacks explicit incomplete_results=False,
+    when the MAX_PRS bound stops pagination (the bound governs: the set may be truncated
     however a further probe would read), or when a page fails, times out, or is
     malformed (non-list/missing items, malformed repository_url).
     The caller must degrade the whole tick on incomplete: an incomplete_search
@@ -174,7 +174,7 @@ def open_prs(e):
     try:
         while len(prs) < MAX_PRS:
             d = json.loads(gh(e, 'api', f'search/issues?q=org:{ORG}+is:pr+is:open&per_page=100&page={page}'))
-            if d.get('incomplete_results'):
+            if d.get('incomplete_results') is not False:
                 return [], False
             items = d.get('items')
             if not isinstance(items, list):
@@ -195,13 +195,37 @@ def open_prs(e):
     return [], False
 
 
+def check_run_shape_valid(run):
+    """Validate verdict inputs; absent identity/head retain their specific refusal reasons."""
+    if not isinstance(run, dict) or not isinstance(run.get('name'), str) or not run['name']:
+        return False
+    if not isinstance(run.get('started_at'), str):
+        return False
+    for field in ('head_sha', 'status', 'conclusion'):
+        if run.get(field) is not None and not isinstance(run[field], str):
+            return False
+    app = run.get('app')
+    if app is not None:
+        if not isinstance(app, dict):
+            return False
+        if app.get('id') is not None and type(app['id']) is not int:
+            return False
+    output = run.get('output')
+    if output is not None:
+        if not isinstance(output, dict):
+            return False
+        if 'title' in output and not isinstance(output['title'], str):
+            return False
+    return True
+
+
 def check_runs_for_head(e, repo, head):
     """Check runs for one head with reconciliation. Returns (runs, complete).
 
     Pages explicitly (page=N) up to MAX_CHECK_RUN_PAGES and reconciles collected
     runs against the first page's total_count. Incomplete (the caller skips that
     PR as incomplete_check_runs, never 5/5-by-omission) on: a missing/non-integer
-    total_count, a non-list check_runs batch, non-object entries in a batch,
+    total_count, a non-list check_runs batch, malformed verdict inputs in a batch,
     collected != total_count, a failed/malformed page, a gh timeout, a disagreeing
     later total_count, or bound exhaustion without reconciliation. A later page
     that omits total_count is tolerated: the first page's total governs.
@@ -211,13 +235,13 @@ def check_runs_for_head(e, repo, head):
         while page <= MAX_CHECK_RUN_PAGES:
             d = json.loads(gh(e, 'api', f'repos/{repo}/commits/{head}/check-runs?per_page=100&page={page}'))
             batch = d.get('check_runs')
-            if not isinstance(batch, list) or any(not isinstance(x, dict) for x in batch):
+            if not isinstance(batch, list) or any(not check_run_shape_valid(x) for x in batch):
                 return [], False
             if page == 1:
                 total = d.get('total_count')
-                if not isinstance(total, int) or isinstance(total, bool):
+                if type(total) is not int or total < 0:
                     return [], False
-            elif 'total_count' in d and d['total_count'] != total:
+            elif 'total_count' in d and (type(d['total_count']) is not int or d['total_count'] != total):
                 return [], False
             runs.extend(batch)
             if len(batch) < 100 or len(runs) >= total:

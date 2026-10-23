@@ -59,20 +59,24 @@ jobs:
           fetch-depth: 0
       - name: Classify the change scope
         id: scope
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" != pull_request ]; then
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git diff --name-status "origin/${{ github.base_ref }}...HEAD" \
+          git diff --name-status "origin/${BASE_REF}...HEAD" \
             | python3 .github/scripts/docs_scope.py >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
       - name: Fast prose checks (docs-only PRs)
         if: steps.scope.outputs.docs_only == 'true'
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- '*.md' 'docs/**' > "$RUNNER_TEMP/docs-files.txt"
+          git diff --name-only "origin/${BASE_REF}...HEAD" -- '*.md' 'docs/**' > "$RUNNER_TEMP/docs-files.txt"
           test -s "$RUNNER_TEMP/docs-files.txt"
           while IFS= read -r f; do
             test -s "$f"

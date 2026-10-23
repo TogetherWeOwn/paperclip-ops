@@ -152,6 +152,23 @@ parse gate only). To inspect suite scope and prerequisites without running or
 preparing anything, use `make verify-fast-plan` (offline, read-only;
 `scripts/verify-fast.sh --plan --json`).
 
+The code-nav suite needs PyYAML. On a clean Linux x86_64 installation, prepare
+an isolated Python 3.12 environment outside the checkout, then run the fast tier
+with that interpreter on `PATH`:
+
+```sh
+python3.12 -m venv "$HOME/.cache/paperclip-ops/verify-fast-venv"
+. "$HOME/.cache/paperclip-ops/verify-fast-venv/bin/activate"
+python3 -m pip install --only-binary=:all: --no-deps --require-hashes \
+  -r scripts/static-label-guard-requirements.txt
+make verify-fast
+```
+
+This reuses CI's hash-pinned PyYAML 6.0.3 requirement; it does not install into
+system Python. An already-provisioned interpreter with PyYAML 6.0.3 also works.
+`--plan --json` reports parser readiness, and `--no-prepare` refuses when it is
+missing. Normal execution does not automatically prepare this Python environment.
+
 ## Contributing
 
 Use a feature branch and a reviewed pull request. Report actual tests and their

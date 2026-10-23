@@ -457,6 +457,10 @@ jobs:
     # docker/sudo.
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Every job states its own permissions (job level replaces the top
+    # level). This job fetches and diffs, so it repeats contents:read.
+    permissions:
+      contents: read
     outputs:
       full: ${{ steps.detect.outputs.full }}
       privilege: ${{ steps.detect.outputs.privilege }}
@@ -560,6 +564,10 @@ jobs:
     # unlike the other jobs that may use approved included-minutes overflow.
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Hermetic local suites (own Postgres cluster, stub API): checkout
+    # only, so contents:read and nothing else.
+    permissions:
+      contents: read
     env:
       PGHOST: 127.0.0.1
       PGUSER: postgres
@@ -831,6 +839,11 @@ jobs:
     # and idle-ttl-contracts.json ttl_min must cover this timeout;
     # test_isolated_garm_drain.py pins the coupling, so move them together.
     timeout-minutes: 210
+    # Checkout plus the dark-step reporter, which reads the jobs/steps API
+    # with the job token, so contents:read and actions:read.
+    permissions:
+      contents: read
+      actions: read
     steps:
       # -- shared prelude (was offline-suites, runs on every suites execution) --
       - name: Prove the private runner selected this job
@@ -1003,6 +1016,18 @@ jobs:
 
       - name: change-gating contract holds
         run: ./test_ci_gating.sh
+
+      # Explicit workflow job permissions gate: every job in every workflow
+      # must declare its own least-privilege `permissions:` block. Runs the
+      # checker over the live tree plus its acceptance suite. A separate
+      # contract-pinned step (not lines inside test_ci_gating.sh) so deleting
+      # it fails the offline-ci contract instead of silently unwiring
+      # enforcement. No step-level `if:`: it runs on every suites execution,
+      # exactly like the change-gating step above.
+      - name: explicit workflow job permissions gate
+        run: |
+          python3 check_workflow_job_permissions.py
+          python3 -m unittest -v test_check_workflow_job_permissions
 
       # case_6bf2cca9. The review-routing contract is load-bearing for review-model
       # spend: a red router that CI never executes would silently misroute
@@ -1550,7 +1575,7 @@ jobs:
       # Reconciler holds and hide-noop predicates, backlog-promoter, board-jobs, orphan-PRs and focus-gate fail-closed timeouts, PR-supply card text, flow-guard stages and host-pressure gate fail-closed contract. Offline: temp files and stubs.
       - name: review reconciler and ops guard suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_resolve_outdated_incomplete_evidence test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pr_controller_ci test_pr_controller_ci_ops test_pr_controller_ci_host test_pr_controller_ci_patch) && (cd ops/paperclip && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -p 'test_focus*.py')
+        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_resolve_outdated_incomplete_evidence test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pr_controller_ci test_pr_controller_ci_ops test_pr_controller_ci_host test_pr_controller_ci_patch test_pipeline_stall_watch) && (cd ops/paperclip && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -p 'test_focus*.py')
       # case_0d0fab73. reviewer-eval survival report atomic write: the eval
       # report persists through write_json_atomic (same-dir temp, fsync,
       # atomic rename) and a failing write exits non-zero with the previous
@@ -6141,6 +6166,8 @@ jobs:
     if: github.event_name == 'pull_request' && (needs.changes.outputs.full == 'true' || needs.changes.outputs.private_mutation == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -6170,6 +6197,10 @@ jobs:
     if: needs.changes.outputs.full == 'true' || needs.changes.outputs.trivy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Local filesystem scan (table output, no SARIF upload); checkout
+    # only, so contents:read.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -6201,6 +6232,9 @@ jobs:
     # isolated pool delays every merge gate.
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Local secret scan over the checkout; no API use, so contents:read.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -6318,6 +6352,9 @@ jobs:
     # aggregator needs no checkout and must not occupy an isolated runner
     # while heavy suites queue.
     runs-on: ubuntu-latest
+    # No checkout, no token use: the verdict reads only the needs
+    # context, so the job claims no scopes at all.
+    permissions: {}
     needs:
       - changes
       - secret-scan

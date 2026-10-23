@@ -36,7 +36,8 @@ candidate set (rows beyond MAX_ACTIONS keep ordinary ranks; the action cap is
 stated separately). It reuses the same scanners and pure classifiers as the
 actor (find_dead/find_loops, is_dead/loop_verdict/classify). Once the newest
 three qualify a loop, report counts/IDs cover all same-class failures inside
-LOOP_WINDOW; the actor still uses only the newest three. Reporting never
+LOOP_WINDOW. Report qualification and evidence share the captured report
+cutoff; the actor still uses its existing newest-three scan. Reporting never
 cancels, parks, or writes ledger/state/API mutations. UNMEASURED probes list as
 unmeasured with diagnostics (never ranked dead); loop cards with live work
 list as deferred_live_work (never parkable).
@@ -313,17 +314,24 @@ def find_dead(now):
     return out, unmeasured
 
 
-def find_loops(now, anchor):
+def find_loops(now, anchor, *, as_of=False):
+    """as_of bounds report queries to now; the actor keeps its existing scan."""
+    window = "r.created_at > now() - interval '3 hours'"
+    ceiling = ''
+    if as_of:
+        window = (f"r.created_at >= '{(now - LOOP_WINDOW).isoformat()}'::timestamptz"
+                  f" and r.created_at <= '{now.isoformat()}'::timestamptz")
+        ceiling = f" and created_at <= '{now.isoformat()}'::timestamptz"
     issues = psql_json(f"""select distinct r.context_snapshot->>'issueId' as issue_id from heartbeat_runs r
         join agents a on a.id=r.agent_id where a.company_id='{COMPANY}' and r.status='failed'
-        and r.created_at > now() - interval '3 hours' and r.context_snapshot->>'issueId' is not null""")
+        and {window} and r.context_snapshot->>'issueId' is not null""")
     out = []
     for row in issues:
         iid = row['issue_id']
         if not iid or not UUID.match(iid):
             continue
         runs = psql_json(f"""select id, status, created_at, error_code, left(coalesce(error,''),2000) as error
-            from heartbeat_runs where context_snapshot->>'issueId'='{iid}' order by created_at desc limit {LOOP_RUNS}""")
+            from heartbeat_runs where context_snapshot->>'issueId'='{iid}'{ceiling} order by created_at desc limit {LOOP_RUNS}""")
         is_loop, cls = loop_verdict(runs, now)
         if not is_loop:
             continue
@@ -534,10 +542,12 @@ def build_report(now, top, min_idle_hours):
 
     find_loops takes anchor=None: without state access the report cannot know
     the parking anchor, so already-parked loops stay visible (full inventory).
+    as_of=True shares now with the evidence window, excluding later runs before
+    selecting the newest three without changing the actor's scan.
     """
     threshold = max(DEAD_AFTER, dt.timedelta(hours=min_idle_hours or 0))
     dead, unmeasured = find_dead(now)
-    loops = find_loops(now, None)
+    loops = find_loops(now, None, as_of=True)
 
     scored, gated = [], 0
     for run_row, why in dead:

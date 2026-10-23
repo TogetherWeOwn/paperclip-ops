@@ -242,6 +242,54 @@ class FloorAndTerminalHealth(unittest.TestCase):
             self.assertEqual(h.comments, [])
             self.assertEqual(h.api_calls, [])
 
+    def test_complete_dry_run_preserves_stale_marker_and_all_file_bytes(self):
+        prior = {marker_key(REPO): STALE_MARKER, 'fixture#9@abc:merge_ready': 'sent'}
+        with TickHarness(apply=False, sizes={REPO: 0}, initial_state=prior) as h:
+            before = h.files()
+            value, error = h.tick()
+            self.assertIsNone(error)
+            self.assertIn(value, (None, 0))
+            self.assertEqual(len(h.gh_argvs), 1)
+            self.assertEqual(h.gh_argvs[0][h.gh_argvs[0].index('--limit') + 1], '101')
+            self.assertEqual(h.files(), before, 'complete dry-run must preserve every file byte')
+            self.assertEqual(h.read_state(), prior)
+            self.assertEqual(h.comments, [])
+            self.assertEqual(h.api_calls, [])
+
+    def test_incomplete_tick_persists_marker_without_any_action_receipts(self):
+        with TickHarness(sizes={REPO: 101}, owned=False) as h:
+            gh = h.gh
+
+            def pending_reviews(cmd, **kwargs):
+                response = gh(cmd, **kwargs)
+                rows = json.loads(response.stdout)
+                for row in rows:
+                    row['statusCheckRollup'] = [
+                        {'name': 'Paperclip Review', 'status': 'IN_PROGRESS', 'conclusion': None}]
+                return types.SimpleNamespace(stdout=json.dumps(rows), returncode=0, stderr='')
+
+            held_before = h.held.read_bytes()
+            self.assertEqual(h.receipts(), {})
+            with mock.patch.object(ps.subprocess, 'run', side_effect=pending_reviews):
+                value, error = h.tick()
+            self.assertIsNone(error)
+            self.assertIs(type(value), int)
+            self.assertEqual(value, 2)
+            self.assertEqual(len(h.gh_argvs), 1)
+            self.assertEqual(h.gh_argvs[0][h.gh_argvs[0].index('--limit') + 1], '101')
+            self.assertEqual(h.comments, [])
+            self.assertEqual(h.api_calls, [])
+            self.assertEqual(h.receipts(), {})
+            self.assertEqual(h.held.read_bytes(), held_before)
+            self.assertIn(INCOMPLETE_LINE, h.out.getvalue())
+            state = h.read_state()
+            self.assertIn(marker_key(REPO), state,
+                          'incomplete marker must persist on disk even without action receipts')
+            marker = state[marker_key(REPO)]
+            self.assertEqual(marker['bound'], 100)
+            self.assertEqual(marker['observed'], 101)
+            self.assertEqual(marker['observed_min'], 101)
+
     def test_pause_bypasses_listing_and_all_writes(self):
         with TickHarness(initial_state={marker_key(REPO): STALE_MARKER}) as h:
             h.pause.write_text('paused\n')

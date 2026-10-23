@@ -333,6 +333,7 @@
     "pr-tracker suite:1",
     "settings-bind rehearsal suite:1",
     "host backup publication receipt contract (offline):1",
+    "paginated review-gate acceptance suite:1",
     "native-ssh citation gate suite:1",
     "code-nav read-only and resource guard suite:1",
     "sdlc review-carry suite:1",
@@ -1880,6 +1881,11 @@
       "name": "host backup publication receipt contract (offline)",
       "definition_sha256": "f3220047635007807b551238df97e65b3db9b784bcafb35829fa009c51e3f5f4",
       "id": "host backup publication receipt contract (offline):1"
+    },
+    {
+      "name": "paginated review-gate acceptance suite",
+      "definition_sha256": "4db540a9f06f2feae7401389daad82217a87a46fc82816dcf64018d4a558d63d",
+      "id": "paginated review-gate acceptance suite:1"
     },
     {
       "name": "native-ssh citation gate suite",

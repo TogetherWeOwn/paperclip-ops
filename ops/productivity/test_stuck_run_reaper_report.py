@@ -454,10 +454,11 @@ class LoopSqlFixture:
     never supplies a pre-filtered full-window answer: missing predicates and
     LIMIT 3 both change the rows seen by the real scanner/report loader.
     """
-    def __init__(self, cards, runs):
+    def __init__(self, cards, runs, db_now=NOW):
+        self.db_now = db_now
         self.db = sqlite3.connect(':memory:')
         self.db.row_factory = sqlite3.Row
-        self.db.create_function('now', 0, lambda: NOW.isoformat())
+        self.db.create_function('now', 0, lambda: self.db_now.isoformat())
         self.db.executescript('''
             create table agents (id text, company_id text, name text);
             create table heartbeat_runs (
@@ -486,7 +487,7 @@ class LoopSqlFixture:
         def cutoff(match):
             amount = float(match.group(1))
             delta = dt.timedelta(**{match.group(2).lower() + 's': amount})
-            return "'%s'" % (NOW - delta).isoformat()
+            return "'%s'" % (self.db_now - delta).isoformat()
 
         sql = re.sub(r"now\(\)\s*-\s*interval\s*'(\d+(?:\.\d+)?)\s+(hour|minute)s?'",
                      cutoff, sql, flags=re.I)
@@ -514,8 +515,8 @@ class FullWindowLoops(Base):
             patch.start()
             self.addCleanup(patch.stop)
 
-    def install_sql(self, cards, runs):
-        fixture = LoopSqlFixture(cards, runs)
+    def install_sql(self, cards, runs, db_now=NOW):
+        fixture = LoopSqlFixture(cards, runs, db_now=db_now)
         self.addCleanup(fixture.close)
         patch = mock.patch.object(r, 'psql_json', side_effect=fixture)
         patch.start()
@@ -590,6 +591,163 @@ class FullWindowLoops(Base):
         self.install_sql([loop_card(ISSUE_A, 'case_mixed')], [(ISSUE_A, x) for x in runs])
         self.assertEqual(r.find_loops(NOW, None), [])
         self.assertEqual(self.real_report(), [], 'full-window counts must not broaden loop qualification')
+
+    def test_as_of_future_third_failure_cannot_qualify(self):
+        # A missing upper bound must not turn two eligible failures into a loop.
+        runs = [failed_run('pre-1', 1), failed_run('pre-2', 2),
+                {**failed_run('post-1', 0),
+                 'created_at': (NOW + dt.timedelta(seconds=1)).isoformat()}]
+        self.install_sql([loop_card(ISSUE_A, 'case_future_third')],
+                         [(ISSUE_A, x) for x in runs])
+        self.assertEqual(self.real_report(), [],
+                         'T+1s must not supply the third failure at report cutoff T')
+
+    def test_as_of_failure_at_cutoff_is_eligible_but_before_window_is_not(self):
+        runs = [failed_run('at-cutoff', 0), failed_run('pre-1', 1),
+                failed_run('pre-2', 2), failed_run('before-window', 181)]
+        self.install_sql([loop_card(ISSUE_A, 'case_at_cutoff')], [(ISSUE_A, x) for x in runs])
+        rows = self.real_report()
+        self.assertEqual([(self.row_issue_id(x), first(x, 'runs', 'run_count', 'runCount'))
+                          for x in rows], [(ISSUE_A, 3)])
+        self.assertCountEqual(first(rows[0], 'run_ids', 'runs_list', default=[]),
+                              ['at-cutoff', 'pre-1', 'pre-2'])
+        self.assertEqual(first(rows[0], 'newest_failure', 'newestFailure'), NOW.isoformat())
+
+    def test_as_of_post_cutoff_noise_preserves_evidence_and_competing_ranks(self):
+        # Filtering only full-window counts is too late: future success/mixed
+        # rows must not disqualify the newest three that existed at report time.
+        cards = [loop_card(ISSUE_A, 'case_noise_a'), loop_card(ISSUE_B, 'case_noise_b'),
+                 loop_card(ISSUE_C, 'case_noise_c')]
+        a = [failed_run('pre-%d' % n, age) for n, age in enumerate((1, 2, 3), 1)]
+        b = [failed_run('b-%d' % n, age) for n, age in enumerate((5, 6, 7, 8), 1)]
+        c = [failed_run('c-%d' % n, age) for n, age in enumerate((10, 20, 30), 1)]
+        same = failed_run('post-same', 0)
+        other = failed_run('post-other', 0, 'did not send all necessary objects')
+        success = {**failed_run('post-success', 0), 'status': 'succeeded'}
+        noise = [('same-class', [same]), ('different-class', [other]),
+                 ('success', [success]), ('combined', [same, other, success])]
+        for kind, posts in noise:
+            with self.subTest(noise=kind):
+                posts = [{**post, 'created_at': (NOW + dt.timedelta(seconds=n)).isoformat()}
+                         for n, post in enumerate(posts, 1)]
+                self.install_sql(cards, [(ISSUE_A, x) for x in reversed(a + posts)]
+                                 + [(ISSUE_B, x) for x in reversed(b)]
+                                 + [(ISSUE_C, x) for x in reversed(c)])
+                rows = self.real_report()
+                self.assertEqual([(self.row_issue_id(x), self.row_rank(x),
+                                   first(x, 'runs', 'run_count', 'runCount')) for x in rows],
+                                 [(ISSUE_B, 1, 4), (ISSUE_A, 2, 3), (ISSUE_C, 3, 3)],
+                                 'rank by eligible count, then eligible newest failure at T')
+                for row, ids, newest in (
+                        (rows[0], ['b-1', 'b-2', 'b-3', 'b-4'], iso(5)),
+                        (rows[1], ['pre-1', 'pre-2', 'pre-3'], iso(1)),
+                        (rows[2], ['c-1', 'c-2', 'c-3'], iso(10))):
+                    self.assertCountEqual(first(row, 'run_ids', 'runs_list', default=[]), ids)
+                    self.assertEqual(first(row, 'newest_failure', 'newestFailure'), newest)
+                    self.assertEqual(first(row, 'error_class', 'class', 'errorClass'), 'enospc')
+
+    def test_as_of_later_database_clock_keeps_qualification_window(self):
+        # DB time T+30m shifts a now()-3h predicate past all of A's eligible
+        # failures. Qualification and evidence must both retain T's window.
+        cards = [loop_card(ISSUE_A, 'case_boundary_a'), loop_card(ISSUE_B, 'case_boundary_b')]
+        a = [failed_run('edge-1', 160), failed_run('edge-2', 170),
+             failed_run('edge-3', 179), failed_run('outside', 181)]
+        b = [failed_run('b-%d' % n, age) for n, age in enumerate((5, 6, 7), 1)]
+        self.install_sql(cards, [(ISSUE_A, x) for x in reversed(a)]
+                         + [(ISSUE_B, x) for x in reversed(b)],
+                         db_now=NOW + dt.timedelta(minutes=30))
+        rows = self.real_report()
+        self.assertEqual([(self.row_issue_id(x), self.row_rank(x),
+                           first(x, 'runs', 'run_count', 'runCount')) for x in rows],
+                         [(ISSUE_B, 1, 3), (ISSUE_A, 2, 3)],
+                         'a later DB clock must not move the report qualification cutoff')
+        self.assertCountEqual(first(rows[1], 'run_ids', 'runs_list', default=[]),
+                              ['edge-1', 'edge-2', 'edge-3'])
+        self.assertEqual(first(rows[1], 'newest_failure', 'newestFailure'), iso(160))
+
+    def test_as_of_later_database_clock_keeps_full_window_count_and_ranking(self):
+        # The newest three still qualify at DB time, but dropping older eligible
+        # evidence would undercount A and incorrectly put B first.
+        cards = [loop_card(ISSUE_A, 'case_count_a'), loop_card(ISSUE_B, 'case_count_b')]
+        a = [failed_run('a-%d' % n, age) for n, age in enumerate((5, 10, 15, 160, 179), 1)]
+        a.append(failed_run('outside', 181))
+        b = [failed_run('b-%d' % n, age) for n, age in enumerate((1, 2, 3, 4), 1)]
+        self.install_sql(cards, [(ISSUE_A, x) for x in reversed(a)]
+                         + [(ISSUE_B, x) for x in reversed(b)],
+                         db_now=NOW + dt.timedelta(minutes=30))
+        rows = self.real_report()
+        self.assertEqual([(self.row_issue_id(x), self.row_rank(x),
+                           first(x, 'runs', 'run_count', 'runCount')) for x in rows],
+                         [(ISSUE_A, 1, 5), (ISSUE_B, 2, 4)],
+                         'enumeration must use T-3h, not the later DB clock minus 3h')
+        self.assertCountEqual(first(rows[0], 'run_ids', 'runs_list', default=[]),
+                              ['a-1', 'a-2', 'a-3', 'a-4', 'a-5'])
+        self.assertEqual(first(rows[0], 'newest_failure', 'newestFailure'), iso(5))
+        self.assertCountEqual(first(rows[1], 'run_ids', 'runs_list', default=[]),
+                              ['b-1', 'b-2', 'b-3', 'b-4'])
+        self.assertEqual(first(rows[1], 'newest_failure', 'newestFailure'), iso(1))
+
+    def test_as_of_pre_cutoff_success_or_mixed_class_still_disqualifies(self):
+        old = [failed_run('old-%d' % n, age) for n, age in enumerate((5, 10, 15, 20), 1)]
+        for newest in ({**failed_run('pre-success', 1), 'status': 'succeeded'},
+                       failed_run('pre-other', 1, 'did not send all necessary objects')):
+            with self.subTest(newest=newest['id']):
+                self.install_sql([loop_card(ISSUE_A, 'case_pre_noise')],
+                                 [(ISSUE_A, x) for x in old + [newest]])
+                self.assertEqual(self.real_report(), [],
+                                 'as-of selection must not filter to matching failures before qualification')
+
+    def test_as_of_live_work_still_defers_real_sql_loop(self):
+        cards = [loop_card(ISSUE_A, 'case_live_a'), loop_card(ISSUE_B, 'case_idle_b')]
+        runs = [(card['id'], failed_run(card['identifier'] + '-%d' % n, age))
+                for card in cards for n, age in enumerate((5, 10, 15), 1)]
+        self.install_sql(cards, runs)
+        with mock.patch.object(r.live_run_guard, 'issue_has_live_work',
+                               side_effect=lambda iid: iid == ISSUE_A):
+            rows = self.real_report()
+        self.assertEqual([(self.row_issue_id(x), self.row_rank(x)) for x in rows],
+                         [(ISSUE_B, 1)], 'as-of reporting must retain the shared live-work guard')
+
+    def test_detector_newest_three_remains_independent_of_report_cutoff(self):
+        pre = [failed_run('pre-%d' % n, age) for n, age in enumerate((1, 2, 3, 4), 1)]
+        for post, want in (
+                (failed_run('post-same', 0),
+                 {ISSUE_A: ('enospc', ['post-same', 'pre-1', 'pre-2'])}),
+                (failed_run('post-other', 0, 'did not send all necessary objects'), {}),
+                ({**failed_run('post-success', 0), 'status': 'succeeded'}, {})):
+            with self.subTest(newest=post['id']):
+                post = {**post, 'created_at': (NOW + dt.timedelta(seconds=1)).isoformat()}
+                self.install_sql([loop_card(ISSUE_A, 'case_detector')],
+                                 [(ISSUE_A, x) for x in pre + [post]])
+                with mock.patch.object(r, 'report_loop_runs', create=True,
+                                       side_effect=AssertionError('report loader reached detector')):
+                    found = r.find_loops(NOW, None)
+                self.assertEqual({card['id']: (cls, [x['id'] for x in runs])
+                                  for card, cls, runs in found}, want,
+                                 'report-only as-of correction must not change detector newest-three behavior')
+                self.assert_no_writes()
+
+    def test_actor_does_not_park_loops_disqualified_by_its_newest_three(self):
+        pre = [failed_run('pre-%d' % n, age) for n, age in enumerate((1, 2, 3, 4), 1)]
+        for post in (failed_run('post-other', 0, 'did not send all necessary objects'),
+                     {**failed_run('post-success', 0), 'status': 'succeeded'}):
+            with self.subTest(newest=post['id']):
+                post = {**post, 'created_at': (NOW + dt.timedelta(seconds=1)).isoformat()}
+                fixture = self.install_sql([loop_card(ISSUE_A, 'case_actor')],
+                                           [(ISSUE_A, x) for x in pre + [post]])
+                fixture.db.execute('insert into issues values (?, ?, ?, ?, ?)',
+                                   (ISSUE_C, 'case_anchor', 'backlog', 'fixture anchor', ''))
+                self.state.write_text(json.dumps({'anchor_id': ISSUE_C}))
+                before = self.state.read_bytes()
+                with mock.patch.object(r, 'report_loop_runs', create=True,
+                                       side_effect=AssertionError('report loader reached actor')), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    result = r.run()
+                self.assertEqual(result['loops'], [],
+                                 'report-only as-of correction must not broaden actor parking')
+                self.assertEqual(self.state.read_bytes(), before)
+                self.api.assert_not_called()
+                self.assert_no_writes()
 
     def test_detector_keeps_only_newest_three_as_acting_evidence(self):
         self.seed_large_and_small()

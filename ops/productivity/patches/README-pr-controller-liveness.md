@@ -17,6 +17,12 @@ its inventory, classification, review, merge, capacity, hold, or live-run rules.
   without `Z`); an unparseable value is preserved and never crashes a pass.
 - `pr-controller-wakes.patch`: wires request/claim acknowledgement into the
   initial-event and stale-reminder paths. All existing admission/hold guards stay.
+- `pr-controller-shadow.patch`: adds `shadow_label is null` to the
+  `latest_reviews()` selection so shadow-only assessments never become the
+  newest review row for a head. Filtering happens before the `distinct on`
+  newest-row pick, so a later shadow row cannot hide an older real review.
+  `classify()` is unchanged: a shadow-only head now yields no map entry and
+  classifies `green`, and the review gate re-requests it.
 - `pr-controller-ci.patch`: routes the `ci_red` wake decision through the
   rerun-once / 3-round-cap policy before the normal wake post, and skips
   stale reminders while a PR is capped. Requires the wakes packet (it anchors
@@ -46,6 +52,9 @@ its inventory, classification, review, merge, capacity, hold, or live-run rules.
   not a runtime controller.
 - `../fixtures/pr_controller_backstop_before.py`: exact pre-fix function, used
   only for offline patch testing. It is not a runtime controller.
+- `../fixtures/pr_controller_shadow_before.py`: exact pre-fix
+  `latest_reviews()`, used only for offline patch testing. It is not a
+  runtime controller.
 
 A comment's HTTP success records a pending request, not delivery. Subsequent
 inventory passes observe a queued/deferred request without posting duplicates.
@@ -69,7 +78,7 @@ This is not a general repair for parked recovery actions or blocked cards.
 
 ```sh
 (cd ops/productivity && python3 -B -m unittest -v \
-  test_pr_controller_backstop test_pr_controller_wakes)
+  test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow)
 ```
 
 The ci-policy suites (acceptance contract, ops surface, host glue, patch
@@ -81,11 +90,11 @@ packet, ledger recording) run the same way:
   test_pr_controller_ci_patch test_flake_ledger)
 ```
 
-The backstop suite applies the patch with `--fuzz=0` to its fixture, and the
-ci-patch suite does the same for the ci packet. Hunk-shape rule for future
-packets: GNU `patch --fuzz=0` rejects a hunk whose leading context outnumbers
-its trailing context (change must sit at or before the hunk middle), so keep
-leading context minimal and anchor on unique lines. To test a full
+The backstop, shadow, and ci-patch suites each apply their patch with
+`--fuzz=0` to their fixture. Hunk-shape rule for future packets: GNU `patch
+--fuzz=0` rejects a hunk whose leading context outnumbers its trailing
+context (change must sit at or before the hunk middle), so keep leading
+context minimal and anchor on unique lines. To test a full
 staged controller without importing its host dependencies:
 
 ```sh
@@ -104,8 +113,9 @@ required CI and Paperclip Review 5/5. Never install this entire public snapshot.
 
 1. Preserve the existing controller, helper if present, state, metadata and hashes.
 2. In a separate staging directory containing `ops/productivity/pr_controller.py`,
-   apply the backstop patch followed by the wake patch with `patch --batch
-   --fuzz=0 -p1`. A mismatch is a stop, not permission to force or fuzzy-apply it.
+   apply the backstop patch, the wake patch, then the shadow patch with
+   `patch --batch --fuzz=0 -p1`. A mismatch is a stop, not permission to
+   force or fuzzy-apply it.
 3. Stage `pr_controller_wakes.py` beside the candidate. Run the offline suites on
    the candidate and the existing host controller tests. Compare the complete
    candidate diff: unrelated classification, hold, review and merge code must be

@@ -110,8 +110,10 @@ test('A1: the arm refuses a ready PR with no heavy evidence (suites missing from
 })
 
 test('A2: the arm refuses while a required check is pending', () => {
+  // Heavy success is present, so this pins the pending-check refusal rather
+  // than passing through the heavy bind (cf. A1, which isolates the reverse).
   const decision = decideReadinessActions(
-    input(2, { checks: [pass('ci-ok'), pass('pr-lint'), pending('public-safety'), REVIEW_PASS()] }), on)
+    input(2, { checks: [pass('ci-ok'), pass('pr-lint'), pending('public-safety'), pass('suites'), REVIEW_PASS()] }), on)
   assert.deepEqual(decision.actions, ['update-body'])
 })
 

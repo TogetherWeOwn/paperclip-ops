@@ -1,0 +1,12 @@
+--- a/ops/productivity/pr_controller.py
++++ b/ops/productivity/pr_controller.py
+@@ -160,7 +160,7 @@
+ def latest_reviews():
+-    """(repo, pr, head) -> (state, score, summary_url) of the newest review row for that head."""
++    """(repo, pr, head) -> (state, score, summary_url) of the newest non-shadow review row for that head."""
+     rows = rr.psql(f"""select distinct on (lower(repository), pull_number, head_sha) lower(repository), pull_number,
+         head_sha, state, coalesce(assessment->>'score',''), coalesce(summary_url, check_url, '')
+-        from chat_github_reviews where endpoint_id='{EP}' and created_at > now() - interval '14 days'
++        from chat_github_reviews where endpoint_id='{EP}' and shadow_label is null and created_at > now() - interval '14 days'
+         order by lower(repository), pull_number, head_sha, created_at desc""")
+     return {(r[0], int(r[1]), r[2]): (r[3], r[4], r[5]) for r in rows}

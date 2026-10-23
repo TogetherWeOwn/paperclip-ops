@@ -357,6 +357,14 @@ echo "$ADDED_LINES" | grep -E 'catch\s*(\([^)]*\))?\s*\{\s*\}' >/dev/null \
 # must be quoted literals or literal-shaped runs; typed parameters, bare
 # identifiers, dotted paths and method-chain receivers are not credentials.
 SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[bap]-[A-Za-z0-9-]{8,}|(token|secret|password)["'"'"' ]*[:=](["'"'"' ]*["'"'"'][^"'"'"' ]{12,}|["'"'"' ]+[^"'"'"' ().<>]{12,}(["'"'"' ,;#]|$)))'
+# A typed declaration (`password: str = "..."`) is an assignment to that
+# credential: the annotation between `:` and `=` holds no quotes, semicolons
+# or `=`, so it cannot swallow the value or cross statements. Value branches
+# mirror SECRET_RE (quoted 12+ non-space run, or a bare run that excludes
+# dots and parens so `password: str = settings.get("password")` still
+# passes), with tabs treated as whitespace. Non-Rust lines only: Rust typed
+# values are already covered by RUST_LITERAL_RE/RUST_TYPED_VALUE_RE.
+SECRET_TYPED_RE="(token|secret|password)[\"'[:space:]]*:[^=;\"']{1,64}=[\"'[:space:]]*([\"'][^\"' ]{12,}|[^\"' ().<>]{12,}([\"' ,;#]|$))"
 # Strong credential families are always checked against the original added
 # bytes, before any language-specific match-span classification. The api-key
 # family is checked separately (api_key_literal_hit) because its unquoted value
@@ -364,12 +372,21 @@ SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|githu
 # only values that start with a known environment/config lookup are dropped.
 STRONG_SECRET_RE='(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[bap]-[A-Za-z0-9-]{8,})'
 RUST_TYPE_NAME='(Option|String|str|Arc|Result|Vec|HashMap|HashSet|Box|Cow|SecretString|SensitiveString|PasswordHash|SecretWrapper|bool|char|f32|f64|[iu](8|16|32|64|128|size)|[A-Z][A-Za-z0-9_]*(Type|Envelope[0-9]*|Response|Error))'
-API_KEY_SECRET_RE="api[_-]?key[\"'[:space:]]*[:=][\"'[:space:]]*([\"'][A-Za-z0-9_.-]{12,}[\"']|[A-Za-z0-9_.-]{12,})"
+API_KEY_SECRET_RE="api[_-]?key[\"'[:space:]]*(:[^=;\"']{1,64})?[:=][\"'[:space:]]*([\"'][A-Za-z0-9_.-]{12,}[\"']|[A-Za-z0-9_.-]{12,})"
 # An unquoted api-key value that starts with one of these is a lookup, not a
 # credential (process.env.X, os.environ[...], import.meta.env.X, ENV.X,
 # settings.X, config.X). Quoted values never qualify, since a quoted lookup
 # is a string literal, and the check is case-sensitive on the lookup prefix.
-API_KEY_LOOKUP_RE="^[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][\"'[:space:]]*[:=][[:space:]]*(process\\.env\\.|os\\.environ(\\.|$)|import\\.meta\\.env\\.|ENV\\.|settings\\.|config\\.)"
+# The optional `: annotation` group mirrors the collector: a typed lookup
+# (`api_key: str = os.environ.get(...)`) is a lookup, not a credential.
+API_KEY_LOOKUP_RE="^[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][\"'[:space:]]*(:[^=;\"']{1,64})?[:=][[:space:]]*(process\\.env\\.|os\\.environ(\\.|$)|import\\.meta\\.env\\.|ENV\\.|settings\\.|config\\.)"
+# A subscript store through an api-key name (`os.environ["X_API_KEY"] = ...`,
+# `headers["x-api-key"] = ...`) is an assignment to that credential: the `]`
+# closes the key subscript and `=` starts the value. The lookup filter drops
+# the same environment/config prefixes as the plain form, so a runtime RHS
+# (`headers["x-api-key"] = settings.get("api_key")`) still passes.
+API_KEY_SUBSCRIPT_RE="api[_-]?key[\"'[:space:]]*\][\"'[:space:]]*=[\"'[:space:]]*([\"'][A-Za-z0-9_.-]{12,}[\"']|[A-Za-z0-9_.-]{12,})"
+API_KEY_SUBSCRIPT_LOOKUP_RE="^[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][\"'[:space:]]*\][\"'[:space:]]*=[[:space:]]*(process\\.env\\.|os\\.environ(\\.|$)|import\\.meta\\.env\\.|ENV\\.|settings\\.|config\\.)"
 RUST_TYPE_PATH="(([A-Za-z_][A-Za-z0-9_]*::)*${RUST_TYPE_NAME})"
 RUST_TYPE_GENERIC_REF="(&[[:space:]]*(mut[[:space:]]+)?('[[:alpha:]_][[:alnum:]_]*[[:space:]]*)?)?"
 RUST_TYPE_GENERIC_ARG1="${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}([[:space:]]*<${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH}(,[[:space:]]*${RUST_TYPE_GENERIC_REF}${RUST_TYPE_PATH})*[[:space:]]*>)?"
@@ -490,11 +507,29 @@ api_key_fallback_hit() {
     BEGIN {
       sq = sprintf("%c", 39)
       assignment = "[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][\"" sq "[:space:]]*[:=][[:space:]]*"
+      # Typed (`api_key: str = ...`) and subscript (`headers["x-api-key"] =
+      # ...) assignments route a lookup RHS through the same fallback scan:
+      # the lookup exempts its own value, never a literal default that rides
+      # behind it. Interval quantifiers are avoided for mawk compatibility;
+      # the annotation class cannot cross `=`, `;` or a quote, so one-or-more
+      # is already bounded by the statement.
+      typed_assignment = "[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][\"" sq "[:space:]]*:[^=;\"" sq "][^=;\"" sq "]*=[[:space:]]*"
+      subscript_assignment = "[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][\"" sq "[:space:]]*\\][\"" sq "[:space:]]*=[[:space:]]*"
       lookup = "^(process[.]env[.]|os[.]environ([.]|[[]|$)|os[.]getenv[[:space:]]*[(]|import[.]meta[.]env[.]|ENV[.]|settings[.]|config[.])"
     }
     {
       rest = $0
       while (match(rest, assignment)) {
+        rest = substr(rest, RSTART + RLENGTH)
+        if (rest ~ lookup && fallback(rest)) hit = 1
+      }
+      rest = $0
+      while (match(rest, typed_assignment)) {
+        rest = substr(rest, RSTART + RLENGTH)
+        if (rest ~ lookup && fallback(rest)) hit = 1
+      }
+      rest = $0
+      while (match(rest, subscript_assignment)) {
         rest = substr(rest, RSTART + RLENGTH)
         if (rest ~ lookup && fallback(rest)) hit = 1
       }
@@ -512,6 +547,10 @@ api_key_literal_hit() {
   local matches
   matches="$(grep -Eoi "$API_KEY_SECRET_RE" <<<"$1" || true)"
   if [[ -n "$matches" && -n "$(grep -Ev "$API_KEY_LOOKUP_RE" <<<"$matches" || true)" ]]; then
+    return 0
+  fi
+  matches="$(grep -Eoi "$API_KEY_SUBSCRIPT_RE" <<<"$1" || true)"
+  if [[ -n "$matches" && -n "$(grep -Ev "$API_KEY_SUBSCRIPT_LOOKUP_RE" <<<"$matches" || true)" ]]; then
     return 0
   fi
   api_key_fallback_hit "$1"
@@ -845,6 +884,7 @@ EDGE_ANGLE_MATCHES="$(grep -Eio "$EDGE_ANGLE_RE" <<<"$AUTHZ_NON_RUST_LINES" || t
 if [[ "$AUTHZ_COLLECTION_FAILED" -eq 1 ]] \
   || [[ "$STRONG_SECRET_HIT" -eq 1 ]] \
   || grep -Eiq "$SECRET_RE" <<<"$AUTHZ_NON_RUST_LINES" \
+  || grep -Eiq "$SECRET_TYPED_RE" <<<"$AUTHZ_NON_RUST_LINES" \
   || grep -Eiq "$EDGE_VALUE_RE" <<<"$AUTHZ_NON_RUST_LINES" \
   || [[ -n "$EDGE_ANGLE_MATCHES" ]] \
   || non_rust_edge_call_hit \

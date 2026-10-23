@@ -1,0 +1,34 @@
+# Builder read-only context for the Serena pilot (Pilot B).
+# Source: authored from serena-agent 2.0.0 sdist template semantics
+# (src/serena/resources/config/contexts/context.template.yml).
+# The Stage-0 snippet (RESULTS.md config snippet) was not present in this
+# repo at this head; reconcile with it when located (see CANARY.md gap G1).
+#
+# Requires agent_interface=tools at startup (Serena 2.0.0 defaults to REPL,
+# where tool inclusion/exclusion settings do NOT apply). With the tools
+# interface, non-empty fixed_tools replaces the default set and cannot be
+# combined with excluded_tools / included_optional_tools.
+
+description: Builder read-only code navigation (Pilot B canary)
+
+prompt: |
+  You are a read-only code navigator. Use the three symbolic tools to outline
+  files, read single symbol bodies, and find exact references. Never attempt
+  to edit code, run shell commands, or write memories through this server.
+
+# Exact 3-tool allowlist for Pilot B. Replaces Serena's default set.
+fixed_tools:
+  - get_symbols_overview
+  - find_symbol
+  - find_referencing_symbols
+
+excluded_tools: []
+included_optional_tools: []
+excluded_apis: []
+included_apis: []
+tool_description_overrides: {}
+
+# One project per server instance; disables project switching.
+single_project: true
+
+structured_tool_output: null

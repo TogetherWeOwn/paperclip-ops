@@ -206,7 +206,7 @@ for f in ops/productivity/*.sh; do
   bash -n "$f" || fail "bash parse error: $f"
 done
 python3 -c 'import ast, sys; [ast.parse(open(p, "rb").read(), p) for p in sys.argv[1:]]' \
-  ops/productivity/*.py ops/lib/*.py ops/paperclip/*.py ops/agent-tooling/serena-pilot-b/*.py || fail "python parse error in ops/productivity, ops/lib, ops/paperclip or ops/agent-tooling/serena-pilot-b"
+  ops/productivity/*.py ops/lib/*.py ops/paperclip/*.py ops/sdlc/*.py ops/agent-tooling/serena-pilot-b/*.py || fail "python parse error in ops/productivity, ops/lib, ops/paperclip, ops/sdlc or ops/agent-tooling/serena-pilot-b"
 sh -n ops/agent-tooling/serena-pilot-b/code-nav || fail "sh parse error: ops/agent-tooling/serena-pilot-b/code-nav"
 python3 -c 'import ast, sys; [ast.parse(open(path, "rb").read(), path) for path in sys.argv[1:]]' \
   ops/pr-hygiene/sweep.py ops/pr-hygiene/owner_match.py ops/lib/live_run_guard.py \
@@ -313,6 +313,7 @@ node --test paperclip-upgrade/settings-bind-rehearsal.test.mjs || fail "settings
 (cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pr_controller_notify_guard test_pr_controller_notify_wiring test_pipeline_stall_watch) \
   || fail "review-error, review-dedup, PR-supply, flow-guard, flake-ledger and pr-controller suites failed"
 (cd ops/paperclip && python3 -B -m unittest test_focus_gate_bounds) || fail "focus-gate bounds suite failed"
+(cd ops/sdlc && python3 -B -m unittest test_review_carry) || fail "review-carry suite failed"
 (cd ops/lib && python3 -m unittest test_atomic_state) || fail "atomic state suite failed"
 (cd ops/agent-tooling/serena-pilot-b && python3 -B -m unittest test_code_nav) || fail "code-nav suite failed"
 (cd ops/productivity && python3 -m unittest test_stuck_run_state) || fail "stuck-run state suite failed"

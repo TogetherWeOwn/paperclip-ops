@@ -13,7 +13,10 @@ Required new behavior (currently RED):
   and never relaxes below the 2h dead rule (additional filter, not a
   replacement). --dry-run is a no-op alias documenting read-onlyness.
 - Full inventory, not action-capped: rows beyond MAX_ACTIONS appear with
-  ordinary ranks; the report states the action cap separately.
+  ordinary ranks; the report states the action cap separately. Retry-loop
+  counts/IDs cover all same-class failed runs inside 3h, not merely the
+  newest 3 used for detector qualification and actor evidence. The two
+  full-window regressions are RED until report-only enumeration is added.
 - Same strict measurement as the actor: UNMEASURED PID probes list as
   `unmeasured` with diagnostics, never ranked dead; live-work cards list
   as `deferred_live_work`, never as parkable.
@@ -38,6 +41,10 @@ Builder interfaces accepted by these tests (backward compatible):
   is_dead/loop_verdict/classify passes by design. A Builder that bypasses
   the shared live guard or the probe helpers will fail the behavioral tests.
   Time: report MUST call r.utc() for now (tests patch it for determinism).
+- Report-only loader isolation: ranking units may stub
+  report_loop_runs(issue_id, error_class, now) with their supplied inventory.
+  FullWindowLoops removes that stub: real find_loops/build_report/loader/CLI
+  execute against a LIMIT-honoring, in-memory SQL boundary there.
 - Envelope aliases accepted (top level):
     schema_version/version/schemaVersion (=1, int or "1"),
     generated_at/generatedAt/at/timestamp (ISO-8601),
@@ -76,6 +83,8 @@ import contextlib
 import datetime as dt
 import io
 import json
+import re
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -147,6 +156,21 @@ class Base(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         self.save = save
+        # Ranking units provide their own loop inventories. Keep the planned
+        # report-only loader offline too; FullWindowLoops removes this stub so
+        # its integration fixtures always exercise the real production loader.
+        self.report_loader_stub = mock.patch.object(r, 'report_loop_runs', create=True,
+                                                    side_effect=self.stub_report_loop_runs)
+        self.report_loader_stub.start()
+        self.addCleanup(self.report_loader_stub.stop)
+
+    def stub_report_loop_runs(self, issue_id, error_class, now):
+        if not isinstance(r.find_loops, mock.Mock):
+            raise AssertionError('real scanner must use the real report-only loader')
+        for card, cls, runs in r.find_loops.return_value:
+            if card['id'] == issue_id and cls == error_class:
+                return runs
+        return []
 
     def invoke(self, *args):
         """Invoke `report ...` via main(); returns (code, out, err, ret)."""
@@ -272,6 +296,37 @@ class CliContract(Base):
                 self.assertTrue(err.strip())
                 self.assert_no_writes()
 
+    def assert_overflow_refused(self, value):
+        """Removing the timedelta overflow guard must fail, not leak OverflowError."""
+        self.state.write_text('{}')
+        before = self.state.read_bytes()
+        for flags in (('--min-idle-hours', value), ('--min-idle-hours=' + value,)):
+            with self.subTest(flags=flags):
+                out, err = io.StringIO(), io.StringIO()
+                with mock.patch.object(sys, 'argv', ['stuck_run_reaper.py', 'report', *flags, '--json']), \
+                        mock.patch.object(r, 'find_dead', side_effect=AssertionError('must refuse before scans')) as dead, \
+                        mock.patch.object(r, 'find_loops', side_effect=AssertionError('must refuse before scans')) as loops, \
+                        mock.patch.object(r, 'psql_json', side_effect=AssertionError('must not query')) as sql, \
+                        contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    # Do not use invoke(): a ValueError is not the required SystemExit.
+                    with self.assertRaises(SystemExit) as caught:
+                        r.main()
+                self.assertEqual(caught.exception.code, 2)
+                self.assertIn('usage:', err.getvalue().lower())
+                self.assertEqual(out.getvalue(), '')
+                dead.assert_not_called()
+                loops.assert_not_called()
+                sql.assert_not_called()
+                self.api.assert_not_called()
+                self.assertEqual(self.state.read_bytes(), before)
+                self.assert_no_writes()
+
+    def test_min_idle_hours_float_overflow_refuses_before_scanning(self):
+        self.assert_overflow_refused('1e308')
+
+    def test_min_idle_hours_timedelta_overflow_refuses_before_scanning(self):
+        self.assert_overflow_refused('24000000000')
+
     def test_dry_run_is_noop_alias(self):
         dead = [(run_row('run-dry-1', 400), 'old'), (run_row('run-dry-2', 500), 'old')]
         with mock.patch.object(r, 'find_dead', return_value=(dead, [])), \
@@ -390,6 +445,193 @@ class LoopRanking(Base):
             self.assertEqual(runs, 3)
         else:
             self.assertEqual(len(runs), 3)
+
+
+class LoopSqlFixture:
+    """Offline psql_json boundary: SQLite executes WHERE/ORDER BY/LIMIT.
+
+    Only PostgreSQL dialect spelling is adapted. In particular this fixture
+    never supplies a pre-filtered full-window answer: missing predicates and
+    LIMIT 3 both change the rows seen by the real scanner/report loader.
+    """
+    def __init__(self, cards, runs):
+        self.db = sqlite3.connect(':memory:')
+        self.db.row_factory = sqlite3.Row
+        self.db.create_function('now', 0, lambda: NOW.isoformat())
+        self.db.executescript('''
+            create table agents (id text, company_id text, name text);
+            create table heartbeat_runs (
+                id text, status text, created_at text, error_code text, error text,
+                agent_id text, context_snapshot text, process_pid integer,
+                process_started_at text, last_output_at text, updated_at text);
+            create table issues (
+                id text, identifier text, status text, title text, description text);
+            create table issue_relations (type text, issue_id text, related_issue_id text);
+        ''')
+        self.db.execute('insert into agents values (?, ?, ?)', (OTHER_AGENT, r.COMPANY, 'fixture'))
+        self.db.executemany('insert into issues values (?, ?, ?, ?, ?)',
+                            [(c['id'], c['identifier'], c['status'], c['title'], '') for c in cards])
+        self.db.executemany('insert into heartbeat_runs values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                            [(x['id'], x['status'], x['created_at'], x.get('error_code'),
+                              x.get('error'), OTHER_AGENT, json.dumps({'issueId': iid}),
+                              None, None, None, x['created_at']) for iid, x in runs])
+
+    def close(self):
+        self.db.close()
+
+    def __call__(self, sql):
+        if not sql.lstrip().lower().startswith('select '):
+            raise AssertionError('only read-only SELECTs allowed: %s' % sql)
+
+        def cutoff(match):
+            amount = float(match.group(1))
+            delta = dt.timedelta(**{match.group(2).lower() + 's': amount})
+            return "'%s'" % (NOW - delta).isoformat()
+
+        sql = re.sub(r"now\(\)\s*-\s*interval\s*'(\d+(?:\.\d+)?)\s+(hour|minute)s?'",
+                     cutoff, sql, flags=re.I)
+        sql = re.sub(r"left\((coalesce\(error,\s*''\)),\s*(\d+)\)", r'substr(\1,1,\2)', sql, flags=re.I)
+        sql = re.sub(r'\bjson_agg\(', 'json_group_array(', sql, flags=re.I)
+        sql = re.sub(r'::(?:timestamptz|timestamp|uuid|jsonb?)\b', '', sql, flags=re.I)
+        rows = [dict(row) for row in self.db.execute(sql)]
+        for row in rows:
+            if isinstance(row.get('blockers'), str):
+                row['blockers'] = json.loads(row['blockers'])
+        return rows
+
+
+class FullWindowLoops(Base):
+    """Catch report LIMIT-3 undercounts without widening the actor's evidence."""
+    def setUp(self):
+        super().setUp()
+        self.report_loader_stub.stop()
+        # Fail closed if the scanner/report tries to escape the offline boundary.
+        for target, name, value in (
+                (r.subprocess, 'run', mock.Mock(side_effect=AssertionError('no host/DB/API subprocesses'))),
+                (r.live_run_guard, 'issue_has_live_work', mock.Mock(return_value=False)),
+                (r, 'utc', mock.Mock(return_value=NOW))):
+            patch = mock.patch.object(target, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def install_sql(self, cards, runs):
+        fixture = LoopSqlFixture(cards, runs)
+        self.addCleanup(fixture.close)
+        patch = mock.patch.object(r, 'psql_json', side_effect=fixture)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return fixture
+
+    def seed_large_and_small(self):
+        cards = [loop_card(ISSUE_A, 'case_big_a'), loop_card(ISSUE_B, 'case_small_b')]
+        a = [failed_run('a-%02d' % n, age) for n, age in enumerate(
+            (50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 179), 1)]
+        b = [failed_run('b-%02d' % n, age) for n, age in enumerate((5, 6, 7), 1)]
+        noise = [failed_run('a-other-class', 75, 'did not send all necessary objects'),
+                 {**failed_run('a-succeeded', 85), 'status': 'succeeded'},
+                 {**failed_run('a-cancelled', 86), 'status': 'cancelled'},
+                 failed_run('a-outside-window', 181)]
+        # Insertion order is deliberately not newest-first.
+        runs = [(ISSUE_A, x) for x in reversed(a + noise)] + [(ISSUE_B, x) for x in reversed(b)]
+        return self.install_sql(cards, runs)
+
+    def real_report(self):
+        # Neither find_loops nor a future report_loop_runs loader is mocked.
+        self.state.write_text('{"anchor_id":')  # read-only reporting must ignore even corrupt state
+        before = self.state.read_bytes()
+        code, out, err, ret = self.invoke('--json')
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.state.read_bytes(), before)
+        self.api.assert_not_called()
+        self.assert_no_writes()
+        return self.loop_rows(ret if isinstance(ret, dict) else json.loads(out))
+
+    def test_full_window_count_outranks_more_recent_three_run_loop(self):
+        self.seed_large_and_small()
+        rows = self.real_report()
+        got = [(self.row_issue_id(x), self.row_rank(x), first(x, 'runs', 'run_count', 'runCount'))
+               for x in rows]
+        self.assertEqual(got, [(ISSUE_A, 1, 12), (ISSUE_B, 2, 3)],
+                         '12 matching failures must outrank 3 even when their newest failure is older')
+        self.assertEqual(first(rows[0], 'newest_failure', 'newestFailure'), iso(50))
+        self.assertEqual(first(rows[1], 'newest_failure', 'newestFailure'), iso(5))
+
+    def test_full_window_ids_exclude_other_classes_statuses_and_old_rows(self):
+        self.seed_large_and_small()
+        rows = {self.row_issue_id(x): x for x in self.real_report()}
+        for iid, want in ((ISSUE_A, ['a-%02d' % n for n in range(1, 13)]),
+                          (ISSUE_B, ['b-01', 'b-02', 'b-03'])):
+            with self.subTest(issue=iid):
+                ids = first(rows[iid], 'run_ids', 'runs_list', default=[])
+                self.assertCountEqual(ids, want, 'all and only same-class failed runs inside 3h')
+                self.assertEqual(first(rows[iid], 'runs', 'run_count', 'runCount'), len(want))
+                self.assertEqual(first(rows[iid], 'error_class', 'class', 'errorClass'), 'enospc')
+
+    def test_real_sql_report_ties_break_on_issue_id(self):
+        cards = [loop_card(iid, 'case_tie_' + suffix) for iid, suffix in
+                 ((ISSUE_C, 'c'), (ISSUE_B, 'b'), (ISSUE_A, 'a'))]
+        runs = [(card['id'], failed_run(card['identifier'] + '-%d' % n, age))
+                for card in cards for n, age in enumerate((5, 15, 25), 1)]
+        self.install_sql(cards, runs)
+        rows = self.real_report()
+        self.assertEqual([(self.row_issue_id(x), self.row_rank(x)) for x in rows],
+                         [(ISSUE_A, 1), (ISSUE_B, 2), (ISSUE_C, 3)])
+
+    def test_newest_success_disqualifies_older_matching_failures(self):
+        runs = [failed_run('old-%d' % n, age) for n, age in enumerate((5, 10, 15, 20), 1)]
+        runs.append({**failed_run('new-success', 1), 'status': 'succeeded'})
+        self.install_sql([loop_card(ISSUE_A, 'case_success')], [(ISSUE_A, x) for x in runs])
+        self.assertEqual(r.find_loops(NOW, None), [])
+        self.assertEqual(self.real_report(), [], 'older failures must not override the newest-three verdict')
+
+    def test_mixed_newest_three_disqualify_older_matching_failures(self):
+        runs = [failed_run('old-%d' % n, age) for n, age in enumerate((5, 10, 15, 20), 1)]
+        runs.append(failed_run('new-other-class', 1, 'did not send all necessary objects'))
+        self.install_sql([loop_card(ISSUE_A, 'case_mixed')], [(ISSUE_A, x) for x in runs])
+        self.assertEqual(r.find_loops(NOW, None), [])
+        self.assertEqual(self.real_report(), [], 'full-window counts must not broaden loop qualification')
+
+    def test_detector_keeps_only_newest_three_as_acting_evidence(self):
+        self.seed_large_and_small()
+        # The actor's scanner must never start using a report-only loader.
+        with mock.patch.object(r, 'report_loop_runs', create=True,
+                               side_effect=AssertionError('report-only enumeration reached detector')):
+            found = r.find_loops(NOW, None)
+        got = {card['id']: (cls, [x['id'] for x in runs]) for card, cls, runs in found}
+        self.assertEqual(got, {ISSUE_A: ('enospc', ['a-01', 'a-02', 'a-03']),
+                               ISSUE_B: ('enospc', ['b-01', 'b-02', 'b-03'])})
+        self.assert_no_writes()
+
+    def test_actor_parks_with_only_newest_three_in_evidence(self):
+        fixture = self.seed_large_and_small()
+        # A live, already-recorded anchor avoids creating one; run/park stay real.
+        fixture.db.execute('insert into issues values (?, ?, ?, ?, ?)',
+                           (ISSUE_C, 'case_anchor', 'backlog', 'fixture anchor', ''))
+        self.state.write_text(json.dumps({'anchor_id': ISSUE_C}))
+        before = self.state.read_bytes()
+        with mock.patch.object(r, 'report_loop_runs', create=True,
+                               side_effect=AssertionError('report-only enumeration reached actor')), \
+                contextlib.redirect_stdout(io.StringIO()):
+            result = r.run()
+        self.assertEqual({x['issue_id']: x['runs'] for x in result['loops']},
+                         {ISSUE_A: ['a-01', 'a-02', 'a-03'], ISSUE_B: ['b-01', 'b-02', 'b-03']})
+        self.assertEqual(len(self.api.call_args_list), 2)
+        for call in self.api.call_args_list:
+            method, path, body = call.args
+            self.assertEqual(method, 'PATCH')
+            self.assertIn(path, ('/issues/' + ISSUE_A, '/issues/' + ISSUE_B))
+            self.assertEqual(body['status'], 'blocked')
+            self.assertEqual(body['blockedByIssueIds'], [ISSUE_C])
+            self.assertIn('last 3 runs', body['description'])
+            prefix = 'a' if path.endswith(ISSUE_A) else 'b'
+            for n in (1, 2, 3):
+                self.assertIn('`%s-%02d`' % (prefix, n), body['description'])
+            for n in range(4, 13):
+                self.assertNotIn('`%s-%02d`' % (prefix, n), body['description'])
+        self.assertEqual(self.state.read_bytes(), before)
+        self.save.assert_not_called()
+        self.assertFalse(self.ledger.exists())
+        self.assertFalse(self.actions.exists())
 
 
 class FullInventory(Base):

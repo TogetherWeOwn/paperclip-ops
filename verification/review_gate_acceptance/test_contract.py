@@ -27,6 +27,8 @@ def check(name='ci-ok', **kw):
 
 def pr(number, **kw):
     return {'number': number, 'isDraft': False, 'headRefOid': HEAD,
+            'isCrossRepository': False,
+            'author': {'__typename': 'User', 'login': 'example-contributor'},
             'url': f'https://example.invalid/pull/{number}',
             'headRef': {'target': {'oid': HEAD, 'statusCheckRollup': {
                 'contexts': {'pageInfo': {'hasNextPage': False}, 'nodes': [check()]}}}}, **kw}
@@ -237,6 +239,182 @@ class InventoryTests(unittest.TestCase):
         saved = json.loads(f.state.read_text())
         self.assertNotIn(f'{A}#1@{HEAD}', saved)
         self.assertIn(f'{B}#99@{HEAD}', saved)
+
+
+class CandidateAdmissionTests(unittest.TestCase):
+    """Independent source-only contract; run with run.py --source-dir ops/review_gate --legacy.
+
+    The GraphQL boundary supplies PullRequest.isCrossRepository: Boolean! and
+    author: Actor (login: String!, concrete __typename). Only explicit False and
+    a known User with a nonblank string login qualify. Bot and unknown actor
+    types never qualify; login substrings are not an actor-type oracle.
+    Schema: https://docs.github.com/en/graphql/reference/pulls
+            https://docs.github.com/en/graphql/reference/users
+    """
+
+    def admission_state(self, fixture):
+        state = json.loads(fixture.state.read_text()) if fixture.state.exists() else {}
+        # The existing background findings sweep timestamp is not admission evidence.
+        state.pop('__findings_postcheck', None)
+        return state
+
+    def assert_rejected(self, candidate, *, neighbor=False, **options):
+        # Catch admission/receipt/state writes, not just a predicate's return value.
+        sentinel = f'{B}#90@{HEAD}'
+        nodes = [candidate, pr(99)] if neighbor else [candidate]
+        f = GateFixture(self, {A: [page(nodes)]}, state={sentinel: NOW - 1}, **options)
+        f.run()
+        expected = [99] if neighbor else []
+        self.assertEqual(f.numbers(), expected, 'ineligible heads must not request a review')
+        self.assertEqual(len(f.batches), int(neighbor), 'no dispatch/receipt for a rejected head')
+        saved = self.admission_state(f)
+        expected_state = {sentinel: NOW - 1}
+        if neighbor:
+            expected_state[f'{A}#99@{HEAD}'] = NOW
+        self.assertEqual(saved, expected_state, 'skip is not requested, covered, or favorable evidence')
+        f.stack.close()
+
+    def test_cross_repository_same_oid_and_green_ci_never_dispatches(self):
+        self.assert_rejected(pr(1, isCrossRepository=True))
+
+    def test_bot_same_repository_same_oid_and_green_ci_never_dispatches(self):
+        self.assert_rejected(pr(1, author={'__typename': 'Bot', 'login': 'release-maintainer'}))
+
+    def test_rejected_candidates_do_not_starve_valid_late_page_head(self):
+        f = GateFixture(self, {A: [page([pr(1, isCrossRepository=True),
+                                        pr(2, author={'__typename': 'Bot', 'login': 'release-maintainer'})],
+                                       True, 'next'), page([pr(3)])]})
+        f.run()
+        self.assertEqual(f.numbers(), [3])
+        self.assertEqual(len(f.batches), 1)
+        self.assertEqual(self.admission_state(f), {f'{A}#3@{HEAD}': NOW})
+        self.assertEqual([c[1] for c in f.pages.calls], [None, 'next'])
+
+    def test_same_repository_user_exact_green_head_is_requested_and_marked(self):
+        f = GateFixture(self, {A: [page([pr(1)])]})
+        f.run()
+        self.assertEqual(f.numbers(), [1])
+        self.assertEqual(len(f.batches), 1)
+        self.assertEqual(f.dedup_pairs, [(A, 1, HEAD)])
+        self.assertEqual(self.admission_state(f), {f'{A}#1@{HEAD}': NOW})
+
+    def test_user_login_containing_bot_is_not_a_bot_type(self):
+        for login in ('botanist', 'robotics-maintainer', 'build-bot-maintainer'):
+            with self.subTest(login=login):
+                f = GateFixture(self, {A: [page([pr(1, author={'__typename': 'User', 'login': login})])]})
+                f.run()
+                self.assertEqual(f.numbers(), [1])
+                self.assertEqual(self.admission_state(f), {f'{A}#1@{HEAD}': NOW})
+                f.stack.close()
+
+    def test_inventory_query_requests_authoritative_metadata_on_every_page(self):
+        import re
+        f = GateFixture(self, {A: [page([pr(1, isDraft=True)], True, 'next'), page([pr(2)])]})
+        f.run()
+        self.assertEqual(f.numbers(), [2], 'observe the real candidate-path inventory request')
+        self.assertEqual(len(f.pages.calls), 2)
+        for _, _, query, _ in f.pages.calls:
+            with self.subTest(query=query):
+                self.assertRegex(query, r'\bisCrossRepository\b', 'fetch authoritative fork metadata')
+                authors = re.findall(r'\bauthor\s*\{([^{}]*)\}', query)
+                self.assertTrue(authors, 'fetch Actor metadata at the transport boundary')
+                self.assertTrue(any(re.search(r'\b__typename\b', fields) and re.search(r'\blogin\b', fields)
+                                    for fields in authors), 'fetch schema-supported Actor type and identity together')
+
+    def test_missing_cross_repository_metadata_fails_closed(self):
+        candidate = pr(1)
+        del candidate['isCrossRepository']
+        self.assert_rejected(candidate, neighbor=True)
+
+    def test_null_cross_repository_metadata_fails_closed(self):
+        self.assert_rejected(pr(1, isCrossRepository=None), neighbor=True)
+
+    def test_non_boolean_cross_repository_metadata_fails_closed(self):
+        for value in ('false', 'true', '', 0, 1, [], {}):
+            with self.subTest(value=value):
+                self.assert_rejected(pr(1, isCrossRepository=value), neighbor=True)
+
+    def test_missing_author_fails_closed(self):
+        candidate = pr(1)
+        del candidate['author']
+        self.assert_rejected(candidate, neighbor=True)
+
+    def test_null_author_fails_closed(self):
+        self.assert_rejected(pr(1, author=None), neighbor=True)
+
+    def test_non_object_author_fails_closed(self):
+        for author in ('example-contributor', False, 0, []):
+            with self.subTest(author=author):
+                self.assert_rejected(pr(1, author=author), neighbor=True)
+
+    def test_missing_actor_type_fails_closed(self):
+        self.assert_rejected(pr(1, author={'login': 'example-contributor'}), neighbor=True)
+
+    def test_null_actor_type_fails_closed(self):
+        self.assert_rejected(pr(1, author={'__typename': None, 'login': 'example-contributor'}), neighbor=True)
+
+    def test_malformed_actor_type_fails_closed(self):
+        for typename in ('', 'user', ' User ', False, 0, [], {}):
+            with self.subTest(typename=typename):
+                self.assert_rejected(pr(1, author={'__typename': typename, 'login': 'example-contributor'}),
+                                     neighbor=True)
+
+    def test_unknown_actor_types_fail_closed(self):
+        for typename in ('Organization', 'Mannequin', 'EnterpriseUserAccount', 'FutureActor'):
+            with self.subTest(typename=typename):
+                self.assert_rejected(pr(1, author={'__typename': typename, 'login': 'example-contributor'}),
+                                     neighbor=True)
+
+    def test_missing_author_identity_fails_closed(self):
+        self.assert_rejected(pr(1, author={'__typename': 'User'}), neighbor=True)
+
+    def test_null_author_identity_fails_closed(self):
+        self.assert_rejected(pr(1, author={'__typename': 'User', 'login': None}), neighbor=True)
+
+    def test_blank_author_identity_fails_closed(self):
+        for login in ('', ' ', '\t\n'):
+            with self.subTest(login=login):
+                self.assert_rejected(pr(1, author={'__typename': 'User', 'login': login}), neighbor=True)
+
+    def test_non_string_author_identity_fails_closed(self):
+        for login in (False, 0, 123, [], {}):
+            with self.subTest(login=login):
+                self.assert_rejected(pr(1, author={'__typename': 'User', 'login': login}), neighbor=True)
+
+    def test_firstpass_favorable_status_does_not_exempt_rejected_candidates(self):
+        for candidate in (pr(1, isCrossRepository=True),
+                          pr(1, author={'__typename': 'Bot', 'login': 'release-maintainer'})):
+            with self.subTest(candidate=candidate):
+                self.assert_rejected(candidate, firstpass=True, fp_status={(A, 1): 'passed'})
+
+    def test_new_head_cannot_reuse_old_head_green_ci_or_favorable_review(self):
+        new_head = 'b' * 40
+        old_ci = pr(1, headRefOid=new_head)
+        missing_ci = deepcopy(old_ci)
+        missing_ci['headRef']['target']['oid'] = new_head
+        missing_ci['headRef']['target']['statusCheckRollup']['contexts']['nodes'] = []
+        for candidate in (old_ci, missing_ci):
+            with self.subTest(candidate=candidate):
+                self.assert_rejected(candidate, reviewed=[[A, '1', HEAD]])
+
+    def test_old_head_review_and_backoff_do_not_cover_valid_new_head(self):
+        new_head = 'b' * 40
+        candidate = pr(1, headRefOid=new_head)
+        candidate['headRef']['target']['oid'] = new_head
+        old_key = f'{A}#1@{HEAD}'
+        f = GateFixture(self, {A: [page([candidate])]}, reviewed=[[A, '1', HEAD]],
+                        state={old_key: NOW - 1})
+        f.run()
+        self.assertEqual(f.numbers(), [1])
+        self.assertEqual(f.dedup_pairs, [(A, 1, new_head)])
+        self.assertEqual(self.admission_state(f), {old_key: NOW - 1, f'{A}#1@{new_head}': NOW})
+
+    def test_red_or_missing_required_ci_still_blocks_valid_user(self):
+        for contexts in ([check(conclusion='FAILURE')], [], [check('unrelated')]):
+            with self.subTest(contexts=contexts):
+                candidate = pr(1)
+                candidate['headRef']['target']['statusCheckRollup']['contexts']['nodes'] = contexts
+                self.assert_rejected(candidate)
 
 
 class FailureSignalTests(unittest.TestCase):

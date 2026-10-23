@@ -350,6 +350,176 @@ assert $? "the hermetic json path makes zero network calls" \
   "curl was invoked; the hermetic path dialed out"
 
 # ---------------------------------------------------------------------------
+hdr "Optional JSON publication — a failed write must not destroy prior evidence"
+
+# Catch direct truncation, unchecked tool failures, leaked staging files and mv's
+# directory-destination trap. Only envelope generation / publication is faulted:
+# jobs classification, log handling and header-file creation use the real tools.
+# The same matrix covers both refusal call sites as well as red and green runs.
+REAL_JQ="$(command -v jq)"
+REAL_MKTEMP="$(command -v mktemp)"
+REAL_MV="$(command -v mv)"
+mkdir -p "$TMP/publication-bin"
+cat > "$TMP/publication-bin/io-tool" <<'STUB'
+#!/usr/bin/env bash
+case "${0##*/}" in
+  jq)
+    envelope=0; null_input=0; prev=""
+    for arg in "$@"; do
+      [[ "$arg" == "-n" ]] && null_input=1
+      [[ "$prev" == "--argjson" && "$arg" == "schema_version" ]] && envelope=1
+      prev="$arg"
+    done
+    if [[ "$null_input" -eq 1 && "$envelope" -eq 1 && "$PUBLICATION_FAULT" == "jq" ]]; then
+      printf '{"partial":'
+      exit 7
+    fi
+    exec "$REAL_JQ" "$@"
+    ;;
+  mktemp)
+    for arg in "$@"; do
+      case "$arg" in
+        "$PUBLICATION_DIR"|"$PUBLICATION_DIR/"*|"--tmpdir=$PUBLICATION_DIR")
+          [[ "$PUBLICATION_FAULT" == "mktemp" ]] && exit 7
+          ;;
+      esac
+    done
+    exec "$REAL_MKTEMP" "$@"
+    ;;
+  mv)
+    if [[ "${@: -1}" == "$PUBLICATION_DIR/failure-summary.json" ]]; then
+      source="${@: -2:1}"
+      # Observe the actual staging file, not a private filename convention.
+      if [[ "$source" != "$PUBLICATION_DIR/failure-summary.json" && -f "$source" ]] \
+          && [[ "$(dirname "$source")" -ef "$PUBLICATION_DIR" ]] \
+          && "$REAL_JQ" -e . "$source" >/dev/null 2>&1; then
+        printf 'valid sibling\n' >> "$PUBLICATION_RENAME_LOG"
+      else
+        printf 'unsafe staging\n' >> "$PUBLICATION_RENAME_LOG"
+      fi
+      [[ "$PUBLICATION_FAULT" == "mv" ]] && exit 7
+    fi
+    exec "$REAL_MV" "$@"
+    ;;
+esac
+exit 98
+STUB
+chmod +x "$TMP/publication-bin/io-tool"
+for tool in jq mktemp mv; do ln -s io-tool "$TMP/publication-bin/$tool"; done
+# Reuse the refusing curl; even an accidental fallback cannot reach a live API.
+ln -s "$TMP/stubbin/curl" "$TMP/publication-bin/curl"
+
+publication_env() {
+  env -u BASH_ENV PATH="$TMP/publication-bin:$PATH" \
+    REAL_JQ="$REAL_JQ" REAL_MKTEMP="$REAL_MKTEMP" REAL_MV="$REAL_MV" \
+    PUBLICATION_DIR="$PUB_OUT" PUBLICATION_FAULT="$PUB_FAULT" \
+    PUBLICATION_RENAME_LOG="$PUB_CASE/rename.log" \
+    CURL_ARGV_LOG="$PUB_CASE/curl.log" TMPDIR="$PUB_CASE/tmpfiles" \
+    GITHUB_RUN_ID=727272 GH_TOKEN="synthetic-publication-token-not-a-secret" "$@"
+}
+
+publication_case() {
+  local scenario="$1" fault="$2" prior="$3" jobs logs expected_rc status code
+  case "$scenario" in
+    drained) jobs="$RED"; logs="$LOGS"; expected_rc=0; status=drained; code=ok ;;
+    no_failures) jobs="$GREEN"; logs="$LOGS"; expected_rc=0; status=no_failures; code=ok ;;
+    refused_jobs) jobs=/dev/null; logs="$LOGS"; expected_rc=3; status=refused; code=refused_jobs_unobservable ;;
+    refused_log) jobs="$RED"; logs="$TMP/thinlogs"; expected_rc=3; status=refused; code=refused_log_missing ;;
+  esac
+  local label="publication $scenario $fault $prior"
+  PUB_CASE="$TMP/publication-$scenario-$fault-$prior"
+  PUB_OUT="$PUB_CASE/out"
+  PUB_FAULT="$fault"
+  mkdir -p "$PUB_OUT" "$PUB_CASE/tmpfiles"
+  : > "$PUB_CASE/curl.log"
+  : > "$PUB_CASE/rename.log"
+
+  # Capture the no-json behavior at the SAME output path: stdout contains paths.
+  # Keep prose/logs in place so the second invocation also tests safe overwrite.
+  publication_env "$TOOL" drain --jobs-json "$jobs" --logs-dir "$logs" --out-dir "$PUB_OUT" \
+    >"$PUB_CASE/plain.stdout" 2>"$PUB_CASE/plain.stderr"; local plain_rc=$?
+  local control_rc=1
+  [[ "$plain_rc" -eq "$expected_rc" && ! -e "$PUB_OUT/failure-summary.json" ]] && control_rc=0
+  assert "$control_rc" "$label no-json control retains its exit and has no JSON side effect" "got exit $plain_rc"
+  cp -a "$PUB_OUT" "$PUB_CASE/control"
+  local final="$PUB_OUT/failure-summary.json"
+  case "$prior" in
+    prior)
+      printf '%s\n' '{"schema_version":1,"run_id":"previous","status":"no_failures","jobs":[],"summary":{"total_jobs":1,"failed_jobs":0,"drained_jobs":0},"error":{"code":"ok","retryable":false,"next_action":"none","unmeasured":null}}' > "$final"
+      cp "$final" "$PUB_CASE/previous.json"
+      ;;
+    directory) mkdir "$final" ;;
+  esac
+  PUB_FAULT="$fault"
+  publication_env "$TOOL" drain --jobs-json "$jobs" --logs-dir "$logs" --out-dir "$PUB_OUT" --json \
+    >"$PUB_CASE/json.stdout" 2>"$PUB_CASE/json.stderr"; local json_rc=$?
+  assert "$((json_rc != expected_rc))" "$label preserves the drain exit" "got exit $json_rc, want $expected_rc"
+  cmp -s "$PUB_CASE/plain.stdout" "$PUB_CASE/json.stdout"
+  assert $? "$label preserves stdout including annotations"
+  diff -r --exclude=failure-summary.json "$PUB_CASE/control" "$PUB_OUT" >/dev/null 2>&1
+  assert $? "$label preserves Markdown and log bytes with no extra output files"
+  local leftovers
+  leftovers="$(find "$PUB_CASE/tmpfiles" -mindepth 1 -print)"
+  [[ -z "$leftovers" ]]
+  assert $? "$label leaves no temporary output outside the bundle" "$leftovers"
+
+  if [[ "$fault" == "success" ]]; then
+    jq -e --arg status "$status" --arg code "$code" \
+      '.schema_version == 1 and .run_id == "727272" and .status == $status and .error.code == $code' \
+      "$final" >/dev/null 2>&1
+    assert $? "$label replaces stale evidence with a valid current envelope"
+    grep -q '^valid sibling$' "$PUB_CASE/rename.log" \
+      && ! grep -q '^unsafe staging$' "$PUB_CASE/rename.log"
+    assert $? "$label publishes valid JSON by renaming a same-directory temporary file"
+    cmp -s "$PUB_CASE/plain.stderr" "$PUB_CASE/json.stderr"
+    assert $? "$label adds no spurious stderr warning"
+  else
+    case "$prior" in
+      prior)
+        cmp -s "$PUB_CASE/previous.json" "$final"
+        assert $? "$label preserves the previous valid summary byte for byte"
+        ;;
+      absent)
+        [[ ! -e "$final" && ! -L "$final" ]]
+        assert $? "$label leaves the final path absent rather than partial or empty"
+        ;;
+      directory)
+        leftovers="$(find "$final" -mindepth 1 -print 2>/dev/null)"
+        [[ -d "$final" && -z "$leftovers" ]]
+        assert $? "$label never moves a staging file inside the final-path directory" "$leftovers"
+        ;;
+    esac
+    # Stubs emit no stderr. Remove the existing refusal before checking for a
+    # NEW warning: "REFUSED: jobs JSON..." is not a publication diagnostic.
+    # Word boundaries also prevent ci_failure_drain.sh / failure-summary.json
+    # in a shell redirect error from masquerading as a warning. No fixed prose.
+    grep -vxF -f "$PUB_CASE/plain.stderr" "$PUB_CASE/json.stderr" > "$PUB_CASE/added.stderr"
+    grep -iE '(^|[^[:alnum:]_/-])(warn(ing)?|failed|failure|cannot|unable)([^[:alnum:]_/-]|$)' \
+      "$PUB_CASE/added.stderr" > "$PUB_CASE/warnings.stderr"
+    grep -qi 'json' "$PUB_CASE/warnings.stderr"
+    assert $? "$label warns on stderr that optional JSON publication failed"
+  fi
+  if [[ "$expected_rc" -eq 3 ]]; then
+    grep -qF REFUSED "$PUB_CASE/json.stderr"
+    assert $? "$label still reports REFUSED for the unobservable input"
+  fi
+  ! grep -qF 'synthetic-publication-token-not-a-secret' \
+    "$PUB_CASE/json.stdout" "$PUB_CASE/json.stderr"
+  assert $? "$label keeps the credential out of stdout and stderr"
+  [[ ! -s "$PUB_CASE/curl.log" ]]
+  assert $? "$label makes zero network calls"
+}
+
+for scenario in drained no_failures refused_jobs refused_log; do
+  publication_case "$scenario" success prior
+  for fault in jq mktemp mv; do
+    for prior in prior absent; do publication_case "$scenario" "$fault" "$prior"; done
+  done
+  # No forced mv error here: the REAL rename must refuse a directory target.
+  publication_case "$scenario" directory directory
+done
+
+# ---------------------------------------------------------------------------
 hdr "Regression control — the prose drain still works"
 
 "$HERE/test_ci_failure_drain.sh" >"$TMP/regression.log" 2>&1; RC_R=$?

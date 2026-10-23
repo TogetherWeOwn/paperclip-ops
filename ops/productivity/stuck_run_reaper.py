@@ -34,8 +34,10 @@ Undo: dead-run cancels auto-redispatch the card; parked cards are released by re
 The report subcommand is a read-only ranked triage inventory over the FULL
 candidate set (rows beyond MAX_ACTIONS keep ordinary ranks; the action cap is
 stated separately). It reuses the same scanners and pure classifiers as the
-actor (find_dead/find_loops, is_dead/loop_verdict/classify) but never cancels,
-parks, or writes ledger/state/API mutations. UNMEASURED probes list as
+actor (find_dead/find_loops, is_dead/loop_verdict/classify). Once the newest
+three qualify a loop, report counts/IDs cover all same-class failures inside
+LOOP_WINDOW; the actor still uses only the newest three. Reporting never
+cancels, parks, or writes ledger/state/API mutations. UNMEASURED probes list as
 unmeasured with diagnostics (never ranked dead); loop cards with live work
 list as deferred_live_work (never parkable).
 """
@@ -518,6 +520,15 @@ def _newest_failure_ts(runs):
     return best
 
 
+def report_loop_runs(issue_id, error_class, now):
+    """Full-window evidence for reporting only; never broadens loop qualification."""
+    runs = psql_json(f"""select id, status, created_at, error_code, left(coalesce(error,''),2000) as error
+        from heartbeat_runs where context_snapshot->>'issueId'='{issue_id}' and status='failed'
+        and created_at >= '{(now - LOOP_WINDOW).isoformat()}'::timestamptz
+        and created_at <= '{now.isoformat()}'::timestamptz order by created_at desc, id asc""")
+    return [r for r in runs if classify(r.get('error_code'), r.get('error')) == error_class]
+
+
 def build_report(now, top, min_idle_hours):
     """Rank the full inventory. Read-only: no API writes, no ledger/state access.
 
@@ -561,6 +572,7 @@ def build_report(now, top, min_idle_hours):
             deferred.append({'issue_id': iid, 'issue': card.get('identifier'), 'status': card.get('status'),
                              'reason': 'deferred_live_work: issue has live work; never parkable'})
             continue
+        runs = report_loop_runs(iid, cls, now)
         newest = _newest_failure_ts(runs)
         ranked_loops.append({'issue_id': iid, 'issue': card.get('identifier'), 'status': card.get('status'),
                              'error_class': cls or classify(None, None),

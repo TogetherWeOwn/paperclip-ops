@@ -2341,7 +2341,14 @@ def is_wired(suite, segments, discovers, counts, tracked=frozenset()):
     unique_stem = stem_counts.get(stem, 0) == 1
     tracked_set = set(tracked)
     for source, text in segments:
-        if source == suite:
+        # Every path, basename and stem match below contains the literal stem.
+        # Avoid reparsing unrelated shell bodies for every tracked suite.
+        if source == suite or stem not in text:
+            continue
+        # Every path, basename or stem match below contains this literal.
+        # Avoid parsing unrelated blocks once for every tracked suite;
+        # discover patterns are still checked independently after this loop.
+        if stem not in text:
             continue
         python = source.endswith(".py")
         funcs = None if python else _function_bodies(text)

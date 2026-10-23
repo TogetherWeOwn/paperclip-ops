@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
@@ -108,6 +109,16 @@ class OrphanRatchetTest(unittest.TestCase):
     def test_suite_wired_through_ci_yml_passes(self):
         root = repo_with(runs="./test_alpha.sh", suites=["test_alpha.sh"])
         self.assertEqual(ratchet.check(root, {}), [])
+
+    def test_unrelated_shell_segment_is_not_parsed(self):
+        segments = [("scripts/run_unrelated.sh",
+                     "unrelated() { echo ready; }\nunrelated\n")]
+        counts = ({"test_alpha.sh": 1}, {"test_alpha": 1})
+        with mock.patch.object(ratchet, "_function_bodies",
+                               wraps=ratchet._function_bodies) as function_bodies:
+            self.assertFalse(ratchet.is_wired(
+                "test_alpha.sh", segments, [], counts))
+            function_bodies.assert_not_called()
 
     def test_suite_wired_through_verify_fast_unittest_list_passes(self):
         root = repo_with(

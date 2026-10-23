@@ -323,6 +323,7 @@
     "database backup observation contract:1",
     "provider baseline integrity suite:1",
     "review report input integrity holds:1",
+    "explicit workflow job permissions gate:1",
     "test-missing gate suites:1",
     "orphan-suite ratchet fixtures suite:1",
     "assignment host-source bundle suite:1",
@@ -334,7 +335,8 @@
     "host backup publication receipt contract (offline):1",
     "native-ssh citation gate suite:1",
     "code-nav read-only and resource guard suite:1",
-    "verify-fast plan suites:1"
+    "verify-fast plan suites:1",
+    "kofra preview parity JSON envelope suite:1"
   ],
   "retained": [
     {
@@ -529,7 +531,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "adc1f3c36b4878f456e814e293bb66b5aa5ab3b7f98dce25325a898d03e8d9f0",
+      "definition_sha256": "dfe876db2f3d112e655364ff6567dfcbf90352414f2f7887b8c7c7515dd975b4",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1828,6 +1830,11 @@
       "id": "review report input integrity holds:1"
     },
     {
+      "name": "explicit workflow job permissions gate",
+      "definition_sha256": "8ad71aa74af77d948d6751d109f0c4dc02ad835b4987f40d4f4dd10403212240",
+      "id": "explicit workflow job permissions gate:1"
+    },
+    {
       "name": "test-missing gate suites",
       "definition_sha256": "a245dc744b32a853deac2e14fcb7d52b9582f7862154f7ae954800a7da67dc3a",
       "id": "test-missing gate suites:1"
@@ -1886,6 +1893,11 @@
       "name": "verify-fast plan suites",
       "definition_sha256": "ccae99dd825dc4bf6449a0a726f92e4d36d5e1be401694a5ce2c09f289526fb7",
       "id": "verify-fast plan suites:1"
+    },
+    {
+      "name": "kofra preview parity JSON envelope suite",
+      "definition_sha256": "a0094f56081eb743136ae6f39b7d8fdd9ed0c6d23676899258f469260542743f",
+      "id": "kofra preview parity JSON envelope suite:1"
     }
   ],
   "removed": [
@@ -2251,7 +2263,7 @@
       "plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|v0.2.2"
     ]
   },
-  "suites_job_sha256": "5d0d517daadcbf5743afdf5f9b131afb162bfaed3980a112ba9c4824d546726c",
+  "suites_job_sha256": "54852a057a5260f18c96016eaeb90c9813fd05f8e20f2cf286d29983ba6e393f",
   "manifest_sha256": "45002e0b5e92e94f5bda7df2d92c40384f1c6d7b054f1a7ede163f5c3999b13e",
   "restored_files_sha256": {
     "acceptance_org_lib.sh": "8db92e9d11f5a21776dbc1f71296b752291e6758ddc2a5ad67a129a86a5ed00a",

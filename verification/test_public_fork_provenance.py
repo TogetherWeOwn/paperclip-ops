@@ -378,6 +378,57 @@ esac
             self.assertIn("0 undeclared publication(s), 1 unresolved", out.stdout)
             self.assertNotIn('"mode": "diagnostic-only"', out.stdout)
 
+    def test_owner_identity_triage_candidates(self):
+        # The managed owner pushes as 1856877+Rick7C2@users.noreply.github.com
+        # (numeric) and Rick7C2@users.noreply.github.com (plain). Both are OURS
+        # triage candidates: they must enter the exact-pin lookup (UNDECLARED
+        # here -- no pins cover the fixture refs), never UNRESOLVED and never
+        # skipped as upstream-authored. A repaired classifier must not
+        # auto-admit: every owner case below stays red (exit 1).
+        tip = "ab" * 20
+        with tempfile.TemporaryDirectory(prefix="provenance-owner-stub-") as d:
+            directory = Path(d)
+            curl = directory / "curl"
+            curl.write_text('#!/bin/sh\nprintf \'%s\\n\' \'[{"name":"paperclip","fork":true,"visibility":"public","parent":{"full_name":"paperclipai/paperclip"}}]\'\n')
+            git = directory / "git"
+            git.write_text('''#!/bin/sh
+case "$*" in
+  *paperclip-ops.git*) exit 128;;
+  *ls-remote*TogetherWeOwn/paperclip.git*) printf '%s\\t%s\\n' "$FIXTURE_TIP" "$FIXTURE_REF";;
+  *ls-remote*paperclipai/paperclip.git*) printf '%s\\t%s\\n' 'ffffffffffffffffffffffffffffffffffffffff' 'refs/heads/master';;
+  *log*%ae*) printf '%s\\n' "$FIXTURE_AUTHOR";;
+  *log*%s*) printf '%s\\n' 'synthetic offline subject';;
+  *init*|*fetch*) exit 0;;
+  *) exit 99;;
+esac
+''')
+            curl.chmod(0o755)
+            git.chmod(0o755)
+            command = ["bash", str(fixture_audit(d))]
+            base_env = {"PATH": d + ":/usr/bin:/bin", "HOME": d, "TMPDIR": d,
+                        "DISCLOSURE_AUDIT_CACHE": str(directory / "cache"),
+                        "FIXTURE_TIP": tip}
+            run = lambda ref, author: subprocess.run(
+                command, env={**base_env, "FIXTURE_REF": ref, "FIXTURE_AUTHOR": author},
+                capture_output=True, text=True, timeout=30)
+            card = "tog-" "999005-synthetic-owner"
+            # 1. Numeric owner, card-named ref: UNDECLARED, not UNRESOLVED.
+            out = run("refs/heads/" + card, "1856877+Rick7C2@users.noreply.github.com")
+            self.assertEqual(out.returncode, 1, out.stderr + out.stdout)
+            self.assertIn("1 undeclared publication(s), 0 unresolved", out.stdout)
+            # 2. Plain owner, ordinary-name ref: UNDECLARED, not skipped.
+            out = run("refs/heads/fix/synthetic-ordinary-owner", "Rick7C2@users.noreply.github.com")
+            self.assertEqual(out.returncode, 1, out.stderr + out.stdout)
+            self.assertIn("1 undeclared publication(s), 0 unresolved", out.stdout)
+            # 3. Unknown author, ordinary-name ref: still skipped, still exit 0.
+            out = run("refs/heads/fix/synthetic-ordinary-unknown", "external@example.invalid")
+            self.assertEqual(out.returncode, 0, out.stderr + out.stdout)
+            self.assertIn("0 undeclared publication(s), 0 unresolved", out.stdout)
+            # 4. Wrong numeric id, card-named ref: still UNRESOLVED (exact id pinned).
+            out = run("refs/heads/" + card, "9999999+Rick7C2@users.noreply.github.com")
+            self.assertEqual(out.returncode, 1, out.stderr + out.stdout)
+            self.assertIn("0 undeclared publication(s), 1 unresolved", out.stdout)
+
     def test_assertion_killed_mutants(self):
         mutations = [
             ('if t["findings"]:', 'if False:', "Consistency.test_captured_ciso_ranges_stay_negative"),

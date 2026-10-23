@@ -340,7 +340,8 @@
     "verify-fast plan suites:1",
     "failure-drain JSON suite:1",
     "kofra preview parity JSON envelope suite:1",
-    "capacity evidence and CLI refusal contract:1"
+    "capacity evidence and CLI refusal contract:1",
+    "workspace sync-back signal acceptance suite:1"
   ],
   "retained": [
     {
@@ -1922,6 +1923,11 @@
       "name": "capacity evidence and CLI refusal contract",
       "definition_sha256": "e9a220734a881e501043a8136282204e7683ef1f7857cfe160c3c02d68e12248",
       "id": "capacity evidence and CLI refusal contract:1"
+    },
+    {
+      "name": "workspace sync-back signal acceptance suite",
+      "definition_sha256": "b55cf9f72aa2e019a9f86a851f15392f230524bad937fee625265e1cdabdbf11",
+      "id": "workspace sync-back signal acceptance suite:1"
     }
   ],
   "removed": [

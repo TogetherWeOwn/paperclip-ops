@@ -27,6 +27,8 @@ and completeness must be the boolean `true`. The count must be a JSON integer
 from 0 through 9,007,199,254,740,991 (the exact-integer limit of JS alert consumers).
 Numeric strings, booleans, floats, negative/out-of-range counts, missing fields,
 unsupported measurements, duplicate keys and invalid/nonfinite JSON are unknown.
+Input must be strict UTF-8. Unpaired surrogate escapes anywhere in keys or values
+(including ignored/nested fields) are unknown; valid escaped pairs are accepted.
 Input is bounded to 4096 bytes; oversized, unreadable or empty input is unknown.
 No raw input or parser exception is printed.
 

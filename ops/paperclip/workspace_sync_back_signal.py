@@ -64,7 +64,11 @@ def observe(raw):
     if len(raw) > MAX_INPUT_BYTES:
         return signal(reason="input_too_large")
     try:
-        observation = json.loads(raw, object_pairs_hook=unique_object, parse_constant=reject_constant)
+        observation = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object,
+                                 parse_constant=reject_constant)
+        # Validate ignored keys/values too: the decoder accepts lone surrogate
+        # escapes and overflowing float exponents that cannot qualify as input.
+        json.dumps(observation, ensure_ascii=False, allow_nan=False).encode("utf-8")
     except (ValueError, UnicodeError, RecursionError):
         return signal(reason="invalid_json")
     if not isinstance(observation, dict):

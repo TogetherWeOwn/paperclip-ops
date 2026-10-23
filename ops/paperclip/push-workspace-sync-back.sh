@@ -6,7 +6,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-report="$(python3 "$HERE/workspace_sync_back_signal.py")" || {
+report="$(python3 "$HERE/workspace_sync_back_signal.py" 2>/dev/null)" || {
   printf '%s\n' 'workspace-sync-back: observer_failed; retry independent observation' >&2
   exit 1
 }

@@ -1588,7 +1588,7 @@ jobs:
       # Reconciler holds and hide-noop predicates, backlog-promoter, board-jobs, orphan-PRs and focus-gate fail-closed timeouts, PR-supply card text, flow-guard stages and host-pressure gate fail-closed contract. Offline: temp files and stubs.
       - name: review reconciler and ops guard suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_review_rebase_carry test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pr_controller_ci test_pr_controller_ci_ops test_pr_controller_ci_host test_pr_controller_ci_patch test_pipeline_stall_watch) && (cd ops/paperclip && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -p 'test_focus*.py')
+        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_review_rebase_carry test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pr_controller_notify_guard test_pr_controller_notify_wiring test_pr_controller_ci test_pr_controller_ci_ops test_pr_controller_ci_host test_pr_controller_ci_patch test_pipeline_stall_watch) && (cd ops/paperclip && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -p 'test_focus*.py')
 
       # sdlc-review-carry. Merge-queue 5/5 carry gate logic: patch
       # normalization/digest, PR-bound latest-review selection, hint-file
@@ -3043,6 +3043,18 @@ jobs:
       - name: failure-drain suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_ci_failure_drain.sh
+
+      # case_821f1653 (M12.3). The machine-readable twin of the failure
+      # log-drain: --json writes failure-summary.json (schema version, run
+      # id, per-job rows, summary counts, error triple) beside the md, so
+      # triage parses instead of scraping prose. Same hermetic fixtures,
+      # same byte-stability contract: the flag adds one file and changes
+      # no other byte.
+      - name: failure-drain JSON suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        # Keep default fixture attribution independent of this Actions run;
+        # the suite separately supplies a run id to verify explicit attribution.
+        run: env -u GITHUB_RUN_ID ./test_ci_failure_drain_json.sh
 
       # case_50dca137. The dark-step reporter's own vacuity gate.
       #

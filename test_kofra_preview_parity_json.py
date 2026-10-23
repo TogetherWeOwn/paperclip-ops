@@ -418,6 +418,34 @@ class JsonEnvelope(unittest.TestCase):
         self.assertEqual(by_id["ingress.workers_dev"]["verdict"], "refused")
         self.assertIn("ingress.workers_dev", env["error"]["next_action"])
 
+    def test_json_absent_stale_entry_refuses_without_fabricating_a_row(self):
+        # A retired path must refuse without inventing a null/null surface
+        # row; only the forbidden worker.name entry may synthesize a row.
+        cfg_path = write_config(make_config())
+        stale_path = "vars.REMOVED"
+        surf = surface_map(cfg_path)
+        for side in ("staging", "prod"):
+            self.assertNotIn((side, stale_path), surf)
+        paths = sorted({p for (_, p) in surf} - {"worker.name"})
+        code, out, err = run_check_json(
+            cfg_path, [(stale_path, "retired variable")])
+        self.assertEqual(code, 2, out + err)
+        env = json.loads(out)
+        self.assertEnvelopeShape(env)
+        self.assertEqual(env["verdict"], "refused")
+        self.assertEqual(env["error"]["code"], "allowlist_stale_entry")
+        self.assertIs(env["error"]["retryable"], False)
+        self.assertIn(stale_path, env["error"]["next_action"])
+        self.assertEqual([r["id"] for r in env["rows"]], paths)
+        for row in env["rows"]:
+            self.assertEqual(row["staging"],
+                             surf.get(("staging", row["id"])), row["id"])
+            self.assertEqual(row["prod"],
+                             surf.get(("prod", row["id"])), row["id"])
+        self.assertEqual(env["summary"], {
+            "match": len(paths), "drift": 0, "allowed": 0, "refused": 0,
+            "semantic_drift": 0})
+
     def test_json_reasonless_allowlist_entry_refuses_stable_code(self):
         d = tempfile.mkdtemp()
         allow = os.path.join(d, "allowlist.txt")

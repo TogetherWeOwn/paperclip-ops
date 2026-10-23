@@ -366,12 +366,14 @@ class TestJsonRegressions(unittest.TestCase):
     def test_text_mode_has_no_envelope(self):
         # Byte-stability companion: without --json, neither stream gains
         # envelope keys — callers gating on exit codes see no new surface.
-        for cfg in (make_config(),
-                    make_config(staging_extra={"workers_dev": True})):
-            code, out, err = run_check(write_config(cfg))
-            self.assertIn(code, (0, 1), out + err)
-            self.assertNotIn("schema_version", out + err)
-            self.assertNotIn('"verdict"', out + err)
+        for cfg, want_code in (
+                (make_config(), 0),
+                (make_config(staging_extra={"workers_dev": True}), 1)):
+            with self.subTest(want_code=want_code):
+                code, out, err = run_check(write_config(cfg))
+                self.assertEqual(code, want_code, out + err)
+                self.assertNotIn("schema_version", out + err)
+                self.assertNotIn('"verdict"', out + err)
 
 
 if __name__ == "__main__":

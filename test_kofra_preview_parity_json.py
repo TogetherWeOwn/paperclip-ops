@@ -486,6 +486,19 @@ class JsonEnvelope(unittest.TestCase):
         self.assertEnvelopeShape(env)
         self.assertEqual(env["error"]["code"], "config_unreadable")
 
+    def test_json_missing_allowlist_file_refuses_stable_code(self):
+        cfg_path = write_config(make_config())
+        with tempfile.TemporaryDirectory() as d:
+            missing = os.path.join(d, "no-such-allowlist.txt")
+            code, out, err = run_cli(
+                ["check", "--config", cfg_path,
+                 "--allowlist", missing, "--json"])
+        self.assertEqual(code, 2, out + err)
+        env = json.loads(out)
+        self.assertEqual(env["verdict"], "refused")
+        self.assertEqual(env["error"]["code"], "allowlist_unreadable")
+        self.assertEnvelopeShape(env)
+
     def test_json_valued_var_redacted_both_sides(self):
         for kwargs in ({"staging_vars": {"RELEASE_SHA": STAGING_SENTINEL}},
                        {"top_vars": {"RELEASE_SHA": TOP_SENTINEL}}):

@@ -35,6 +35,7 @@
     "migration squawk": 15,
     "prod-clone rehearsal": 45,
     "schema drift gate": 10,
-    "readiness-sweep": 5
+    "readiness-sweep": 5,
+    "quality-gates": 9
   }
 }

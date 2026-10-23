@@ -520,6 +520,126 @@ for scenario in drained no_failures refused_jobs refused_log; do
 done
 
 # ---------------------------------------------------------------------------
+hdr "Optional JSON rows — failed serialization must never publish incomplete evidence"
+
+# Unlike the publication faults above, fail ONLY the per-job jq invocation.
+# Classification and final-envelope generation still use real jq. A valid row
+# followed by exit 7 also catches implementations that inspect bytes but ignore
+# the serializer's exit status; malformed partial output alone cannot do that.
+mkdir -p "$TMP/row-bin" "$TMP/row-thinlogs"
+ln -s "$TMP/stubbin/curl" "$TMP/row-bin/curl"
+cp "$LOGS/9002.log" "$LOGS/9003.log" "$TMP/row-thinlogs/"
+jq '.jobs += [{"conclusion":"failure","id":9004,"name":"missing-suite","status":"completed","steps":[{"conclusion":"failure","name":"Missing log step","number":9}]}]' \
+  "$RED" > "$TMP/row-refusal-jobs.json"
+cat > "$TMP/row-bin/jq" <<'STUB'
+#!/usr/bin/env bash
+args=("$@")
+null_input=0; row_id=""
+for ((i=0; i<${#args[@]}; i++)); do
+  [[ "${args[i]}" == "-n" ]] && null_input=1
+  if [[ "${args[i]}" == "--argjson" && "${args[i+1]:-}" == "id" ]]; then
+    row_id="${args[i+2]:-}"
+  fi
+done
+if [[ "$null_input" -eq 1 && "$row_id" == "$ROW_FAIL_ID" && "$ROW_FAULT" != "success" ]]; then
+  printf '%s %s\n' "$row_id" "$ROW_FAULT" >> "$ROW_TRACE"
+  case "$ROW_FAULT" in
+    empty) ;;
+    partial) printf '{"id":' ;;
+    complete) "$REAL_JQ" "$@" || exit 98 ;;
+    *) exit 98 ;;
+  esac
+  exit 7
+fi
+exec "$REAL_JQ" "$@"
+STUB
+chmod +x "$TMP/row-bin/jq"
+
+row_env() {
+  env -u BASH_ENV -u GITHUB_RUN_ID PATH="$TMP/row-bin:$PATH" \
+    REAL_JQ="$REAL_JQ" ROW_FAIL_ID="$ROW_ID" ROW_FAULT="$ROW_MODE" \
+    ROW_TRACE="$ROW_CASE/row.trace" CURL_ARGV_LOG="$ROW_CASE/curl.log" \
+    TMPDIR="$ROW_CASE/tmpfiles" GH_TOKEN="synthetic-row-token-not-a-secret" \
+    GITHUB_TOKEN="synthetic-row-token-not-a-secret" "$@"
+}
+
+row_case() {
+  local scenario="$1" id="$2" fault="$3" prior="$4" jobs logs expected_rc
+  case "$scenario" in
+    drained) jobs="$RED"; logs="$LOGS"; expected_rc=0 ;;
+    refused_log) jobs="$TMP/row-refusal-jobs.json"; logs="$TMP/row-thinlogs"; expected_rc=3 ;;
+  esac
+  local label="row serialization $scenario $id $fault $prior"
+  ROW_CASE="$TMP/row-$scenario-$id-$fault-$prior"
+  ROW_ID="$id"; ROW_MODE="$fault"
+  local out="$ROW_CASE/out" final="$ROW_CASE/out/failure-summary.json"
+  mkdir -p "$out" "$ROW_CASE/tmpfiles"
+  : > "$ROW_CASE/row.trace"
+  : > "$ROW_CASE/curl.log"
+
+  # Compare the real drain at the same path; path text is part of stdout.
+  row_env "$TOOL" drain --jobs-json "$jobs" --logs-dir "$logs" --out-dir "$out" \
+    >"$ROW_CASE/plain.stdout" 2>"$ROW_CASE/plain.stderr"; local plain_rc=$?
+  local control_rc=1
+  [[ "$plain_rc" -eq "$expected_rc" && ! -e "$final" && ! -s "$ROW_CASE/row.trace" ]] && control_rc=0
+  assert "$control_rc" "$label no-json control keeps its exit and skips row serialization" "got exit $plain_rc"
+  cp -a "$out" "$ROW_CASE/control"
+  if [[ "$prior" == "prior" ]]; then
+    cp "$GJSON" "$final"
+    cp "$final" "$ROW_CASE/previous.json"
+  fi
+
+  row_env "$TOOL" drain --jobs-json "$jobs" --logs-dir "$logs" --out-dir "$out" --json \
+    >"$ROW_CASE/json.stdout" 2>"$ROW_CASE/json.stderr"; local json_rc=$?
+  assert "$((json_rc != expected_rc))" "$label preserves the drain exit" "got exit $json_rc, want $expected_rc"
+  local trace_rc=1
+  [[ "$(<"$ROW_CASE/row.trace")" == "$id $fault" ]] && trace_rc=0
+  assert "$trace_rc" "$label exercises the selected per-job serializer failure"
+  cmp -s "$ROW_CASE/plain.stdout" "$ROW_CASE/json.stdout"
+  assert $? "$label preserves stdout including annotations"
+  diff -r --exclude=failure-summary.json "$ROW_CASE/control" "$out" >/dev/null 2>&1
+  assert $? "$label preserves Markdown and log bytes with no extra bundle files"
+  local leftovers
+  leftovers="$(find "$ROW_CASE/tmpfiles" -mindepth 1 -print)"
+  [[ -z "$leftovers" ]]
+  assert $? "$label leaves no temporary output outside the bundle" "$leftovers"
+
+  case "$prior" in
+    prior)
+      cmp -s "$ROW_CASE/previous.json" "$final"
+      assert $? "$label preserves previous JSON byte for byte"
+      ;;
+    absent)
+      [[ ! -e "$final" && ! -L "$final" ]]
+      assert $? "$label leaves the JSON destination absent"
+      ;;
+  esac
+  # Stubs are silent: the tool must add a JSON warning, not merely repeat an
+  # existing missing-log refusal or leak a bare parser error onto stderr.
+  grep -vxF -f "$ROW_CASE/plain.stderr" "$ROW_CASE/json.stderr" > "$ROW_CASE/added.stderr"
+  grep -iE '(^|[^[:alnum:]_/-])(warn(ing)?|failed|failure|cannot|unable)([^[:alnum:]_/-]|$)' \
+    "$ROW_CASE/added.stderr" > "$ROW_CASE/warnings.stderr"
+  grep -qi 'json' "$ROW_CASE/warnings.stderr"
+  assert $? "$label warns on stderr that optional JSON failed"
+  if [[ "$expected_rc" -eq 3 ]]; then
+    grep -qF REFUSED "$ROW_CASE/json.stderr"
+    assert $? "$label still refuses the missing later log"
+  fi
+  ! grep -qF 'synthetic-row-token-not-a-secret' "$ROW_CASE/json.stdout" "$ROW_CASE/json.stderr"
+  assert $? "$label keeps the credential out of stdout and stderr"
+  [[ ! -s "$ROW_CASE/curl.log" ]]
+  assert $? "$label makes zero network calls"
+}
+
+for scenario in drained refused_log; do
+  for id in 9002 9003; do
+    for fault in empty partial complete; do
+      for prior in absent prior; do row_case "$scenario" "$id" "$fault" "$prior"; done
+    done
+  done
+done
+
+# ---------------------------------------------------------------------------
 hdr "Regression control — the prose drain still works"
 
 "$HERE/test_ci_failure_drain.sh" >"$TMP/regression.log" 2>&1; RC_R=$?

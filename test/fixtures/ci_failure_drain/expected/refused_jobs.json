@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "run_id": "fixture",
+  "status": "refused",
+  "jobs": [],
+  "summary": {"total_jobs": 0, "failed_jobs": 0, "drained_jobs": 0},
+  "error": {"code": "refused_jobs_unobservable", "retryable": false, "next_action": "provide_jobs_list", "unmeasured": "jobs"}
+}

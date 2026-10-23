@@ -320,8 +320,10 @@
     "staging-preflight carrier suite:1",
     "api-base-validation suite:1",
     "api-base-validation-python suite:1",
+    "database backup observation contract:1",
     "provider baseline integrity suite:1",
     "review report input integrity holds:1",
+    "test-missing gate suites:1",
     "orphan-suite ratchet fixtures suite:1",
     "assignment host-source bundle suite:1",
     "stop-guard landing suite:1",
@@ -331,6 +333,7 @@
     "settings-bind rehearsal suite:1",
     "host backup publication receipt contract (offline):1",
     "native-ssh citation gate suite:1",
+    "code-nav read-only and resource guard suite:1",
     "verify-fast plan suites:1",
     "dispatch staged-lifecycle acceptance suite:1"
   ],
@@ -527,7 +530,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "e2fe400f0373e1bdbd1970c8726ec1a9a9d21bab59730f234a7f99a133d7f8c6",
+      "definition_sha256": "8c752b650f3e44c1ca698ce94f97a1cbb24303fe67d29069da614d983db9f473",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1811,6 +1814,11 @@
       "id": "api-base-validation-python suite:1"
     },
     {
+      "name": "database backup observation contract",
+      "definition_sha256": "138acfb905a66fbb8105ea71d473653f39778fb06ac1f306a047df30d20b904c",
+      "id": "database backup observation contract:1"
+    },
+    {
       "name": "provider baseline integrity suite",
       "definition_sha256": "a61a574a93f9aa493c38694fb68c4c43a4df905ac3721442d5547cf09a665dcd",
       "id": "provider baseline integrity suite:1"
@@ -1819,6 +1827,11 @@
       "name": "review report input integrity holds",
       "definition_sha256": "bffa19729a879126ad09b2eba97c28fddbdc6f4fa5e10afa5a536bb291c9dfc4",
       "id": "review report input integrity holds:1"
+    },
+    {
+      "name": "test-missing gate suites",
+      "definition_sha256": "a245dc744b32a853deac2e14fcb7d52b9582f7862154f7ae954800a7da67dc3a",
+      "id": "test-missing gate suites:1"
     },
     {
       "name": "orphan-suite ratchet fixtures suite",
@@ -1866,8 +1879,13 @@
       "id": "native-ssh citation gate suite:1"
     },
     {
+      "name": "code-nav read-only and resource guard suite",
+      "definition_sha256": "f4f3c272c75249ae5430663c6689ba7c058a33074edc105dc8e55352d488af05",
+      "id": "code-nav read-only and resource guard suite:1"
+    },
+    {
       "name": "verify-fast plan suites",
-      "definition_sha256": "e1b1d3d318e2dff53a23c79b891d4bbab267c426e0d16a9c8dcf8fbef9f8074d",
+      "definition_sha256": "ccae99dd825dc4bf6449a0a726f92e4d36d5e1be401694a5ce2c09f289526fb7",
       "id": "verify-fast plan suites:1"
     },
     {

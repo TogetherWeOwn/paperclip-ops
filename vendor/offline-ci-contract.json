@@ -334,7 +334,8 @@
     "host backup publication receipt contract (offline):1",
     "native-ssh citation gate suite:1",
     "code-nav read-only and resource guard suite:1",
-    "verify-fast plan suites:1"
+    "verify-fast plan suites:1",
+    "kofra preview parity JSON envelope suite:1"
   ],
   "retained": [
     {
@@ -1886,6 +1887,11 @@
       "name": "verify-fast plan suites",
       "definition_sha256": "ccae99dd825dc4bf6449a0a726f92e4d36d5e1be401694a5ce2c09f289526fb7",
       "id": "verify-fast plan suites:1"
+    },
+    {
+      "name": "kofra preview parity JSON envelope suite",
+      "definition_sha256": "a0094f56081eb743136ae6f39b7d8fdd9ed0c6d23676899258f469260542743f",
+      "id": "kofra preview parity JSON envelope suite:1"
     }
   ],
   "removed": [

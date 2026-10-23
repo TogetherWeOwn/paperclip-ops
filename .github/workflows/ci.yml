@@ -992,6 +992,11 @@ jobs:
       - name: coolify decommission capacity suite
         run: ./test_coolify_capacity_headroom.sh
 
+      # Versioned offline evidence contract. The real CLI runs behind Landlock
+      # and seccomp; unsupported sandbox environments fail closed.
+      - name: capacity evidence and CLI refusal contract
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_capacity_evidence_contract
+
       # case_d0cad227. The required checks named in required_checks.json (a pinned
       # copy of the main rulesets) must each be produced by a real job that
       # runs on a pull request and cannot report green without running. A

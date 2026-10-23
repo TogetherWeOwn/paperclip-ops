@@ -80,7 +80,7 @@ This documentation does not authorize running a backup or changing a host.
 | `ci_required_checks_ownership.py` |
 | `claude_countdown.py` |
 | `codex_countdown.py` |
-| `coolify_capacity_headroom.sh` |
+| `coolify_capacity_headroom.sh` and `coolify_capacity_headroom.py` ([offline evidence contract](docs/capacity-evidence.md); keep these siblings together) |
 | `credential_chain_audit.sh` |
 | `credential_chain_lockdown.sh` |
 | `db_backup_stall.sh` |

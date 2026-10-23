@@ -320,6 +320,7 @@
     "staging-preflight carrier suite:1",
     "api-base-validation suite:1",
     "api-base-validation-python suite:1",
+    "database backup observation contract:1",
     "provider baseline integrity suite:1",
     "review report input integrity holds:1",
     "test-missing gate suites:1",
@@ -332,6 +333,7 @@
     "settings-bind rehearsal suite:1",
     "host backup publication receipt contract (offline):1",
     "native-ssh citation gate suite:1",
+    "code-nav read-only and resource guard suite:1",
     "verify-fast plan suites:1"
   ],
   "retained": [
@@ -527,7 +529,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "c1d6fccc5eefb703bcf13253e153e897e127e965fa5b0f8b23a26648cede4469",
+      "definition_sha256": "f05104a44b821bac8d9ac00991022d8dd6c57a89b700272da71b72e687273bc3",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1811,6 +1813,11 @@
       "id": "api-base-validation-python suite:1"
     },
     {
+      "name": "database backup observation contract",
+      "definition_sha256": "138acfb905a66fbb8105ea71d473653f39778fb06ac1f306a047df30d20b904c",
+      "id": "database backup observation contract:1"
+    },
+    {
       "name": "provider baseline integrity suite",
       "definition_sha256": "a61a574a93f9aa493c38694fb68c4c43a4df905ac3721442d5547cf09a665dcd",
       "id": "provider baseline integrity suite:1"
@@ -1871,8 +1878,13 @@
       "id": "native-ssh citation gate suite:1"
     },
     {
+      "name": "code-nav read-only and resource guard suite",
+      "definition_sha256": "f4f3c272c75249ae5430663c6689ba7c058a33074edc105dc8e55352d488af05",
+      "id": "code-nav read-only and resource guard suite:1"
+    },
+    {
       "name": "verify-fast plan suites",
-      "definition_sha256": "e1b1d3d318e2dff53a23c79b891d4bbab267c426e0d16a9c8dcf8fbef9f8074d",
+      "definition_sha256": "ccae99dd825dc4bf6449a0a726f92e4d36d5e1be401694a5ce2c09f289526fb7",
       "id": "verify-fast plan suites:1"
     }
   ],

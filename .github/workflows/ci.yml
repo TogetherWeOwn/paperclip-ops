@@ -1085,7 +1085,13 @@ jobs:
       # to the core area through the root fallthrough.
       - name: verify-fast plan suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: python3 -B -m unittest -v test_verify_fast_plan test_verify_fast_plan_gates
+        env:
+          STATIC_LABEL_PYTHON: ${{ steps.static-label-python.outputs.python-path || '/usr/bin/python3' }}
+          PYTHONPATH: ${{ runner.temp }}/static-label-guard-deps
+        run: |
+          # The copied inventory probes PyYAML through child python3 processes.
+          export PATH="$(dirname "$STATIC_LABEL_PYTHON"):$PATH"
+          python3 -B -m unittest -v test_verify_fast_plan test_verify_fast_plan_gates
 
       - name: Syntax check every script
         run: ./scripts/verify-fast.sh --parse-only

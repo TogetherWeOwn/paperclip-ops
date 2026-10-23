@@ -120,7 +120,7 @@ class HarnessMixin:
         else:
             inner = gh_side_effect
 
-            def gh_side_effect(cmd, **kwargs):  # noqa: F811 (wrap to record argv)
+            def gh_side_effect(cmd, **kwargs):  # Wrap to record argv.
                 if cmd[:3] == ['gh', 'pr', 'list']:
                     gh_argvs.append(list(cmd))
                 return inner(cmd, **kwargs)
@@ -166,7 +166,7 @@ class HarnessMixin:
                 ps.main()
             except SystemExit as e:
                 error = e
-            except Exception as e:  # noqa: BLE001 (harness surfaces crashes to assertions)
+            except Exception as e:  # Harness surfaces crashes to assertions.
                 error = e
             state_file = Path(tmp, 'state.json')
             state = json.loads(state_file.read_text()) if state_file.exists() else {}

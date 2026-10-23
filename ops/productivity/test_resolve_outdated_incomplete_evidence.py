@@ -64,6 +64,8 @@ import contextlib
 import io
 import json
 import re
+import socket
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -119,9 +121,14 @@ class GhStub:
         self.graphql_calls = 0
         self.check_calls = 0
         self.mutations = []
+        self.mutation_calls = []
+        self.detail_prs = []
+        self.check_heads = []
 
     def __call__(self, e, *args, input_=None):
         argv = list(args)
+        if any('resolveReviewThread' in a or '/replies' in a for a in argv):
+            self.mutation_calls.append((argv, input_))
         if any('resolveReviewThread' in a for a in argv):
             self.mutations.append('resolve')
             return '{}'
@@ -146,6 +153,7 @@ class GhStub:
             page = int(m.group(1)) if m else 1
             hm = _HEAD_RE.search(joined)
             head = hm.group(1) if hm else HEAD
+            self.check_heads.append(head)
             pages = self.check_pages.get(head)
             if pages is None:
                 return json.dumps({'total_count': 0, 'check_runs': []})
@@ -162,6 +170,7 @@ class GhStub:
             for a in argv:
                 if a.startswith('n='):
                     num = int(a[2:])
+            self.detail_prs.append(num)
             head, nodes = self.pr_threads.get(num, (HEAD, []))
             return json.dumps({'data': {'repository': {'pullRequest': {
                 'headRefOid': head, 'reviewThreads': {'nodes': nodes}}}}})
@@ -188,6 +197,9 @@ def run_tick(stub, dry=False, paused=False):
                mock.patch.object(r, 'gh', stub),
                mock.patch.object(r, 'log', lambda line, rec: log_calls.append(rec)),
                mock.patch.object(r.subprocess, 'run', no_subprocess),
+               mock.patch.object(r.subprocess, 'Popen', no_subprocess),
+               mock.patch.object(socket, 'socket', no_subprocess),
+               mock.patch.object(socket, 'create_connection', no_subprocess),
                mock.patch.object(r, 'STATE_DIR', state),
                mock.patch.object(r, 'PAUSE', state / 'PAUSE')]
     for p in patches:
@@ -422,6 +434,242 @@ class CheckRunsPath(unittest.TestCase):
                          'only the clean sibling PR may mutate')
         self.assertEqual(len(log_calls), 1)
         self.assertEqual(log_calls[0]['pr'], 'TogetherWeOwn/paperclip-ops#2')
+
+
+class SearchShapeRegressions(unittest.TestCase):
+    """Unknown completeness and malformed pages must discard even valid prefixes."""
+
+    def assert_search_refused(self, pages):
+        stub = GhStub(
+            search_pages=pages,
+            pr_threads={1: (HEAD, [thread()]), 101: (HEAD_B, [thread(cid=2)])},
+            check_pages={HEAD: single_5of5(), HEAD_B: single_5of5(HEAD_B)})
+        try:
+            report, stub, logs, _ = run_tick(stub)
+        except Exception as exc:
+            self.fail(f'search must refuse normally, not raise {type(exc).__name__}: {exc}')
+        self.assertEqual(report, [{'pr': '*', 'outdated': 0,
+                                   'skipped': 'incomplete_search'}])
+        self.assertEqual(stub.graphql_calls, 0)
+        self.assertEqual(stub.check_calls, 0)
+        self.assertEqual(stub.mutations, [])
+        self.assertEqual(logs, [])
+
+    def full_prefix(self):
+        return {'total_count': 101, 'incomplete_results': False,
+                'items': [search_item(n) for n in range(1, 101)]}
+
+    def test_missing_completeness_refuses_first_and_later_pages(self):
+        for later in (False, True):
+            with self.subTest(later=later):
+                page = {'total_count': 101, 'items': [search_item(101)]}
+                self.assert_search_refused([self.full_prefix(), page] if later else [page])
+
+    def test_null_completeness_refuses_first_and_later_pages(self):
+        for later in (False, True):
+            with self.subTest(later=later):
+                page = {'total_count': 101, 'incomplete_results': None,
+                        'items': [search_item(101)]}
+                self.assert_search_refused([self.full_prefix(), page] if later else [page])
+
+    def test_nonboolean_completeness_including_zero_refuses(self):
+        for flag in (0, 1, '', 'false', [], {}):
+            for later in (False, True):
+                with self.subTest(flag=flag, later=later):
+                    page = {'total_count': 101, 'incomplete_results': flag,
+                            'items': [search_item(101)]}
+                    self.assert_search_refused([self.full_prefix(), page] if later else [page])
+
+    def test_explicit_false_complete_listing_resolves(self):
+        stub = GhStub(
+            search_pages=[{'total_count': 1, 'incomplete_results': False,
+                           'items': [search_item(1)]}],
+            pr_threads=would_resolve_pr(), check_pages={HEAD: single_5of5()})
+        report, stub, logs, _ = run_tick(stub)
+        self.assertEqual(stub.detail_prs, [1])
+        self.assertEqual(stub.check_heads, [HEAD])
+        self.assertEqual(stub.mutations, ['reply', 'resolve'])
+        self.assertEqual(len(report), 1)
+        self.assertEqual(report[0]['resolved'], 1)
+        self.assertEqual([row['pr'] for row in logs], [f'{REPO}#1'])
+
+    def test_missing_items_after_full_prefix_refuses_whole_tick(self):
+        self.assert_search_refused([
+            self.full_prefix(), {'total_count': 101, 'incomplete_results': False}])
+
+    def test_null_items_after_full_prefix_refuses_whole_tick(self):
+        self.assert_search_refused([
+            self.full_prefix(), {'total_count': 101, 'incomplete_results': False,
+                                 'items': None}])
+
+    def test_nonlist_items_after_full_prefix_refuses_whole_tick(self):
+        for items in ({}, '', 'not-a-list', 0, True):
+            with self.subTest(items=items):
+                self.assert_search_refused([
+                    self.full_prefix(), {'total_count': 101, 'incomplete_results': False,
+                                         'items': items}])
+
+    def test_malformed_repository_url_discards_valid_item(self):
+        for url in (None, 42, [], {}, 'not-a-repository-url'):
+            with self.subTest(url=url):
+                self.assert_search_refused([
+                    {'total_count': 2, 'incomplete_results': False,
+                     'items': [search_item(1), {'number': 2, 'repository_url': url}]}])
+
+    def test_search_timeout_refuses_first_and_later_pages(self):
+        for later in (False, True):
+            with self.subTest(later=later):
+                timeout = subprocess.TimeoutExpired(['gh', 'api', 'search/issues'], 1)
+                self.assert_search_refused([self.full_prefix(), timeout] if later else [timeout])
+
+
+class CheckShapeRegressions(unittest.TestCase):
+    """Bad consumed evidence refuses one PR, not the following eligible sibling."""
+
+    def drive_with_sibling(self, pages):
+        bad_thread, good_thread = thread(cid=1), thread(cid=2)
+        bad_thread['id'], good_thread['id'] = 'BAD_THREAD', 'GOOD_THREAD'
+        stub = GhStub(
+            search_pages=[{'total_count': 2, 'incomplete_results': False,
+                           'items': [search_item(1), search_item(2)]}],
+            pr_threads={1: (HEAD, [bad_thread]), 2: (HEAD_B, [good_thread])},
+            check_pages={HEAD: pages, HEAD_B: single_5of5(HEAD_B)})
+        try:
+            return run_tick(stub)
+        except Exception as exc:
+            self.fail(f'bad checks must skip and continue to sibling, not raise '
+                      f'{type(exc).__name__}: {exc}; details read: {stub.detail_prs}')
+
+    def assert_only_sibling_resolves(self, pages, reason='incomplete_check_runs'):
+        report, stub, logs, _ = self.drive_with_sibling(pages)
+        self.assertEqual(len(report), 2)
+        self.assertEqual(report[0], {'pr': f'{REPO}#1', 'outdated': 1,
+                                     'skipped': reason})
+        self.assertEqual(report[1]['pr'], f'{REPO}#2')
+        self.assertEqual(report[1]['resolved'], 1)
+        self.assertEqual(stub.detail_prs, [1, 2])
+        self.assertEqual(stub.graphql_calls, 2)
+        self.assertIn(HEAD, stub.check_heads)
+        self.assertEqual(stub.check_heads[-1], HEAD_B)
+        self.assertEqual(stub.check_heads.count(HEAD_B), 1)
+        self.assertEqual(stub.mutations, ['reply', 'resolve'])
+        reply_argv, _ = stub.mutation_calls[0]
+        self.assertTrue(any('/comments/2/replies' in arg for arg in reply_argv),
+                        f'only sibling comment 2 may get a reply: {reply_argv!r}')
+        resolve_argv, resolve_input = stub.mutation_calls[1]
+        resolve_request = ' '.join(resolve_argv) + str(resolve_input or '')
+        self.assertIn('GOOD_THREAD', resolve_request)
+        self.assertNotIn('BAD_THREAD', resolve_request)
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0]['pr'], f'{REPO}#2')
+        self.assertEqual(logs[0]['resolved'], 1)
+
+    def trusted_run(self):
+        return cr('2026-10-06T12:00Z', 'success', '5/5')
+
+    def full_check_page(self):
+        return {'total_count': 101,
+                'check_runs': [self.trusted_run() for _ in range(100)]}
+
+    def test_malformed_app_refuses_and_continues(self):
+        for app in ('not-an-app', ['not-an-app'], 42, True):
+            with self.subTest(app=app):
+                run = self.trusted_run()
+                run['app'] = app
+                self.assert_only_sibling_resolves([{'total_count': 1, 'check_runs': [run]}])
+
+    def test_malformed_output_refuses_and_continues(self):
+        for output in ('not-an-output', ['5/5'], 42, True):
+            with self.subTest(output=output):
+                run = self.trusted_run()
+                run['output'] = output
+                self.assert_only_sibling_resolves([{'total_count': 1, 'check_runs': [run]}])
+
+    def test_wrong_type_output_title_refuses_and_continues(self):
+        for title in (None, 0, 42, True, ['5/5'], {'score': '5/5'}):
+            with self.subTest(title=title):
+                run = self.trusted_run()
+                run['output']['title'] = title
+                self.assert_only_sibling_resolves([{'total_count': 1, 'check_runs': [run]}])
+
+    def test_mixed_started_at_types_refuse_and_continue(self):
+        for started in (None, 0, 42, 1.5, True, [], {}):
+            with self.subTest(started=started):
+                malformed = self.trusted_run()
+                malformed['started_at'] = started
+                self.assert_only_sibling_resolves([
+                    {'total_count': 2, 'check_runs': [self.trusted_run(), malformed]}])
+
+    def test_empty_object_entry_refuses_alone_and_beside_trusted_run(self):
+        for runs in ([{}], [self.trusted_run(), {}]):
+            with self.subTest(runs=runs):
+                self.assert_only_sibling_resolves([
+                    {'total_count': len(runs), 'check_runs': runs}])
+
+    def test_nonobject_entries_refuse_first_and_later_pages(self):
+        for entry in (None, 'not-a-run', 42, True, []):
+            for later in (False, True):
+                with self.subTest(entry=entry, later=later):
+                    page = {'total_count': 101 if later else 2,
+                            'check_runs': [entry] if later else [self.trusted_run(), entry]}
+                    self.assert_only_sibling_resolves(
+                        [self.full_check_page(), page] if later else [page])
+
+    def test_check_timeout_refuses_first_and_later_pages(self):
+        for later in (False, True):
+            with self.subTest(later=later):
+                timeout = subprocess.TimeoutExpired(['gh', 'api', 'check-runs'], 1)
+                self.assert_only_sibling_resolves(
+                    [self.full_check_page(), timeout] if later else [timeout])
+
+    def test_wrong_type_first_total_refuses_and_continues(self):
+        for total in (True, False, '1', 1.0, None):
+            with self.subTest(total=total):
+                self.assert_only_sibling_resolves([
+                    {'total_count': total, 'check_runs': [self.trusted_run()]}])
+
+    def test_wrong_type_later_total_refuses_and_continues(self):
+        for total in (True, False, '101', 101.0, None):
+            with self.subTest(total=total):
+                self.assert_only_sibling_resolves([
+                    self.full_check_page(),
+                    {'total_count': total, 'check_runs': [self.trusted_run()]}])
+
+    def test_disagreeing_later_total_refuses_and_continues(self):
+        for total in (0, 100, 102):
+            with self.subTest(total=total):
+                self.assert_only_sibling_resolves([
+                    self.full_check_page(),
+                    {'total_count': total, 'check_runs': [self.trusted_run()]}])
+
+    def test_existing_refusal_reasons_stay_distinct_from_malformed_reads(self):
+        for field, value, reason in (
+                ('app', None, 'missing_identity'),
+                ('app', {}, 'missing_identity'),
+                ('app', {'id': 1234567}, 'no_trusted_evidence'),
+                ('head_sha', None, 'missing_head'),
+                ('head_sha', OTHER, 'wrong_head'),
+                ('status', 'in_progress', 'incomplete_status'),
+                ('conclusion', 'action_required', 'incomplete_conclusion'),
+                ('output', {'title': '4/5'}, 'incomplete_score')):
+            with self.subTest(field=field, value=value, reason=reason):
+                run = self.trusted_run()
+                run[field] = value
+                self.assert_only_sibling_resolves(
+                    [{'total_count': 1, 'check_runs': [run]}], reason=reason)
+        run = self.trusted_run()
+        del run['app']
+        self.assert_only_sibling_resolves(
+            [{'total_count': 1, 'check_runs': [run]}], reason='missing_identity')
+
+    def test_omitted_later_total_still_resolves_both_prs(self):
+        report, stub, logs, _ = self.drive_with_sibling([
+            self.full_check_page(), {'check_runs': [self.trusted_run()]}])
+        self.assertEqual([row['resolved'] for row in report], [1, 1])
+        self.assertEqual(stub.detail_prs, [1, 2])
+        self.assertEqual(stub.check_heads, [HEAD, HEAD, HEAD_B])
+        self.assertEqual(stub.mutations, ['reply', 'resolve', 'reply', 'resolve'])
+        self.assertEqual([row['pr'] for row in logs], [f'{REPO}#1', f'{REPO}#2'])
 
 
 class PreservedSemantics(unittest.TestCase):

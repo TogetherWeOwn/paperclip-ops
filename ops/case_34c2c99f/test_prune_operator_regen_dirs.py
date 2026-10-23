@@ -665,15 +665,56 @@ class RegenTest(unittest.TestCase):
     @unittest.skipIf(IS_ROOT, "chmod does not block root")
     def test_rm_failure_is_counted_and_cooled_before_the_next_firing(self):
         run, ws = self.make_run()
-        pkg = os.path.join(ws, "node_modules", "pkg")
+        cand = os.path.join(ws, "node_modules")
+        pkg = os.path.join(cand, "pkg")
         os.chmod(pkg, 0o500)
-        self.addCleanup(os.chmod, pkg, 0o700)
+
+        def restore_permissions():
+            if os.path.isdir(pkg):
+                os.chmod(pkg, 0o700)
+
+        self.addCleanup(restore_permissions)
+        preconditions = {"euid": os.geteuid(), "pkg_mode": oct(os.stat(pkg).st_mode & 0o777)}
+        commands = []
+        real_op = tool.op
+
+        def observed_op(*cmd, timeout=120):
+            # Preserve real guards and rm. An empty refusal map alone cannot
+            # distinguish a pre-rm safety keep from successful removal.
+            result = real_op(*cmd, timeout=timeout)
+            commands.append({"cmd": cmd, "rc": result.returncode,
+                             "stdout": result.stdout, "stderr": result.stderr})
+            return result
+
+        self.patch(tool, "op", side_effect=observed_op)
         rc, s = self.run_main("--apply")
-        self.assertEqual(s["refused_by_reason"], {"rm-failed": 1})
-        self.assertTrue(os.path.isfile(os.path.join(pkg, "index.js")))
+        evidence = json.dumps({"preconditions": preconditions, "rc": rc,
+                               "summary": s, "commands": commands}, sort_keys=True)
+        self.assertEqual(s["refused_by_reason"], {"rm-failed": 1}, evidence)
+        self.assertEqual((rc, s["idle_min"], s["planned"], s["removed"]), (0, 10, 2, 1), evidence)
+        self.assertEqual((s["kept_by_reason"], s["fail_closed"], s["ledger_error"]),
+                         ({}, None, None), evidence)
+        self.assertEqual((s["archive_verified_runs"], s["archive_pending_runs"]), (1, 0), evidence)
+        self.assertTrue(os.path.isfile(os.path.join(pkg, "index.js")), evidence)
+        self.assertFalse(os.path.exists(os.path.join(ws, "target")), evidence)
+        self.assertTrue(os.path.isfile(tool.FAILED_PATH), evidence)
+        with open(tool.FAILED_PATH) as fh:
+            failed = json.load(fh)
+        self.assertEqual(set(failed), {cand}, evidence)
+        self.assertIsInstance(failed[cand], (int, float), evidence)
+        self.assertGreater(failed[cand], 0, evidence)
+
         backdate(run)
+        commands.clear()
         rc, s = self.run_main("--apply")
-        self.assertEqual((s["planned"], s["kept_by_reason"]), (0, {"rm-failed-cooldown": 1}))
+        evidence = json.dumps({"preconditions": preconditions, "rc": rc,
+                               "summary": s, "commands": commands, "failed": failed}, sort_keys=True)
+        self.assertEqual((rc, s["planned"], s["removed"], s["kept_by_reason"]),
+                         (0, 0, 0, {"rm-failed-cooldown": 1}), evidence)
+        self.assertEqual((s["refused_by_reason"], s["fail_closed"]), ({}, None), evidence)
+        self.assertTrue(os.path.isfile(os.path.join(pkg, "index.js")), evidence)
+        with open(tool.FAILED_PATH) as fh:
+            self.assertEqual(json.load(fh), failed, evidence)
 
     @unittest.skipIf(IS_ROOT, "chmod does not block root")
     def test_unreadable_subtree_keeps_the_run(self):

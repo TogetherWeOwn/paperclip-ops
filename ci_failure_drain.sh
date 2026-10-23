@@ -69,6 +69,8 @@ Drains the logs of failed jobs in the current run into OUT_DIR:
 Without flags the job list and logs come from the Actions API (CI use).
 With --jobs-json/--logs-dir they come from files (hermetic tests).
 With --json the md bytes, the ::error line and stdout are unchanged.
+If optional JSON publication fails, stderr warns and any prior JSON is kept;
+the drain exit code is unchanged.
 
 EXIT CODES
   0  drained (whether or not failures were found)
@@ -90,18 +92,34 @@ refuse() {
 
 # --- failure-summary.json envelope (opt-in via --json) -------------------------
 # Built with jq so causes carrying quotes or backslashes stay valid JSON.
+# Stage beside the destination so a successful rename publishes atomically.
+# -T refuses a directory target instead of moving the staging file inside it.
+# JSON is optional: warn on failure, preserving prior evidence and drain exits.
+write_json() {
+  local staged
+  if staged="$(mktemp "$OUT_DIR/.failure-summary.json.XXXXXX")"; then
+    if "$@" > "$staged" && mv -fT -- "$staged" "$OUT_DIR/failure-summary.json"; then
+      return 0
+    fi
+    rm -f -- "$staged"
+  fi
+  printf '%s: warning: unable to publish optional failure-summary.json\n' "$ME" >&2
+  return 1
+}
+
 # write_envelope STATUS NEXT_ACTION DRAINED_COUNT: the success envelope over
 # the rows the drain loop collected ($TMP/rows.jsonl, empty on green runs).
 write_envelope() {
   local total
   total="$(jq '.jobs | length' "$TMP/jobs.json")"
   [[ -f "$TMP/rows.jsonl" ]] || : > "$TMP/rows.jsonl"
-  jq -n --argjson schema_version 1 --arg run_id "$RUN_ID" --arg status "$1" \
+  # jq variables in the filter must stay literal through the writer wrapper.
+  # shellcheck disable=SC2016
+  write_json jq -n --argjson schema_version 1 --arg run_id "$RUN_ID" --arg status "$1" \
     --slurpfile jobs "$TMP/rows.jsonl" \
     --argjson total "$total" --argjson failed "$N_FAILED" --argjson drained "$3" \
     --arg next "$2" \
-    '{schema_version:$schema_version,run_id:$run_id,status:$status,jobs:$jobs,summary:{total_jobs:$total,failed_jobs:$failed,drained_jobs:$drained},error:{code:"ok",retryable:false,next_action:$next,unmeasured:null}}' \
-    > "$OUT_DIR/failure-summary.json"
+    '{schema_version:$schema_version,run_id:$run_id,status:$status,jobs:$jobs,summary:{total_jobs:$total,failed_jobs:$failed,drained_jobs:$drained},error:{code:"ok",retryable:false,next_action:$next,unmeasured:null}}'
 }
 
 # write_refusal_json CODE UNMEASURED: the refusal envelope. Counts reflect
@@ -114,11 +132,12 @@ write_refusal_json() {
     failed="$(jq '[.jobs[] | select(.conclusion=="failure")] | length' "$TMP/jobs.json")"
   fi
   [[ "$1" == "refused_log_missing" ]] && next="fetch_missing_log"
-  jq -n --argjson schema_version 1 --arg run_id "$run" \
+  # jq variables in the filter must stay literal through the writer wrapper.
+  # shellcheck disable=SC2016
+  write_json jq -n --argjson schema_version 1 --arg run_id "$run" \
     --arg code "$1" --arg unmeasured "$2" --arg next "$next" \
     --argjson total "$total" --argjson failed "$failed" \
-    '{schema_version:$schema_version,run_id:$run_id,status:"refused",jobs:[],summary:{total_jobs:$total,failed_jobs:$failed,drained_jobs:0},error:{code:$code,retryable:false,next_action:$next,unmeasured:$unmeasured}}' \
-    > "$OUT_DIR/failure-summary.json"
+    '{schema_version:$schema_version,run_id:$run_id,status:"refused",jobs:[],summary:{total_jobs:$total,failed_jobs:$failed,drained_jobs:0},error:{code:$code,retryable:false,next_action:$next,unmeasured:$unmeasured}}'
 }
 
 [[ $# -ge 1 ]] || { usage >&2; exit 2; }

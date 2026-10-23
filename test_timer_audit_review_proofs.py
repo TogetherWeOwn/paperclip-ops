@@ -544,5 +544,174 @@ class UndecodableRepoBytes(ProofCase):
                 self.assertIn("unreadable-source", codes)
 
 
+class FilenameCase(ProofCase):
+    """Raw filename fixtures; never inherit a surrounding Git repo/config."""
+
+    def setUp(self):
+        super().setUp()
+        self.env = {k: v for k, v in self.env.items() if not k.startswith("GIT_")}
+        home = self.tmp / "home"
+        home.mkdir()
+        self.env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
+                        GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_SYSTEM=os.devnull,
+                        GIT_CONFIG_GLOBAL=os.devnull, GIT_ATTR_NOSYSTEM="1",
+                        GIT_CEILING_DIRECTORIES=str(self.tmp),
+                        PYTHONIOENCODING="ascii:strict")
+
+    def write_filename(self, raw, data):
+        rel = os.fsdecode(raw)
+        self.assertEqual(os.fsencode(rel), raw)
+        self.write_bytes_file(rel, data)
+        return rel
+
+    def replay(self, *extra, registry):
+        first = self.run_raw(*extra, registry=registry)
+        second = self.run_raw(*extra, registry=registry)
+        self.assertEqual((first.returncode, first.stdout, first.stderr),
+                         (second.returncode, second.stdout, second.stderr))
+        self.assertNotIn("Traceback", first.stdout + first.stderr)
+        self.assertEqual(first.stderr, "")
+        # A subprocess encoding override must not just be ignored by the fixture.
+        first.stdout.encode("ascii", "strict")
+        return first
+
+    def assert_unregistered(self, raw, display, action, text=True):
+        registry = self.write_registry([])
+        if text:
+            result = self.replay(registry=registry)
+            self.assertEqual(result.returncode, 1, result.stdout)
+            self.assertIn("I5 " + display, result.stdout)
+            self.assertEqual(len([line for line in result.stdout.splitlines()
+                                  if line.startswith("I5 ")]), 1, result.stdout)
+        result = self.replay("--json", registry=registry)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        doc = json.loads(result.stdout)
+        self.assert_valid_envelope(doc)
+        self.assertEqual(doc["violations"], 1, doc)
+        self.assertEqual(doc["unknown"], 0, doc)
+        self.assertTrue(doc["next_action"].strip(), doc)
+        self.assertEqual(len(doc["results"]), 1, doc)
+        finding = doc["results"][0]
+        self.assertEqual(finding["invariant"], "I5", finding)
+        self.assertEqual(finding["severity"], "violation", finding)
+        self.assertEqual(finding["code"], "unregistered-source", finding)
+        self.assertIs(finding["retryable"], False, finding)
+        self.assertIn("Register", finding["next_action"])
+        self.assertIn(action, finding["next_action"])
+        self.assertIn("I5 " + display, finding["message"])
+        # JSON's parsed identity must round-trip to the original filename bytes,
+        # not a replacement character, a literal backslash escape or Git quotes.
+        self.assertEqual(finding["unit"], os.fsdecode(raw))
+        self.assertEqual(os.fsencode(finding["unit"]), raw)
+
+
+class UndecodableFilenames(FilenameCase):
+    """Removing diagnostic escaping must fail, even with valid file contents."""
+
+    SINKS = (
+        (b".github/workflows/night-\xff.yml",
+         b'on:\n  schedule:\n    - cron: "5 4 * * *"\n',
+         ".github/workflows/night-\\udcff.yml", "workflow"),
+        (b"systemd/night-\xff.timer", TIMER_TEXT.encode("ascii"),
+         "systemd/night-\\udcff.timer", "timer"),
+        (b"plugins/night-\xff/src/manifest.ts",
+         b'jobs: [{ schedule: "*/1 * * * *" }]\n',
+         "plugins/night-\\udcff/src/manifest.ts", "manifest"),
+    )
+
+    def test_raw_ff_filename_text_is_controlled_and_repeatable(self):
+        for raw, data, display, _ in self.SINKS:
+            with self.subTest(filename=raw):
+                # Keep each sink independent: exactly one scheduled source.
+                self.root = Path(tempfile.mkdtemp(dir=self.tmp, prefix="filename-"))
+                self.reg_path = self.root / "registry.json"
+                self.write_filename(raw, data)
+                result = self.replay(registry=self.write_registry([]))
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("I5 " + display, result.stdout)
+                self.assertIn("violations=1", result.stdout)
+
+    def test_raw_ff_filename_json_preserves_byte_identity(self):
+        for raw, data, display, action in self.SINKS:
+            with self.subTest(filename=raw):
+                self.root = Path(tempfile.mkdtemp(dir=self.tmp, prefix="filename-"))
+                self.reg_path = self.root / "registry.json"
+                self.write_filename(raw, data)
+                self.assert_unregistered(raw, display, action, text=False)
+
+
+class TrackedFilenameIdentity(FilenameCase):
+    """Whitespace splitting / Git C-quotes must not change inventory identity."""
+
+    CONTROLS = (b"systemd/space name.timer", b'systemd/quote"name.timer',
+                b"systemd/line\nbreak.timer")
+    RAW_FF = b"systemd/night-\xff.timer"
+    BOUNDED_SERVICE = ("[Service]\nType=oneshot\nTimeoutStartSec=5min\n"
+                       "ExecStart=/bin/work\n")
+
+    def git(self, *args):
+        result = subprocess.run(["git", "-C", str(self.root), *args],
+                                capture_output=True, text=True, env=self.env,
+                                timeout=TIMEOUT_S)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result
+
+    def plant_tracked(self, raw, quote):
+        self.root = Path(tempfile.mkdtemp(dir=self.tmp, prefix="tracked-"))
+        self.reg_path = self.root / "registry.json"
+        self.git("init", "-q", "--template=")
+        self.git("config", "--local", "core.quotepath", quote)
+        self.assertEqual(self.git("config", "--local", "--get",
+                                  "core.quotepath").stdout.strip(), quote)
+        rel = self.write_filename(raw, TIMER_TEXT.encode("ascii"))
+        self.write_service(self.BOUNDED_SERVICE)
+        # Add the directory so byte filenames never traverse a text-only argv
+        # launcher (the audit itself must still consume Git's raw output).
+        self.git("add", "--", "systemd")
+        # This must stay untracked: it detects accidental filesystem fallback
+        # instead of exercising Git's tracked inventory.
+        self.write_timer(name="untracked-decoy.timer")
+        return rel
+
+    def assert_registered(self, raw, quote):
+        rel = self.plant_tracked(raw, quote)
+        registry = self.write_registry([repo_timer_entry(timer=rel)])
+        text = self.replay(registry=registry)
+        self.assertEqual(text.returncode, 0, text.stdout)
+        self.assertIn("entries=1 unverified=0 violations=0", text.stdout)
+        result = self.replay("--json", registry=registry)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        doc = json.loads(result.stdout)
+        self.assert_valid_envelope(doc)
+        self.assertEqual(doc["coverage"]["entries"], 1, doc)
+        self.assertEqual(doc["violations"], 0, doc)
+        self.assertEqual(doc["unknown"], 0, doc)
+        self.assertEqual(doc["results"], [], doc)
+
+    def test_raw_ff_registered_timer_is_clean_for_both_quotepath_modes(self):
+        for quote in ("true", "false"):
+            with self.subTest(quotepath=quote):
+                self.assert_registered(self.RAW_FF, quote)
+
+    def test_raw_ff_unregistered_timer_is_one_exact_path_for_both_quotepath_modes(self):
+        for quote in ("true", "false"):
+            with self.subTest(quotepath=quote):
+                self.plant_tracked(self.RAW_FF, quote)
+                self.assert_unregistered(self.RAW_FF, "systemd/night-\\udcff.timer", "timer")
+
+    def test_registered_whitespace_and_quote_controls_are_clean(self):
+        for raw in self.CONTROLS:
+            for quote in ("true", "false"):
+                with self.subTest(filename=raw, quotepath=quote):
+                    self.assert_registered(raw, quote)
+
+    def test_unregistered_whitespace_and_quote_controls_are_one_exact_path(self):
+        for raw in self.CONTROLS:
+            for quote in ("true", "false"):
+                with self.subTest(filename=raw, quotepath=quote):
+                    self.plant_tracked(raw, quote)
+                    self.assert_unregistered(raw, os.fsdecode(raw), "timer")
+
+
 if __name__ == "__main__":
     unittest.main()

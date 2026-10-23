@@ -16,8 +16,8 @@
 #   readiness block reports these from CI.
 #
 # Usage:
-#   scripts/verify-fast.sh [--parse-only] [--list]
-#   make verify-fast
+#   scripts/verify-fast.sh [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--no-prepare] [--help]
+#   make verify-fast | make verify-fast-parse | make verify-fast-plan
 #
 # Worktree setup: scratch worktrees have no node_modules. The translator
 # fixture needs typescript; the script installs the pinned compiler with the
@@ -36,31 +36,133 @@ set -euo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 MODE="full"
-if [[ "${1:-}" == "--parse-only" ]]; then
-  MODE="parse"
-elif [[ "${1:-}" == "--list" ]]; then
-  echo "parse: bash -n, node --check, python py_compile, ESM check, vendored-tracked gate, orphan-suite ratchet"
-  echo "full: parse + external-disclosure, muse-stop-guard, disposition-stop-guard, orphan-suite fixtures,"
-  echo "      ci-required-checks-audit, ci-gating, private-mutation-harness, readme-script-index,"
-  echo "      public-comment-hygiene,"
-  echo "      case_b2acfa5c-runner-contract, dropchannel-fixture, approval-timeout-probe, acceptance-transport reply, gh-access-dispatch,"
-  echo "      upstream pre-push hook,"
-  echo "      alert-queue, watchdog-snapshot-builder, fleet-run-stall, assignment-host-source,"
-  echo "      review-error-rerequest, backlog-promoter, board-jobs-bounds, focus-gate-bounds, pr-supply, flow-guard, host-ok, connection-intent-sweeper, hide-noop-reconcile, nongit-quarantine-custody,"
-  echo "      guard-state (atomic-state, stuck-run-state, idle-waiter-state, owner-guard-state), feed-contract,"
-  echo "      survival-atomic-write, corpus atomic-write, observational-collect-atomic-write, pr-hygiene owner-match, live-run guard, review-route, shell-subst guard, arm-import, merge-survival-atomic-write, operator-workspace reconciler and sweep, operator copy-risk gate,"
-  echo "      translator-fixture (pinned tsc), deploy-window wrapper, deploy-window manifest gate, activation contract (paperclip-upgrade), staged-tier0-drift gate,"
-  echo "      migration-safety gates (timeout-preamble, squawk, rehearsal, drift-gate),"
-  echo "      org-snapshot offline suite, queue-reject verb,"
-  echo "      stop-guard landing, warn-first inventory, regen receipt, pr-tracker, settings-bind rehearsal"
-  exit 0
-elif [[ -n "${1:-}" ]]; then
-  echo "usage: $0 [--parse-only] [--list]" >&2
+PREPARE=1
+WANT_PARSE=0
+WANT_PLAN=0
+WANT_LIST=0
+WANT_JSON=0
+WANT_NO_PREPARE=0
+WANT_HELP=0
+
+usage() {
+  echo "usage: $0 [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--no-prepare] [--help]" >&2
+}
+
+print_help() {
+  cat <<'HELP'
+usage: verify-fast.sh [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--no-prepare] [--help]
+
+Fast verification tier. The default run executes the parse gate plus the fast
+suites; --parse-only executes the parse gate only.
+
+Modes (plan and list modes are read-only; execution modes are not):
+  (default)            run parse + fast suites, preparing the checkout as needed
+  --parse-only         run the parse gate only
+  --plan, --dry-run    print the suite plan without running anything (read-only)
+  --list               print one stable suite id per line (read-only)
+  --no-prepare         run without preparing; refuse (exit 3) if prerequisites are missing
+
+Options:
+  --json               machine-readable output for --plan, --dry-run or --list
+  -h, --help           print this help
+
+Examples:
+  ./scripts/verify-fast.sh --plan --json
+  ./scripts/verify-fast.sh --dry-run
+  ./scripts/verify-fast.sh --list
+  ./scripts/verify-fast.sh --no-prepare
+  ./scripts/verify-fast.sh --parse-only
+  make verify-fast-plan
+
+Normal execution is not read-only: it may restore toolkit files, install the
+pinned TypeScript compiler, and write bytecode caches. Only --plan, --dry-run
+and --list make no changes.
+HELP
+}
+
+while (($# > 0)); do
+  arg="$1"; shift
+  case "$arg" in
+    --parse-only) WANT_PARSE=1 ;;
+    --plan|--dry-run) WANT_PLAN=1 ;;
+    --list) WANT_LIST=1 ;;
+    --json) WANT_JSON=1 ;;
+    --no-prepare) WANT_NO_PREPARE=1 ;;
+    --help|-h) WANT_HELP=1 ;;
+    *)
+      echo "verify-fast: unknown flag: $arg" >&2
+      usage
+      exit 2
+      ;;
+  esac
+done
+
+if (( WANT_JSON )) && (( ! WANT_PLAN )) && (( ! WANT_LIST )); then
+  echo "verify-fast: --json requires --plan, --dry-run or --list" >&2
+  usage
   exit 2
+fi
+if (( WANT_PLAN )) && (( WANT_LIST )); then
+  echo "verify-fast: cannot combine --plan/--dry-run with --list (pick one output)" >&2
+  usage
+  exit 2
+fi
+if (( WANT_NO_PREPARE )) && (( WANT_PLAN || WANT_LIST )); then
+  echo "verify-fast: cannot combine --no-prepare with --plan/--dry-run/--list (plan and list modes never prepare)" >&2
+  usage
+  exit 2
+fi
+
+if (( WANT_HELP )); then
+  print_help
+  exit 0
+fi
+if (( WANT_PARSE )); then
+  MODE="parse"
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+
+INVENTORY_FILE="$REPO_ROOT/scripts/verify-fast-inventory.json"
+PLAN_HELPER="$REPO_ROOT/scripts/verify-fast-plan.py"
+TIER_ARGS=()
+if (( WANT_PARSE )); then
+  TIER_ARGS=(--tier parse)
+fi
+
+# "--list" prints one stable suite id per line from the shared inventory.
+if (( WANT_LIST )); then
+  if (( WANT_JSON )); then
+    python3 "$PLAN_HELPER" --inventory "$INVENTORY_FILE" --emit-list-json "${TIER_ARGS[@]}"
+  else
+    python3 "$PLAN_HELPER" --inventory "$INVENTORY_FILE" --emit-list "${TIER_ARGS[@]}"
+  fi
+  exit 0
+fi
+
+if (( WANT_PLAN )); then
+  if (( WANT_JSON )); then
+    python3 "$PLAN_HELPER" --inventory "$INVENTORY_FILE" --emit-json "${TIER_ARGS[@]}"
+  else
+    python3 "$PLAN_HELPER" --inventory "$INVENTORY_FILE" --emit-text "${TIER_ARGS[@]}"
+  fi
+  exit 0
+fi
+
+if (( WANT_NO_PREPARE )); then
+  PREPARE=0
+  missing="$(python3 "$PLAN_HELPER" --inventory "$INVENTORY_FILE" --missing-prereqs "${TIER_ARGS[@]}")"
+  if [[ -n "$missing" ]]; then
+    count="$(printf '%s\n' "$missing" | wc -l | tr -d ' ')"
+    {
+      echo "verify-fast: cannot run with --no-prepare: ${count} prerequisite(s) missing"
+      echo "missing: $(printf '%s' "$missing" | tr '\n' ' ' | sed 's/ $//')"
+      echo "next step: run the same command without --no-prepare to restore and install, or provision the missing prerequisites and retry"
+    } >&2
+    exit 3
+  fi
+fi
 
 rc=0
 fail() { echo "::error::$1"; rc=1; }
@@ -124,7 +226,7 @@ fi
 # Warm checkouts can contain old ignored bytes. Check the complete pinned
 # untracked closure, not a filename sentinel. A cold/stale checkout needs the
 # archive download as preparation; all subsequent tests stay hermetic.
-if ! python3 verification/offline_ci_contract.py --check-restored >/dev/null 2>&1; then
+if (( PREPARE )) && ! python3 verification/offline_ci_contract.py --check-restored >/dev/null 2>&1; then
   echo "verify-fast: restoring stale or missing toolkit-vendored suite files..."
   bash scripts/sync-toolkit.sh || fail "toolkit sync failed"
   python3 verification/offline_ci_contract.py --check-restored \
@@ -144,6 +246,11 @@ python3 -m unittest test_reharden_relative_targets || fail "reharden relative-ta
 python3 -m unittest test_deploy_window_manifest || fail "deploy-window manifest gate suite failed"
 ./test_credential_chain_lockdown.sh || fail "credential-chain lockdown fixture suite failed"
 python3 -m unittest test_ci_required_checks_audit || fail "required-checks audit failed"
+# case_6f2e8a41. Deterministic test-missing gate: unit contract plus
+# staged-copy/CLI regression. Hermetic stdlib unittest, no network, no
+# clock, temp fixtures only.
+python3 -m unittest test_blocker_test_checks test_test_missing_org_template \
+  || fail "test-missing gate suites failed"
 python3 -B test_beszel_adapter.py || fail "beszel adapter suite failed"
 python3 -B test_beszel_discord_forwarder.py || fail "beszel discord forwarder suite failed"
 bash test_fetch_beszel_normalized.sh || fail "beszel fetch wrapper suite failed"
@@ -184,7 +291,7 @@ python3 -m unittest test_warn_first_inventory || fail "warn-first inventory suit
 node --test plugins/pr-tracker/test/collect-rest.test.mjs plugins/pr-tracker/test/poll-prs.test.mjs plugins/pr-tracker/test/setup.test.mjs plugins/pr-tracker/test/upstream-watcher.test.mjs plugins/pr-tracker/test/view-model.test.mjs \
   || fail "pr-tracker suite failed"
 node --test paperclip-upgrade/settings-bind-rehearsal.test.mjs || fail "settings-bind rehearsal suite failed"
-(cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes) \
+(cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes) \
   || fail "review-error, review-dedup, PR-supply, flow-guard, flake-ledger and pr-controller suites failed"
 (cd ops/paperclip && python3 -B -m unittest test_focus_gate_bounds) || fail "focus-gate bounds suite failed"
 (cd ops/lib && python3 -m unittest test_atomic_state) || fail "atomic state suite failed"
@@ -212,7 +319,7 @@ node --test paperclip-upgrade/settings-bind-rehearsal.test.mjs || fail "settings
 # Translator fixture needs the pinned TypeScript compiler. CI installs
 # typescript@5.9.3 before this step; do the same locally with the shared
 # npm cache so scratch worktrees (no node_modules) work identically.
-if ! node -e "require.resolve('typescript/bin/tsc')" >/dev/null 2>&1; then
+if (( PREPARE )) && ! node -e "require.resolve('typescript/bin/tsc')" >/dev/null 2>&1; then
   echo "verify-fast: installing pinned typescript@5.9.3 (shared npm cache)..."
   npm install --no-save --ignore-scripts typescript@5.9.3 || fail "typescript install failed"
 fi
@@ -227,6 +334,9 @@ python3 test_staged_drift.py || fail "staged Tier-0 drift gate failed"
 ./test_migration_rehearsal.sh || fail "migration rehearsal suite failed"
 python3 -m unittest test_migration_drift_gate || fail "migration drift-gate suite failed"
 python3 -m unittest test_migration_evidence_ax || fail "migration evidence-AX suite failed"
+# Plan/list/no-prepare contract plus the strict inventory-to-execution drift
+# check and the PREPARE-guard check. Offline: stdlib unittest, synthetic stubs.
+python3 -B -m unittest test_verify_fast_plan test_verify_fast_plan_gates || fail "verify-fast plan suites failed"
 
 if [[ "$rc" -ne 0 ]]; then
   echo "verify-fast: FAILED"

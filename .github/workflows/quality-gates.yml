@@ -1,0 +1,311 @@
+name: Quality gates
+
+# Deterministic quality gates: static checks that need no reviewer.
+# shellcheck+shfmt, ruff, actionlint+zizmor, vendored shared ast-grep rules
+# (fixtures, a subprocess-timeout backlog gate and a report-only full scan),
+# a pull_request_target ban, semgrep python+bash, and changed-lines mutation
+# testing. The ast-grep/semgrep rule configs port separately; their WARN
+# gates skip until the configs land.
+#
+# ci-policy: non-required -- owns no required check; WARN steps report via
+# annotations and HARD steps go red without blocking merge. One light job
+# (timeout-minutes 9) on a GitHub-hosted runner.
+#
+# WARN vs HARD: WARN steps carry `continue-on-error: true` (report, don't
+# fail). HARD steps fail the job on a hit: zizmor high-severity findings and
+# any pull_request_target trigger. New checks start WARN. WARN graduates to
+# HARD only in a reviewed PR that first clears (or backlogs) its findings.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-gates-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  # Gate-tool versions (ruff/semgrep/mutmut/zizmor) live in
+  # scripts/quality-gates-requirements.txt, a pip-compile
+  # --generate-hashes lockfile installed with --require-hashes below,
+  # so floating transitive deps cannot slip in at run time. Bump a tool
+  # by editing scripts/quality-gates-requirements.in and regenerating
+  # the lockfile in the same PR.
+  SHELLCHECK_VERSION: "0.10.0"
+  SHFMT_VERSION: "3.12.0"
+  ACTIONLINT_VERSION: "1.7.7"
+  AST_GREP_VERSION: "0.50.0"
+  MUTMUT_BUDGET_SECS: "180"
+  # Digest pins for release binaries pulled by mutable tag (Linux x86_64
+  # runners). Verified with sha256sum -c before extraction/execution;
+  # a re-pointed tag fails closed here instead of running silently. Update
+  # with the new digest when bumping a version above.
+  SHELLCHECK_SHA256: "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87"
+  SHFMT_SHA256: "d9fbb2a9c33d13f47e7618cf362a914d029d02a6df124064fff04fd688a745ea"
+  ACTIONLINT_SHA256: "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757"
+  AST_GREP_SHA256: "0fd3f489639abb8465a914b74b8779171577582318d8a940d00399f59dba81c5"
+  # get-pip.py bootstrap fallback (only when pip and ensurepip are both
+  # absent). Unversioned upstream URL: digest-pinned and verified before
+  # execution so a changed bootstrap fails closed. Refresh with the new
+  # digest if the fallback ever trips on a hash mismatch.
+  GET_PIP_SHA256: "f4448a01e3ab2914c65f4ca59d4cacba6b2dbde19a483fbac46587f8bbaff424"
+
+jobs:
+  quality-gates:
+    name: quality-gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - name: Require a GitHub-hosted runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || {
+            echo "::error::public CI requires a GitHub-hosted runner"; exit 1;
+          }
+          printf 'GitHub-hosted runner: os=%s arch=%s\n' "$RUNNER_OS" "$RUNNER_ARCH"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Gates 7 and 8 compare against the PR base recorded from the
+          # checked-out merge commit (HEAD^1). Full history is already
+          # present, so no base fetch is needed; the credential is not
+          # persisted so downloaded HARD-gate binaries never see a
+          # write-capable token (zizmor artipacked).
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Record checked-out PR base for diff gates
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUALITY_GATE_BASE_SHA="$(git rev-parse HEAD^1)"
+          echo "QUALITY_GATE_BASE_SHA=$QUALITY_GATE_BASE_SHA" >> "$GITHUB_ENV"
+
+      - name: Install pinned gate tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Always install into a runner-owned venv: distro Python is
+          # PEP 668 externally managed, so a system-wide pip install can
+          # fail. Try a normal venv first; if the image cannot seed pip,
+          # recreate it with --without-pip (stdlib only) and bootstrap pip
+          # with the checksum-verified get-pip.py. No sudo is ever needed.
+          PIP_PY="$RUNNER_TEMP/qgvenv/bin/python"
+          if ! python3 -m venv "$RUNNER_TEMP/qgvenv" >/dev/null 2>&1; then
+            rm -rf "$RUNNER_TEMP/qgvenv"
+            python3 -m venv --without-pip "$RUNNER_TEMP/qgvenv"
+            curl -sSL -o "$RUNNER_TEMP/get-pip.py" https://bootstrap.pypa.io/get-pip.py
+            echo "${GET_PIP_SHA256}  $RUNNER_TEMP/get-pip.py" | sha256sum -c -
+            "$PIP_PY" "$RUNNER_TEMP/get-pip.py" --disable-pip-version-check >/dev/null
+          fi
+          # mutmut and glob2 ship sdist-only, and pip's isolated builds
+          # would fetch their setuptools backend outside --require-hashes.
+          # Pre-install the hash-pinned backend first, then install the
+          # main lockfile with build isolation disabled.
+          "$PIP_PY" -m pip install --quiet \
+            --require-hashes \
+            -r scripts/quality-gates-build-requirements.txt
+          "$PIP_PY" -m pip install --quiet \
+            --require-hashes \
+            --no-build-isolation \
+            -r scripts/quality-gates-requirements.txt
+          mkdir -p "$RUNNER_TEMP/qgbin"
+          cd "$RUNNER_TEMP/qgbin"
+          # Linux x86_64 runners; versions and digests pinned in job
+          # env above. Every binary is verified with sha256sum -c before it
+          # executes, so a re-pointed mutable tag fails closed.
+          curl -sSL -o shellcheck.tar.xz "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          tar -xf shellcheck.tar.xz --wildcards '*/shellcheck' --strip-components=1
+          curl -sSL -o shfmt "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_amd64"
+          echo "${SHFMT_SHA256}  shfmt" | sha256sum -c -
+          chmod +x shfmt
+          curl -sSL -o actionlint.tar.gz "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          curl -sSL -o ast-grep.zip "https://github.com/ast-grep/ast-grep/releases/download/${AST_GREP_VERSION}/app-x86_64-unknown-linux-gnu.zip"
+          echo "${AST_GREP_SHA256}  ast-grep.zip" | sha256sum -c -
+          python3 -c "import zipfile; zipfile.ZipFile('ast-grep.zip').extractall('sg')"
+          chmod +x sg/sg sg/ast-grep
+          # GITHUB_PATH applies to later steps only; export for the version
+          # probes below in this same step. The venv always exists here:
+          # both branches above either create qgvenv or exit the step
+          # under set -e, so there is no non-venv case left to handle.
+          echo "$RUNNER_TEMP/qgvenv/bin:$RUNNER_TEMP/qgbin:$RUNNER_TEMP/qgbin/sg" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/qgvenv/bin:$RUNNER_TEMP/qgbin:$RUNNER_TEMP/qgbin/sg:$PATH"
+          shellcheck --version | head -n 1
+          shfmt --version
+          actionlint --version
+          ruff --version
+          zizmor --version
+
+      - name: "Gate 1 (WARN): shellcheck + shfmt on tracked shell"
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # NUL-delimited file list through xargs -r: no word splitting,
+          # so no shellcheck SC2086 suppression is needed (floor guard
+          # bans new suppressions). -r keeps empty_input from hanging
+          # on stdin.
+          git ls-files -z '*.sh' | xargs -0 -r shellcheck -S warning --format=gcc \
+            || echo "::warning::shellcheck findings above (WARN, not failing)"
+          unformatted="$(git ls-files -z '*.sh' | xargs -0 -r shfmt -d || true)"
+          if [[ -n "$unformatted" ]]; then
+            echo "::warning::shfmt would reformat files (WARN, not failing):"
+            printf '%s\n' "$unformatted" | grep '^diff' | head -n 20 || true
+          fi
+          echo "gate 1 done"
+
+      - name: "Gate 2 (WARN): ruff default rules + bugbear"
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          ruff check --select E4,E7,E9,F,B . \
+            || echo "::warning::ruff findings above (WARN, not failing)"
+          echo "gate 2 done"
+
+      - name: "Gate 3a (WARN): actionlint on workflows"
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          actionlint -no-color
+          echo "gate 3a done"
+
+      - name: "Gate 3b (WARN): zizmor full scan for visibility"
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          zizmor --no-online-audits .github/workflows/ \
+            || echo "::warning::zizmor findings above (WARN, not failing)"
+          echo "gate 3b done"
+
+      - name: "Gate 3c (HARD): zizmor fails on high-severity findings"
+        shell: bash
+        run: |
+          set -euo pipefail
+          zizmor --no-online-audits --min-severity high .github/workflows/
+          echo "gate 3c done: no high-severity findings"
+
+      - name: "Gate 4a (WARN): vendored ast-grep rule fixtures pass"
+        # Rule configs port separately; skip until sgconfig.yml lands.
+        if: hashFiles('sgconfig.yml') != ''
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/qgbin/sg/ast-grep" test --config sgconfig.yml \
+            || echo "::warning::ast-grep rule fixtures failing (WARN, not failing)"
+          echo "gate 4a done"
+
+      - name: "Gate 4b (WARN): ast-grep subprocess-without-timeout vs backlog"
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python3 scripts/quality-gates/subprocess_timeout_gate.py \
+            --ast-grep "$RUNNER_TEMP/qgbin/sg/ast-grep"
+          echo "gate 4b done"
+
+      - name: "Gate 4c (WARN): vendored ast-grep rules full scan, report only"
+        # Rule configs port separately; skip until sgconfig.yml lands.
+        if: hashFiles('sgconfig.yml') != ''
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # ast-grep skips hidden dirs by default, so the gha-* rules over
+          # .github/workflows never run without this flag.
+          "$RUNNER_TEMP/qgbin/sg/ast-grep" scan --config sgconfig.yml \
+            --no-ignore hidden \
+            --json > "$RUNNER_TEMP/sg-findings.json" || true
+          python3 - "$RUNNER_TEMP/sg-findings.json" <<'EOF'
+          import json, sys
+          from collections import Counter
+          from pathlib import Path
+          def is_test_path(path):
+              parts = Path(path).parts
+              name = parts[-1]
+              return (any(p in ("test", "tests") for p in parts)
+                      or name.startswith("test_")
+                      or name.endswith("_test.py"))
+          findings = json.load(open(sys.argv[1]))
+          prod = [f for f in findings if not is_test_path(f["file"])]
+          by_rule = {}
+          for f in prod:
+              by_rule.setdefault(f["ruleId"], []).append(f["file"])
+          print(f"vendored-rules scan: {len(prod)} prod findings "
+                f"({len(findings) - len(prod)} in tests, out of scope)")
+          for rule in sorted(by_rule):
+              files = sorted(set(by_rule[rule]))
+              shown = ", ".join(files[:5])
+              extra = "" if len(files) <= 5 else f" (+{len(files) - 5} more)"
+              print(f"::warning::{rule}: {len(by_rule[rule])} finding(s) "
+                    f"(WARN, not failing): {shown}{extra}")
+          EOF
+          echo "gate 4c done"
+
+      - name: "Gate 5 (HARD): no pull_request_target in workflows"
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/quality-gates/no_pull_request_target.sh
+          echo "gate 5 done: clean"
+
+      - name: "Gate 6 (WARN): semgrep python+bash rules"
+        # Rule configs port separately; skip until the semgrep config lands.
+        if: hashFiles('.semgrep/quality-gates.yml') != ''
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          semgrep --config .semgrep/quality-gates.yml --quiet \
+            --exclude 'test_*.py' --exclude '*_test.py' \
+            --exclude 'tests/*' --exclude 'test/*' .
+          echo "gate 6 done"
+
+      - name: "Gate 7 (WARN): mutmut on changed lines, verify-fast as runner"
+        shell: bash
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ env.QUALITY_GATE_BASE_SHA || github.event.pull_request.base.sha }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          bash scripts/quality-gates/mutmut_changed.sh
+          echo "gate 7 done"
+
+      - name: "Gate 8 (HARD): floor guard -- no silenced checks, easier tests, weaker bar"
+        shell: bash
+        env:
+          BASE_SHA: ${{ env.QUALITY_GATE_BASE_SHA || github.event.pull_request.base.sha }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          base="${BASE_SHA:-}"
+          if [[ -z "$base" ]]; then
+            # Push to main / merge_group: diff against the first parent.
+            base="HEAD~1"
+          else
+            # On pull_request, this is the checked-out merge commit's first
+            # parent, not a possibly stale event payload base SHA. Full
+            # history is already present (fetch-depth 0): the base must
+            # resolve locally, otherwise fail loudly.
+            git cat-file -e "$base^{commit}" || {
+              echo "::error::floor guard: base $base missing from clone"
+              exit 1
+            }
+          fi
+          python3 scripts/quality-gates/floor_guard.py --base "$base"
+          echo "gate 8 done: clean"

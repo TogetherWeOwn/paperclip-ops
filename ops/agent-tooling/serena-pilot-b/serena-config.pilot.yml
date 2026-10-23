@@ -1,0 +1,17 @@
+# Pilot B global Serena config template.
+# code-nav renders @SERENA_HOME@ for the effective home before seeding and
+# validates these safety-critical values on EVERY call. Serena may normalize
+# the file and populate projects/auth_secret; those values are preserved.
+# An unsafe older config is refused: inspect and move it aside to reseed.
+#
+# Explicitly disable legacy trust-all defaults: no repo activation commands,
+# repo-supplied language-server settings or symlink escapes are trusted.
+trusted_project_path_patterns: []
+# Required even when empty. --project-from-cwd activates repos dynamically;
+# Serena may add entries as they are activated.
+projects: []
+# Serena 2.0.0 falls back to repo/.serena when the external folder is absent.
+# code-nav pre-creates that folder before activation, even if .serena exists.
+# Only the directory basename placeholder is supported; same-basename repos
+# share state. Builder worktree directory names are unique during the canary.
+project_serena_folder_location: "@SERENA_HOME@/projects/$projectFolderName"

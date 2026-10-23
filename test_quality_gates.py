@@ -85,9 +85,55 @@ class TestCompare(unittest.TestCase):
         self.assertEqual(gate.compare({"a.py": 3}, {"a.py": 3}), [])
 
 
-# NOTE: TestWorkflowComparisonBase (workflow merge-base wiring) is not moved
-# with this batch: it pins .github/workflows/quality-gates.yml, which moves
-# with the workflow-split batch. Re-add it there.
+class TestWorkflowComparisonBase(unittest.TestCase):
+    def test_pr_diff_gates_use_checked_out_merge_base(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "quality-gates.yml").read_text()
+        self.assertIn('QUALITY_GATE_BASE_SHA="$(git rev-parse HEAD^1)"', workflow)
+        # Both halves of the wiring are pinned: the value must reach the
+        # job environment (not GITHUB_OUTPUT or nowhere), and the Record
+        # step must run before the gates that consume it. Either half
+        # dropped silently falls back to the payload base the wiring
+        # exists to avoid, mis-attributing main-side changes to the PR.
+        self.assertIn(
+            'echo "QUALITY_GATE_BASE_SHA=$QUALITY_GATE_BASE_SHA" >> "$GITHUB_ENV"',
+            workflow,
+        )
+        record_at = workflow.index("Record checked-out PR base for diff gates")
+        self.assertLess(record_at, workflow.index("Gate 7 (WARN)"))
+        self.assertLess(record_at, workflow.index("Gate 8 (HARD)"))
+        self.assertEqual(
+            workflow.count("BASE_SHA: ${{ env.QUALITY_GATE_BASE_SHA || github.event.pull_request.base.sha }}"),
+            2,
+        )
+
+    def test_gate_tools_install_is_hash_locked(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "quality-gates.yml").read_text()
+        # The supply-chain fix is pinned, not just present: the tools must
+        # install from the hash-locked file with --require-hashes, never as
+        # bare version-pinned arguments (whose transitive trees pip would
+        # resolve fresh from PyPI on every run). Reverting the install step
+        # to floating direct installs must turn this suite red.
+        # The flag must appear on code lines, not just in prose comments:
+        # deleting both pip flags while leaving the comments must fail.
+        code_lines = [
+            line
+            for line in workflow.splitlines()
+            if not line.strip().startswith("#")
+        ]
+        self.assertEqual(sum("--require-hashes" in line for line in code_lines), 2)
+        self.assertIn("-r scripts/quality-gates-requirements.txt", workflow)
+        for bare in ("ruff==", "semgrep==", "mutmut[patch]==", "zizmor=="):
+            self.assertNotIn(bare, workflow)
+        # mutmut and glob2 ship sdist-only: their builds must run with
+        # build isolation disabled against the pre-installed pinned
+        # backend, never fetching unpinned setuptools into an isolated
+        # build env. The backend install must come first.
+        self.assertIn("--no-build-isolation", workflow)
+        self.assertIn("-r scripts/quality-gates-build-requirements.txt", workflow)
+        self.assertLess(
+            workflow.index("-r scripts/quality-gates-build-requirements.txt"),
+            workflow.index("-r scripts/quality-gates-requirements.txt"),
+        )
 
 class TestScan(unittest.TestCase):
     def _finding(self, file, rule="py-subprocess-timeout"):

@@ -20,12 +20,16 @@ import sys
 import time
 from pathlib import Path
 
+import confirmed_outcomes as outcomes
+
 ROOT = Path('/home/ubuntu/paperclip-enterprise-company')
 CID = '00000000-0000-4000-8000-000000000004'
 API = 'http://127.0.0.1:3100/api'
 LOG = ROOT / 'ops/worker-vps/operator-actions.log'
 PAUSE = ROOT / 'ops/productivity/backlog-promoter.PAUSE'
 APPLY = '--apply' in sys.argv
+DRY_RUN = '--dry-run' in sys.argv
+JSON_SUMMARY = '--json-summary' in sys.argv
 BOUNCE_H = 24  # a card its owner returned to backlog after our promotion waits for COO admission, not another push
 TARGET_RUNNABLE = 40
 MAX_PER_RUN = 25
@@ -91,18 +95,39 @@ def psql(sql):
 
 
 def api(method, path, body):
-    """HTTP status; 'timeout' when curl did not exit in time (the write may or may not have landed)."""
+    """Classified status-only response; unknown writes are never retried here."""
     try:
         r = subprocess.run(['curl', '-sK', str(ROOT / '.pc.curl'), '-X', method, f'{API}/{path}', '-H',
                             'content-type: application/json', '-d', json.dumps(body), '-o', '/dev/null',
                             '--max-time', f'{CURL_TIMEOUT_S:g}', '-w', '%{http_code}'],
                            capture_output=True, text=True, timeout=CURL_TIMEOUT_S + 10)
     except subprocess.TimeoutExpired:
-        return 'timeout'
-    return r.stdout.strip()
+        return outcomes.from_curl()
+    except OSError:
+        return outcomes.Outcome('definite_failure', 'curl_unavailable', 'check_transport_before_next_tick')
+    return outcomes.from_curl(r)
 
 
-def main():
+def main(argv=None):
+    args = outcomes.options('Promote eligible backlog cards; dry-run by default.',
+                            apply=APPLY, dry_run=DRY_RUN, json_summary=JSON_SUMMARY, argv=argv)
+    summary = outcomes.Summary('backlog_promoter', args.json_summary)
+    if args.refused:
+        summary.error('contradictory_flags')
+        summary.finish()
+        return 2
+    try:
+        promote(args, summary)
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError, ValueError):
+        summary.error('read_or_log_failed')
+        summary.finish()
+        raise
+    # Preserve the imported caller's historic successful None return; the CLI
+    # still exits zero, while failures carry a nonzero status.
+    return summary.finish() or None
+
+
+def promote(args, summary):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from host_ok import host_ok
     ok, why = host_ok()
@@ -120,18 +145,20 @@ def main():
     if not need:
         return
     bounced = set()
-    for line in LOG.read_text().splitlines()[-4000:]:
-        if 'backlog-promoter:' in line and 'backlog->todo' in line:
+    for line in (LOG.read_text().splitlines()[-4000:] if LOG.exists() else []):
+        if ('backlog-promoter:' in line and 'backlog->todo' in line
+                and 'outcome=confirmed code=http_200' in line):
             try:
                 ts = calendar.timegm(time.strptime(line[:20], '%Y-%m-%dT%H:%M:%SZ'))
             except ValueError:
                 continue
-            if time.time() - ts < BOUNCE_H * 3600:
+            if 0 <= time.time() - ts < BOUNCE_H * 3600:
                 bounced.add(line.split('backlog-promoter: ', 1)[1].split(' ', 1)[0])
     agents = {r[0]: (r[1], r[2]) for r in psql(f"select name, id, status from agents where company_id='{CID}' and status<>'terminated'")}
-    done = 0
+    done, uncertain, attempted = 0, 0, 0
+    seen = set()
     for proj, fallback in PROJECTS:
-        if done >= need:
+        if done + uncertain + summary.planned >= need or attempted >= MAX_PER_RUN:
             break
         rows = psql(f"""select i.id, i.identifier, i.title, coalesce(i.priority,'medium'), coalesce(a.name,''), coalesce(a.status,'')
             from issues i join projects p on p.id=i.project_id left join agents a on a.id=i.assignee_agent_id
@@ -139,8 +166,10 @@ def main():
             order by i.updated_at desc""")
         rows.sort(key=lambda r: PRIO.get(r[3], 2))
         for iid, ident, title, prio, aname, astatus in rows:
-            if done >= need:
+            if done + uncertain + summary.planned >= need or attempted >= MAX_PER_RUN:
                 break
+            if iid in seen:
+                continue  # no blind same-tick replay, including unknown writes
             if ident in bounced:
                 continue  # promoted within BOUNCE_H and its owner put it back: needs COO admission
             if proj == 'Kofra' and SKIP_TITLE.search(title):
@@ -154,14 +183,25 @@ def main():
             who = aname if aname and astatus not in ('paused', 'terminated') else fallback
             if who != aname:
                 body['assigneeAgentId'] = agents[who][0]
-            if not APPLY:
-                print(f'would promote {ident} [{proj}/{prio}] -> {who}: {title[:70]}')
-                done += 1
+            seen.add(iid)
+            if not args.apply:
+                print(f'would promote {ident} [{proj}/{prio}] -> {who}')
+                summary.planned += 1
                 continue
-            code = api('PATCH', f'issues/{iid}', body)
+            attempted += 1
+            outcome = api('PATCH', f'issues/{iid}', body)
+            summary.add('promote', f'{ident}:{iid}', outcome)
+            if not outcome.confirmed:
+                # Reserve uncertain slots only for this tick; a later fresh DB
+                # read re-qualifies backlog. Rejections spend no success capacity.
+                uncertain += outcome.outcome == 'unknown'
+                print(f'FAILED promote {ident}: outcome {outcome.outcome} '
+                      f'code={outcome.code} next_action={outcome.next_action}')
+                continue
             done += 1
             line = (f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} backlog-promoter: {ident} backlog->todo "
-                    f"[{proj}/{prio}] assignee {who} HTTP {code}")
+                    f"[{proj}/{prio}] assignee {who} HTTP {outcome.http_status} "
+                    f"outcome=confirmed code={outcome.code}")
             print(line)
             with LOG.open('a') as f:
                 f.write(line + '\n')
@@ -169,4 +209,9 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        result = main(sys.argv[1:])
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError, ValueError):
+        print('backlog-promoter: FAILED: read or log unavailable; inspect state before retry', file=sys.stderr)
+        result = 1
+    sys.exit(result)

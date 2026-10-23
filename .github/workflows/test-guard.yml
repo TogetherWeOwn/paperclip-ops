@@ -28,6 +28,11 @@ jobs:
   # Keep id and name byte-identical: a future org ruleset requires `test-guard`.
   test-guard:
     name: test-guard
+    # Caller of the org reusable gate: passes the marker-label audit
+    # scopes through; repeats the workflow floor exactly.
+    permissions:
+      contents: read
+      pull-requests: read
     uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@866275517a9875f02110f946411401db8907ec8a
     # Private repo: no GitHub-hosted minutes; two-ephemeral is this repo's GARM pool.
     with:

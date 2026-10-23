@@ -90,7 +90,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import kofra_preview_parity as parity  # noqa: E402
+import kofra_preview_parity as parity
 
 TOP_LEVEL_PROD = "top-level (no env.production block)"
 ENV_PROD = "env.production"

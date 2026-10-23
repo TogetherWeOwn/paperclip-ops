@@ -165,7 +165,8 @@ def open_prs(e):
 
     complete is False when any search page reports incomplete_results, when the
     MAX_PRS bound stops pagination (the bound governs: the set may be truncated
-    however a further probe would read), or when a page fails or is malformed.
+    however a further probe would read), or when a page fails, times out, or is
+    malformed (non-list/missing items, malformed repository_url).
     The caller must degrade the whole tick on incomplete: an incomplete_search
     skip row with zero mutations and zero per-PR detail reads.
     """
@@ -175,14 +176,21 @@ def open_prs(e):
             d = json.loads(gh(e, 'api', f'search/issues?q=org:{ORG}+is:pr+is:open&per_page=100&page={page}'))
             if d.get('incomplete_results'):
                 return [], False
-            items = d.get('items') or []
+            items = d.get('items')
+            if not isinstance(items, list):
+                return [], False
             for it in items:
-                repo = it['repository_url'].split('/repos/')[1]
+                url_parts = it['repository_url'].split('/repos/', 1)
+                repo = url_parts[1] if len(url_parts) == 2 else ''
+                repo_parts = repo.split('/')
+                if len(repo_parts) != 2 or not all(repo_parts):
+                    return [], False
                 prs.append((repo, it['number']))
             if len(items) < 100:
                 return prs, True
             page += 1
-    except (RuntimeError, ValueError, KeyError, AttributeError, TypeError, IndexError):
+    except (RuntimeError, ValueError, KeyError, AttributeError, TypeError, IndexError,
+            subprocess.TimeoutExpired):
         return [], False
     return [], False
 
@@ -193,7 +201,8 @@ def check_runs_for_head(e, repo, head):
     Pages explicitly (page=N) up to MAX_CHECK_RUN_PAGES and reconciles collected
     runs against the first page's total_count. Incomplete (the caller skips that
     PR as incomplete_check_runs, never 5/5-by-omission) on: a missing/non-integer
-    total_count, collected != total_count, a failed/malformed page, a disagreeing
+    total_count, a non-list check_runs batch, non-object entries in a batch,
+    collected != total_count, a failed/malformed page, a gh timeout, a disagreeing
     later total_count, or bound exhaustion without reconciliation. A later page
     that omits total_count is tolerated: the first page's total governs.
     """
@@ -201,8 +210,8 @@ def check_runs_for_head(e, repo, head):
     try:
         while page <= MAX_CHECK_RUN_PAGES:
             d = json.loads(gh(e, 'api', f'repos/{repo}/commits/{head}/check-runs?per_page=100&page={page}'))
-            batch = d.get('check_runs') or []
-            if not isinstance(batch, list):
+            batch = d.get('check_runs')
+            if not isinstance(batch, list) or any(not isinstance(x, dict) for x in batch):
                 return [], False
             if page == 1:
                 total = d.get('total_count')
@@ -214,7 +223,8 @@ def check_runs_for_head(e, repo, head):
             if len(batch) < 100 or len(runs) >= total:
                 break
             page += 1
-    except (RuntimeError, ValueError, KeyError, AttributeError, TypeError, IndexError):
+    except (RuntimeError, ValueError, KeyError, AttributeError, TypeError, IndexError,
+            subprocess.TimeoutExpired):
         return [], False
     return runs, len(runs) == total
 

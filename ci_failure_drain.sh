@@ -97,7 +97,7 @@ refuse() {
 # JSON is optional: warn on failure, preserving prior evidence and drain exits.
 write_json() {
   local staged
-  if staged="$(mktemp "$OUT_DIR/.failure-summary.json.XXXXXX")"; then
+  if [[ "$JSON_ROWS_FAILED" == "0" ]] && staged="$(mktemp "$OUT_DIR/.failure-summary.json.XXXXXX")"; then
     if "$@" > "$staged" && mv -fT -- "$staged" "$OUT_DIR/failure-summary.json"; then
       return 0
     fi
@@ -152,6 +152,7 @@ JOBS_JSON=""
 LOGS_DIR=""
 OUT_DIR="failure-drain"
 JSON_OUT=0
+JSON_ROWS_FAILED=0
 API="${GITHUB_API_URL:-https://api.github.com}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -271,9 +272,12 @@ for jid in $FAILED_IDS; do
   # The envelope row reuses the md's own cause/step/filename, so the two
   # surfaces cannot triage differently.
   if [[ "$JSON_OUT" == "1" ]]; then
-    jq -n --argjson id "$jid" --arg name "$JNAME" --arg step "$STEP" \
+    if ! jq -n --argjson id "$jid" --arg name "$JNAME" --arg step "$STEP" \
       --arg cause "$CAUSE" --arg log "$FNAME" \
-      '{id:$id,name:$name,failed_step:$step,cause:$cause,log_file:$log}' >> "$TMP/rows.jsonl"
+      '{id:$id,name:$name,failed_step:$step,cause:$cause,log_file:$log}' >> "$TMP/rows.jsonl"; then
+      # Even valid output from a failed serializer must veto either envelope.
+      JSON_ROWS_FAILED=1
+    fi
   fi
   [[ -n "$STEP" ]] && STEP_TXT=" at step \"$STEP\"" || STEP_TXT=""
   printf -- '- ❌ %s%s: %s\n  Log: %s (last %s lines)\n' "$JNAME" "$STEP_TXT" "$CAUSE" "$FNAME" "$LOG_TAIL_LINES" >> "$OUT_DIR/failure-summary.md"

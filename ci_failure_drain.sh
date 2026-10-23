@@ -220,7 +220,9 @@ cause_of() {
   [[ -n "$line" ]] || line="$(grep -a . "$log" 2>/dev/null | tail -n 1 || true)"
   # Strip the Actions timestamp prefix; it doubles every line's width.
   line="$(sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z //' <<< "$line")"
-  printf '%.300s' "$line"
+  # Slice characters, not bytes, even when the caller runs in the C locale.
+  local LC_ALL=C.UTF-8
+  printf '%s' "${line:0:$SUMMARY_LINE_CHARS}"
 }
 
 safe_name() {

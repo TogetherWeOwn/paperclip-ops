@@ -23,10 +23,10 @@
 # went unmeasured in the JSON instead of printing "no failures found". The md
 # bytes, the ::error line and stdout are byte-identical with --json on or off.
 #
-# HERMETIC BY CONSTRUCTION. Recorded jobs-list fixtures plus recorded per-job
-# log files, invoked via --jobs-json/--logs-dir. No network, no credential,
-# nothing leaves the loopback; a refusing curl stub proves zero HTTP calls.
-# Requires bash, jq, curl (curl only for the live path, never taken here).
+# HERMETIC BY CONSTRUCTION. Recorded jobs/log fixtures and synthetic curl
+# responses exercise fixture and live paths. Curl stubs never call the network;
+# live cases use synthetic credentials and an unreachable .invalid API origin.
+# Requires bash, jq, python3 and an available UTF-8 locale.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,8 +61,22 @@ for f in "$RED" "$GREEN" "$SINGLE" "$LONGCAUSE" \
   [[ -s "$f" ]] || { echo "test_ci_failure_drain_json: recorded fixture missing or empty: $f" >&2; exit 2; }
 done
 
+command -v python3 >/dev/null 2>&1 || { echo "test_ci_failure_drain_json: python3 is required" >&2; exit 2; }
+for scenario in drained single no_failures refused_jobs refused_log; do
+  [[ -s "$FIXTURES/expected/$scenario.json" ]] || { echo "missing expected envelope: $scenario" >&2; exit 2; }
+done
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+
+# Literal expected envelopes are independent of the implementation. Only the run
+# id varies between fixture, publication and synthetic live invocations.
+assert_envelope() {
+  local scenario="$1" actual="$2" run="$3" label="$4"
+  jq -e --arg run "$run" --slurpfile expected "$FIXTURES/expected/$scenario.json" \
+    '. == ($expected[0] | .run_id = $run)' "$actual" >/dev/null 2>&1
+  assert $? "$label complete v1 envelope pins every field"
+}
 
 # ---------------------------------------------------------------------------
 hdr "The multi-failure envelope — what a red run must parse as"
@@ -468,6 +482,7 @@ publication_case() {
       '.schema_version == 1 and .run_id == "727272" and .status == $status and .error.code == $code' \
       "$final" >/dev/null 2>&1
     assert $? "$label replaces stale evidence with a valid current envelope"
+    assert_envelope "$scenario" "$final" 727272 "$label"
     grep -q '^valid sibling$' "$PUB_CASE/rename.log" \
       && ! grep -q '^unsafe staging$' "$PUB_CASE/rename.log"
     assert $? "$label publishes valid JSON by renaming a same-directory temporary file"
@@ -637,6 +652,189 @@ for scenario in drained refused_log; do
       for prior in absent prior; do row_case "$scenario" "$id" "$fault" "$prior"; done
     done
   done
+done
+
+# ---------------------------------------------------------------------------
+hdr "Complete envelopes — names, measured counts and exact remediation"
+
+# Catch step-as-name, zeroed refusal counts, wrong remediation and lost/null
+# attribution, including successful replacement of a previous JSON envelope.
+assert_envelope drained "$JSON" fixture "ordinary drained"
+assert_envelope single "$SJSON" fixture "ordinary single"
+assert_envelope no_failures "$GJSON" fixture "ordinary no_failures"
+assert_envelope refused_jobs "$EJSON" fixture "ordinary refused_jobs"
+assert_envelope refused_jobs "$TMP/ref-nojobs/failure-summary.json" fixture "ordinary empty jobs list"
+assert_envelope refused_log "$TJSON" fixture "ordinary refused_log"
+jq -e '[.jobs[].name] == ["broker-suite","capture-suite"]' "$JSON" >/dev/null 2>&1
+assert $? "success names are job names, not failed steps"
+jq -e '.summary == {total_jobs:3,failed_jobs:2,drained_jobs:0}' "$TJSON" >/dev/null 2>&1
+assert $? "missing 9003 log retains all measured total and failed counts"
+jq -e '.error == {code:"refused_log_missing",retryable:false,next_action:"fetch_missing_log",unmeasured:"9003"}' "$TJSON" >/dev/null 2>&1
+assert $? "missing 9003 log pins exact typed attribution and fetch_missing_log remediation"
+
+# ---------------------------------------------------------------------------
+hdr "UTF-8 fidelity — a character boundary must not split the shared cause"
+
+# Byte precision at 300 splits the U+00E9 after its leading C3 byte. The public
+# rule is 300 CHARACTERS: 299 ASCII characters followed by one intact U+00E9.
+# Keep the existing ASCII 300-character assertions above unchanged.
+UTF8_LOCALE=""
+for candidate in C.UTF-8 C.utf8 en_US.UTF-8; do
+  charmap="$(LC_ALL="$candidate" locale charmap 2>/dev/null)"
+  if [[ "$charmap" == "UTF-8" ]]; then UTF8_LOCALE="$candidate"; break; fi
+done
+[[ -n "$UTF8_LOCALE" ]] || { echo "test_ci_failure_drain_json: UTF-8 locale required, not skipped" >&2; exit 2; }
+mkdir -p "$TMP/unicode-logs"
+UTF8_EXPECTED="error: $(printf 'A%.0s' {1..292})é"
+printf '%s fin\n' "$UTF8_EXPECTED" > "$TMP/unicode-logs/9005.log"
+for cause_locale in "$UTF8_LOCALE" C; do
+  UCASE="$TMP/unicode-$cause_locale"
+  mkdir -p "$UCASE"
+  # Same path in both calls: stdout contains the path to the output bundle.
+  env -u BASH_ENV LC_ALL="$cause_locale" "$TOOL" drain --jobs-json "$LONGCAUSE" \
+    --logs-dir "$TMP/unicode-logs" --out-dir "$UCASE/out" \
+    >"$UCASE/plain.stdout" 2>"$UCASE/plain.stderr"; RC_UP=$?
+  cp -a "$UCASE/out" "$UCASE/control"
+  env -u BASH_ENV LC_ALL="$cause_locale" "$TOOL" drain --jobs-json "$LONGCAUSE" \
+    --logs-dir "$TMP/unicode-logs" --out-dir "$UCASE/out" --json \
+    >"$UCASE/json.stdout" 2>"$UCASE/json.stderr"; RC_UJ=$?
+  assert "$((RC_UP != 0 || RC_UJ != 0))" "UTF-8 $cause_locale both drains retain exit zero" "plain=$RC_UP json=$RC_UJ"
+  python3 - "$UCASE" "$UTF8_EXPECTED" <<'PY'
+import json
+import pathlib
+import sys
+
+case = pathlib.Path(sys.argv[1])
+expected = sys.argv[2]
+try:
+    md = (case / "out/failure-summary.md").read_text(encoding="utf-8")
+    envelope = json.loads((case / "out/failure-summary.json").read_text(encoding="utf-8"))
+    cause = envelope["jobs"][0]["cause"]
+    prefix = '- ❌ long-suite at step "Long step": '
+    md_causes = [line[len(prefix):] for line in md.splitlines() if line.startswith(prefix)]
+    assert len(expected) == 300 and expected.endswith("é"), "invalid test boundary"
+    assert cause == expected, "JSON cause is not the exact first 300 Unicode characters"
+    assert md_causes == [expected], "Markdown cause is not exactly the decoded JSON cause"
+    for name in ("plain.stdout", "json.stdout"):
+        (case / name).read_text(encoding="utf-8")
+except (UnicodeError, ValueError, KeyError, IndexError, AssertionError) as exc:
+    print(f"UTF-8 cause fidelity: {exc}")
+    sys.exit(1)
+PY
+  assert $? "UTF-8 $cause_locale exact 300-character JSON and Markdown cause fidelity"
+  cmp -s "$UCASE/plain.stdout" "$UCASE/json.stdout"
+  assert $? "UTF-8 $cause_locale stdout including annotations stays byte-identical"
+  grep '^::error' "$UCASE/plain.stdout" > "$UCASE/plain.annotations"
+  grep '^::error' "$UCASE/json.stdout" > "$UCASE/json.annotations"
+  [[ -s "$UCASE/plain.annotations" ]] && cmp -s "$UCASE/plain.annotations" "$UCASE/json.annotations"
+  assert $? "UTF-8 $cause_locale error annotations stay byte-identical"
+  stderr_rc=0
+  [[ ! -s "$UCASE/plain.stderr" && ! -s "$UCASE/json.stderr" ]] || stderr_rc=1
+  assert "$stderr_rc" "UTF-8 $cause_locale adds no stderr warnings"
+  diff -r --exclude=failure-summary.json "$UCASE/control" "$UCASE/out" >/dev/null 2>&1
+  assert $? "UTF-8 $cause_locale Markdown and logs stay byte-identical"
+  cmp -s "$TMP/unicode-logs/9005.log" "$UCASE/out/long-suite.log"
+  assert $? "UTF-8 $cause_locale retained log preserves the full untruncated error"
+done
+
+# ---------------------------------------------------------------------------
+hdr "Live refusal JSON — transport and HTTP failures remain attributed"
+
+# Only curl is replaced. Parsing, refusal, JSON serialization and publication
+# all run through the real drain. No exec/fallback to a real curl exists here;
+# unknown URLs fail closed and the API origin is reserved .invalid, never live.
+mkdir -p "$TMP/live-json-bin"
+cat > "$TMP/live-json-bin/curl" <<'STUB'
+#!/usr/bin/env bash
+set -uo pipefail
+dest=""; url=""; prev=""
+printf '%s\0' "$@" >> "$CURL_ARGV_LOG"
+for arg in "$@"; do
+  if [[ "$prev" == "-o" ]]; then dest="$arg"; prev=""; continue; fi
+  case "$arg" in
+    -o) prev="-o" ;;
+    https://*) url="$arg" ;;
+  esac
+done
+[[ -n "$dest" ]] || exit 98
+case "$url" in
+  'https://ci-drain.invalid/repos/synthetic/acceptance/actions/runs/838383/attempts/4/jobs?per_page=100')
+    endpoint=jobs ;;
+  https://ci-drain.invalid/repos/synthetic/acceptance/actions/jobs/9002/logs)
+    endpoint=log-9002 ;;
+  https://ci-drain.invalid/repos/synthetic/acceptance/actions/jobs/9003/logs)
+    endpoint=log-9003 ;;
+  *) printf 'unexpected URL\n' >> "$LIVE_TRACE"; exit 98 ;;
+esac
+printf '%s\n' "$endpoint" >> "$LIVE_TRACE"
+if [[ "$LIVE_TARGET" == jobs && "$endpoint" == jobs ]] \
+    || [[ "$LIVE_TARGET" == log && "$endpoint" == log-9003 ]]; then
+  case "$LIVE_FAULT" in
+    transport) : > "$dest"; printf '000'; exit 28 ;;
+    http) printf 'synthetic unavailable\n' > "$dest"; printf '503'; exit 0 ;;
+    truncated-200)
+      # Both bodies are deterministically unobservable as complete input.
+      if [[ "$endpoint" == jobs ]]; then printf '{"jobs":[' > "$dest";
+      else printf 'error: synthetic partial log\n' > "$dest"; fi
+      printf '200'; exit 28 ;;
+    *) exit 98 ;;
+  esac
+fi
+case "$endpoint" in
+  jobs) cp "$LIVE_JOBS" "$dest" ;;
+  log-9002) cp "$LIVE_LOGS/9002.log" "$dest" ;;
+  *) exit 98 ;;
+esac
+printf '200'
+STUB
+chmod +x "$TMP/live-json-bin/curl"
+
+live_json_env() {
+  env -u BASH_ENV PATH="$TMP/live-json-bin:$PATH" \
+    GITHUB_API_URL=https://ci-drain.invalid GITHUB_REPOSITORY=synthetic/acceptance \
+    GITHUB_RUN_ID=838383 GITHUB_RUN_ATTEMPT=4 \
+    GH_TOKEN=synthetic-live-json-token-not-a-secret GITHUB_TOKEN=synthetic-live-json-token-not-a-secret \
+    LIVE_JOBS="$RED" LIVE_LOGS="$LOGS" LIVE_TARGET="$LIVE_TARGET" LIVE_FAULT="$LIVE_FAULT" \
+    CURL_ARGV_LOG="$LIVE_CASE/curl.argv" LIVE_TRACE="$LIVE_CASE/curl.trace" "$@"
+}
+
+live_json_case() {
+  LIVE_TARGET="$1"; LIVE_FAULT="$2"
+  LIVE_CASE="$TMP/live-json-$LIVE_TARGET-$LIVE_FAULT"
+  local label="live $LIVE_TARGET $LIVE_FAULT" expected=refused_jobs
+  [[ "$LIVE_TARGET" == log ]] && expected=refused_log
+  mkdir -p "$LIVE_CASE"
+  : > "$LIVE_CASE/curl.argv"; : > "$LIVE_CASE/curl.trace"
+  live_json_env "$TOOL" drain --out-dir "$LIVE_CASE/out" --json \
+    >"$LIVE_CASE/stdout" 2>"$LIVE_CASE/stderr"; local rc=$?
+  assert "$((rc != 3))" "$label refuses with exit 3" "got exit $rc"
+  assert_envelope "$expected" "$LIVE_CASE/out/failure-summary.json" 838383 "$label"
+  if [[ "$LIVE_TARGET" == jobs ]]; then
+    jq -e '.run_id == "838383" and .error.code == "refused_jobs_unobservable" and .error.unmeasured == "jobs"' \
+      "$LIVE_CASE/out/failure-summary.json" >/dev/null 2>&1
+    assert $? "$label jobs-list attribution names jobs, not a missing log"
+    local md_rc=0
+    [[ ! -e "$LIVE_CASE/out/failure-summary.md" ]] || md_rc=1
+    assert "$md_rc" "$label unmeasured jobs never create a clean Markdown summary"
+    [[ "$(<"$LIVE_CASE/curl.trace")" == jobs ]]
+  else
+    [[ "$(<"$LIVE_CASE/curl.trace")" == $'jobs\nlog-9002\nlog-9003' ]]
+  fi
+  assert $? "$label exercises exactly the expected live API calls through the offline stub"
+  grep -qF REFUSED "$LIVE_CASE/stderr"
+  assert $? "$label retains refusal prose on stderr"
+  if [[ "$LIVE_FAULT" == http ]]; then
+    grep -qF '503' "$LIVE_CASE/stderr"
+  else
+    grep -qF 'transport failure' "$LIVE_CASE/stderr"
+  fi
+  assert $? "$label names the HTTP or transport failure rather than reading as clean"
+  ! grep -rFq 'synthetic-live-json-token-not-a-secret' "$LIVE_CASE"
+  assert $? "$label exposes no token in argv, prose or output bundle"
+}
+
+for live_target in jobs log; do
+  for live_fault in transport http truncated-200; do live_json_case "$live_target" "$live_fault"; done
 done
 
 # ---------------------------------------------------------------------------

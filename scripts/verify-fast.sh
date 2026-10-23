@@ -274,6 +274,10 @@ python3 -m unittest test_quality_gates test_floor_guard test_no_pull_request_tar
   || fail "quality-gate helper suites failed"
 ./test_mutmut_changed.sh || fail "mutmut budget-kill fixture suite failed"
 ./test_ci_gating.sh || fail "change-gating contract failed"
+# Explicit workflow job permissions gate: same two commands as the
+# contract-pinned CI step, so the fast tier still executes the gate locally.
+python3 check_workflow_job_permissions.py || fail "workflow job permissions gate failed"
+python3 -m unittest test_check_workflow_job_permissions || fail "workflow job permissions acceptance suite failed"
 ./test_readme_script_index.sh || fail "readme script-index gate failed"
 ./test_public_comment_hygiene_gate.sh || fail "public-comment hygiene gate suite failed"
 ./test_acceptance_transport.sh || fail "acceptance-transport reply suite failed"

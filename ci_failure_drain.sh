@@ -113,13 +113,13 @@ write_envelope() {
   local total
   total="$(jq '.jobs | length' "$TMP/jobs.json")"
   [[ -f "$TMP/rows.jsonl" ]] || : > "$TMP/rows.jsonl"
-  # jq variables in the filter must stay literal through the writer wrapper.
-  # shellcheck disable=SC2016
+  # A quoted heredoc keeps jq variables literal through the writer wrapper.
   write_json jq -n --argjson schema_version 1 --arg run_id "$RUN_ID" --arg status "$1" \
     --slurpfile jobs "$TMP/rows.jsonl" \
     --argjson total "$total" --argjson failed "$N_FAILED" --argjson drained "$3" \
-    --arg next "$2" \
-    '{schema_version:$schema_version,run_id:$run_id,status:$status,jobs:$jobs,summary:{total_jobs:$total,failed_jobs:$failed,drained_jobs:$drained},error:{code:"ok",retryable:false,next_action:$next,unmeasured:null}}'
+    --arg next "$2" -f /dev/stdin <<'JQ'
+{schema_version:$schema_version,run_id:$run_id,status:$status,jobs:$jobs,summary:{total_jobs:$total,failed_jobs:$failed,drained_jobs:$drained},error:{code:"ok",retryable:false,next_action:$next,unmeasured:null}}
+JQ
 }
 
 # write_refusal_json CODE UNMEASURED: the refusal envelope. Counts reflect
@@ -132,12 +132,12 @@ write_refusal_json() {
     failed="$(jq '[.jobs[] | select(.conclusion=="failure")] | length' "$TMP/jobs.json")"
   fi
   [[ "$1" == "refused_log_missing" ]] && next="fetch_missing_log"
-  # jq variables in the filter must stay literal through the writer wrapper.
-  # shellcheck disable=SC2016
+  # A quoted heredoc keeps jq variables literal through the writer wrapper.
   write_json jq -n --argjson schema_version 1 --arg run_id "$run" \
     --arg code "$1" --arg unmeasured "$2" --arg next "$next" \
-    --argjson total "$total" --argjson failed "$failed" \
-    '{schema_version:$schema_version,run_id:$run_id,status:"refused",jobs:[],summary:{total_jobs:$total,failed_jobs:$failed,drained_jobs:0},error:{code:$code,retryable:false,next_action:$next,unmeasured:$unmeasured}}'
+    --argjson total "$total" --argjson failed "$failed" -f /dev/stdin <<'JQ'
+{schema_version:$schema_version,run_id:$run_id,status:"refused",jobs:[],summary:{total_jobs:$total,failed_jobs:$failed,drained_jobs:0},error:{code:$code,retryable:false,next_action:$next,unmeasured:$unmeasured}}
+JQ
 }
 
 [[ $# -ge 1 ]] || { usage >&2; exit 2; }

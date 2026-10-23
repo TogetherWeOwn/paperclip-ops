@@ -126,7 +126,16 @@ API="https://api.github.com"
 # only by `$`, which let anything at all precede the domain -- including a
 # second address, so `person-d7e4a1b4@example.invalid@togetherweown.com` classified as ours.
 # `[^@]+` makes the local part exactly one local part.
-OUR_AUTHOR_RE="${DISCLOSURE_AUDIT_AUTHOR_RE:-^([^@]+@togetherweown\.(com|org|invalid)|([0-9]+\+)?togetherweown\[bot\]@users\.noreply\.github\.com)$}"
+#
+# Owner identity (evidenced 2026-10-13, still live 2026-10-22): the managed
+# owner pushes as `1856877+Rick7C2@users.noreply.github.com` (numeric noreply)
+# and `Rick7C2@users.noreply.github.com` (plain noreply). Both are OURS *triage
+# candidates* -- they enter the exact-pin lookup below, never auto-admit. The
+# numeric id is pinned exact: unlike the bot's per-installation ids, a user id
+# is stable, so any other digits stay NOT-OURS (wrong-id control below). Same
+# `^...$` anchoring as the bot arm, so lookalike/suffix/double-address shapes
+# stay rejected.
+OUR_AUTHOR_RE="${DISCLOSURE_AUDIT_AUTHOR_RE:-^([^@]+@togetherweown\.(com|org|invalid)|([0-9]+\+)?togetherweown\[bot\]@users\.noreply\.github\.com|(1856877\+)?Rick7C2@users\.noreply\.github\.com)$}"
 
 # ---------------------------------------------------------------------------
 # --self-test -- the ONLY part of this gate CI can run.
@@ -141,7 +150,7 @@ OUR_AUTHOR_RE="${DISCLOSURE_AUDIT_AUTHOR_RE:-^([^@]+@togetherweown\.(com|org|inv
 # below runs offline, deterministically, on every CI run.
 #
 # The OURS rows are the cheap half. The NOT-OURS rows are the point: every one
-# is a real identity observed on this org's own public forks, plus four
+# is a real identity observed on this org's own public forks, plus eleven
 # adversarial near-misses. If a future widening makes any NOT-OURS row match,
 # the allowlist has silently become a rubber stamp and this fails loudly.
 self_test() {
@@ -153,6 +162,8 @@ self_test() {
     'togetherweown[bot]@users.noreply.github.com'
     '319968614+togetherweown[bot]@users.noreply.github.com'
     '244704104+togetherweown[bot]@users.noreply.github.com'
+    '1856877+Rick7C2@users.noreply.github.com'
+    'Rick7C2@users.noreply.github.com'
   )
   # Real identities from the 2026-09-19 census, then the near-misses.
   local theirs=(
@@ -169,6 +180,12 @@ self_test() {
     'togetherweown[bot]@users.noreply.github.com.evil.tld'
     'synthetic-fixture@togetherweown.com.example.invalid'
     'person-d7e4a1b4@example.invalid@togetherweown.com'
+    'evilRick7C2@users.noreply.github.com'
+    'Rick7C2x@users.noreply.github.com'
+    '1856877+Rick7C2@users.noreply.github.com.evil.tld'
+    'Rick7C2@users.noreply.github.com.evil.tld'
+    '9999999+Rick7C2@users.noreply.github.com'
+    'attacker@example.invalid+Rick7C2@users.noreply.github.com'
   )
   local t_pass=0 t_fail=0 e
   printf '== self-test: OUR_AUTHOR_RE\n   %s\n\n' "$OUR_AUTHOR_RE"

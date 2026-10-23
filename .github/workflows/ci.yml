@@ -1531,6 +1531,14 @@ jobs:
           (cd ops/review_tier1 && python3 -m unittest -v test_review_tier1)
           (cd ops/analysis/review-findings && python3 -m unittest -v test_classify)
 
+      # Paginated review-gate acceptance: paginated inventory plus exact
+      # fair-order admission. Offline: fixtures under ops/review_gate.
+      - name: paginated review-gate acceptance suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        env:
+          PAPERCLIP_RUN_SCRATCH_DIR: ${{ runner.temp }}
+        run: python3 -B verification/review_gate_acceptance/run.py --source-dir ops/review_gate --legacy
+
       # Reconciler holds and hide-noop predicates, backlog-promoter, board-jobs, orphan-PRs and focus-gate fail-closed timeouts, PR-supply card text, flow-guard stages and host-pressure gate fail-closed contract. Offline: temp files and stubs.
       - name: review reconciler and ops guard suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'

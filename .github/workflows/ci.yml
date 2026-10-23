@@ -1085,7 +1085,13 @@ jobs:
       # to the core area through the root fallthrough.
       - name: verify-fast plan suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: python3 -B -m unittest -v test_verify_fast_plan test_verify_fast_plan_gates
+        env:
+          STATIC_LABEL_PYTHON: ${{ steps.static-label-python.outputs.python-path || '/usr/bin/python3' }}
+          PYTHONPATH: ${{ runner.temp }}/static-label-guard-deps
+        run: |
+          # The copied inventory probes PyYAML through child python3 processes.
+          export PATH="$(dirname "$STATIC_LABEL_PYTHON"):$PATH"
+          python3 -B -m unittest -v test_verify_fast_plan test_verify_fast_plan_gates
 
       - name: Syntax check every script
         run: ./scripts/verify-fast.sh --parse-only
@@ -1521,6 +1527,16 @@ jobs:
           (cd ops/owner-guard && python3 -m unittest -v test_owner_guard_state)
           (cd ops/pr-hygiene && python3 -m unittest -v test_owner_match)
           (cd ops/lib && python3 -m unittest -v test_live_run_guard)
+
+      # Serena navigation guards must execute here: CI's parse-only tier
+      # never reaches the suite in the full local verify-fast tier. Reuse the
+      # hash-pinned YAML parser and its interpreter prepared above.
+      - name: code-nav read-only and resource guard suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        env:
+          STATIC_LABEL_PYTHON: ${{ steps.static-label-python.outputs.python-path || '/usr/bin/python3' }}
+          PYTHONPATH: ${{ runner.temp }}/static-label-guard-deps
+        run: (cd ops/agent-tooling/serena-pilot-b && "$STATIC_LABEL_PYTHON" -B -m unittest -v test_code_nav)
 
       # case_8c53addb. Tier-1 cheap-model review checks: fixed verdict schemas
       # (block/hold/pass, never approve), deterministic prefilters, eval math

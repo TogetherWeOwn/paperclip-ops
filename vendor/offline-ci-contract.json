@@ -333,6 +333,7 @@
     "settings-bind rehearsal suite:1",
     "host backup publication receipt contract (offline):1",
     "native-ssh citation gate suite:1",
+    "code-nav read-only and resource guard suite:1",
     "verify-fast plan suites:1"
   ],
   "retained": [
@@ -1877,8 +1878,13 @@
       "id": "native-ssh citation gate suite:1"
     },
     {
+      "name": "code-nav read-only and resource guard suite",
+      "definition_sha256": "f4f3c272c75249ae5430663c6689ba7c058a33074edc105dc8e55352d488af05",
+      "id": "code-nav read-only and resource guard suite:1"
+    },
+    {
       "name": "verify-fast plan suites",
-      "definition_sha256": "e1b1d3d318e2dff53a23c79b891d4bbab267c426e0d16a9c8dcf8fbef9f8074d",
+      "definition_sha256": "ccae99dd825dc4bf6449a0a726f92e4d36d5e1be401694a5ce2c09f289526fb7",
       "id": "verify-fast plan suites:1"
     }
   ],

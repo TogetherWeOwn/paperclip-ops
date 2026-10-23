@@ -6,6 +6,7 @@
     "git": {"probe": {"which": "git"}},
     "node": {"probe": {"which": "node"}},
     "python3": {"probe": {"which": "python3"}},
+    "pyyaml": {"probe": {"argv": ["python3", "-B", "-c", "import yaml; assert yaml.__version__ == '6.0.3'"]}},
     "toolkit-vendored-files": {"probe": {"argv": ["python3", "verification/offline_ci_contract.py", "--check-restored"]}},
     "typescript@5.9.3": {"probe": {"argv": ["node", "-e", "require.resolve('typescript/bin/tsc')"]}}
   },
@@ -61,6 +62,7 @@
     {"id": "ops-productivity-unittests", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": "(cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes)"},
     {"id": "focus-gate-bounds", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": "(cd ops/paperclip && python3 -B -m unittest test_focus_gate_bounds)"},
     {"id": "atomic-state", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": "(cd ops/lib && python3 -m unittest test_atomic_state)"},
+    {"id": "code-nav", "tier": "fast", "prerequisites": ["python3", "pyyaml"], "preparation": {"actions": ["Activate the external Python 3.12 test venv with hash-pinned PyYAML (README.md#verification)"]}, "command": "(cd ops/agent-tooling/serena-pilot-b && python3 -B -m unittest test_code_nav)"},
     {"id": "stuck-run-state", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": "(cd ops/productivity && python3 -m unittest test_stuck_run_state)"},
     {"id": "idle-waiter-state", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": "(cd ops/productivity && python3 -B -m unittest test_idle_waiters_state test_idle_waiter_live_path test_idle_waiters_cli)"},
     {"id": "owner-guard-state", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": "(cd ops/owner-guard && python3 -m unittest test_owner_guard_state)"},

@@ -274,6 +274,10 @@ python3 -m unittest test_quality_gates test_floor_guard test_no_pull_request_tar
   || fail "quality-gate helper suites failed"
 ./test_mutmut_changed.sh || fail "mutmut budget-kill fixture suite failed"
 ./test_ci_gating.sh || fail "change-gating contract failed"
+# Explicit workflow job permissions gate: same two commands as the
+# contract-pinned CI step, so the fast tier still executes the gate locally.
+python3 check_workflow_job_permissions.py || fail "workflow job permissions gate failed"
+python3 -m unittest test_check_workflow_job_permissions || fail "workflow job permissions acceptance suite failed"
 ./test_readme_script_index.sh || fail "readme script-index gate failed"
 ./test_public_comment_hygiene_gate.sh || fail "public-comment hygiene gate suite failed"
 ./test_acceptance_transport.sh || fail "acceptance-transport reply suite failed"
@@ -306,7 +310,7 @@ python3 -m unittest test_warn_first_inventory || fail "warn-first inventory suit
 node --test plugins/pr-tracker/test/collect-rest.test.mjs plugins/pr-tracker/test/poll-prs.test.mjs plugins/pr-tracker/test/setup.test.mjs plugins/pr-tracker/test/upstream-watcher.test.mjs plugins/pr-tracker/test/view-model.test.mjs \
   || fail "pr-tracker suite failed"
 node --test paperclip-upgrade/settings-bind-rehearsal.test.mjs || fail "settings-bind rehearsal suite failed"
-(cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow) \
+(cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pipeline_stall_watch) \
   || fail "review-error, review-dedup, PR-supply, flow-guard, flake-ledger and pr-controller suites failed"
 (cd ops/paperclip && python3 -B -m unittest test_focus_gate_bounds) || fail "focus-gate bounds suite failed"
 (cd ops/sdlc && python3 -B -m unittest test_review_carry) || fail "review-carry suite failed"

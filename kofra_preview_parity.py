@@ -511,10 +511,6 @@ def build_refusal_envelope(err, surfaces):
                          "prod": prod_worker,
                          "verdict": "refused"})
             rows.sort(key=lambda r: r["id"])
-        elif err.path and err.path not in {r["id"] for r in rows}:
-            rows.append({"id": err.path, "staging": None, "prod": None,
-                         "verdict": "refused"})
-            rows.sort(key=lambda r: r["id"])
         gates = build_gates(staging_worker, prod_worker,
                             staging_valued, prod_valued)
     return {"schema_version": SCHEMA_VERSION,

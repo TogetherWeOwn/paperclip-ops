@@ -1,0 +1,349 @@
+{
+  "schema": "review-gate-source-port.v1",
+  "source_archive_sha256": "9340d954b3b38af59dbeb152a43fc35f3d15e473cdd3e7ac8819e4f7bb0a1235",
+  "source_manifest_sha256": "69855f70e5839606191381e10a190eefa821a6ad3fc4b41f786d77c76a374d40",
+  "members": [
+    {
+      "file": "review_gate.py",
+      "original_sha256": "4be0e6d7b341c60a1e361594325bde49a71fe6d1d520f991354b705a08c6e0cb",
+      "sanitized_sha256": "70f037b0bac7199b36477a5bfc6c7e90b06482b8a8c4de79571bd998bdeef4a5",
+      "bytes": 20224,
+      "retained_source_ranges": [],
+      "shipped": true,
+      "port_sha256": "8c4192cc659e6aeff2eb02c32411b0db9b870b7d2a5db1c66d9aff5f742c7a23",
+      "delta": "inventory-status propagation in main and CLI only"
+    },
+    {
+      "file": "baseline/review_gate_before_fairness.py",
+      "original_sha256": "984320b12e761b67a8ef853e884936581b1feca83ed1af2b1af4364ce88b167e",
+      "sanitized_sha256": "64d0fef02a1e6bed55fba656025a2a02ef3c677fe6c8a8b66b23bc7fe2444a7d",
+      "bytes": 19671,
+      "retained_source_ranges": [],
+      "shipped": false,
+      "delta": "comparison artifact not shipped as runtime source"
+    },
+    {
+      "file": "pr_controller.py",
+      "original_sha256": "0fab0c18f7f7a18cc0540566889957d0306cc40e0d5ac4bfac3ea3a31d8d0bee",
+      "sanitized_sha256": "a90a5561cea29bf45a1acd48de10aa4e73ca1ac229257426e5128ad98f34850a",
+      "bytes": 2069,
+      "retained_source_ranges": [
+        {
+          "names": [
+            "json"
+          ],
+          "start": 30,
+          "end": 30
+        },
+        {
+          "names": [
+            "subprocess"
+          ],
+          "start": 33,
+          "end": 33
+        },
+        {
+          "names": [
+            "QUERY"
+          ],
+          "start": 80,
+          "end": 85
+        },
+        {
+          "names": [
+            "gh"
+          ],
+          "start": 107,
+          "end": 108
+        },
+        {
+          "names": [
+            "fetch_repository"
+          ],
+          "start": 111,
+          "end": 136
+        }
+      ],
+      "shipped": true,
+      "port_sha256": "a90a5561cea29bf45a1acd48de10aa4e73ca1ac229257426e5128ad98f34850a",
+      "delta": "byte-identical to sanitized source"
+    },
+    {
+      "file": "review_dedup.py",
+      "original_sha256": "fc495f7db60fdfab2676783ba4fe1ef75fe2cc337f74ac89d4ed643a4fd287c4",
+      "sanitized_sha256": "d4c97bfd585872843fdaf11fe086e69b88bcb4939ec6f43fe4c88378fa1064ec",
+      "bytes": 2834,
+      "retained_source_ranges": [],
+      "shipped": true,
+      "port_sha256": "d4c97bfd585872843fdaf11fe086e69b88bcb4939ec6f43fe4c88378fa1064ec",
+      "delta": "byte-identical to sanitized source"
+    },
+    {
+      "file": "review_findings.py",
+      "original_sha256": "c017881acab219092f5995505ceb0d6be8b654234d52a751a7ec544e361f515e",
+      "sanitized_sha256": "e40fb7200ba657cefb5aa2883cc610e90e6da88c19ea97dab4ad71919645bced",
+      "bytes": 7331,
+      "retained_source_ranges": [],
+      "shipped": true,
+      "port_sha256": "e40fb7200ba657cefb5aa2883cc610e90e6da88c19ea97dab4ad71919645bced",
+      "delta": "byte-identical to sanitized source"
+    },
+    {
+      "file": "firstpass_review.py",
+      "original_sha256": "3c7efe8b2f0b613997fa847193d568f4ca527dac36bf157113e74480ea677a8d",
+      "sanitized_sha256": "83f8d15576a74e45e8ffc407cb945e6ee1cc4568e8a79a4cb731edabf690c8b2",
+      "bytes": 4683,
+      "retained_source_ranges": [
+        {
+          "names": [
+            "json"
+          ],
+          "start": 22,
+          "end": 22
+        },
+        {
+          "names": [
+            "re"
+          ],
+          "start": 24,
+          "end": 24
+        },
+        {
+          "names": [
+            "Path"
+          ],
+          "start": 30,
+          "end": 30
+        },
+        {
+          "names": [
+            "ROOT"
+          ],
+          "start": 32,
+          "end": 32
+        },
+        {
+          "names": [
+            "CONFIG"
+          ],
+          "start": 37,
+          "end": 37
+        },
+        {
+          "names": [
+            "STATE"
+          ],
+          "start": 38,
+          "end": 38
+        },
+        {
+          "names": [
+            "PAUSE"
+          ],
+          "start": 39,
+          "end": 39
+        },
+        {
+          "names": [
+            "SPECIALIST_NAMES"
+          ],
+          "start": 44,
+          "end": 45
+        },
+        {
+          "names": [
+            "CONFIDENCE_DEFAULT"
+          ],
+          "start": 47,
+          "end": 47
+        },
+        {
+          "names": [
+            "META_JSON"
+          ],
+          "start": 49,
+          "end": 49
+        },
+        {
+          "names": [
+            "DEFAULT_CONFIG"
+          ],
+          "start": 53,
+          "end": 81
+        },
+        {
+          "names": [
+            "meta_available"
+          ],
+          "start": 110,
+          "end": 122
+        },
+        {
+          "names": [
+            "should_request_claude"
+          ],
+          "start": 125,
+          "end": 127
+        },
+        {
+          "names": [
+            "short_name"
+          ],
+          "start": 130,
+          "end": 131
+        },
+        {
+          "names": [
+            "in_scope"
+          ],
+          "start": 134,
+          "end": 136
+        },
+        {
+          "names": [
+            "gate_decision"
+          ],
+          "start": 143,
+          "end": 157
+        },
+        {
+          "names": [
+            "CPU_SOME60_MAX"
+          ],
+          "start": 945,
+          "end": 945
+        },
+        {
+          "names": [
+            "LOAD5_CEILING"
+          ],
+          "start": 946,
+          "end": 946
+        },
+        {
+          "names": [
+            "HOME_PCT_MAX"
+          ],
+          "start": 947,
+          "end": 947
+        },
+        {
+          "names": [
+            "META_5H_MAX"
+          ],
+          "start": 948,
+          "end": 948
+        },
+        {
+          "names": [
+            "parse_cpu_some60"
+          ],
+          "start": 951,
+          "end": 957
+        },
+        {
+          "names": [
+            "cpu_some60"
+          ],
+          "start": 960,
+          "end": 969
+        },
+        {
+          "names": [
+            "guards"
+          ],
+          "start": 972,
+          "end": 978
+        },
+        {
+          "names": [
+            "host_readings"
+          ],
+          "start": 981,
+          "end": 997
+        },
+        {
+          "names": [
+            "load_config"
+          ],
+          "start": 1417,
+          "end": 1424
+        },
+        {
+          "names": [
+            "load_state"
+          ],
+          "start": 1427,
+          "end": 1433
+        },
+        {
+          "names": [
+            "meta_records"
+          ],
+          "start": 1442,
+          "end": 1446
+        },
+        {
+          "names": [
+            "fp_key"
+          ],
+          "start": 1449,
+          "end": 1450
+        },
+        {
+          "names": [
+            "parse_priority_prs"
+          ],
+          "start": 1880,
+          "end": 1887
+        },
+        {
+          "names": [
+            "status"
+          ],
+          "start": 2434,
+          "end": 2443
+        }
+      ],
+      "shipped": true,
+      "port_sha256": "83f8d15576a74e45e8ffc407cb945e6ee1cc4568e8a79a4cb731edabf690c8b2",
+      "delta": "byte-identical to sanitized source"
+    },
+    {
+      "file": "test_review_gate.py",
+      "original_sha256": "bc6913e605d2ce7e6dfab683776053780e600f1df00d2825acabc5636f38bcde",
+      "sanitized_sha256": "5fc98b7072b9a62eadada6055cb4db77eaa14a92fd5285eba727b113b6fd6e45",
+      "bytes": 2405,
+      "retained_source_ranges": [],
+      "shipped": true,
+      "port_sha256": "5fc98b7072b9a62eadada6055cb4db77eaa14a92fd5285eba727b113b6fd6e45",
+      "delta": "byte-identical to sanitized source"
+    },
+    {
+      "file": "test_review_gate_fairness.py",
+      "original_sha256": "f75950458ccae950382c167c4382031028528e7833123ac8f083f1cb32b702c6",
+      "sanitized_sha256": "e14f5e6a416fbe24f36dc1c4a8c2574c0a8108cf3bc7b11f7a0ccf0d05d88cbc",
+      "bytes": 2798,
+      "retained_source_ranges": [],
+      "shipped": true,
+      "port_sha256": "e14f5e6a416fbe24f36dc1c4a8c2574c0a8108cf3bc7b11f7a0ccf0d05d88cbc",
+      "delta": "byte-identical to sanitized source"
+    }
+  ],
+  "runtime_interface": {
+    "file": "review_gate_runtime.py",
+    "sha256": "adbe2b9411c56a21dcbbb4ef38d1ca05793f2586ce9e54fe78d02dbab0390ed1",
+    "original_sha256": null
+  },
+  "fairness_patch": {
+    "original_fairness_patch_sha256": "799cd433274d7dd64b96b34ba94ca70326a64280c189adf3e81b49cf78586de2",
+    "sanitized_fairness_patch_sha256": "3be553469a9a9cb4da578b4753f4ba39936421b764c8e5ca79275e182091bc49"
+  },
+  "independent_test_commit": "01f091506a1ab14f8ad1b1b673359c9bd6cca27c",
+  "independent_test_sha256": {
+    "verification/review_gate_acceptance/README.md": "a1425b367e94a9e0bbbd15b556a574f427c3078aa696d7a937ee43aaeda8f955",
+    "verification/review_gate_acceptance/mutations.py": "b3d488b74b94c7b5afb13a2c15f0af05100d05d1d0d47ed08b00ac12de670a8a",
+    "verification/review_gate_acceptance/run.py": "9245f025cbfd6b98ca92087a083ebe4013ff689630d56b2be41ca4037d83b660",
+    "verification/review_gate_acceptance/test_contract.py": "d9f227659780755a4276bd3e702aeeca73c7044d80ac1656380b33f7ef05f349"
+  }
+}

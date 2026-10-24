@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Title-fallback acceptance: upstream_gate.sh eval_our_review (TOG-39901).
+# Title-fallback acceptance: upstream_gate.sh eval_our_review (PR #106 follow-up acceptance).
 #
 # Test-only handoff for PR #106 (fix/review-verdict-title-fallback). Pins the
 # missing/empty-title -> first-summary-line fallback WITHOUT implementing it.

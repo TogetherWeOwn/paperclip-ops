@@ -1,0 +1,21 @@
+--- a/ops/productivity/review_findings.py
++++ b/ops/productivity/review_findings.py
+@@ -35,2 +35,3 @@
+ from pathlib import Path
++import review_rebase_carry_flow as rebase_flow  # review-only rebase carry (default off, TOG-36534)
+ from finding_labels import finding_title, FINDING_TITLE_SQL
+@@ -55,2 +56,3 @@
+     r'data-loss|destruct|wipe|drop-|purge',
++    r'review_gate|review_carry|review_findings|rebase_carry',  # merge-gate decision code (TOG-36534)
+ ]
+@@ -159,2 +161,10 @@
+         d = {'from': last['head'], 'to': head, 'files': None, 'error': str(e)[:160]}
++    try:  # own-patch delta ∪ prior blockers; any doubt keeps the compare-based list above
++        rebase_paths = rebase_flow.Paths(CTX_DIR.parent)
++        own = rebase_flow.scoped_delta(rebase_paths, rebase_flow.control_mode(rebase_paths), full, pr,
++                                       last['head'], head, last['blocking'])
++    except Exception:
++        own = None
++    if own is not None:
++        d = {'from': last['head'], 'to': head, 'files': own, 'scope': 'own-patch'}
+     ctx = {'repo': full, 'pr': int(pr), 'head': head, 'round': len(prev) + 1,

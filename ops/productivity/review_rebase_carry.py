@@ -14,6 +14,7 @@ from collections.abc import Mapping
 
 SHA_RX = re.compile(r'[0-9a-f]{40}\Z')
 REPO_RX = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z')
+NAMESPACE = 'paperclip-review-rebase-carry:v1:'
 DIFF_FLAGS = ('--no-ext-diff', '--no-textconv', '--no-renames', '--binary',
               '--full-index', '--unified=0', '--no-color',
               '--src-prefix=a/', '--dst-prefix=b/')
@@ -159,7 +160,7 @@ def idempotency_key(repo, number, head):
     if (not isinstance(repo, str) or not REPO_RX.fullmatch(repo)
             or type(number) is not int or number < 1):
         raise GitError('invalid repository or PR')
-    return f'paperclip-review-rebase-carry:v1:{repo.lower()}:{number}:{_sha(head)}'
+    return f'{NAMESPACE}{repo.lower()}:{number}:{_sha(head)}'
 
 
 def carry_applies(proof, head):

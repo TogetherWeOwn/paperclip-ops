@@ -23,7 +23,7 @@
 #      Docker; blocking only with --block-on-root)
 #   7. pending-decision report (NON-DESTRUCTIVE, via pending-decisions.sql):
 #      zero wake_origin_agent decisions with a pending continuation whose
-#      origin agent is paused or terminated. No ack flag exists for this
+#      origin agent is paused, terminated or pending_approval. No ack flag exists for this
 #      gate and no row is ever repaired here.
 #
 # Read-only except for nothing: this script writes nothing anywhere. It never
@@ -187,16 +187,17 @@ else
 fi
 
 # --- 7. pending wake_origin_agent decisions (NON-DESTRUCTIVE) ------------------
-# Fresh in this same drained transaction: a pending continuation whose
-# origin agent is paused or terminated must not cross the restart. There
+# Measured fresh after drain: a pending continuation whose origin agent is
+# paused, terminated or pending_approval must not cross the restart. There
 # is no --ack for this gate and rows are never repaired here; reconcile
 # through the product, then re-run.
 if pending="$(dbq < "$HERE/pending-decisions.sql" 2>/dev/null)" \
    && [[ "$pending" =~ ^pending_wake_origin_decisions\|([0-9]+)$ ]]; then
-  if (( BASH_REMATCH[1] == 0 )); then
-    gate_ok "pending wake_origin_agent decisions on paused/terminated origins: 0"
+  # Compare as text: arithmetic can wrap an oversized malformed count to zero.
+  if [[ "${BASH_REMATCH[1]}" =~ ^0+$ ]]; then
+    gate_ok "pending wake_origin_agent decisions on paused/terminated/pending_approval origins: 0"
   else
-    gate_fail "pending wake_origin_agent decisions on paused/terminated origins: ${BASH_REMATCH[1]} — reported, NOT repaired; reconcile through the product, then re-run"
+    gate_fail "pending wake_origin_agent decisions on paused/terminated/pending_approval origins: ${pending#*|} — reported, NOT repaired; reconcile through the product, then re-run"
   fi
 else
   gate_fail "pending-decisions.sql unreadable or malformed (database unreachable?)"

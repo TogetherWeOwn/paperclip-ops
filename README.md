@@ -106,7 +106,7 @@ This documentation does not authorize running a backup or changing a host.
 | `migration_squawk.sh` |
 | `migration_timeout_preamble.sh` |
 | `muse_countdown.py` |
-| `native_ssh_citation_gate.py` |
+| `native_ssh_citation_gate.py` (historical fork audit; [official-stable retirement scope](docs/official-stable-fork-controls.md)) |
 | `notify_paperclip_issue.sh` |
 | `omniroute_combo_cli.sh` |
 | `op_queue_reject.sh` |

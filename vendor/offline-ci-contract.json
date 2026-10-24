@@ -539,7 +539,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "162cd57ecff56dd7f27cf168ec89159b58a64fb9d2d508c26606a8763e13dc89",
+      "definition_sha256": "201212b7237be77a35ce701485b651716bc67c43423be46eb1ac2f6b55d2d053",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1896,7 +1896,6 @@
       "name": "settings-bind rehearsal suite",
       "definition_sha256": "bb309c4b15965281fffe7f9190063f90688cd4a7cb1c00f659918423a5bde7fd",
       "id": "settings-bind rehearsal suite:1"
-
     },
     {
       "name": "host backup publication receipt contract (offline)",

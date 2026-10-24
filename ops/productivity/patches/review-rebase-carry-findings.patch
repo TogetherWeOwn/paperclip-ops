@@ -2,11 +2,11 @@
 +++ b/ops/productivity/review_findings.py
 @@ -35,2 +35,3 @@
  from pathlib import Path
-+import review_rebase_carry_flow as rebase_flow  # review-only rebase carry (default off, TOG-36534)
++import review_rebase_carry_flow as rebase_flow  # review-only rebase carry (default off)
  from finding_labels import finding_title, FINDING_TITLE_SQL
 @@ -55,2 +56,3 @@
      r'data-loss|destruct|wipe|drop-|purge',
-+    r'review_gate|review_carry|review_findings|rebase_carry',  # merge-gate decision code (TOG-36534)
++    r'review_gate|review_carry|review_findings|rebase_carry',  # merge-gate decision code
  ]
 @@ -159,2 +161,10 @@
          d = {'from': last['head'], 'to': head, 'files': None, 'error': str(e)[:160]}

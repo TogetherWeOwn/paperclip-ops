@@ -16,9 +16,10 @@ authorized executor installs the packet and a person writes the file.
 - `review-rebase-carry-entrypoint.patch`: the `reconcile()` call site that runs
   `process_rebases(token, repo, dry_run)` once per repository per tick, plus the
   one-line guard change that lets repos with no merge refs reach it. Same
-  `-p1`, `--fuzz=0` standard, same carry pin (re-confirmed by TOG-39953).
+  `-p1`, `--fuzz=0` standard, same carry pin (re-confirmed by the second
+  read-only capture, 2026-10-24).
 
-### Pins (re-pinned 2026-10-24 from the read-only capture of TOG-39225)
+### Pins (re-pinned 2026-10-24 from the first read-only capture)
 
 | File | SHA-256 at capture |
 |---|---|
@@ -27,7 +28,7 @@ authorized executor installs the packet and a person writes the file.
 | `ops/sdlc/review_carry.py` | `1c541598840be96675fb15f6d2eb2d87a22f00d3a1ef47c280716c77e5198c47` |
 
 The originally requested prefixes (`aee66f14`, `c017881a`, `7e1fdff2`) had drifted. The
-second capture (TOG-39953) re-confirmed all three pins unchanged. The host files are
+second read-only capture (2026-10-24) re-confirmed all three pins unchanged. The host files are
 not readable by the builder, so every hunk sits entirely inside a captured,
 hash-verified line range: gate 12-21, 281-513; findings 30-36, 45-57, 77-167; carry 243-429, 479-533.
 The packet was applied with `patch --batch --fuzz=0 -p1` to sparse copies rebuilt from those
@@ -35,7 +36,7 @@ ranges. That proves the hunks are anchored in captured text; it does **not** pro
 to the full host files, and the host gate/fairness/carry suites were NOT run. The install
 request must repeat the apply on copies of the real pinned files and run those suites.
 
-### Entrypoint wiring (second capture TOG-39953 consumed)
+### Entrypoint wiring (second read-only capture consumed)
 
 `reconcile()` (lines 479-533) runs every minute via `sdlc-review-carry.timer` and
 loops repositories calling `process_group(token, repo, ref, dry_run)` per merge-queue

@@ -2,7 +2,7 @@
 +++ b/ops/sdlc/review_carry.py
 @@ -494,2 +494,2 @@
 -            if not refs:
-+            if not refs and not isinstance(refs, list):  # empty list falls through to the rebase-carry pass below (TOG-36534)
++            if not refs and not isinstance(refs, list):  # empty list falls through to the rebase-carry pass below
                  continue
 @@ -501,2 +501,8 @@
                      errors.append({'repo': repo, 'branch': ref.get('ref'), 'error': str(exc) if not isinstance(exc, subprocess.TimeoutExpired) else 'operation timed out'})

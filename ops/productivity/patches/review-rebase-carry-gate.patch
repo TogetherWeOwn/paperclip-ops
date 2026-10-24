@@ -2,7 +2,7 @@
 +++ b/ops/productivity/review_gate.py
 @@ -20,2 +20,3 @@
  import review_findings as findings  # noqa: E402  findings contract, deterministic side (Phase 1 item 1.2)
-+import review_rebase_carry_flow as rebase_flow  # noqa: E402  review-only rebase carry call site (default off, TOG-36534)
++import review_rebase_carry_flow as rebase_flow  # noqa: E402  review-only rebase carry call site (default off)
  from finding_labels import finding_title  # noqa: E402
 @@ -302,2 +303,4 @@
          "and g.shadow_label is null))") if r[1].isdigit()}

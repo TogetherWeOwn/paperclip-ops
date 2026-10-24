@@ -54,7 +54,7 @@ drift.
 | `POST {callbackUrl}` (caller-supplied URL, host constrained to api.github.com) | `protection-rule/src/callback.js` (`postVerdict`) | installation token, header-only, whitespace-refused | fetch |
 | `GET /repos/{repo}/pulls/{n}` (+ `/commits`, `/files` pages) | `upstream_reputation.py` (delegates to `upstream_lint.api_get`) | delegated: `GH_TOKEN` or `gh api` per `upstream_lint.py` | urllib or `gh api` subprocess |
 | `GET /orgs/{org}/repos`, `/meta`, `/rate_limit` | `verification/case_092cd51d-public-fork-disclosure-audit.sh` (CI gate) | `GH_TOKEN` optional (anonymous fallback); never on argv | curl + config file |
-| `GET /search/issues?q=...`, `GET /repos/{repo}/pulls/{n}/commits`, `GET /repos/{repo}/commits/{sha}/status`, `GET .../check-runs` | `templates/org-github/ax-metrics/ax_metrics.py:61,:120,:127,:129` (STAGED TEMPLATE — runs in consumer repos via `ax-metrics.yml:48`, not live here) | `GITHUB_TOKEN` (`--github-token-env`, header-only Bearer `:45-48`, never logged `:141`) | urllib |
+| `GET /search/issues?q=...` (paged to `MAX_SEARCH_PAGES`/`MAX_SEARCH_ITEMS`, reconciled vs `total_count`), `GET /repos/{repo}/pulls/{n}/commits`, `GET /repos/{repo}/commits/{sha}/status`, `GET .../check-runs` (paged to `MAX_CHECK_RUN_PAGES`, reconciled vs `total_count`) | `templates/org-github/ax-metrics/ax_metrics.py:117,:363,:372,:285` (STAGED TEMPLATE — runs in consumer repos via `ax-metrics.yml:48`, not live here) | `GITHUB_TOKEN` (`--github-token-env`, header-only Bearer `:86-89`, never logged `:388`) | urllib |
 
 ## Negative inventory (deliberate non-senders)
 

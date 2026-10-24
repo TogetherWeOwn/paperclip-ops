@@ -130,6 +130,51 @@ def pages(token, path, key=None):
     raise Unsafe('pagination bound exceeded')
 
 
+def _is_pino_record(record):
+    # Pino NDJSON log records always carry numeric level/time and a string
+    # msg (plus pid/hostname/name). Anything else shaped is not a log line.
+    return (isinstance(record.get('level'), int)
+            and isinstance(record.get('time'), (int, float))
+            and isinstance(record.get('msg'), str))
+
+
+def parse_mint_stdout(stdout):
+    """Extract the single credential token from mint preflight stdout.
+
+    The preflight may emit pino NDJSON log records ahead of its result;
+    those lines are skipped. Exactly one credential object must be present,
+    for this App, with a non-empty string token. Any other line, a missing
+    credential, or a second credential object raises ValueError and the
+    caller fails closed without logging stdout (it may contain credentials).
+    """
+    credential = None
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            raise ValueError('mint stdout line is not JSON') from None
+        if not isinstance(record, dict):
+            raise ValueError('mint stdout line is not an object')
+        if 'token' in record or 'app_id' in record:
+            if credential is not None:
+                raise ValueError('second credential object in mint stdout')
+            credential = record
+        elif _is_pino_record(record):
+            continue
+        else:
+            raise ValueError('unexpected line in mint stdout')
+    if credential is None:
+        raise ValueError('no credential object in mint stdout')
+    token = credential.get('token')
+    if credential.get('app_id') != APP_ID or not token:
+        raise ValueError('credential App/token mismatch')
+    if not isinstance(token, str):
+        raise ValueError('credential token is not a string')
+    return token
+
+
 def mint(repo):
     if not REPO_RX.fullmatch(repo):
         raise Unsafe('invalid repository')
@@ -144,11 +189,8 @@ def mint(repo):
     if result.returncode:
         raise Unsafe('reviewer App credential preflight failed; no fallback credential permitted')
     try:
-        data = json.loads(result.stdout)
-        if data['app_id'] != APP_ID or not data['token']:
-            raise ValueError()
-        return data['token']
-    except (ValueError, KeyError):
+        return parse_mint_stdout(result.stdout)
+    except ValueError:
         raise Unsafe('reviewer App credential response invalid') from None
 
 

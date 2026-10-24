@@ -1229,7 +1229,7 @@
     },
     {
       "name": "host timer registry (offline, mutation-controlled)",
-      "definition_sha256": "76e2d6719e926124a4be97299999bb2ba4dfee02e3f9591782bae013252d7485",
+      "definition_sha256": "ae952cda0ad54b5a3b4c21ec416cbbaf48d38ec533a967472f46f1a54294f9f9",
       "id": "host timer registry (offline, mutation-controlled):1"
     },
     {

@@ -3949,6 +3949,8 @@ jobs:
           else
             python3 ops/case_30b51a0f/host_timer_registry_check.py
           fi
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_timer_audit_integrity
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_timer_audit_review_proofs
           cd ops/case_30b51a0f && python3 -m unittest -v test_host_timer_consolidation
 
       # case_0bf02bac. The home-PC guard reconciles CI_nodecf677d86_RUNNER with

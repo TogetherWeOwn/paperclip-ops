@@ -77,6 +77,13 @@ job/test/flips/observations/rate), `insufficient` rows with counts,
 `excluded` counts with reasons, and `error` (null on success, or
 `{code, retryable, next_action}` on failure).
 
+Stable row IDs contain three slash-separated components: repository, job, and
+test. Within each component, literal `%` becomes `%25` first, then `/` becomes
+`%2F`; all other characters stay unchanged. This preserves tuple boundaries
+and keeps literal percent sequences distinct from escaped slashes. For example,
+`(r, a/b, c)` has ID `r/a%2Fb/c`, while `(r, a%2Fb, c)` has ID
+`r/a%252Fb/c`. IDs do not depend on ranking or the observation gate.
+
 The report is read-only: it never writes the ledger, reruns tests, or files
 cards. `--dry-run` is a documented no-op alias producing byte-identical text
 output. Unknown flags, a missing or blank repo, and extra positionals refuse

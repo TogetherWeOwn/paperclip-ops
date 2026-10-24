@@ -304,8 +304,9 @@ class ReportHelpRequested(Exception):
 
 
 def report_row_id(repo, job, test):
-    """Return the stable report identifier for one ledger row."""
-    return f'{repo}/{job}/{test}'
+    """Escape percent and slash per component to preserve tuple boundaries."""
+    return '/'.join(value.replace('%', '%25').replace('/', '%2F')
+                    for value in (repo, job, test))
 
 
 def validate_report_rows(rows, repo):

@@ -1,5 +1,17 @@
 # ADR: split Paperclip server and agent OS authority for native SSH
 
+> **Official-stable applicability (2026-10-23):** the fork-specific citation pins
+> and expected-present seam requirements below are superseded for the fresh
+> official `v2026.1012.0` target only. See the
+> [retirement scope and deferred timer hold](official-stable-fork-controls.md).
+> Keep the historical audit and fixture suite unchanged for legacy evidence;
+> do not restore fork symbols to make an official artifact pass it. This does
+> **not** retire the independent security invariant, host preflight, hostile-agent
+> acceptance, activation STOPs, or rollback restrictions in this ADR. Missing
+> symbols are not proof of runtime authorization or permission to enable native
+> SSH. Measurements below describe their dated fork artifacts, not current
+> official-stable qualification. No live control is changed by this notice.
+
 > **Slice D provenance (recovery, no behavior change):** §§1.0/5.2/8.2 recovered
 > here as the full file from ops-tooling `50f68ebcad` for the deploy-branch port.
 > case_37f8c070 carrier `e5aa2570`, ADR SHA-256 `d554da57…c5fa794a` (267-line carrier;

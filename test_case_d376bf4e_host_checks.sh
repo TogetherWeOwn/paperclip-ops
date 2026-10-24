@@ -105,6 +105,10 @@ build_sandbox() {
   cp -r "$SRC" "$SBX/case_4ea7d92e-dir"
   mkdir -p "$SBX/ops"
   mv "$SBX/case_4ea7d92e-dir" "$SBX/ops/case_4ea7d92e"
+  # The wrappers' post_finding.sh sources the shared allowlist lib by
+  # repo-relative path; mirror that lib into the sandbox checkout.
+  mkdir -p "$SBX/lib"
+  cp "$REPO_ROOT/lib/paperclip_api_allowlist.sh" "$SBX/lib/"
   mkdir -p "$SBX/ws/repo/.git"
   printf '[remote "origin"]\n\turl = https://person-f431cd1b@example.invalid/o/r.git\n' > "$SBX/ws/repo/.git/config"
 }
@@ -140,6 +144,7 @@ run_wrapper() { # run_wrapper <sandbox-dir> <wrapper.sh> [EXTRA=env ...] -> prin
   env -u BASH_ENV \
     PATH="$WORK/bin:$PATH" \
     PAPERCLIP_API_URL="http://127.0.0.1:$PORT" \
+    PAPERCLIP_API_ALLOWLIST_TEST="1" \
     PAPERCLIP_AGENT_API_KEY="$SENTINEL_KEY" \
     PAPERCLIP_COMPANY_ID="test-company" \
     PAPERCLIP_ASSIGNEE_AGENT_ID="test-agent" \
@@ -390,6 +395,29 @@ stop_api
 grep -qF "$SENTINEL_KEY" <(tr '\0' '\n' < "$WORK/argv.bin") \
   && ok "positive control: an -H bearer on argv IS detected by this check" \
   || bad "positive control failed — the argv check cannot see a real leak"
+
+# === 4a2. ALLOWLIST ENFORCE: post_finding refuses with zero transport ===
+# Wiring pin: deleting the paperclip_allowlist_check call must fail the
+# zero-transport assertion (post_finding would curl the evil base).
+build_sandbox allowlist_enforce
+stub_detector "$SBX/git_remote_credential_scan.sh" 1 \
+  "FINDING repo=/fake config_line=7 kind=gh-app-installation-token host=github.com perms=x"
+: > "$WORK/argv.bin"
+rc="$(run_wrapper "$SBX" git_remote_credential_sweep_check.sh \
+  case_d376bf4e_GIT_SCAN_ROOTS="$SBX/ws" \
+  PAPERCLIP_API_URL="https://evil.example.invalid" \
+  PAPERCLIP_API_ALLOWLIST_TEST= PAPERCLIP_API_ALLOWLIST_MODE=enforce)"
+[[ "$rc" != "0" ]] \
+  && ok "an allowlist-refused board fails the wrapper loudly (exit $rc)" \
+  || bad "an allowlist-refused board exited 0 — the finding reads as handled when nothing was posted"
+grep -q 'allowlist' "$WORK/stderr.txt" \
+  && ok "the refusal names the allowlist" \
+  || bad "no allowlist refusal on stderr: $(cat "$WORK/stderr.txt")"
+if grep -q "evil.example.invalid" <(tr '\0' '\n' < "$WORK/argv.bin"); then
+  bad "a refused board got transport calls" "$(tr '\0' '\n' < "$WORK/argv.bin")"
+else
+  ok "a refused board gets zero transport calls"
+fi
 
 # === 4b. GIT SWEEP: detection only, explicit roots, real layout ==========
 # Revoking a credential is owner-reserved, so a finding must not run the

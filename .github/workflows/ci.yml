@@ -1136,6 +1136,14 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 -m unittest -v test_orphan_suites
 
+      - name: workspace sync-back signal acceptance suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_workspace_sync_back_signal_acceptance
+
+      - name: workspace sync-back signal regression suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_workspace_sync_back_signal_regressions
+
       # Assignment host-source bundle: the builder, normalizer and detector
       # run as CLIs with the SQL under a SQLite translation — no database,
       # no network, no credential. Without this step the suite runs only
@@ -1588,7 +1596,7 @@ jobs:
       # Reconciler holds and hide-noop predicates, backlog-promoter, board-jobs, orphan-PRs and focus-gate fail-closed timeouts, PR-supply card text, flow-guard stages and host-pressure gate fail-closed contract. Offline: temp files and stubs.
       - name: review reconciler and ops guard suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_review_rebase_carry test_review_rebase_carry_flow test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pr_controller_notify_guard test_pr_controller_notify_wiring test_pr_controller_ci test_pr_controller_ci_ops test_pr_controller_ci_host test_pr_controller_ci_patch test_pipeline_stall_watch) && (cd ops/paperclip && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -p 'test_focus*.py')
+        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_pr_supply_listing_bound test_pr_supply_tick_health test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_resolve_outdated_incomplete_evidence test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_flake_ledger_report test_review_rebase_carry test_review_rebase_carry_flow test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pr_controller_notify_guard test_pr_controller_notify_wiring test_pr_controller_ci test_pr_controller_ci_ops test_pr_controller_ci_host test_pr_controller_ci_patch test_pipeline_stall_watch) && (cd ops/paperclip && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -p 'test_focus*.py')
 
       # sdlc-review-carry. Merge-queue 5/5 carry gate logic: patch
       # normalization/digest, PR-bound latest-review selection, hint-file
@@ -2314,6 +2322,28 @@ jobs:
       - name: api-base-validation-python suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 -B -m unittest -v test_paperclip_api_base_validation_py
+
+      # API host allowlist (shell senders): exact-origin match, fail-closed
+      # host-file behavior, bridge/hatch matrices, shadow warning + counter,
+      # and the --check dry-run. Hermetic (fixture files, env -i), no
+      # network, no credentials.
+      - name: api-allowlist suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_paperclip_api_allowlist.sh
+
+      # API host allowlist (Python senders): same contract as the shell suite
+      # above, for the shared Python helper. Hermetic (fixture files,
+      # explicit environ dicts), no network, no credentials.
+      - name: api-allowlist-python suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -B -m unittest -v test_paperclip_api_allowlist_py
+
+      # Allowlist test-hatch gate: the test-only hatch stays out of prod
+      # units, env examples, operator templates, and workflows, and never
+      # defaults on in senders or helpers. Hermetic static checks only.
+      - name: allowlist-hatch-absent gate
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_allowlist_hatch_absent.sh
 
       # case_acb41886. The capability gate — the sibling of the provisioning queue,
       # for asks whose object is a CAPABILITY rather than an org seat. It runs
@@ -3927,6 +3957,8 @@ jobs:
           else
             python3 ops/case_30b51a0f/host_timer_registry_check.py
           fi
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_timer_audit_integrity
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_timer_audit_review_proofs
           cd ops/case_30b51a0f && python3 -m unittest -v test_host_timer_consolidation
 
       # case_0bf02bac. The home-PC guard reconciles CI_nodecf677d86_RUNNER with

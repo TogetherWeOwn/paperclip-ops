@@ -232,6 +232,7 @@ class DeploymentContract(unittest.TestCase):
         repo = pathlib.Path(__file__).resolve().parent
         builder_src = repo / "systemd" / "build-recovery-writer-bundle.sh"
         payload = [
+            "lib/paperclip_api_allowlist.py",
             "recovery_writer.py",
             "ops/lib/host_pressure.py",
             "systemd/run-recovery-writer.sh",
@@ -300,7 +301,7 @@ class DeploymentContract(unittest.TestCase):
     def test_installer_compiles_and_imports_pressure_module_before_claiming_installed(self):
         source = INSTALLER.read_text()
         self.assertIn(
-            '/usr/bin/python3 -m py_compile "$RELEASE_DIR/recovery_writer.py" "$RELEASE_DIR/ops/lib/host_pressure.py"',
+            '/usr/bin/python3 -m py_compile "$RELEASE_DIR/recovery_writer.py" "$RELEASE_DIR/lib/paperclip_api_allowlist.py" "$RELEASE_DIR/ops/lib/host_pressure.py"',
             source,
         )
         self.assertIn(
@@ -323,7 +324,7 @@ class DeploymentContract(unittest.TestCase):
         source = installer_source()
         line = manifest_generation_line(source)
         self.assertIn('(cd "$RELEASE_DIR"', line)
-        self.assertIn("/usr/bin/sha256sum recovery_writer.py ops/lib/host_pressure.py run-recovery-writer.sh REVISION", line)
+        self.assertIn("/usr/bin/sha256sum lib/paperclip_api_allowlist.py recovery_writer.py ops/lib/host_pressure.py run-recovery-writer.sh REVISION", line)
         self.assertIn('"$WORK_DIR/SHA256SUMS.release"', line)
         self.assertIn('"$WORK_DIR/SHA256SUMS.release" "$RELEASE_DIR/SHA256SUMS"', source)
         revision_install = '/usr/bin/install -o root -g root -m 0444 "$WORK_DIR/REVISION" "$RELEASE_DIR/REVISION"'
@@ -348,6 +349,7 @@ class DeploymentContract(unittest.TestCase):
                          if "/usr/bin/install " in line and " -d " not in line]
         installed = set(re.findall(r'"\$RELEASE_DIR/([A-Za-z0-9_./\-]+)"', "\n".join(install_lines)))
         self.assertGreaterEqual(installed, {
+            "lib/paperclip_api_allowlist.py",
             "recovery_writer.py", "ops/lib/host_pressure.py",
             "run-recovery-writer.sh", "REVISION", "SHA256SUMS",
         })
@@ -369,6 +371,7 @@ class DeploymentContract(unittest.TestCase):
     def test_bundle_manifest_still_covers_payload_units_installer_and_driver(self):
         source = BUILDER.read_text()
         for member in (
+            "lib/paperclip_api_allowlist.py",
             "recovery_writer.py",
             "ops/lib/host_pressure.py",
             "systemd/run-recovery-writer.sh",
@@ -381,6 +384,7 @@ class DeploymentContract(unittest.TestCase):
 
     def test_old_layout_fails_preflight_and_regenerated_manifest_passes(self):
         payload = [
+            "lib/paperclip_api_allowlist.py",
             "recovery_writer.py",
             "ops/lib/host_pressure.py",
             "systemd/run-recovery-writer.sh",
@@ -448,7 +452,10 @@ class DeploymentContract(unittest.TestCase):
             covered = manifest_generation_line(installer_source()
                         ).split("sha256sum ", 1)[1].split(" > ", 1)[0].split()
             new = pathlib.Path(td) / "release-new"
+            (new / "lib").mkdir(parents=True)
             (new / "ops" / "lib").mkdir(parents=True)
+            shutil.copyfile(extract / "lib" / "paperclip_api_allowlist.py",
+                            new / "lib" / "paperclip_api_allowlist.py")
             shutil.copyfile(extract / "recovery_writer.py", new / "recovery_writer.py")
             shutil.copyfile(extract / "ops" / "lib" / "host_pressure.py",
                             new / "ops" / "lib" / "host_pressure.py")

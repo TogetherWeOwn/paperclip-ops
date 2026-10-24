@@ -154,6 +154,10 @@ Refs: TOG-""999002" ;;
     two-commits) ncommits=2 ;;
     no-review-run) paperclip_out='SKIP' ;;
     review-no-score) paperclip_out='{"title":"reviewed","summary":"looks fine"}' ;;
+    review-fallback) paperclip_out='{"title":"","summary":"5/5\nadditional details"}' ;;
+    review-fallback-missing) paperclip_out='{"summary":"5/5\nadditional details"}' ;;
+    review-title-authoritative) paperclip_out='{"title":"reviewed","summary":"5/5\nadditional details"}' ;;
+    review-incidental-score) paperclip_out='{"title":"reviewed","summary":"reviewer notes mention 5/5 inline"}' ;;
     ci-red-latest) extra_runs='RED_LATEST' ;;
     ci-pending) extra_runs='PENDING' ;;
     ci-pending-no-time) extra_runs='PENDING_NO_TIMESTAMP' ;;
@@ -407,6 +411,30 @@ M="$WORK/m_noscore"; mk_mirror "$M" review-no-score
 run_check "$M"
 if [ "$RC" -eq 1 ] && grep -q "FAIL.*our-review" <<<"$OUT"; then ok "success without 5/5 fails our-review";
 else bad "success without 5/5 fails our-review" "rc=$RC out=$OUT"; fi
+
+M="$WORK/m_fallback"; mk_mirror "$M" review-fallback
+run_check "$M"
+if [ "$RC" -eq 0 ] && grep -q "PASS.*our-review 5/5" <<<"$OUT"; then
+  ok "empty review title falls back to the first summary line";
+else bad "empty review title falls back to the first summary line" "rc=$RC out=$OUT"; fi
+
+M="$WORK/m_fallback_missing"; mk_mirror "$M" review-fallback-missing
+run_check "$M"
+if [ "$RC" -eq 0 ] && grep -q "PASS.*our-review 5/5" <<<"$OUT"; then
+  ok "missing review title falls back to the first summary line";
+else bad "missing review title falls back to the first summary line" "rc=$RC out=$OUT"; fi
+
+M="$WORK/m_title_authoritative"; mk_mirror "$M" review-title-authoritative
+run_check "$M"
+if [ "$RC" -eq 1 ] && grep -q "FAIL.*our-review" <<<"$OUT"; then
+  ok "nonempty review title remains authoritative";
+else bad "nonempty review title remains authoritative" "rc=$RC out=$OUT"; fi
+
+M="$WORK/m_incidental"; mk_mirror "$M" review-incidental-score
+run_check "$M"
+if [ "$RC" -eq 1 ] && grep -q "FAIL.*our-review" <<<"$OUT"; then
+  ok "incidental 5/5 elsewhere in the summary does not satisfy our-review";
+else bad "incidental 5/5 elsewhere in the summary does not satisfy our-review" "rc=$RC out=$OUT"; fi
 
 M="$WORK/m_2c"; mk_mirror "$M" two-commits
 run_check "$M"

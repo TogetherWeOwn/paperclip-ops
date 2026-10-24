@@ -21,7 +21,7 @@ MAX_QUEUED = 20
 FOCUS_REPOS = runtime.FOCUS_REPOS
 GREEN = {'SUCCESS', 'NEUTRAL', 'SKIPPED'}
 ADVISORY_BOTS = {'CodeRabbit'}
-QUERY = 'query($o:String!,$r:String!,$cursor:String){repository(owner:$o,name:$r){isArchived pullRequests(states:OPEN,first:20,after:$cursor,orderBy:{field:CREATED_AT,direction:ASC}){totalCount pageInfo{hasNextPage endCursor} nodes{\nnumber isDraft headRefOid url headRef{target{... on Commit{oid statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{\n... on CheckRun{name status conclusion startedAt checkSuite{workflowRun{workflow{name}}}} ... on StatusContext{context state createdAt}}}}}}}}}}}'
+QUERY = 'query($o:String!,$r:String!,$cursor:String){repository(owner:$o,name:$r){isArchived pullRequests(states:OPEN,first:20,after:$cursor,orderBy:{field:CREATED_AT,direction:ASC}){totalCount pageInfo{hasNextPage endCursor} nodes{\nnumber isDraft isCrossRepository author{__typename login} headRefOid url headRef{target{... on Commit{oid statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{\n... on CheckRun{name status conclusion startedAt checkSuite{workflowRun{workflow{name}}}} ... on StatusContext{context state createdAt}}}}}}}}}}}'
 REVIEWER = runtime.REVIEWER_ID
 
 def sh(args, **kw):
@@ -208,6 +208,14 @@ def main():
             continue
         for pr in repo['pullRequests']['nodes']:
             if pr['isDraft']:
+                continue
+            if pr.get('isCrossRepository') is not False:
+                continue
+            author = pr.get('author')
+            if not isinstance(author, dict) or author.get('__typename') != 'User':
+                continue
+            login = author.get('login')
+            if not isinstance(login, str) or not login.strip():
                 continue
             head = pr['headRefOid']
             if (full.lower(), pr['number'], head) in docs_passed:

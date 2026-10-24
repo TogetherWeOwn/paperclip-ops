@@ -27,6 +27,18 @@ from unittest.mock import mock_open, patch
 
 import recovery_writer as rw
 
+
+def setUpModule():
+    # Every client in this suite uses a test-only base (board.invalid or
+    # loopback); the hatch lets the allowlist layer through without a host
+    # file so the policy assertions below see the writer, not the gate.
+    os.environ["PAPERCLIP_API_ALLOWLIST_TEST"] = "1"
+
+
+def tearDownModule():
+    os.environ.pop("PAPERCLIP_API_ALLOWLIST_TEST", None)
+
+
 CEO = "00000000-0000-4000-8000-000000000031"
 OWNER_USER = "u-owner-0000-1111-2222-333333333333"
 OWNER_AGENT = "a-owner-0000-1111-2222-333333333333"
@@ -887,6 +899,25 @@ class BenignAgentResetApply(unittest.TestCase):
         result = rw.apply_decision(client, refused)
         self.assertEqual(result["wrote"], False)
         self.assertEqual(client.posts, [])
+
+
+class AllowlistEnforceWiring(unittest.TestCase):
+    def test_enforce_refuses_before_any_transport(self):
+        # Wiring pin: deleting the check_api_base_allowed call in
+        # PaperclipClient.__init__ must fail this test (construction
+        # would succeed and _request would proceed to urlopen).
+        env = dict(os.environ)
+        env.pop("PAPERCLIP_API_ALLOWLIST_TEST", None)
+        env.pop("PAPERCLIP_API_BRIDGE_MODE", None)
+        env["PAPERCLIP_API_ALLOWLIST_MODE"] = "enforce"
+        with patch.dict(os.environ, env, clear=True), \
+                patch("paperclip_api_allowlist.load_allowlist",
+                      return_value=set()), \
+                patch("urllib.request.urlopen") as urlopen:
+            with self.assertRaises(rw.WriterError) as raised:
+                rw.PaperclipClient("https://evil.example.com", "KEY")
+        self.assertIn("mode=enforce", str(raised.exception))
+        urlopen.assert_not_called()
 
 
 if __name__ == "__main__":

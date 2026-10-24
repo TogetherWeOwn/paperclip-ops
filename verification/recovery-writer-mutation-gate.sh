@@ -193,8 +193,8 @@ mutate driver-repair-cap-reliteralised systemd/run-recovery-writer.sh \
   '  --max-repairs 3' \
   test_repair_cap_is_operator_settable_without_editing_a_root_unit
 mutate installer-release-manifest-covers-pressure-module systemd/install-recovery-writer.sh \
-  '/usr/bin/sha256sum recovery_writer.py ops/lib/host_pressure.py run-recovery-writer.sh REVISION' \
-  '/usr/bin/sha256sum recovery_writer.py run-recovery-writer.sh REVISION' \
+  '/usr/bin/sha256sum lib/paperclip_api_allowlist.py recovery_writer.py ops/lib/host_pressure.py run-recovery-writer.sh REVISION' \
+  '/usr/bin/sha256sum lib/paperclip_api_allowlist.py recovery_writer.py run-recovery-writer.sh REVISION' \
   test_installer_regenerates_release_scoped_manifest
 mutate installer-import-smoke-test-removed systemd/install-recovery-writer.sh \
   '(cd "$RELEASE_DIR" && /usr/bin/python3 recovery_writer.py --help >/dev/null)' \

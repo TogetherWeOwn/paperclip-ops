@@ -56,6 +56,18 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(mp.evaluate_memcg(sample(anon=deny_line + GIB))["workersFit"], 0)
         self.assertEqual(mp.evaluate_memcg(sample(anon=deny_line - 7 * GIB), per_worker_bytes=GIB)["workersFit"], 7)
 
+    def test_psi_hold_advertises_no_workers(self):
+        verdict = mp.evaluate_memcg(sample(anon=GIB, psi=9.0))
+        self.assertEqual((verdict["reason"], verdict["workersFit"]), ("memcg_psi", 0))
+
+    def test_non_positive_worker_budget_is_rejected(self):
+        for bad in (0, -GIB, True, 1.5, None):
+            with self.subTest(bad=bad), self.assertRaises(mp.MemcgError):
+                mp.evaluate_memcg(sample(anon=GIB), per_worker_bytes=bad)
+
+    def test_uncapped_cgroup_ignores_psi(self):
+        self.assertEqual(mp.evaluate_memcg(sample(limit="max", psi=90.0))["reason"], "uncapped")
+
     def test_uncapped_cgroup_is_not_this_guards_concern(self):
         verdict = mp.evaluate_memcg(sample(limit="max", anon=10 * GIB))
         self.assertEqual((verdict["allowed"], verdict["reason"]), (True, "uncapped"))
@@ -72,6 +84,8 @@ class FailClosedTest(unittest.TestCase):
             "text limit": {"memory.max": "lots\n"},
             "no full row": {"memory.pressure": "some avg60=0.00\n"},
             "psi out of range": {"memory.pressure": "full avg60=101.0\n"},
+            "duplicate psi key": {"memory.pressure": "full avg60=90 avg60=0\n"},
+            "junk psi token": {"memory.pressure": "full avg60=1 junk\n"},
             "psi nan": {"memory.pressure": "full avg60=nan\n"},
             "missing stat": {"memory.stat": "anon 1\nshmem 1\n"},
             "duplicate stat": {"memory.stat": "anon 1\nanon 2\nshmem 0\nslab_unreclaimable 0\nkernel_stack 0\n"},
@@ -112,7 +126,7 @@ class CliTest(unittest.TestCase):
         code, out = self.run_cli(["--per-worker-gib", "1"], anon=GIB)
         self.assertEqual((code, json.loads(out)["workersFit"]), (0, 23))
         with contextlib.redirect_stderr(io.StringIO()):
-            for argv in (["--bogus"], ["--per-worker-gib"], ["--per-worker-gib", "0"]):
+            for argv in (["--bogus"], ["--per-worker-gib"], ["--per-worker-gib", "0"], ["--per-worker-gib", "inf"]):
                 self.assertEqual(mp.main(argv), 2)
 
     def test_unreadable_telemetry_exits_two(self):

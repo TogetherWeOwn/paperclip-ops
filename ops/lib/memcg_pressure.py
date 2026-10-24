@@ -5,7 +5,8 @@ tens of GiB free. memory.current is also the wrong signal: it includes reclaimab
 sits near memory.max on a healthy busy container. What the OOM killer cannot reclaim is anonymous
 memory, shmem (tmpfs), unreclaimable slab and kernel stacks, so the guard is
 (anon + shmem + slab_unreclaimable + kernel_stack) / memory.max, plus the cgroup's own memory
-PSI. Missing or malformed telemetry fails closed; an uncapped cgroup is not this guard's concern.
+PSI. Missing or malformed telemetry fails closed. An uncapped cgroup (no memory.max) is passed without
+looking at PSI: the host-wide gate in host_pressure.py covers it.
 
 CLI: python3 memcg_pressure.py [--dir DIR] [--per-worker-gib N]
   prints one JSON verdict (with the number of test workers that still fit); exit 0 allowed,
@@ -59,7 +60,12 @@ def _psi_full_avg60(text: str) -> float:
     rows = [line.split() for line in text.splitlines() if line.startswith("full ")]
     if len(rows) != 1:
         raise MemcgError("memory.pressure full row is missing or duplicated")
-    fields = dict(item.partition("=")[::2] for item in rows[0][1:])
+    fields: dict[str, str] = {}
+    for item in rows[0][1:]:
+        key, separator, value = item.partition("=")
+        if not separator or not key or not value or key in fields:
+            raise MemcgError("memory.pressure row is malformed")
+        fields[key] = value
     try:
         value = float(fields["avg60"])
     except (KeyError, ValueError) as error:
@@ -93,7 +99,12 @@ def read_memcg(cgroup_dir: str = DEFAULT_DIR,
 
 
 def evaluate_memcg(sample: Any, per_worker_bytes: int = PER_WORKER_BYTES) -> dict[str, Any]:
-    """Return admission, reason and how many more `per_worker_bytes` test trees fit below the deny line."""
+    """Return admission, reason and how many more `per_worker_bytes` test trees fit below the deny line.
+
+    `workersFit` is a memory budget only: it is 0 whenever the verdict is a hold, and None when uncapped.
+    """
+    if isinstance(per_worker_bytes, bool) or not isinstance(per_worker_bytes, int) or per_worker_bytes <= 0:
+        raise MemcgError("per_worker_bytes must be a positive integer")
     if not isinstance(sample, dict):
         raise MemcgError("memcg sample is not an object")
     limit = sample.get("limit")
@@ -116,8 +127,9 @@ def evaluate_memcg(sample: Any, per_worker_bytes: int = PER_WORKER_BYTES) -> dic
     headroom = int(DENY_RATIO * limit) - unreclaimable
     reason = ("memcg_psi" if psi > PSI_FULL_MAX else
               "memcg_unreclaimable" if ratio >= DENY_RATIO else "headroom")
+    fit = max(0, headroom) // per_worker_bytes if reason == "headroom" else 0
     return {"allowed": reason == "headroom", "reason": reason, "unreclaimable": unreclaimable,
-            "ratio": round(ratio, 4), "workersFit": max(0, headroom) // per_worker_bytes}
+            "ratio": round(ratio, 4), "workersFit": fit}
 
 
 def main(argv: list[str]) -> int:
@@ -138,7 +150,7 @@ def main(argv: list[str]) -> int:
     except MemcgError as error:
         print(json.dumps({"allowed": False, "reason": "unreadable", "error": str(error)}))
         return 2
-    except (IndexError, ValueError):
+    except (IndexError, ValueError, OverflowError):
         print("usage: memcg_pressure.py [--dir DIR] [--per-worker-gib N]", file=sys.stderr)
         return 2
     print(json.dumps(verdict))

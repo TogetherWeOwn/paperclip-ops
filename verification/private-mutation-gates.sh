@@ -137,9 +137,13 @@ request_mutation "ambiguous-request-id" \
 # network or credential. Each mutant must be rejected by the unmutated suite.
 notify_root="$TMP/notify-transport"
 notify_baseline="$notify_root/baseline"
-mkdir -p "$notify_baseline" || exit 1
+mkdir -p "$notify_baseline" "$notify_baseline/lib" || exit 1
 if ! cp notify_paperclip_issue.sh test_notify_transport.sh "$notify_baseline/"; then
   printf 'ERROR: could not stage notification baseline\n' >&2
+  exit 1
+fi
+if ! cp lib/paperclip_api_allowlist.sh "$notify_baseline/lib/"; then
+  printf 'ERROR: could not stage notification allowlist helper\n' >&2
   exit 1
 fi
 chmod +x "$notify_baseline/notify_paperclip_issue.sh" \

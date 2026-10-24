@@ -38,6 +38,7 @@ WORK_DIR=$(mktemp -d)
 OUTPUT=$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$OUTPUT")
 trap 'rm -rf "$WORK_DIR"' EXIT
 files=(
+  lib/paperclip_api_allowlist.py
   recovery_writer.py
   ops/lib/host_pressure.py
   systemd/run-recovery-writer.sh

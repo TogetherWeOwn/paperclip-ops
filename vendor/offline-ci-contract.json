@@ -323,6 +323,9 @@
     "database backup observation contract:1",
     "provider baseline integrity suite:1",
     "review report input integrity holds:1",
+    "api-allowlist suite:1",
+    "api-allowlist-python suite:1",
+    "allowlist-hatch-absent gate:1",
     "explicit workflow job permissions gate:1",
     "test-missing gate suites:1",
     "orphan-suite ratchet fixtures suite:1",
@@ -1835,6 +1838,21 @@
       "id": "review report input integrity holds:1"
     },
     {
+      "name": "api-allowlist suite",
+      "definition_sha256": "ffe1904f67380d1b9b578caf01c608b1c0dc508f736c55be61056a406ac81e62",
+      "id": "api-allowlist suite:1"
+    },
+    {
+      "name": "api-allowlist-python suite",
+      "definition_sha256": "fcf6fbc4ff8d0dbc70d5d7339ff2b93f83ebf67d78f05cb7f371c597769f6336",
+      "id": "api-allowlist-python suite:1"
+    },
+    {
+      "name": "allowlist-hatch-absent gate",
+      "definition_sha256": "83b5df16e75c5f159cf75c11727bae9e4e3633b206120a7e6a0d9ab6c5c8860f",
+      "id": "allowlist-hatch-absent gate:1"
+    },
+    {
       "name": "explicit workflow job permissions gate",
       "definition_sha256": "8ad71aa74af77d948d6751d109f0c4dc02ad835b4987f40d4f4dd10403212240",
       "id": "explicit workflow job permissions gate:1"
@@ -1878,6 +1896,7 @@
       "name": "settings-bind rehearsal suite",
       "definition_sha256": "bb309c4b15965281fffe7f9190063f90688cd4a7cb1c00f659918423a5bde7fd",
       "id": "settings-bind rehearsal suite:1"
+
     },
     {
       "name": "host backup publication receipt contract (offline)",

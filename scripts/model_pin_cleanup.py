@@ -85,6 +85,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "lib"))
+from paperclip_api_allowlist import (
+    AllowlistRefused, check_api_base_allowed)
+
 PLUGIN_ACTOR_ID = "00000000-0000-4000-8000-000000000143"
 PLUGIN_KEY = "togetherweown.model-selection"
 OPEN_STATUSES = ("todo", "in_progress", "in_review", "blocked")
@@ -548,6 +553,10 @@ class PaperclipClient:
         if not _valid_api_base(base):
             raise CleanupError(
                 "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
+        try:
+            check_api_base_allowed(base, sender="model_pin_cleanup")
+        except AllowlistRefused as exc:
+            raise CleanupError(str(exc)) from exc
         self.base = base
         self.key = api_key
         self.company = company_id

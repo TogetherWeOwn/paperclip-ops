@@ -17,6 +17,7 @@ import datetime
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
 
@@ -868,6 +869,26 @@ class FetchPathTest(unittest.TestCase):
     def test_build_plan_row_none_for_unpinned(self):
         self.assertIsNone(build_plan_row(issue("T", model=None), [], []))
         self.assertIsNone(build_plan_row(None, [], []))
+
+
+class AllowlistEnforceWiring(unittest.TestCase):
+    def test_enforce_refuses_before_any_transport(self):
+        # Wiring pin: deleting the check_api_base_allowed call in
+        # PaperclipClient.__init__ must fail this test (construction
+        # would succeed and _request would proceed to urlopen).
+        import model_pin_cleanup as mpc
+        env = dict(os.environ)
+        env.pop("PAPERCLIP_API_ALLOWLIST_TEST", None)
+        env.pop("PAPERCLIP_API_BRIDGE_MODE", None)
+        env["PAPERCLIP_API_ALLOWLIST_MODE"] = "enforce"
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch("paperclip_api_allowlist.load_allowlist",
+                           return_value=set()), \
+                mock.patch("urllib.request.urlopen") as urlopen:
+            with self.assertRaises(mpc.CleanupError) as raised:
+                mpc.PaperclipClient("https://evil.example.com", "KEY", "c")
+        self.assertIn("mode=enforce", str(raised.exception))
+        urlopen.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -637,6 +637,19 @@ if (( CHECK_HEALTH == 1 )) && [[ -n "${PAPERCLIP_API_URL:-}" ]] && command -v cu
       fi
     fi
   fi
+  if (( base_ok == 1 )); then
+    # Load only after argument validation and only for health corroboration.
+    # shellcheck source=lib/paperclip_api_allowlist.sh
+    _PC_ALLOWLIST_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/paperclip_api_allowlist.sh"
+    _PC_ALLOWLIST_LIB_OK=""
+    if [[ -r "$_PC_ALLOWLIST_LIB" ]]; then source "$_PC_ALLOWLIST_LIB"; _PC_ALLOWLIST_LIB_OK=1; fi
+    if [[ -z "${_PC_ALLOWLIST_LIB_OK:-}" ]]; then
+      echo "db_backup_stall: WARNING: API allowlist lib missing; skipping health corroboration" >&2
+      base_ok=0
+    else
+      paperclip_allowlist_check "$base" "db_backup_stall" || base_ok=0
+    fi
+  fi
   if (( base_ok == 0 )); then
     echo "db_backup_stall: WARNING: PAPERCLIP_API_URL is not a clean http(s) base; skipping health corroboration" >&2
   fi

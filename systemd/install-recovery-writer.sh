@@ -32,7 +32,7 @@ WORK_DIR=$(/usr/bin/mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 /usr/bin/tar --extract --file "$BUNDLE" --directory "$WORK_DIR" --no-same-owner --no-same-permissions
 [[ "$(<"$WORK_DIR/REVISION")" == "$SOURCE_REF" ]] || refuse "bundle revision does not match --source-ref"
-for source in recovery_writer.py ops/lib/host_pressure.py systemd/run-recovery-writer.sh systemd/install-recovery-writer.sh systemd/paperclip-recovery-writer.service systemd/paperclip-recovery-writer.timer SHA256SUMS REVISION; do
+for source in lib/paperclip_api_allowlist.py recovery_writer.py ops/lib/host_pressure.py systemd/run-recovery-writer.sh systemd/install-recovery-writer.sh systemd/paperclip-recovery-writer.service systemd/paperclip-recovery-writer.timer SHA256SUMS REVISION; do
   [[ -f "$WORK_DIR/$source" ]] || refuse "reviewed bundle is missing $source"
 done
 (cd "$WORK_DIR" && /usr/bin/sha256sum --check --strict SHA256SUMS)
@@ -40,8 +40,9 @@ RELEASE_DIR="/usr/local/libexec/paperclip-recovery-writer/$SOURCE_REF"
 if [[ -e "$RELEASE_DIR" ]]; then
   refuse "release directory already exists: $RELEASE_DIR"
 fi
-/usr/bin/install -d -o root -g root -m 0755 "$RELEASE_DIR" "$RELEASE_DIR/ops/lib" /etc/systemd/user
+/usr/bin/install -d -o root -g root -m 0755 "$RELEASE_DIR" "$RELEASE_DIR/lib" "$RELEASE_DIR/ops/lib" /etc/systemd/user
 /usr/bin/install -o root -g root -m 0555 "$WORK_DIR/recovery_writer.py" "$RELEASE_DIR/recovery_writer.py"
+/usr/bin/install -o root -g root -m 0444 "$WORK_DIR/lib/paperclip_api_allowlist.py" "$RELEASE_DIR/lib/paperclip_api_allowlist.py"
 /usr/bin/install -o root -g root -m 0444 "$WORK_DIR/ops/lib/host_pressure.py" "$RELEASE_DIR/ops/lib/host_pressure.py"
 /usr/bin/install -o root -g root -m 0555 "$WORK_DIR/systemd/run-recovery-writer.sh" "$RELEASE_DIR/run-recovery-writer.sh"
 # The bundle manifest covers bundle-scope paths (systemd/*) that are verified
@@ -50,9 +51,9 @@ fi
 # with FAILED-open-or-read. The release manifest covers exactly the installed
 # byte set, regenerated here from the verified bytes.
 /usr/bin/install -o root -g root -m 0444 "$WORK_DIR/REVISION" "$RELEASE_DIR/REVISION"
-(cd "$RELEASE_DIR" && /usr/bin/sha256sum recovery_writer.py ops/lib/host_pressure.py run-recovery-writer.sh REVISION > "$WORK_DIR/SHA256SUMS.release")
+(cd "$RELEASE_DIR" && /usr/bin/sha256sum lib/paperclip_api_allowlist.py recovery_writer.py ops/lib/host_pressure.py run-recovery-writer.sh REVISION > "$WORK_DIR/SHA256SUMS.release")
 /usr/bin/install -o root -g root -m 0444 "$WORK_DIR/SHA256SUMS.release" "$RELEASE_DIR/SHA256SUMS"
-/usr/bin/python3 -m py_compile "$RELEASE_DIR/recovery_writer.py" "$RELEASE_DIR/ops/lib/host_pressure.py"
+/usr/bin/python3 -m py_compile "$RELEASE_DIR/recovery_writer.py" "$RELEASE_DIR/lib/paperclip_api_allowlist.py" "$RELEASE_DIR/ops/lib/host_pressure.py"
 (cd "$RELEASE_DIR" && /usr/bin/python3 recovery_writer.py --help >/dev/null)
 rm -rf "$RELEASE_DIR/__pycache__" "$RELEASE_DIR/ops/lib/__pycache__"
 # The unit runs this exact check before every start; prove it passes now,

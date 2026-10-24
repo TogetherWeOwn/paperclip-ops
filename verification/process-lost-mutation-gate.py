@@ -21,6 +21,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "process_lost_probe.py"
 SUITE = "test_process_lost_probe.py"
+LIB_REL = Path("lib/paperclip_api_allowlist.py")
 
 # Each mutant names the shortcut it stands for and the assertions that kill
 # it. The first three reproduce the hand-killed contract; the rest protect
@@ -88,6 +89,12 @@ def run_suite(directory, names=()):
 def stage(directory, source):
     (directory / TARGET).write_text(source)
     shutil.copyfile(ROOT / SUITE, directory / SUITE)
+    # The probe fail-closes at import without its allowlist dep; stage the
+    # unmodified lib so the baseline is green and kills stay attributable.
+    if not (ROOT / LIB_REL).is_file():
+        raise RuntimeError(f"allowlist lib missing at {ROOT / LIB_REL}")
+    (directory / "lib").mkdir(exist_ok=True)
+    shutil.copyfile(ROOT / LIB_REL, directory / LIB_REL)
 
 
 def main():

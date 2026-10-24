@@ -76,6 +76,10 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/paperclip_api_allowlist.sh
+_PC_ALLOWLIST_LIB="$HERE/lib/paperclip_api_allowlist.sh"
+[[ -r "$_PC_ALLOWLIST_LIB" ]] || { echo "ERROR: API allowlist lib missing: $_PC_ALLOWLIST_LIB" >&2; exit 2; }
+source "$_PC_ALLOWLIST_LIB"
 DETECTOR="${DB_BACKUP_STALL_SH:-$HERE/db_backup_stall.sh}"
 ISSUE_ID="${PAPERCLIP_TASK_ID:-}"
 INTERVAL_HOURS=2
@@ -156,6 +160,7 @@ elif [[ "$_base_host" == *:* ]]; then
     echo "ERROR: PAPERCLIP_API_URL authority is not one bare host" >&2; exit 2
   fi
 fi
+paperclip_allowlist_check "$BASE" "db_backup_stall_monitor" || exit 2
 WORK="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/db_backup_stall_monitor.XXXXXXXX")" \
   || { echo "ERROR: could not create private work directory" >&2; exit 2; }
 cleanup() { rm -rf "$WORK"; }

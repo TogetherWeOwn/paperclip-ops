@@ -107,6 +107,8 @@ run_case() {
   : > "$WORK/patch.json"; : > "$WORK/status-argv.log"
   timeout 5s env -i PATH="$WORK/bin:$PATH" HOME="$WORK" TMPDIR="$WORK" \
     PAPERCLIP_API_URL="${MONITOR_TEST_API_URL:-https://paperclip.invalid/api}" \
+    PAPERCLIP_API_ALLOWLIST_TEST="${MONITOR_TEST_ALLOWLIST_HATCH:-1}" \
+    PAPERCLIP_API_ALLOWLIST_MODE="${MONITOR_TEST_ALLOWLIST_MODE:-}" \
     PAPERCLIP_API_KEY="pc_CANARY_dispatch_monitor_key" \
     PAPERCLIP_TASK_ID="issue-monitor" \
     DISPATCH_DEPLOY_MONITOR_NOW="2026-09-12T20:00:00Z" \
@@ -251,6 +253,16 @@ fi
 
 echo
 echo "-----------------------------------------------------------------"
+hdr "Allowlist enforce refuses with zero transport"
+# Wiring pin: deleting the paperclip_allowlist_check call must fail the
+# zero-transport assertion (the wrapper would run status and re-arm
+# against the evil base).
+MONITOR_TEST_API_URL="https://evil.example.invalid/api" MONITOR_TEST_ALLOWLIST_HATCH=0 MONITOR_TEST_ALLOWLIST_MODE=enforce run_case "$NO_DRIFT_OUTPUT" 0
+[[ "$CASE_RC" -eq 2 ]] && ok "enforce refuses the unallowlisted base (exit 2)" || bad "enforce refuses the unallowlisted base (exit 2)" "got $CASE_RC ($(cat "$WORK/err.txt"))"
+grep -q "allowlist" "$WORK/err.txt" && ok "refusal names the allowlist" || bad "refusal names the allowlist" "$(cat "$WORK/err.txt")"
+[[ ! -s "$WORK/requests.log" ]] && ok "refusal makes zero transport calls" || bad "refusal makes zero transport calls" "$(cat "$WORK/requests.log")"
+[[ ! -s "$WORK/status-argv.log" ]] && ok "refusal runs no status either" || bad "refusal ran status" "$(cat "$WORK/status-argv.log")"
+
 if [[ "$FAIL" -eq 0 ]]; then
   echo "PASS  $PASS/$PASS"
   exit 0

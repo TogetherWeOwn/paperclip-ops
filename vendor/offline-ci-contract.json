@@ -539,7 +539,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "20f85a6e1bea32d63216e539688478ad20eebf1a7e0e82ba3525bbb47d087c19",
+      "definition_sha256": "b2f514ddfb266ddd4cd473f23551f5992db30c794f53a476e04f68ed7780b185",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1229,7 +1229,7 @@
     },
     {
       "name": "host timer registry (offline, mutation-controlled)",
-      "definition_sha256": "76e2d6719e926124a4be97299999bb2ba4dfee02e3f9591782bae013252d7485",
+      "definition_sha256": "ae952cda0ad54b5a3b4c21ec416cbbaf48d38ec533a967472f46f1a54294f9f9",
       "id": "host timer registry (offline, mutation-controlled):1"
     },
     {

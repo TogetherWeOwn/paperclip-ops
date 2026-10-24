@@ -31,6 +31,10 @@ export CURL_LOG="$WORK/curl.log" CFG_LOG="$WORK/cfg.log"
 : > "$CURL_LOG"; : > "$CFG_LOG"
 
 CANARY="pc_CANARY_base_validation_key"
+# The allowlist test hatch: well-formed GOOD bases (.invalid, loopback)
+# opt in explicitly so the allowlist layer lets the structural layer's
+# still-delivers assertions through without a host file.
+HATCH="PAPERCLIP_API_ALLOWLIST_TEST=1"
 NL_BASE="$(printf 'https://paperclip.invalid/api\nheader = "X: injected"')"
 
 # Recording curl stub. Serves every sender below by URL shape:
@@ -147,7 +151,7 @@ done
 
 hdr "notify: well-formed base still delivers"
 reset_logs
-out="$("${RUN_ENV[@]}" PAPERCLIP_API_URL="https://paperclip.invalid/api" PAPERCLIP_API_KEY="$CANARY" \
+out="$("${RUN_ENV[@]}" "$HATCH" PAPERCLIP_API_URL="https://paperclip.invalid/api" PAPERCLIP_API_KEY="$CANARY" \
   "$HERE/notify_paperclip_issue.sh" <<<"$PAYLOAD" 2>"$WORK/err.txt")"; rc=$?
 [[ "$rc" -eq 0 ]] && ok "exit 0" || bad "exit 0" "exit=$rc err=$(cat "$WORK/err.txt")"
 [[ "$(curl_calls)" -eq 1 ]] && ok "one curl call" || bad "one curl call" "calls=$(curl_calls)"
@@ -155,7 +159,7 @@ grep -qF "$CANARY" "$CFG_LOG" && ok "bearer reached curl by config" || bad "bear
 
 hdr "notify: bracketed IPv6 base still delivers"
 reset_logs
-out="$("${RUN_ENV[@]}" PAPERCLIP_API_URL="http://[::1]:9/api" PAPERCLIP_API_KEY="$CANARY" \
+out="$("${RUN_ENV[@]}" "$HATCH" PAPERCLIP_API_URL="http://[::1]:9/api" PAPERCLIP_API_KEY="$CANARY" \
   "$HERE/notify_paperclip_issue.sh" <<<"$PAYLOAD" 2>"$WORK/err.txt")"; rc=$?
 [[ "$rc" -eq 0 ]] && ok "exit 0" || bad "exit 0" "exit=$rc err=$(cat "$WORK/err.txt")"
 [[ "$(curl_calls)" -eq 1 ]] && ok "one curl call" || bad "one curl call" "calls=$(curl_calls)"
@@ -184,7 +188,7 @@ done
 
 hdr "stall monitor: well-formed base still cycles"
 reset_logs; : > "$DETECTOR_CALL_LOG"
-out="$("${RUN_ENV[@]}" PAPERCLIP_API_URL="https://paperclip.invalid/api" PAPERCLIP_API_KEY="$CANARY" PAPERCLIP_TASK_ID="issue-stub" \
+out="$("${RUN_ENV[@]}" "$HATCH" PAPERCLIP_API_URL="https://paperclip.invalid/api" PAPERCLIP_API_KEY="$CANARY" PAPERCLIP_TASK_ID="issue-stub" \
   DB_BACKUP_STALL_SH="$WORK/bin/fakedetector" "DETECTOR_CALL_LOG=$DETECTOR_CALL_LOG" \
   "$HERE/db_backup_stall_monitor.sh" 2>"$WORK/err.txt")"; rc=$?
 [[ "$rc" -eq 0 ]] && ok "exit 0" || bad "exit 0" "exit=$rc err=$(cat "$WORK/err.txt")"
@@ -214,7 +218,7 @@ done
 
 hdr "deploy monitor: well-formed base still cycles"
 reset_logs; : > "$DEPLOY_CALL_LOG"
-out="$("${RUN_ENV[@]}" PAPERCLIP_API_URL="https://paperclip.invalid/api" PAPERCLIP_API_KEY="$CANARY" PAPERCLIP_TASK_ID="issue-stub" \
+out="$("${RUN_ENV[@]}" "$HATCH" PAPERCLIP_API_URL="https://paperclip.invalid/api" PAPERCLIP_API_KEY="$CANARY" PAPERCLIP_TASK_ID="issue-stub" \
   DISPATCH_DEPLOY_SH="$WORK/bin/fakedeploy" "DEPLOY_CALL_LOG=$DEPLOY_CALL_LOG" \
   "$HERE/scripts/dispatch_deploy_monitor.sh" 2>"$WORK/err.txt")"; rc=$?
 [[ "$rc" -eq 0 ]] && ok "exit 0" || bad "exit 0" "exit=$rc err=$(cat "$WORK/err.txt")"
@@ -237,7 +241,7 @@ done
 
 hdr "stall detector: well-formed base still reads health"
 reset_logs
-out="$("${RUN_ENV[@]}" PAPERCLIP_API_URL="https://health-stub.invalid" PAPERCLIP_API_KEY="$CANARY" \
+out="$("${RUN_ENV[@]}" "$HATCH" PAPERCLIP_API_URL="https://health-stub.invalid" PAPERCLIP_API_KEY="$CANARY" \
   "$HERE/db_backup_stall.sh" --log "$WORK/healthy.log" --backup-dir "$WORK/good" --json 2>"$WORK/err.txt")"; rc=$?
 health="$(printf '%s' "$out" | jq -r '.healthStatus // "MISSING"' 2>/dev/null)"
 [[ "$(curl_calls)" -ge 1 ]] && ok "health curl ran" || bad "health curl ran" "calls=$(curl_calls)"
@@ -265,7 +269,7 @@ done
 
 hdr "red_main_poll: well-formed base still snapshots"
 reset_logs
-out="$("${RUN_ENV[@]}" PAPERCLIP_API_URL="https://paperclip.invalid/api" PAPERCLIP_COMPANY_ID="co-stub" \
+out="$("${RUN_ENV[@]}" "$HATCH" PAPERCLIP_API_URL="https://paperclip.invalid/api" PAPERCLIP_COMPANY_ID="co-stub" \
   RED_MAIN_API_KEY="$CANARY" GH_TOKEN="$CANARY" GH_CI_STATUS_BIN="$WORK/bin/fakereader" \
   "$HERE/red_main_poll.sh" snapshot o/r 2>"$WORK/err.txt")"; rc=$?
 [[ "$rc" -eq 0 ]] && ok "exit 0" || bad "exit 0" "exit=$rc err=$(cat "$WORK/err.txt") out=$out"
@@ -296,7 +300,7 @@ chmod +x "$WORK/bin/curl-board"
 # _pf_api uses direct curl args with -w; route through a board-shaped stub by
 # shadowing curl only for this call.
 mv "$WORK/bin/curl" "$WORK/bin/curl-main"; cp "$WORK/bin/curl-board" "$WORK/bin/curl"
-out="$("${RUN_ENV[@]}" PAPERCLIP_API_URL="https://paperclip.invalid/api" PAPERCLIP_AGENT_API_KEY="$CANARY" PAPERCLIP_COMPANY_ID="co-stub" \
+out="$("${RUN_ENV[@]}" "$HATCH" PAPERCLIP_API_URL="https://paperclip.invalid/api" PAPERCLIP_AGENT_API_KEY="$CANARY" PAPERCLIP_COMPANY_ID="co-stub" \
   PAPERCLIP_ASSIGNEE_AGENT_ID="agent-stub" \
   bash -c 'source "$0"; _pf_api GET "/api/test"' "$HERE/ops/case_4ea7d92e/lib/post_finding.sh" 2>"$WORK/err.txt")"; rc=$?
 mv "$WORK/bin/curl-main" "$WORK/bin/curl"

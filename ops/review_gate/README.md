@@ -23,15 +23,17 @@ scratch directory. The harness creates and cleans its own temporary child there.
 CI supplies the runner temporary directory; the fast script prefers the owned
 agent scratch variable and otherwise uses the standard temporary directory.
 
-The independent test handoff is commit
-`01f091506a1ab14f8ad1b1b673359c9bd6cca27c`. All four files under
-`verification/review_gate_acceptance/` remain byte-for-byte unchanged. The same
-47-case command runs in the GitHub-hosted offline CI job and `make verify-fast`.
+The original independent test handoff is commit
+`01f091506a1ab14f8ad1b1b673359c9bd6cca27c`; the candidate-filter extension is
+`0edec01706863b429b03cc0828dc2836c18e4b7a`. The implementation preserves all four
+files under `verification/review_gate_acceptance/` byte-for-byte from that extended
+handoff. The same 71-case command runs in the GitHub-hosted offline CI job and
+`make verify-fast`.
 The canonical `verification/offline_ci_contract.py --write` tool adds only this
 new producer to `vendor/offline-ci-contract.json`; no existing producer pin,
 job/default hash, gate or guard is removed or weakened.
 The original sanitized baseline yields 45 passes and exactly two loudness
-failures; this port yields 47 passes, no errors and no skips. The harness forbids
+failures; the original port yielded 47 passes, no errors and no skips. The harness forbids
 real process/network operations and isolates runtime state in scratch fixtures.
 The baseline-only mutation driver intentionally refuses repaired candidate
 hashes; its pins must not be updated to make it accept this port.
@@ -89,6 +91,26 @@ placeholders, not deployable defaults. A separately authorized executor must
 inject the **unchanged** private identities, focus/rank policy, paths and
 transports through the existing configuration contract. Do not treat configurable
 values as permission to change policy, models, caps, security or credentials.
+
+## Candidate admission extension
+
+The gate query now requests `PullRequest.isCrossRepository` and
+`author { __typename login }` on every inventory page. Before candidate coverage
+or dispatch, only an explicit boolean `False` and a known `User` actor with a
+nonblank string login qualify. `Bot`, unknown actor types, and missing, null or
+malformed metadata are skipped, not converted into favorable review evidence or
+required-check exemptions. Actor type, not a login substring, identifies bots.
+The commit-OID comparison remains an independent exact-head check; equal OIDs do
+not establish that a PR comes from the same repository.
+
+The extension changes only the gate query and this admission predicate. The
+`source-map.json` port hashes above describe the original pagination port, not
+the extended gate. The extended test file SHA256 is
+`01cca1a41f433020cca68145840fc1f3e650b1ed7f8751edacfe05750b678908`.
+Against the original port, the extended suite has 52 passing methods and 19 red
+methods (45 assertion failures); with this filter all 71 methods pass. Existing
+CI wiring already executes the full command; no workflow or gate change is needed.
+Optional docs-lane integration remains unqualified as noted below.
 
 ## Preserved behavior and explicit limits
 

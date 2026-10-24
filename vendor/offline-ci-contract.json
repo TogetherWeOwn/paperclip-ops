@@ -323,6 +323,9 @@
     "database backup observation contract:1",
     "provider baseline integrity suite:1",
     "review report input integrity holds:1",
+    "api-allowlist suite:1",
+    "api-allowlist-python suite:1",
+    "allowlist-hatch-absent gate:1",
     "explicit workflow job permissions gate:1",
     "test-missing gate suites:1",
     "orphan-suite ratchet fixtures suite:1",
@@ -341,7 +344,9 @@
     "dispatch staged-lifecycle acceptance suite:1",
     "failure-drain JSON suite:1",
     "kofra preview parity JSON envelope suite:1",
-    "capacity evidence and CLI refusal contract:1"
+    "capacity evidence and CLI refusal contract:1",
+    "workspace sync-back signal acceptance suite:1",
+    "workspace sync-back signal regression suite:1"
   ],
   "retained": [
     {
@@ -536,7 +541,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "aa0c95658b935acb206525aff2f28918dbce42cfe83e4cfacab62b76fb12e79d",
+      "definition_sha256": "10d54889f27bfd5a8a923c22e3b379370f97a0e1c93ae6979e54dc1f93a15be7",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1226,7 +1231,7 @@
     },
     {
       "name": "host timer registry (offline, mutation-controlled)",
-      "definition_sha256": "76e2d6719e926124a4be97299999bb2ba4dfee02e3f9591782bae013252d7485",
+      "definition_sha256": "ae952cda0ad54b5a3b4c21ec416cbbaf48d38ec533a967472f46f1a54294f9f9",
       "id": "host timer registry (offline, mutation-controlled):1"
     },
     {
@@ -1835,6 +1840,21 @@
       "id": "review report input integrity holds:1"
     },
     {
+      "name": "api-allowlist suite",
+      "definition_sha256": "ffe1904f67380d1b9b578caf01c608b1c0dc508f736c55be61056a406ac81e62",
+      "id": "api-allowlist suite:1"
+    },
+    {
+      "name": "api-allowlist-python suite",
+      "definition_sha256": "fcf6fbc4ff8d0dbc70d5d7339ff2b93f83ebf67d78f05cb7f371c597769f6336",
+      "id": "api-allowlist-python suite:1"
+    },
+    {
+      "name": "allowlist-hatch-absent gate",
+      "definition_sha256": "83b5df16e75c5f159cf75c11727bae9e4e3633b206120a7e6a0d9ab6c5c8860f",
+      "id": "allowlist-hatch-absent gate:1"
+    },
+    {
       "name": "explicit workflow job permissions gate",
       "definition_sha256": "8ad71aa74af77d948d6751d109f0c4dc02ad835b4987f40d4f4dd10403212240",
       "id": "explicit workflow job permissions gate:1"
@@ -1928,6 +1948,16 @@
       "name": "capacity evidence and CLI refusal contract",
       "definition_sha256": "e9a220734a881e501043a8136282204e7683ef1f7857cfe160c3c02d68e12248",
       "id": "capacity evidence and CLI refusal contract:1"
+    },
+    {
+      "name": "workspace sync-back signal acceptance suite",
+      "definition_sha256": "b55cf9f72aa2e019a9f86a851f15392f230524bad937fee625265e1cdabdbf11",
+      "id": "workspace sync-back signal acceptance suite:1"
+    },
+    {
+      "name": "workspace sync-back signal regression suite",
+      "definition_sha256": "3d72cd44d7c856a77dc32e6dbc3a66b610e3b7f47c3ff3fa2675ab93238f1163",
+      "id": "workspace sync-back signal regression suite:1"
     }
   ],
   "removed": [

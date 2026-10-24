@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+# shellcheck source=lib/paperclip_api_allowlist.sh
+_PC_ALLOWLIST_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/paperclip_api_allowlist.sh"
+[[ -r "$_PC_ALLOWLIST_LIB" ]] || { echo "sibling_guard: API allowlist lib missing (board unreadable)" >&2; exit 3; }
+source "$_PC_ALLOWLIST_LIB"
+
 # ===========================================================================
 # SIBLING-RUN GUARD  (EXAMPLE-345)
 #
@@ -161,7 +166,7 @@ while [[ $# -gt 0 ]]; do
     --repo)    [[ $# -ge 2 ]] || die "--repo needs a value"; REPO_SLUG="$2"; shift 2;;
     --quiet|-q) QUIET=1; shift;;
     --json)    JSON=1; shift;;
-    -h|--help) sed -n '98,144p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) sed -n '103,149p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
     --) shift; POSITIONAL+=("$@"); break;;
     -*) die "unknown flag $1";;
     # Flags are accepted on either side of the issue key. `EXAMPLE-345 --phase=prepush`
@@ -310,6 +315,7 @@ detect_control_plane() {
 
   base="${base%/}"; base="${base%/api}"
   _pc_valid_base "$base" || { blind_on "control-plane: PAPERCLIP_API_URL is not a clean http(s) base"; return; }
+  paperclip_allowlist_check "$base" "sibling_guard" || { blind_on "control-plane: PAPERCLIP_API_URL refused by API host allowlist"; return; }
 
   hdrs="$TMPD/hdrs"; : > "$hdrs"; chmod 600 "$hdrs"
   printf 'Authorization: Bearer %s\n' "$key" > "$hdrs"   # never on argv — /proc is world readable
@@ -643,6 +649,9 @@ detect_remote() {
               if ! _pc_valid_base "$gbase"; then
                 blind_on "remote: cross-branch ownership check refuses PAPERCLIP_API_URL (not a clean http(s) base), so a generic PR cannot be attributed"
                 generic_mykey=""
+              elif ! paperclip_allowlist_check "$gbase" "sibling_guard"; then
+                blind_on "remote: cross-branch ownership check refused by API host allowlist, so a generic PR cannot be attributed"
+                generic_mykey=""
               else
                 ghdr="$TMPD/gownhdrs"; : > "$ghdr"; chmod 600 "$ghdr"
                 printf 'Authorization: Bearer %s\n' "$PAPERCLIP_API_KEY" > "$ghdr"
@@ -750,6 +759,9 @@ detect_remote() {
               if ! _pc_valid_base "$obase"; then
                 blind_on "remote: prepush ownership check refuses PAPERCLIP_API_URL (not a clean http(s) base), so a same-head PR cannot be attributed"
                 mykey=""
+              elif ! paperclip_allowlist_check "$obase" "sibling_guard"; then
+                blind_on "remote: prepush ownership check refused by API host allowlist, so a same-head PR cannot be attributed"
+                mykey=""
               else
                 ohdrs="$TMPD/ownhdrs"; : > "$ohdrs"; chmod 600 "$ohdrs"
                 printf 'Authorization: Bearer %s\n' "$PAPERCLIP_API_KEY" > "$ohdrs"
@@ -839,6 +851,9 @@ detect_remote() {
                 sha_obase="${PAPERCLIP_API_URL%/}"; sha_obase="${sha_obase%/api}"
                 if ! _pc_valid_base "$sha_obase"; then
                   blind_on "remote: same-commit ownership check refuses PAPERCLIP_API_URL (not a clean http(s) base), so a same-commit PR cannot be attributed"
+                  sha_mykey=""
+                elif ! paperclip_allowlist_check "$sha_obase" "sibling_guard"; then
+                  blind_on "remote: same-commit ownership check refused by API host allowlist, so a same-commit PR cannot be attributed"
                   sha_mykey=""
                 else
                   sha_ohdrs="$TMPD/shaownhdrs"; : > "$sha_ohdrs"; chmod 600 "$sha_ohdrs"

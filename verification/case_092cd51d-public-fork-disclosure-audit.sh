@@ -330,19 +330,26 @@ EOF
 #
 # case_fcdcc723: CEO decision 04daa237 (2026-10-02T20:53:55Z) on the CTO per-ref
 # recommendation rev 2. First publication times were not recoverable.
+#
+# case_aee42a7a: CISO per-ref POSTHOC adjudication (2026-10-05T11:22:04Z), 4 refs
+# admitted; supersedes the case_fcdcc723 pins for
+# release/tog.5-build-preparation and fix/mcp-alias-unique-suffix (pruned
+# alongside). First publication times unknown.
 # ---------------------------------------------------------------------------
 POSTHOC=$(cat <<'EOF'
 paperclip|refs/heads/master|2ff804e873462c44b45532e85e694b9b198e55d0|case_fcdcc723|unknown|2026-10-02T20:53:55Z|release line (pin goes stale on next merge -- accepted)
 paperclip|refs/heads/release/v2026.1001.0|14f66a7cf6422b43fe87d1d747ceabdf9f23b583|case_fcdcc723|unknown|2026-10-02T20:53:55Z|1001 line
 paperclip|refs/heads/release/tog.2-epipe|88dc42c29952a97949e39f35457899f597fb09ba|case_fcdcc723|unknown|2026-10-02T20:53:55Z|POSTHOC until deployed line confirmed; delete if superseded
 paperclip|refs/heads/tog/v2026.916.1-e2big-14092|598f924f24bc6e060410ef1b1200d75d533e5e15|case_fcdcc723|unknown|2026-10-02T20:53:55Z|POSTHOC until confirmed superseded; then delete
-paperclip|refs/heads/release/tog.5-build-preparation|6aefa649f4815ad6784a4e68a3482456bc41db6b|case_fcdcc723|unknown|2026-10-02T20:53:55Z|POSTHOC while fork PR #20 open; then delete
+paperclip|refs/heads/release/tog.5-build-preparation|78db40a12beb826ad52dba2662b3840a1045a137|case_aee42a7a|unknown|2026-10-05T11:22:04Z|release line, stays live; #20 squash strict scan zero (no creds/hosts/triggers)
 paperclip|refs/heads/ci/immutable-release-builder|80ef2164b9a2725a3ae604ff554952f7453dfd2b|case_fcdcc723|unknown|2026-10-02T20:53:55Z|in-flight #20; delete on merge/close
 paperclip|refs/heads/fix/nested-pool-deadlock-wake|f8e24a2696711adc303b0f4ffa1b5cbe58f92ac4|case_fcdcc723|unknown|2026-10-02T20:53:55Z|in-flight #18
 paperclip|refs/heads/fix/never-started-continuation|73e98bff97db0492821b35e46f948bca794e06a4|case_fcdcc723|unknown|2026-10-02T20:53:55Z|in-flight #21
 paperclip|refs/heads/fix/case_8a1b7894-exe-dev-env-file|1ef30a3412f272ad5e1202a2370fdfea673fe8fc|case_fcdcc723|unknown|2026-10-02T20:53:55Z|in-flight #19; upstream advisory drafted separately
 paperclip|refs/heads/fix-ssh-bundle-stream-truncation|27fcd5e4135bfde9581e981b8bb8c07d40b0b7be|case_fcdcc723|unknown|2026-10-02T20:53:55Z|head of owner's open upstream PR #14428 -- POSTHOC, never delete
-CLIProxyAPI|refs/heads/fix/mcp-alias-unique-suffix|8e44e70969664d27776b0a20034a01f094302c9a|case_fcdcc723|unknown|2026-10-02T20:53:55Z|in-flight internal PR #1; scanned clean
+paperclip|refs/heads/ci/pr-trusted-affected-work-draft|300dd3b66ed38feb3e404377af923dd513e7e52d|case_aee42a7a|unknown|2026-10-05T11:22:04Z|no PR (stacked intermediate); CI gating, 569 added lines scanned clean
+CLIProxyAPI|refs/heads/fix/mcp-alias-unique-suffix|159e43cea3c56aeaf51313651cce425a06256939|case_aee42a7a|unknown|2026-10-05T11:22:04Z|fork PR #1 open draft; alias correctness, strict scan zero; reuses prior adjudication carries, tip unchanged
+CLIProxyAPI|refs/heads/dev|e9af1ba330858c09a3d6aace3669ba087455928c|case_aee42a7a|unknown|2026-10-05T11:22:04Z|docs replay (PR template); reuses prior adjudication evidence, tip unchanged
 EOF
 )
 
@@ -419,8 +426,9 @@ PY
     [[ $repo =~ ^[A-Za-z0-9._-]+$ ]] && pt ok || pt no "bad repo: $line"
     [[ $ref == refs/heads/?* ]] && pt ok || pt no "ref not under refs/heads/ (never audited): $line"
     [[ $sha =~ $sha_re ]] && pt ok || pt no "sha not full 40-hex: $line"
-    if (( public_snapshot )) && [[ $card == case_fcdcc723 ]]; then
-      # Only this reviewed sanitizer alias has lost its private card identity.
+    if (( public_snapshot )) && [[ $card == case_fcdcc723 || $card == case_aee42a7a ]]; then
+      # Only these reviewed sanitizer aliases have lost their private card
+      # identity; each is documented in a stanza above its list.
       # Keep all remaining row assertions and the production provenance grammar.
       p_skip=$((p_skip + 1))
     else

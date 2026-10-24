@@ -338,6 +338,7 @@
     "code-nav read-only and resource guard suite:1",
     "sdlc review-carry suite:1",
     "verify-fast plan suites:1",
+    "dispatch staged-lifecycle acceptance suite:1",
     "failure-drain JSON suite:1",
     "kofra preview parity JSON envelope suite:1",
     "capacity evidence and CLI refusal contract:1"
@@ -535,7 +536,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "e853ed64500396f6b12d312d68b1d32cff59282b907a26a1d0d61bb2fc2aed1b",
+      "definition_sha256": "162cd57ecff56dd7f27cf168ec89159b58a64fb9d2d508c26606a8763e13dc89",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1907,6 +1908,11 @@
       "name": "verify-fast plan suites",
       "definition_sha256": "ccae99dd825dc4bf6449a0a726f92e4d36d5e1be401694a5ce2c09f289526fb7",
       "id": "verify-fast plan suites:1"
+    },
+    {
+      "name": "dispatch staged-lifecycle acceptance suite",
+      "definition_sha256": "08b50e006b6e7315ec03d8d6d157eab8565be8cb65e0e5c1620e6de880d6cf54",
+      "id": "dispatch staged-lifecycle acceptance suite:1"
     },
     {
       "name": "failure-drain JSON suite",

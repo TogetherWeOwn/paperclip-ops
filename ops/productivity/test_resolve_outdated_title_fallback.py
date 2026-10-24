@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Title-fallback acceptance: resolve_outdated_threads.review_evidence (TOG-39901).
+"""Title-fallback acceptance: resolve_outdated_threads.review_evidence (PR #106 follow-up acceptance).
 
 Test-only handoff for PR #106 (fix/review-verdict-title-fallback). Pins the
 missing/empty-title -> first-summary-line fallback WITHOUT implementing it.

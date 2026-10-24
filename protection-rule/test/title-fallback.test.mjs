@@ -1,4 +1,4 @@
-// Title-fallback acceptance: protection-rule source evidence (TOG-39901).
+// Title-fallback acceptance: protection-rule source evidence (PR #106 follow-up acceptance).
 //
 // Test-only handoff for PR #106 (fix/review-verdict-title-fallback). Pins the
 // missing/empty-title -> first-summary-line fallback WITHOUT implementing it.

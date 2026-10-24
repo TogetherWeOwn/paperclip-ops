@@ -536,7 +536,7 @@
     },
     {
       "name": "guard state fail-closed suites",
-      "definition_sha256": "cc4f8a604969e0c70933c2fff7b461c71ae4ae29645bc2e34e3df8f4fa45498f",
+      "definition_sha256": "4f6d5cf9f030fa254feb868b2929f0aad15cc5cf076dabe5996b1ccc57d67ec5",
       "id": "guard state fail-closed suites:1"
     },
     {

@@ -887,17 +887,55 @@ class RegenTest(unittest.TestCase):
         self.assertEqual((s["idle_min"], s["planned"], s["kept_by_reason"]), (10, 0, {"recent-write": 1}))
 
     def test_write_to_the_folder_after_planning_is_refused(self):
-        _, ws = self.make_run()
+        run, ws = self.make_run()
+        late = os.path.join(ws, "late.txt")
+        preconditions = {"euid": os.geteuid(), "db_row": self.db[RID],
+                         "late_exists_before_plan": os.path.exists(late)}
+        commands = []
+        real_op = tool.op
+
+        def observed_op(*cmd, timeout=120):
+            # Trace every operator command so a plan-time keep (empty plan,
+            # empty refusals) stays distinguishable from a revalidation
+            # refusal: the find outputs show what each phase saw.
+            result = real_op(*cmd, timeout=timeout)
+            commands.append({"cmd": cmd, "rc": result.returncode,
+                             "stdout": result.stdout, "stderr": result.stderr})
+            return result
+
+        self.patch(tool, "op", side_effect=observed_op)
+        preconditions["idle_before_plan"] = tool.folder_idle_block(run, tool.IDLE_MINUTES)
+        commands.append({"event": "precheck-idle", "result": preconditions["idle_before_plan"]})
         original = tool.revalidate_run
+        calls = []
 
         def wrapper(rid, run_real, idle_min):
-            write(os.path.join(ws, "late.txt"))
+            # Revalidation runs only for planned runs: a plan-time keep means
+            # this never fires and late.txt never exists, which is exactly how
+            # an empty-plan outcome shows itself in the evidence below.
+            calls.append(rid)
+            commands.append({"event": "revalidate", "call": len(calls)})
+            write(late)
             return original(rid, run_real, idle_min)
 
         self.patch(tool, "revalidate_run", side_effect=wrapper)
         rc, s = self.run_main("--apply")
-        self.assertEqual((s["removed"], s["refused_by_reason"]), (0, {"recent-write": 2}))
-        self.assertTrue(os.path.isdir(os.path.join(ws, "node_modules")))
+        evidence = json.dumps({"preconditions": preconditions, "rc": rc,
+                               "summary": s, "commands": commands,
+                               "revalidate_calls": len(calls),
+                               "late_exists_after_apply": os.path.exists(late)}, sort_keys=True)
+        self.assertIsNone(preconditions["idle_before_plan"], evidence)
+        self.assertEqual((rc, s["idle_min"], s["planned"], s["removed"]), (0, 10, 2, 0), evidence)
+        self.assertEqual((s["kept_by_reason"], s["fail_closed"], s["ledger_error"]),
+                         ({}, None, None), evidence)
+        self.assertEqual(s["refused_by_reason"], {"recent-write": 2}, evidence)
+        self.assertEqual((s["archive_verified_runs"], s["archive_pending_runs"]), (0, 1), evidence)
+        self.assertEqual(len(calls), 1, evidence)
+        self.assertTrue(os.path.exists(late), evidence)
+        marker = next(i for i, e in enumerate(commands) if e.get("event") == "revalidate")
+        self.assertTrue(any(e.get("stdout", "").strip() for e in commands[marker:]
+                            if "-newermt" in e.get("cmd", ())), evidence)
+        self.assertTrue(os.path.isdir(os.path.join(ws, "node_modules")), evidence)
 
     def test_process_running_a_binary_from_the_folder_keeps_the_run(self):
         run, ws = self.make_run()

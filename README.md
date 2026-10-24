@@ -60,6 +60,10 @@ For `host_db_backup.sh`, see the [publication receipt contract](docs/host-db-bac
 for offline discovery, no-write planning, machine outcomes and fixture checks.
 This documentation does not authorize running a backup or changing a host.
 
+For the external, alert-only workspace sync-back size observer, see the
+[byte measurement and alert contract](docs/workspace-sync-back-signal.md).
+It does not instrument transport or authorize host installation.
+
 | Tool |
 | --- |
 | `public_snapshot_test_support.py` (test-only private-artifact boundary; not a runtime policy or operator command) |

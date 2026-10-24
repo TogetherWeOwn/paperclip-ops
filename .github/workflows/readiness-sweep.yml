@@ -29,29 +29,46 @@ name: Readiness Sweep
 # that posts PR checks — the contract test derives that set from the sibling
 # workflow files and fails if one is added without naming it here.
 #
-# EVENT CONTRACT (read before flag-on). Writes made with GITHUB_TOKEN do NOT
-# re-fire workflows: GitHub suppresses token-triggered events (dispatch events
-# are the only exception). Consequences, all load-bearing:
+# EVENT CONTRACT (flag-on posture: both gaps demonstrated fail-closed in
+# gh-event-capture/test/readiness-flag-on.test.mjs). Writes made with
+# GITHUB_TOKEN do NOT re-fire workflows: GitHub suppresses token-triggered
+# events (dispatch events are the only exception). Consequences, all
+# load-bearing:
 #   * No self-trigger is possible: a pass never chains another pass. Each run
 #     is terminal; follow-up passes come only from later real events (author
 #     pushes, CI completions from author-triggered runs, label flips).
 #   * A ready-for-review transition made by the sweep does NOT start the heavy
-#     CI selection that a human ready-click would. The automatic heavy-CI
-#     handoff is therefore UNPROVEN on this route: before any repo is enabled,
-#     a trusted exact-head post-draft verification handoff must be demonstrated
-#     and the gate must fail closed without it. No extra grant (actions:write,
-#     dispatch rights, new credentials) may be inferred to close this gap —
-#     that is a fresh security review, not an edit to this file.
-#   * The post-review auto-merge arm has NO wake. Arming requires the Paperclip
-#     Review check to pass on the head, that check is an App check-run (not one
-#     of the named workflows), review completion is systematically the last
-#     state change, and passes act mutually exclusively — so an enabled PR
-#     would sit ready-but-unarmed until an unrelated event. A wake for external
-#     check completion is therefore UNPROVEN on this route (check_run docs carry
-#     the same Actions-associated-SHA suppression wording as check_suite, so any
-#     candidate needs live proof, never a docs assertion): before any repo is
-#     enabled, the arm wake must be demonstrated and the gate must fail closed
-#     without it.
+#     CI selection that a human ready-click would — there is no automatic
+#     heavy-CI handoff on this route, by platform design. Worse, draft
+#     selection passes ci-ok with every area skipped, so a ci-ok success on a
+#     sweep-readied head does not prove heavy CI ran there — and a later
+#     review pass is not that proof either (a comment-triggered review can
+#     pass without any human-driven full CI running). The arm therefore
+#     requires exact-head verification (every required check plus the review
+#     check passing on THIS head) PLUS the suites job's own completed
+#     success on THIS head, and refuses on missing, pending, or
+#     skipped-heavy evidence (proof A). A sweep-readied PR sits
+#     ready-but-unarmed, never armed and never flapping, until a full CI run
+#     and review both land on the ready head. Cost of the bind, stated
+#     plainly: ready PRs with no selected area skip suites too, so they
+#     never auto-arm either and merge by hand. The merge rulesets (review
+#     required on main, verified 2026-10-21) block merging without that
+#     evidence independently. No extra grant (actions:write, dispatch
+#     rights, new credentials) may be inferred to close this gap — that is a
+#     fresh security review, not an edit to this file.
+#   * The post-review auto-merge arm has NO wake. Review completion is an App
+#     check-run (not one of the named workflows) and systematically the last
+#     state change, so an enabled PR sits ready-but-unarmed until an unrelated
+#     pass re-reads it (check_run docs carry the same Actions-associated-SHA
+#     suppression wording as check_suite, so no trigger is claimed here). The
+#     arm binds the review verdict to THIS head unconditionally — missing,
+#     pending, failing, or stale-head review never arms — and any later pass
+#     arms on fresh exact-head evidence alone (proof B). A missing wake delays
+#     the arm; it cannot corrupt it.
+#   * Non-wake state changes converge lazily. Ruleset edits, mergeable-state
+#     flips, and external statuses arrive with no wake of their own; every pass
+#     re-reads the snapshot and the required set before deciding (proof B: the
+#     decision takes no wake payload), so staleness delays but never corrupts.
 #
 # FORK CONTEXT. A job triggered by pull_request on a fork PR already carries a
 # read-only token (GitHub-enforced). workflow_run jobs run base code with base
@@ -85,11 +102,11 @@ name: Readiness Sweep
 # (including the flag-on change itself) take effect after merge; acceptance
 # runs against the merged tree.
 #
-# FLAG-OFF DEFAULT. gh-event-capture/readiness-policy.json ships with an
-# empty enabledRepositories: passes authenticate, scan, and log would-act
-# without changing anything. Enabling a repo is a reviewed change that lists
-# it (rollback is the revert), only after the security review and sign-off
-# this binding requires.
+# FLAG-ON (ops only). gh-event-capture/readiness-policy.json enables exactly
+# TogetherWeOwn/paperclip-ops (pinned by the scope test in
+# readiness-flag-on.test.mjs — listing any other repo fails that test and
+# needs a fresh security review). Passes act on that repo; scanned-but-unenabled
+# repos still log would-act. Rollback is the revert.
 
 on:
   pull_request:
@@ -116,7 +133,14 @@ jobs:
     timeout-minutes: 5
     # EXACT grant set for the four sweep mutations plus the two sweep reads
     # (pinned by gh-event-capture/test/readiness-job-token.test.mjs — widening
-    # this block fails that test and needs a fresh security review):
+    # this block fails that test and needs a fresh security review). These are
+    # the minimal EXPRESSIBLE grants, not exact capabilities: `contents:write`
+    # also permits push and `pull-requests:write` also permits close and review
+    # actions — GitHub offers no narrower scope. The residual is contained
+    # three ways: the base-tree pin runs no untrusted code beside the token,
+    # the duty module exposes exactly six methods with no push/close/merge path
+    # (pinned by the never-merges runner test), and the token is minutes-lived
+    # and repo-scoped (revocation is the flag revert).
     #   pull-requests: write — body PATCH, mark-ready, convert-to-draft,
     #     auto-merge arm, PR reads (write implies read).
     #   contents: write — enablePullRequestAutoMerge requires it. The sweep
@@ -165,7 +189,7 @@ jobs:
             exit 0
           fi
           # The sweep requires a 0600 owner-uid policy file; install the
-          # checked-in flag-off policy into job-private temp (never edit the
+          # checked-in policy into job-private temp (never edit the
           # checkout copy: enablement is a reviewed change, not a job mutation).
           install -m 0600 gh-event-capture/readiness-policy.json "$RUNNER_TEMP/readiness-policy.json"
           node gh-event-capture/scripts/readiness-sweep.mjs "$RUNNER_TEMP/readiness-policy.json"

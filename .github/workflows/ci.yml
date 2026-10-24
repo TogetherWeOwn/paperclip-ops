@@ -1565,6 +1565,7 @@ jobs:
           (cd ops/owner-guard && python3 -m unittest -v test_owner_guard_state)
           (cd ops/pr-hygiene && python3 -m unittest -v test_owner_match)
           (cd ops/lib && python3 -m unittest -v test_live_run_guard)
+          (cd ops/lib && python3 -m unittest -v test_memcg_pressure)
 
       # Serena navigation guards must execute here: CI's parse-only tier
       # never reaches the suite in the full local verify-fast tier. Reuse the

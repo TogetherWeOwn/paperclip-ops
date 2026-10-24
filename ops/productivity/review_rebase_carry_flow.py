@@ -314,16 +314,20 @@ def previous_source(ledger, repo, number, head):
 
 
 class Env:
-    """Injected capabilities. The host builds these from its authenticated client."""
+    """Injected capabilities. The host builds these from its authenticated client.
+
+    The base methods all raise FlowError, so a bare Env() carries nothing and
+    every decision falls back to today's full review.
+    """
     git_dir = None
 
-    def get_pr(self, number): raise NotImplementedError          # GET pulls/{n}
-    def checks_for(self, sha): raise NotImplementedError         # ALL rows, complete or raise
-    def ensure_objects(self, *shas): raise NotImplementedError   # fetch pinned commits
-    def create_check(self, payload): raise NotImplementedError
-    def patch_check(self, check_id, payload): raise NotImplementedError
-    def now_iso(self): raise NotImplementedError
-    def log(self, line): raise NotImplementedError
+    def get_pr(self, number): raise FlowError('unconfigured environment')  # GET pulls/{n}
+    def checks_for(self, sha): raise FlowError('unconfigured environment')  # ALL rows, complete or raise
+    def ensure_objects(self, *shas): raise FlowError('unconfigured environment')  # fetch pinned commits
+    def create_check(self, payload): raise FlowError('unconfigured environment')
+    def patch_check(self, check_id, payload): raise FlowError('unconfigured environment')
+    def now_iso(self): raise FlowError('unconfigured environment')
+    def log(self, line): raise FlowError('unconfigured environment')
 
 
 def _pr_view(pr, repo):

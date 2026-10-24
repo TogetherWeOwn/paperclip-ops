@@ -4,8 +4,10 @@
 normalized export. It is an **offline digest fragment**, not an installed monitor.
 It never connects to a database, calls an API, changes a card, repairs a workspace,
 pauses a run, changes a model, or schedules work. There is no write-enabled mode.
-The existing daily digest owns collection, cadence, deduplication and delivery.
-Do not attach this to an unrelated alert loop or add a timer.
+Any eventual existing daily digest must own collection, cadence, deduplication
+and delivery. Inspection did not identify that digest or a routing hook. This
+fragment is paused and must not be activated. Do not attach it to an unrelated
+alert loop or add a timer.
 
 ## Invocation and outcomes
 
@@ -127,13 +129,58 @@ Verified against official source commit
   `packages/adapter-utils/src/server-utils.test.ts:634-640`. Reading that evidence
   is not carrying its implementation or building its deployment branch.
 
-The public snapshot does **not** contain the actual platform daily digest or an
-artifact-qualified workspace-check exporter. The retained owner-routing daily
-poster is unrelated and must not be repurposed. Thus this fragment alone is NOT
-QUALIFIED as a live deployment. An authorized operator must locate the existing
-private digest entrypoint and supply/review exact source-to-export mappings,
-including historical caps and workspace-check coverage. Do not invent a new
-collector clock or query production from a builder heartbeat.
+Source inspection did **not** identify an existing platform daily convergence
+digest, routing hook, or persisted workspace-coherence verdict source. The retained
+owner-routing daily poster is unrelated and must not be repurposed. The route name
+in this fragment is a proposed contract, **not an implemented transport**. The
+fragment remains draft and NOT QUALIFIED for runtime use. Collection/delivery
+cannot proceed under an existing-digest-only scope without an actual existing
+source/route or an explicit scope decision. No new collector, clock, transport,
+production query, or deployment is authorized by this document.
+
+Inspection also identified these unresolved normalization requirements:
+
+- Activity rows have timestamps and random IDs, not a proven per-issue sequence.
+  A timestamp tie must remain incomplete unless actual order can be established;
+  sorting UUIDs is not evidence of transition order. All status writers and
+  previous-status semantics still need qualification.
+- The official cap is `runtimeConfig.heartbeat.maxConcurrentRuns`, default 20,
+  clamped to 1–50 (`server/src/services/heartbeat.ts` and
+  `packages/shared/src/constants.ts` at the pinned base). Exported `cap` must be
+  the effective normalized historical value, not a raw configured value. The
+  official running-status count is not yet proven equivalent to start/finish
+  interval overlap; config creation/history coverage is likewise unqualified.
+- No persisted daily workspace verdict was found. Metadata or an on-demand
+  readiness/repair operation cannot be substituted for observations. Keep this
+  source missing/incomplete rather than manufacturing successful checks.
+- Review `at` must faithfully cover both creation and updates, full-head format
+  must validate (otherwise UNKNOWN), and historical sibling expansion and stable
+  repository identity remain exporter obligations, not facts proved here.
+- The stdin signature above is fork-test evidence only. It was not located in
+  the official base's runtime source. Failed/finished timestamps and stderr
+  truncation also remain unqualified. An empty export cannot establish that the
+  watch is applicable or that a native fix shipped.
+
+## Offline acceptance
+
+Run the independent, protected test suites without contacting any live service:
+
+```sh
+python3 -B -m unittest -v test_convergence_watches test_convergence_watches_safety
+```
+
+The 59 tests exercise query boundaries, missing/malformed evidence, input privacy,
+resource budgets, descriptor safety, and same-connection write denial. They are
+wired into the existing hosted `suites` job and local fast inventory; draft PRs
+still skip hosted heavy suites under the existing policy. A passing offline test
+run does not qualify source mappings, a live digest, a build, or deployment.
+
+Direct-function tests currently expose unclosed SQLite connection warnings:
+SQLite's transaction context manager does not close the connection. The protected
+safety test also inspects that connection after evaluation. Explicit closure needs
+a coordinated implementation/test-contract change, not an implementer edit to the
+acceptance test or warning suppression. No persistent-process resource-growth
+qualification is claimed.
 
 ## Read-only and resource boundary
 

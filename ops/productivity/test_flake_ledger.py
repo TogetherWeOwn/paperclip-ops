@@ -409,5 +409,165 @@ class ReportUnit(unittest.TestCase):
                          ('two-bot-next', 3, 7, True))
 
 
+class ReportReviewRegressions(unittest.TestCase):
+    """CLI regressions for component-ID aliasing and lost exclusion counts."""
+
+    def report(self, rows, repo='r', *args):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp, 'ledger.jsonl')
+            ledger.write_text(''.join(json.dumps(row) + '\n' for row in rows),
+                              encoding='utf-8')
+            before = ledger.read_bytes()
+            env = dict(os.environ, FLAKE_LEDGER_PATH=str(ledger))
+            documents = []
+            for _ in range(2):
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPT), 'report', repo, '--json', *args],
+                    capture_output=True, text=True, env=env, check=False,
+                    timeout=15)
+                self.assertEqual(ledger.read_bytes(), before,
+                                 'report must leave ledger bytes unchanged')
+                self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()),
+                                 ['ledger.jsonl'], 'report must not create sidecars')
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                document = json.loads(result.stdout)
+                self.assertIsNone(document['error'])
+                for row in document['rows'] + document['insufficient']:
+                    self.assertIsInstance(row['id'], str)
+                    self.assertTrue(row['id'], 'row IDs must be nonempty')
+                document.pop('generated_at')
+                documents.append(document)
+            self.assertEqual(documents[0], documents[1],
+                             'IDs, counts, and ranking must survive repeated invocation')
+            return documents[0]
+
+    def test_slash_components_have_distinct_ids_and_preserve_ranked_evidence(self):
+        # Raw slash joining aliases these different valid (job, test) tuples.
+        rows = [ledger_row(repo='r', job='a', test='b/c', flips=1, observations=10),
+                ledger_row(repo='r', job='a/b', test='c', flips=9, observations=10)]
+        document = self.report(rows)
+        ranked = document['rows']
+        self.assertEqual([(row['job'], row['test'], row['flips'], row['observations'])
+                          for row in ranked],
+                         [('a/b', 'c', 9, 10), ('a', 'b/c', 1, 10)])
+        self.assertEqual([row['rate'] for row in ranked], [0.9, 0.1])
+        self.assertEqual(document['insufficient'], [])
+        self.assertEqual(document['excluded'], [])
+        self.assertEqual(len({row['id'] for row in ranked}), 2,
+                         'different component tuples must not share an ID')
+        reversed_document = self.report(list(reversed(rows)))
+        self.assertEqual(reversed_document, document,
+                         'IDs must not depend on ledger row order')
+
+    def test_ids_stay_disjoint_and_stable_across_the_observation_gate(self):
+        rows = [ledger_row(repo='r', job='a/b', test='c', flips=9, observations=10),
+                ledger_row(repo='r', job='a', test='b/c', flips=1, observations=4)]
+        loose = self.report(rows, 'r', '--min-observations', '1')
+        gated = self.report(rows, 'r', '--min-observations', '5')
+        self.assertEqual([(row['job'], row['test'], row['flips'], row['observations'])
+                          for row in gated['rows']], [('a/b', 'c', 9, 10)])
+        self.assertEqual([(row['job'], row['test'], row['flips'], row['observations'])
+                          for row in gated['insufficient']], [('a', 'b/c', 1, 4)])
+        self.assertEqual(gated['excluded'],
+                         [{'reason': 'insufficient_observations', 'count': 1}])
+        ranked_ids = {row['id'] for row in gated['rows']}
+        short_ids = {row['id'] for row in gated['insufficient']}
+        self.assertTrue(ranked_ids.isdisjoint(short_ids),
+                        'sub-gate and ranked tuples must not share an ID')
+        self.assertEqual([(row['job'], row['test']) for row in loose['rows']],
+                         [('a/b', 'c'), ('a', 'b/c')])
+        self.assertEqual({(row['job'], row['test']): row['id']
+                          for row in loose['rows']},
+                         {(row['job'], row['test']): row['id']
+                          for row in gated['rows'] + gated['insufficient']},
+                         'an ID identifies a tuple, not its eligibility bucket')
+
+    def test_literal_percent_escape_aliases_remain_distinct_in_each_component(self):
+        # Escaping slash alone would alias a literal "%2F" with an escaped slash.
+        for component in ('repo', 'job', 'test'):
+            with self.subTest(component=component):
+                first = ledger_row(repo='r', job='worker', test='sample',
+                                   flips=9, observations=10)
+                second = ledger_row(repo='r', job='worker', test='sample',
+                                    flips=1, observations=10)
+                first[component] = 'a%2Fb'
+                second[component] = 'a/b'
+                rows = [second, first]
+                if component == 'repo':
+                    reported = (self.report(rows, first['repo'])['rows'] +
+                                self.report(rows, second['repo'])['rows'])
+                else:
+                    reported = self.report(rows)['rows']
+                self.assertEqual([(row['job'], row['test'], row['flips'], row['observations'])
+                                  for row in reported],
+                                 [(first['job'], first['test'], 9, 10),
+                                  (second['job'], second['test'], 1, 10)])
+                self.assertEqual(len({row['id'] for row in reported}), 2,
+                                 'literal percent escapes and slash must not alias')
+
+    def test_repository_and_job_and_test_boundaries_do_not_alias(self):
+        rows = [ledger_row(repo='r/a', job='b', test='c', flips=8, observations=10),
+                ledger_row(repo='r', job='a/b', test='c', flips=9, observations=10),
+                ledger_row(repo='r', job='a', test='b/c', flips=1, observations=10)]
+        nested_repo = self.report(rows, 'r/a')
+        root_repo = self.report(rows)
+        self.assertEqual(nested_repo['repo'], 'r/a')
+        self.assertEqual(root_repo['repo'], 'r')
+        self.assertEqual([(row['job'], row['test'], row['flips'])
+                          for row in nested_repo['rows']], [('b', 'c', 8)])
+        self.assertEqual([(row['job'], row['test'], row['flips'])
+                          for row in root_repo['rows']], [('a/b', 'c', 9), ('a', 'b/c', 1)])
+        combined = nested_repo['rows'] + root_repo['rows']
+        self.assertEqual(len({row['id'] for row in combined}), 3,
+                         'repo is an independent ID component, not a path prefix')
+
+    def test_plain_names_remain_readable_in_ids(self):
+        document = self.report([ledger_row(job='rust tests', test='sample_test')],
+                               'two-bot-next')
+        row_id = document['rows'][0]['id']
+        self.assertIn('rust tests', row_id)
+        self.assertIn('sample_test', row_id)
+
+    @staticmethod
+    def eligible_rows():
+        return [ledger_row(repo='r', test=f'ranked_{index}_test',
+                           flips=10 - index, observations=10)
+                for index in range(6)]
+
+    def test_top_truncation_and_insufficient_counts_are_separate(self):
+        rows = self.eligible_rows() + [ledger_row(repo='r', test='newbie_test',
+                                                flips=1, observations=4)]
+        document = self.report(rows, 'r', '--top', '2', '--min-observations', '5')
+        self.assertEqual(document['top'], 2)
+        self.assertEqual([row['test'] for row in document['rows']],
+                         ['ranked_0_test', 'ranked_1_test'])
+        self.assertEqual([(row['test'], row['flips'], row['observations'])
+                          for row in document['insufficient']], [('newbie_test', 1, 4)])
+        self.assertCountEqual(document['excluded'],
+                              [{'reason': 'top_truncated', 'count': 4},
+                               {'reason': 'insufficient_observations', 'count': 1}])
+
+    def test_top_at_or_above_eligible_count_has_only_insufficient_exclusion(self):
+        rows = self.eligible_rows() + [ledger_row(repo='r', test='newbie_test',
+                                                flips=1, observations=4)]
+        for top in ('6', '100'):
+            with self.subTest(top=top):
+                document = self.report(rows, 'r', '--top', top)
+                self.assertEqual([row['test'] for row in document['rows']],
+                                 [f'ranked_{index}_test' for index in range(6)])
+                self.assertEqual([row['test'] for row in document['insufficient']],
+                                 ['newbie_test'])
+                self.assertEqual(document['excluded'],
+                                 [{'reason': 'insufficient_observations', 'count': 1}])
+
+    def test_all_eligible_without_truncation_has_no_exclusions(self):
+        for top in ('6', '100'):
+            with self.subTest(top=top):
+                document = self.report(self.eligible_rows(), 'r', '--top', top)
+                self.assertEqual(len(document['rows']), 6)
+                self.assertEqual(document['insufficient'], [])
+                self.assertEqual(document['excluded'], [])
+
+
 if __name__ == '__main__':
     unittest.main()

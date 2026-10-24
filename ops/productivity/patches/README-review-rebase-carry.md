@@ -13,6 +13,10 @@ authorized executor installs the packet and a person writes the file.
   skip test. It has no credential, token or mint code.
 - `review-rebase-carry-{gate,findings,carry}.patch`: minimal unified diffs, `-p1`,
   `--fuzz=0`, against the pins below.
+- `review-rebase-carry-entrypoint.patch`: the `reconcile()` call site that runs
+  `process_rebases(token, repo, dry_run)` once per repository per tick, plus the
+  one-line guard change that lets repos with no merge refs reach it. Same
+  `-p1`, `--fuzz=0` standard, same carry pin (re-confirmed by TOG-39953).
 
 ### Pins (re-pinned 2026-10-24 from the read-only capture of TOG-39225)
 
@@ -22,20 +26,46 @@ authorized executor installs the packet and a person writes the file.
 | `ops/productivity/review_findings.py` | `d6869afe3558610a311421d15c3f57d497babe0a96a97df340d97d14fcc8a0a2` |
 | `ops/sdlc/review_carry.py` | `1c541598840be96675fb15f6d2eb2d87a22f00d3a1ef47c280716c77e5198c47` |
 
-The originally requested prefixes (`aee66f14`, `c017881a`, `7e1fdff2`) had drifted. The host
-files are not readable by the builder, so every hunk sits entirely inside a captured,
-hash-verified line range: gate 12-21, 281-513; findings 30-36, 45-57, 77-167; carry 243-429.
+The originally requested prefixes (`aee66f14`, `c017881a`, `7e1fdff2`) had drifted. The
+second capture (TOG-39953) re-confirmed all three pins unchanged. The host files are
+not readable by the builder, so every hunk sits entirely inside a captured,
+hash-verified line range: gate 12-21, 281-513; findings 30-36, 45-57, 77-167; carry 243-429, 479-533.
 The packet was applied with `patch --batch --fuzz=0 -p1` to sparse copies rebuilt from those
 ranges. That proves the hunks are anchored in captured text; it does **not** prove they apply
 to the full host files, and the host gate/fairness/carry suites were NOT run. The install
 request must repeat the apply on copies of the real pinned files and run those suites.
 
-### Not yet wired (blocked on a second read-only capture)
+### Entrypoint wiring (second capture TOG-39953 consumed)
 
-The first capture omitted `review_carry.py`'s entrypoint, so the one line that calls
-`process_rebases(token, repo, dry_run)` for each repository is **not in the packet**.
-Until that call site is added the carry pass never runs, even with the control file set to
-`on`. Nothing else activates it. The gate and findings patches are inert with mode `off`.
+`reconcile()` (lines 479-533) runs every minute via `sdlc-review-carry.timer` and
+loops repositories calling `process_group(token, repo, ref, dry_run)` per merge-queue
+ref. The entrypoint patch adds the rebase pass to that loop:
+
+1. `if not refs:` becomes `if not refs and not isinstance(refs, list):`. The old
+   `continue` skipped repos with no merge-queue refs, which would silently disable
+   the rebase pass for exactly the repos that need it (a missing optimization, and
+   misleading shadow metrics — never a wrong carry, since no pass means a normal
+   full review). The new guard changes behavior only for an empty list: a missing
+   or non-list ref inventory still skips exactly as before, and every other value
+   takes the same path it always did. The `for ref in refs:` loop over `[]` is a
+   no-op, so the merge-group path is untouched.
+2. After that loop, `process_rebases(token, repo, dry_run)` runs inside its own
+   `try/except` (it also never raises itself) and non-empty decision counts are
+   appended to `receipts` under a `rebase_carry` key. With mode `off` (control file
+   absent) the call costs one small file read and returns `{}`.
+
+Hunk anchoring notes for the installer (in addition to the pin check in §Install
+requirements): both hunks sit entirely inside the hash-verified 479-533 capture.
+Hunk 1 carries no leading context because line 493 is a redacted credential line
+the builder provably never saw; its `-`/`+` pair plus the trailing `continue` are
+the anchor. Both anchors occur exactly once in all ~19.8 KB of captured
+`review_carry.py` text, but the uncaptured gaps (1-14, 42-87, 131-182, 242,
+430-431, 477-478) were never searched: before applying, `grep -c` each anchor on
+the pinned file and require exactly one match. `carry.patch` and this patch touch
+disjoint regions and were validated applying sequentially (`carry` first, then
+this one) with `patch --batch --fuzz=0 -p1`; the patched combination parses.
+That still proves anchoring in captured text only — the install request must
+repeat the apply on copies of the real pinned files and run the host suites.
 
 ## How it fits together
 

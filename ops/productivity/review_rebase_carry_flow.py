@@ -161,10 +161,17 @@ def any_rows(checks, number, head):
 
 
 def verify_carry_check(check, repo, number, head, app_id=APP_ID):
-    """True only for the exact published carried check on this head (also the receipt test)."""
+    """True only for the exact published carried check on this head (also the receipt test).
+
+    C4: a receipt without a positive-int id never verifies; the caller then
+    PATCHes to failure and falls back to a full review.
+    """
     try:
         output = check.get('output') if isinstance(check, Mapping) else None
-        return (isinstance(check, Mapping) and check.get('name') == CHECK
+        check_id = check.get('id') if isinstance(check, Mapping) else None
+        if type(check_id) is not int or check_id <= 0:
+            return False
+        return (check.get('name') == CHECK
                 and _app_id(check) == app_id and check.get('head_sha') == head
                 and check.get('status') == 'completed' and check.get('conclusion') == 'success'
                 and check.get('external_id') == core.idempotency_key(repo, number, head)

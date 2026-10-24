@@ -146,6 +146,15 @@ offline verification command, see [Reconciler outcomes](docs/reconciler-outcomes
 The source contract does not imply runtime installation; flow guard's existing
 no-flag invocation is mutating.
 
+## Convergence digest fragment
+
+[Convergence watches](docs/convergence-watches.md) documents five read-only,
+offline queries and their private export contract. `ops/convergence_watches.py`
+emits versioned JSON or a finding-only Markdown fragment for an existing daily
+digest. It installs no monitor, collector, clock, repair path or transport; missing
+coverage is UNKNOWN, not healthy. Live integration requires a separately verified
+source mapping and the existing deployment gates.
+
 ## Verification
 
 Run the fast tier with `make verify-fast` (`make verify-fast-parse` for the

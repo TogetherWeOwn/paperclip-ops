@@ -266,6 +266,9 @@ python3 -m unittest test_ci_required_checks_audit || fail "required-checks audit
 # clock, temp fixtures only.
 python3 -m unittest test_blocker_test_checks test_test_missing_org_template \
   || fail "test-missing gate suites failed"
+# Independent convergence fragment acceptance, no live digest qualification.
+python3 -B -m unittest -v test_convergence_watches test_convergence_watches_safety \
+  || fail "convergence digest offline acceptance failed"
 python3 -B test_beszel_adapter.py || fail "beszel adapter suite failed"
 python3 -B test_beszel_discord_forwarder.py || fail "beszel discord forwarder suite failed"
 bash test_fetch_beszel_normalized.sh || fail "beszel fetch wrapper suite failed"

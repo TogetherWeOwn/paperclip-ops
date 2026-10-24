@@ -1291,5 +1291,31 @@ class EntryPointTests(unittest.TestCase):
             fx.close()
 
 
+class AllowlistEnforceWiring(unittest.TestCase):
+    def test_enforce_refuses_before_any_transport(self):
+        # Wiring pin: deleting both the quiet pre-check and the ApiClient
+        # check must fail this test (main would proceed to run_tool and
+        # the network).
+        env = {"PAPERCLIP_API_URL": "https://evil.example.com",
+               "PAPERCLIP_API_KEY": "k",
+               "PAPERCLIP_COMPANY_ID": "c"}
+        run_env = dict(os.environ)
+        run_env.pop("PAPERCLIP_API_ALLOWLIST_TEST", None)
+        run_env.pop("PAPERCLIP_API_BRIDGE_MODE", None)
+        run_env["PAPERCLIP_API_ALLOWLIST_MODE"] = "enforce"
+        with mock.patch.dict(os.environ, run_env, clear=True), \
+                mock.patch("paperclip_api_allowlist.load_allowlist",
+                           return_value=set()), \
+                mock.patch("urllib.request.urlopen") as urlopen, \
+                mock.patch.object(tool.reclaim, "ApiClient") as api_cls, \
+                mock.patch.object(tool, "run_tool") as run_tool:
+            with self.assertRaises(PruneError) as raised:
+                tool.main(argv=[], api=None, env=env)
+        self.assertIn("mode=enforce", str(raised.exception))
+        urlopen.assert_not_called()
+        api_cls.assert_not_called()
+        run_tool.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

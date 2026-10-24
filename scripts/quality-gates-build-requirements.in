@@ -1,0 +1,9 @@
+# Build requirements for installing the sdist-only tools in
+# scripts/quality-gates-requirements.txt (mutmut, glob2) with
+# pip install --no-build-isolation. Installed first with --require-hashes
+# so pip never fetches unpinned build backends into an isolated build env.
+# Regenerate scripts/quality-gates-build-requirements.txt with
+# `pip-compile --generate-hashes` in the same PR that bumps a version here.
+setuptools==84.2.1
+wheel==0.48.0
+packaging==26.3  # via wheel

@@ -473,6 +473,7 @@ class Classify(unittest.TestCase):
             "test_garm_provider_latency_baseline.py",
             "kofra_preview_parity.py",
             "test_kofra_preview_parity.py",
+            "test_kofra_preview_parity_json.py",
             "upstream_draft_pin_audit.sh",
             "test_upstream_draft_pin_audit.sh",
             "ops/case_80989a33/cliproxy_config_gate.py",
@@ -490,6 +491,14 @@ class Classify(unittest.TestCase):
         # suites job. A change to the suite must wake the suites job at PR
         # time without latching a full run.
         r = self.result("test_watchdog_writer_compat.py")
+        self.assertTrue(r["core"])
+        self.assertFalse(r["full"])
+
+    def test_provider_baseline_integrity_wakes_core(self):
+        # provider-baseline-integrity: the integrity suite runs as its own
+        # suites step next to its sibling. A change to the suite must wake
+        # the suites job at PR time without latching a full run.
+        r = self.result("test_provider_baseline_integrity.py")
         self.assertTrue(r["core"])
         self.assertFalse(r["full"])
 

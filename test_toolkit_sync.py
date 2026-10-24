@@ -253,6 +253,12 @@ cp "$source" "$dest"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.guard = self.root / "sibling_guard.sh"
         self.assertEqual(self.guard.read_bytes(), subject)
+        # The tracked guard sources the shared allowlist helper by
+        # repo-relative path; the fixture checkout needs that runtime input.
+        helper = self.root / "lib" / "paperclip_api_allowlist.sh"
+        helper.parent.mkdir(exist_ok=True)
+        helper.write_bytes(
+            (ROOT / "lib" / "paperclip_api_allowlist.sh").read_bytes())
 
     def test_sync_restores_tracked_guard_subject_bytes(self):
         self.prepare_guard()
@@ -320,6 +326,7 @@ cp "$source" "$dest"
             "GIT_AUTHOR_NAME": "suite", "GIT_AUTHOR_EMAIL": "suite@example.invalid",
             "GIT_COMMITTER_NAME": "suite", "GIT_COMMITTER_EMAIL": "suite@example.invalid",
             "PAPERCLIP_API_URL": base, "PAPERCLIP_API_KEY": "stub-key",
+            "PAPERCLIP_API_ALLOWLIST_TEST": "1",
             "PAPERCLIP_COMPANY_ID": "stub-company", "PAPERCLIP_AGENT_ID": "agent-me",
             "PAPERCLIP_RUN_ID": "run-me", "GH_API_URL": base, "GH_TOKEN": "stub-gh-token",
         }

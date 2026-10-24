@@ -320,8 +320,31 @@
     "staging-preflight carrier suite:1",
     "api-base-validation suite:1",
     "api-base-validation-python suite:1",
+    "database backup observation contract:1",
+    "provider baseline integrity suite:1",
     "review report input integrity holds:1",
-    "host backup publication receipt contract (offline):1"
+    "api-allowlist suite:1",
+    "api-allowlist-python suite:1",
+    "allowlist-hatch-absent gate:1",
+    "explicit workflow job permissions gate:1",
+    "test-missing gate suites:1",
+    "orphan-suite ratchet fixtures suite:1",
+    "assignment host-source bundle suite:1",
+    "stop-guard landing suite:1",
+    "warn-first inventory suite:1",
+    "regen dry-run receipt suite:1",
+    "pr-tracker suite:1",
+    "settings-bind rehearsal suite:1",
+    "host backup publication receipt contract (offline):1",
+    "paginated review-gate acceptance suite:1",
+    "native-ssh citation gate suite:1",
+    "code-nav read-only and resource guard suite:1",
+    "sdlc review-carry suite:1",
+    "verify-fast plan suites:1",
+    "dispatch staged-lifecycle acceptance suite:1",
+    "failure-drain JSON suite:1",
+    "kofra preview parity JSON envelope suite:1",
+    "capacity evidence and CLI refusal contract:1"
   ],
   "retained": [
     {
@@ -511,12 +534,12 @@
     },
     {
       "name": "guard state fail-closed suites",
-      "definition_sha256": "e2a9927bc5def107f7280a8d0673f31718926a45a28cff6a4e64790ebecabbc3",
+      "definition_sha256": "cc4f8a604969e0c70933c2fff7b461c71ae4ae29645bc2e34e3df8f4fa45498f",
       "id": "guard state fail-closed suites:1"
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "cc83d5e72b441e7d8dd069e8ce5ac032c9d16756c5ed3b87f21c39b987b55bec",
+      "definition_sha256": "0026800a86014ad4fa5901ba3e153a24d60e209e407cfd60de1606d893790322",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -546,7 +569,7 @@
     },
     {
       "name": "staging login-smoke probe suite",
-      "definition_sha256": "00e0dda681157127078945f992899071099bfa097dcb7fafbb02570a1a5e14e1",
+      "definition_sha256": "74896b139efb11ffcedb06a4d90192eb99732132f8fbfe82d18802ab71dbecea",
       "id": "staging login-smoke probe suite:1"
     },
     {
@@ -1441,12 +1464,12 @@
     },
     {
       "name": "org-request-mcp regression suite",
-      "definition_sha256": "6a37e701118978e49e914ea7f43137fb9231f77ca7931038db102951bf952db6",
+      "definition_sha256": "70cacf39bc8b9ab3ad16703a6f67d24d5606b0aa7f8a5e55a61c58da9e5599c2",
       "id": "org-request-mcp regression suite:1"
     },
     {
       "name": "Prove the suite rejects each tempting simplification",
-      "definition_sha256": "daab40cb177c5d1b468350902a86792ef3d9a6d7315bad1b05cbb14106ed0fb1",
+      "definition_sha256": "7bee64d7c7030048d2e8126c8d51d002897a9eeef74bbfa7d0f4024f8d5ee29a",
       "id": "Prove the suite rejects each tempting simplification:1"
     },
     {
@@ -1800,14 +1823,130 @@
       "id": "api-base-validation-python suite:1"
     },
     {
+      "name": "database backup observation contract",
+      "definition_sha256": "138acfb905a66fbb8105ea71d473653f39778fb06ac1f306a047df30d20b904c",
+      "id": "database backup observation contract:1"
+    },
+    {
+      "name": "provider baseline integrity suite",
+      "definition_sha256": "a61a574a93f9aa493c38694fb68c4c43a4df905ac3721442d5547cf09a665dcd",
+      "id": "provider baseline integrity suite:1"
+    },
+    {
       "name": "review report input integrity holds",
       "definition_sha256": "bffa19729a879126ad09b2eba97c28fddbdc6f4fa5e10afa5a536bb291c9dfc4",
       "id": "review report input integrity holds:1"
     },
     {
+      "name": "api-allowlist suite",
+      "definition_sha256": "ffe1904f67380d1b9b578caf01c608b1c0dc508f736c55be61056a406ac81e62",
+      "id": "api-allowlist suite:1"
+    },
+    {
+      "name": "api-allowlist-python suite",
+      "definition_sha256": "fcf6fbc4ff8d0dbc70d5d7339ff2b93f83ebf67d78f05cb7f371c597769f6336",
+      "id": "api-allowlist-python suite:1"
+    },
+    {
+      "name": "allowlist-hatch-absent gate",
+      "definition_sha256": "83b5df16e75c5f159cf75c11727bae9e4e3633b206120a7e6a0d9ab6c5c8860f",
+      "id": "allowlist-hatch-absent gate:1"
+    },
+    {
+      "name": "explicit workflow job permissions gate",
+      "definition_sha256": "8ad71aa74af77d948d6751d109f0c4dc02ad835b4987f40d4f4dd10403212240",
+      "id": "explicit workflow job permissions gate:1"
+    },
+    {
+      "name": "test-missing gate suites",
+      "definition_sha256": "a245dc744b32a853deac2e14fcb7d52b9582f7862154f7ae954800a7da67dc3a",
+      "id": "test-missing gate suites:1"
+    },
+    {
+      "name": "orphan-suite ratchet fixtures suite",
+      "definition_sha256": "6a78bd74cf80ae987f05bdf0de08f83fd58cbc9b94d89517c714db382c093835",
+      "id": "orphan-suite ratchet fixtures suite:1"
+    },
+    {
+      "name": "assignment host-source bundle suite",
+      "definition_sha256": "ca3888d1e7ca664228f085cb9bdce9ea8338184849a2bfe9c50da0ac7898323f",
+      "id": "assignment host-source bundle suite:1"
+    },
+    {
+      "name": "stop-guard landing suite",
+      "definition_sha256": "00cac3c8a7eb04bfd64d386f096695c1c95c99cce6b7fafc9e2af84eb4ebbb64",
+      "id": "stop-guard landing suite:1"
+    },
+    {
+      "name": "warn-first inventory suite",
+      "definition_sha256": "9b7f38337b97884c46ab9ccbaaa639e0bfac67046f92defd79e4896e0ddbd16c",
+      "id": "warn-first inventory suite:1"
+    },
+    {
+      "name": "regen dry-run receipt suite",
+      "definition_sha256": "dc5d726ee40872397c5d9d4f72ccc035bfb7f571fbca24ddadb6b338591eee5d",
+      "id": "regen dry-run receipt suite:1"
+    },
+    {
+      "name": "pr-tracker suite",
+      "definition_sha256": "43f5da6f262e2c3e8fd380c20fcdd78127a99992b60d39bb808a2dc4c8011425",
+      "id": "pr-tracker suite:1"
+    },
+    {
+      "name": "settings-bind rehearsal suite",
+      "definition_sha256": "bb309c4b15965281fffe7f9190063f90688cd4a7cb1c00f659918423a5bde7fd",
+      "id": "settings-bind rehearsal suite:1"
+
+    },
+    {
       "name": "host backup publication receipt contract (offline)",
       "definition_sha256": "f3220047635007807b551238df97e65b3db9b784bcafb35829fa009c51e3f5f4",
       "id": "host backup publication receipt contract (offline):1"
+    },
+    {
+      "name": "paginated review-gate acceptance suite",
+      "definition_sha256": "4db540a9f06f2feae7401389daad82217a87a46fc82816dcf64018d4a558d63d",
+      "id": "paginated review-gate acceptance suite:1"
+    },
+    {
+      "name": "native-ssh citation gate suite",
+      "definition_sha256": "34cafcd66f97b170ff90432448cfed1b909cc5f20b905b42c6b09b6651c10694",
+      "id": "native-ssh citation gate suite:1"
+    },
+    {
+      "name": "code-nav read-only and resource guard suite",
+      "definition_sha256": "f4f3c272c75249ae5430663c6689ba7c058a33074edc105dc8e55352d488af05",
+      "id": "code-nav read-only and resource guard suite:1"
+    },
+    {
+      "name": "sdlc review-carry suite",
+      "definition_sha256": "4cc0a1b7421746981ba556684ba8d20bc0d9d06de46e69d5c78b33a48b763100",
+      "id": "sdlc review-carry suite:1"
+    },
+    {
+      "name": "verify-fast plan suites",
+      "definition_sha256": "ccae99dd825dc4bf6449a0a726f92e4d36d5e1be401694a5ce2c09f289526fb7",
+      "id": "verify-fast plan suites:1"
+    },
+    {
+      "name": "dispatch staged-lifecycle acceptance suite",
+      "definition_sha256": "08b50e006b6e7315ec03d8d6d157eab8565be8cb65e0e5c1620e6de880d6cf54",
+      "id": "dispatch staged-lifecycle acceptance suite:1"
+    },
+    {
+      "name": "failure-drain JSON suite",
+      "definition_sha256": "50bc1a323e31572b16df3a8e610c6d955281a9a0e7f77c15c34053f34afc2fba",
+      "id": "failure-drain JSON suite:1"
+    },
+    {
+      "name": "kofra preview parity JSON envelope suite",
+      "definition_sha256": "a0094f56081eb743136ae6f39b7d8fdd9ed0c6d23676899258f469260542743f",
+      "id": "kofra preview parity JSON envelope suite:1"
+    },
+    {
+      "name": "capacity evidence and CLI refusal contract",
+      "definition_sha256": "e9a220734a881e501043a8136282204e7683ef1f7857cfe160c3c02d68e12248",
+      "id": "capacity evidence and CLI refusal contract:1"
     }
   ],
   "removed": [
@@ -2173,7 +2312,7 @@
       "plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql|v0.2.2"
     ]
   },
-  "suites_job_sha256": "5d0d517daadcbf5743afdf5f9b131afb162bfaed3980a112ba9c4824d546726c",
+  "suites_job_sha256": "54852a057a5260f18c96016eaeb90c9813fd05f8e20f2cf286d29983ba6e393f",
   "manifest_sha256": "45002e0b5e92e94f5bda7df2d92c40384f1c6d7b054f1a7ede163f5c3999b13e",
   "restored_files_sha256": {
     "acceptance_org_lib.sh": "8db92e9d11f5a21776dbc1f71296b752291e6758ddc2a5ad67a129a86a5ed00a",

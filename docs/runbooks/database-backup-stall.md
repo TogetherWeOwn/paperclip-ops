@@ -24,10 +24,83 @@ current timestamp to make the default invocation appear healthy.
 
 The paths above are placeholders, not host locations. Keep captured logs and
 backup payloads in protected local storage, never Git or public issue comments.
-If API-health correlation is used, keep its bearer in protected configuration,
-not arguments. `--no-health` omits that independent signal; it is not proof of API
-health. `--no-log` does not evaluate orphan/truncation signals and must not be
-reported as doing so.
+`--no-health`, `--local-only` and its alias `--dry-run` perform the same local
+read-only observation: no network, board/state writes or credential config. The
+ordinary invocation can optionally GET `/api/health` and create a temporary,
+protected credential config. That health view is advisory: it never clears a
+stall. Local-only output is not proof of API health. The detector has no
+`--no-log` option; `--staleness-only` skips both the log and orphan checks.
+
+## Modes and observation integrity
+
+| Question | Local-only invocation (placeholder paths) | Selected producers |
+|---|---|---|
+| Is the in-server scheduler stalled? | `./db_backup_stall.sh --local-only --log ./current.log --backup-dir ./backups --json` | In-server; excludes `-hostcron.sql` and `-hostcron.sql.gz` |
+| Is any writer producing recent archives? | `./db_backup_stall.sh --dry-run --staleness-only --backup-dir ./backups --json` | All by default; no log or orphan evaluation |
+| Include host orphans and archives in combined checks | Add `--include-all-producers` to the first invocation | All |
+| Select a different host marker | Add `--exclude-suffix nightly` | Same suffix contract for `.sql` and `.sql.gz`; explicitly narrows staleness-only too |
+
+Thresholds are unchanged: at least 1024 bytes, strictly over two hours for
+archive/log staleness, and at least 90 minutes for an orphan. The existing
+unsettled-start rule is unchanged. There is no clock-skew grace: even a one-second
+future mtime is not freshness evidence. Each file's mtime is checked against a
+clock sampled after its stat; that same observation time determines its age and
+orphan cutoff. `checkedAt` remains the run's start time. This is a size/mtime
+detector, not gzip, SQL or restoration verification.
+
+An empty `--backup-dir ""` is missing evidence, not an alias for the current
+directory; use an explicit `--backup-dir .` to select the current directory.
+Numeric options require positive decimal integers of at most 18 digits. Age
+options must also fit signed 64-bit seconds: at most 153722867280912930 minutes
+or 2562047788015215 hours. Out-of-range input exits 2 before observation, rather
+than wrapping a size or age threshold.
+
+A measured empty directory is a positive **stall (exit 1)**. An absent/unreadable
+directory, failed enumeration, failed stat or unusable/future timestamp is an
+**unknown observation**, not a zero-byte archive, epoch-zero orphan or fresh
+backup. Without an independent measured stall, required unknown evidence gives
+**inconclusive (exit 2)**, in either mode. A partial scan never proves absence or
+health; a positively observed orphan or suppression still survives that failure.
+
+A valid independent fresh archive can establish availability despite a different
+unusable candidate. An old archive beside an unknown candidate cannot establish
+that *all* selected archives are stale. Invalid excluded host observations remain
+visible but do not invalidate independent in-server evidence.
+
+## Machine output
+
+Legacy JSON fields, `reasons`, `notes`, verdicts and exit codes remain. The
+additive `schemaVersion: 1` contract includes:
+
+- `signals.suppression`, `signals.orphan`, `signals.freshness`: each has `state`
+  (`measured`, `unknown`, `not_evaluated`) and a `codes` array. `measured` describes
+  evidence, not health: a measured empty directory is still a stall.
+- `producers.in_server.selected`, `producers.host.selected`: boolean selection
+  under the configured suffix; the `host` ID also represents a custom marker.
+- Root `codes`: stable reason IDs across signals; `next_action`: nonempty guidance,
+  **not** authorization or an executed remediation.
+
+Observation codes include `directory_unmeasured`, `stat_failed`,
+`file_unmeasured`, `mtime_invalid`, `mtime_future`, `clock_unmeasured`, `producer_excluded`,
+`log_unmeasured`, `log_read_failed`, `window_unanchored`, `log_stale`. Finding codes
+are `backup_suppressed`, `backup_unsettled`, `orphan_dump`, `truncated_sibling`,
+`no_usable_backup`, `archive_stale`. Notes identify excluded/unknown files and
+producers. A code can coexist with a measured signal when other valid evidence
+answers its question. Legacy age `-1` means no usable measured timestamp, never a
+negative fresh age. Do not publish raw JSON/log lines containing private data.
+
+Offline verification uses synthetic trees, no inherited credentials, and a
+run-owned `TMPDIR`:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_backup_observation_contract
+bash test_db_backup_stall.sh
+```
+
+The immutable acceptance suite denies writes and sockets and injects real scan
+failure plus deterministic stat faults. The existing shell suite uses health
+stubs, not the real endpoint. Passing these tests establishes source behavior
+only: it neither deploys this detector, rearms a monitor nor proves live coverage.
 
 ## After recovery
 

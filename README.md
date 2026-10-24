@@ -67,9 +67,11 @@ This documentation does not authorize running a backup or changing a host.
 | `agent_error_proposer.py` |
 | `approval_timeout_probe.sh` |
 | `balancer_silence_guard.py` |
+| `blocker_test_checks.py` |
 | `bridge_row_inventory.py` |
 | `capture_host_evidence.sh` |
 | `capture_host_render.sh` |
+| `check_workflow_job_permissions.py` |
 | `case_8abb7523-measure.mjs` |
 | `ci_dark_steps.sh` |
 | `ci_failure_drain.sh` |
@@ -78,7 +80,7 @@ This documentation does not authorize running a backup or changing a host.
 | `ci_required_checks_ownership.py` |
 | `claude_countdown.py` |
 | `codex_countdown.py` |
-| `coolify_capacity_headroom.sh` |
+| `coolify_capacity_headroom.sh` and `coolify_capacity_headroom.py` ([offline evidence contract](docs/capacity-evidence.md); keep these siblings together) |
 | `credential_chain_audit.sh` |
 | `credential_chain_lockdown.sh` |
 | `db_backup_stall.sh` |
@@ -104,7 +106,7 @@ This documentation does not authorize running a backup or changing a host.
 | `migration_squawk.sh` |
 | `migration_timeout_preamble.sh` |
 | `muse_countdown.py` |
-| `native_ssh_citation_gate.py` |
+| `native_ssh_citation_gate.py` (historical fork audit; [official-stable retirement scope](docs/official-stable-fork-controls.md)) |
 | `notify_paperclip_issue.sh` |
 | `omniroute_combo_cli.sh` |
 | `op_queue_reject.sh` |
@@ -136,6 +138,37 @@ This documentation does not authorize running a backup or changing a host.
 | `upstream_watch.sh` |
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
+
+## Productivity reconcilers
+
+For confirmed mutation counts, safe CLI modes, versioned JSON summaries and an
+offline verification command, see [Reconciler outcomes](docs/reconciler-outcomes.md).
+The source contract does not imply runtime installation; flow guard's existing
+no-flag invocation is mutating.
+
+## Verification
+
+Run the fast tier with `make verify-fast` (`make verify-fast-parse` for the
+parse gate only). To inspect suite scope and prerequisites without running or
+preparing anything, use `make verify-fast-plan` (offline, read-only;
+`scripts/verify-fast.sh --plan --json`).
+
+The code-nav suite needs PyYAML. On a clean Linux x86_64 installation, prepare
+an isolated Python 3.12 environment outside the checkout, then run the fast tier
+with that interpreter on `PATH`:
+
+```sh
+python3.12 -m venv "$HOME/.cache/paperclip-ops/verify-fast-venv"
+. "$HOME/.cache/paperclip-ops/verify-fast-venv/bin/activate"
+python3 -m pip install --only-binary=:all: --no-deps --require-hashes \
+  -r scripts/static-label-guard-requirements.txt
+make verify-fast
+```
+
+This reuses CI's hash-pinned PyYAML 6.0.3 requirement; it does not install into
+system Python. An already-provisioned interpreter with PyYAML 6.0.3 also works.
+`--plan --json` reports parser readiness, and `--no-prepare` refuses when it is
+missing. Normal execution does not automatically prepare this Python environment.
 
 ## Contributing
 

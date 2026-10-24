@@ -1,0 +1,8 @@
+# Top-level gate tools for .github/workflows/quality-gates.yml.
+# Bump a version here, regenerate scripts/quality-gates-requirements.txt
+# with `pip-compile --generate-hashes` in the same PR, and keep the
+# install step on --require-hashes.
+ruff==0.17.0
+semgrep==1.180.0
+mutmut[patch]==2.5.1
+zizmor==1.30.1

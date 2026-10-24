@@ -62,8 +62,13 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
         "test_cliproxy_seam_extract.py",
         "garm_provider_latency_baseline.py",
         "test_garm_provider_latency_baseline.py",
+        # provider-baseline-integrity: the integrity suite runs as its own
+        # suites step next to its sibling; pin it so a change to the suite
+        # wakes the suites job at PR time.
+        "test_provider_baseline_integrity.py",
         "kofra_preview_parity.py",
         "test_kofra_preview_parity.py",
+        "test_kofra_preview_parity_json.py",
         "upstream_draft_pin_audit.sh",
         "test_upstream_draft_pin_audit.sh",
         "ops/case_80989a33/cliproxy_config_gate.py",
@@ -109,6 +114,12 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
         "test_migration_evidence_ax.py",
         # Harness code, fixtures and scored tables are offline suite inputs.
         "eval/review-bakeoff/",
+        # Native-SSH citation gate and its hermetic mutation suite, wired
+        # into the suites job. Both would fall through to core as root
+        # files; pin explicitly so a change to either wakes the suites job
+        # at PR time by intent, not by fallthrough.
+        "native_ssh_citation_gate.py",
+        "test_native_ssh_citation_gate.sh",
     ),
     "privilege": (
         "test/fixtures/orgdb/",
@@ -223,6 +234,9 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
 # fails when a step's script classifies without `core`, so a new suite cannot
 # repeat this.
 ALSO_CORE_PREFIXES: tuple[str, ...] = (
+    # code-nav tests pin the hash-checked install command, so this spec is
+    # executable contract surface even on a markdown-only PR.
+    "ops/agent-tooling/serena-pilot-b/OPERATOR_SPEC.md",
     # host operations broker: `host operations broker suite` and `installer
     # contract suite` steps, the host-ops/*.sh parse gate, and
     # test_host_ops_broker.py reads host-ops/RUNBOOK.md.

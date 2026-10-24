@@ -1,0 +1,70 @@
+--- a/ops/productivity/pr_controller.py
++++ b/ops/productivity/pr_controller.py
+@@ -299,3 +299,22 @@
++import pr_controller_wake_guard as notify_guard  # noqa: E402  (author_wake, KNOWN_BASE_EXECUTED)
++
++
++def notify_author_wake(state, detail, required):
++    """Decide whether a controller state warrants an author-action wake.
++
++    Notification-only gate for the initial-wake and stale-reminder emission
++    sites (and the host PR pump, which re-renders stored ``ci_red`` through
++    ``wake_text`` with an empty red list): returns ``('wake'|'suppress',
++    reason)``. ``suppress`` fires only for ``ci_red`` with no
++    author-actionable failure. Verdicts, eligibility, checks and gates are
++    unchanged: a suppressed wake still leaves CI red. Unknown required sets
++    fail closed to ``wake``.
++    """
++    return notify_guard.author_wake(
++        state, detail, required,
++        known_base_executed=notify_guard.KNOWN_BASE_EXECUTED)
++
++
+ def latest_check_contexts(contexts):
+     """Collapse proven Actions attempts only; other workflows and non-Actions contexts remain gates."""
+     latest, unknown = {}, []
+@@ -642,7 +642,8 @@
+                 print(f'{key}: check inventory truncated; skipped rather than infer green')
+                 continue
+             pr['_contexts'] = contexts.get('nodes') or []
+-            cur, detail = classify(pr, required_checks(full, pr['baseRefName'], env), reviews, full)
++            required = required_checks(full, pr['baseRefName'], env)
++            cur, detail = classify(pr, required, reviews, full)
+             if cur == 'passed' and f"{full.split('/')[-1]}#{pr['number']}@{pr['headRefOid']}".lower() in ejected_heads():
+                 # Green alone, red in the merge group; nobody re-enqueues this head, so only its owner can move it
+                 # (10-17: two-bot-next#1008 sat 12 h as 'passed' after update-branch was refused).
+@@ -661,4 +661,16 @@
+             state[key] = rec
++            # Notification-only verdict record for the host pump: refreshed on
++            # every pass that reaches this record, before the WAKE_STATES /
++            # age / pressure / red-settle exits below, so a saved same-head
++            # verdict always describes the checks this pass classified.
++            # Non-ci_red states pop it, so a later ci_red cannot revive it.
++            if cur == 'ci_red':
++                rec['notify_verdict'] = {
++                    'head': head,
++                    'verdict': notify_author_wake(cur, detail, required)[0],
++                }
++            else:
++                rec.pop('notify_verdict', None)
+             cards = owner_cards(full, pr['number'])
+             if len(cards) > 1 and not pressure and rec.get('dupe_noted') != cards[0][1]:
+                 for iid, ident, st, _ in cards[1:]:
+@@ -719,6 +719,17 @@
+             if cur == 'ci_red' and detail.get('pending') and (NOW - parse(rec['red_since'])) / 60 < RED_SETTLE_MIN:
+                 continue
+             wkey = f'{cur}@{head}'
++            if cur == 'ci_red':
++                # Notification-only gate: a ci_red state with no author-actionable
++                # failure (empty red list, or only known shared-base checks red)
++                # pages nobody. The verdict was recorded above on every pass
++                # that updates this record; here it only decides the skip.
++                # Verdicts, eligibility and gates are unchanged.
++                verdict = (rec.get('notify_verdict') or {}).get('verdict')
++                if verdict == 'suppress':
++                    if SHADOW:
++                        log(f'would suppress author wake for {key}: {cur} @ {head[:8]} (no actionable failure)')
++                    continue
+             if rec.get('woke') == wkey and cards:
+                 name_l = full.split('/')[-1].lower()
+                 stale_h = STALE_H_DRAFT if cur == 'draft_idle' else (STALE_H_FOCUS if name_l in FOCUS_REPOS else STALE_H_OTHER)

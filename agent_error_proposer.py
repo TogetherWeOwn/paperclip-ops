@@ -43,6 +43,10 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from paperclip_api_allowlist import (
+    AllowlistRefused, check_api_base_allowed)
+
 AGENT_ERROR_MIN = 10
 BENIGN_SUBTYPE = "success"
 
@@ -208,6 +212,10 @@ def api_get(base_url: str, api_key: str, path: str) -> Any:
     if not _valid_api_base(base_url):
         raise RuntimeError(
             "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
+    try:
+        check_api_base_allowed(base_url, sender="agent_error_proposer")
+    except AllowlistRefused as exc:
+        raise RuntimeError(str(exc)) from exc
     request = urllib.request.Request(
         base_url + path,
         headers={"Authorization": f"Bearer {api_key}"},

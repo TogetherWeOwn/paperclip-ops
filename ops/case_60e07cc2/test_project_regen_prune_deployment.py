@@ -27,6 +27,7 @@ INSTALLER = ROOT / "systemd" / "install-project-regen-prune.sh"
 TOOL = ROOT / "ops" / "case_60e07cc2" / "project_worktree_regen_prune.py"
 
 PAYLOAD = [
+    "lib/paperclip_api_allowlist.py",
     "ops/case_60e07cc2/project_worktree_regen_prune.py",
     "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
     "ops/lib/atomic_state.py",
@@ -38,6 +39,7 @@ PAYLOAD = [
 # What the installer puts in the release directory (bundle-scope systemd/* is
 # verified but never installed).
 INSTALLED = [
+    "lib/paperclip_api_allowlist.py",
     "ops/lib/atomic_state.py",
     "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
     "ops/case_60e07cc2/project_worktree_regen_prune.py",

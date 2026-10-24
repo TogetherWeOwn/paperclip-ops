@@ -272,8 +272,13 @@ def latest_review(checks, head, number):
     # A newer queued/failed assessment invalidates an older successful one.
     latest = max(bound, key=lambda c: int(c['id']))
     external_id = str(latest.get('external_id') or '')
+    output = latest.get('output') or {}
+    score = output.get('title')
+    if score is None or score == '':
+        summary = output.get('summary')
+        score = summary.split('\n', 1)[0] if isinstance(summary, str) else None
     if (latest.get('status') != 'completed' or latest.get('conclusion') != 'success'
-            or latest.get('output', {}).get('title', '').strip() != '5/5'
+            or not isinstance(score, str) or score.strip() != '5/5'
             or external_id.startswith(PREFIX)):
         return None
     return latest

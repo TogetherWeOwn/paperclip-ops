@@ -5,7 +5,7 @@ The org rulesets require review-thread resolution, so outdated reviewer threads 
 already scored 5/5 (seen on ops-tooling #737/#752/#753/#764). A thread is resolved only when ALL hold:
   - the thread is unresolved AND isOutdated (its lines changed in a later push);
   - its first comment is by togetherweown-reviewer[bot];
-  - the latest "Paperclip Review" check run on the PR's CURRENT head concluded success with title "5/5".
+  - the latest "Paperclip Review" check run on the PR's CURRENT head concluded success with score "5/5".
 It replies first ("Outdated: superseded by head <sha>, which scored 5/5."), then resolves. Never touches threads that
 are not outdated or by anyone else. Cap MAX_RESOLVE per tick. Token: ./gh_token.sh App token via env()
 (bounded TOKEN_TIMEOUT, fail closed on timeout/exit/empty), never on argv, never printed.
@@ -16,7 +16,8 @@ Review evidence (case_0a5a55e4): a check NAME is claimable by any App with write
 authenticates nothing. The resolver accepts only the latest check run that carries ALL of:
   - name "Paperclip Review" from the trusted review App (id 5191093, slug togetherweown-reviewer);
   - head_sha equal to the PR's current headRefOid (the expected head);
-  - status "completed", conclusion "success", output title "5/5".
+  - status "completed", conclusion "success", output title "5/5" (or first summary line
+    only when the title is missing or empty; whitespace is stripped, as before).
 Anything else refuses with a diagnostic and zero mutations: missing_head (no expected head to bind to),
 missing_identity (same-name check with no App id), no_trusted_evidence (no same-name check from the
 trusted App), wrong_head (trusted checks exist but none on the expected head), or incomplete_* (latest
@@ -127,8 +128,9 @@ def review_evidence(check_runs, head):
     """Authenticate the 5/5 claim for the expected head. Returns (ok, reason).
 
     ok is True only for the latest trusted-App run on `head` with status completed,
-    conclusion success and title 5/5. Every other shape refuses with a machine-readable
-    reason and the caller must make zero mutations.
+    conclusion success and score 5/5 in the title or, when missing/empty, first summary
+    line. Every other shape refuses with a machine-readable reason and the caller
+    must make zero mutations.
     """
     if not head:
         return False, 'missing_head'
@@ -149,7 +151,12 @@ def review_evidence(check_runs, head):
         return False, 'incomplete_status'
     if latest.get('conclusion') != 'success':
         return False, 'incomplete_conclusion'
-    if (((latest.get('output') or {}).get('title') or '').strip() != '5/5'):
+    output = latest.get('output') or {}
+    score = output.get('title')
+    if score is None or score == '':
+        summary = output.get('summary')
+        score = summary.split('\n', 1)[0] if isinstance(summary, str) else None
+    if not isinstance(score, str) or score.strip() != '5/5':
         return False, 'incomplete_score'
     return True, 'ok'
 

@@ -20,8 +20,9 @@
 //           commit; the review ran on the pull request head, and GitHub's own
 //           `merge_commit_sha` is the only link back). On that pull request's
 //           head there is exactly one latest check run with the review check's
-//           name from the pinned review App, completed/success, titled with the
-//           required score, recorded against that pull request number and head,
+//           name from the pinned review App, completed/success, with the required
+//           score in its title (or first summary line if the title is absent or
+//           empty), recorded against that pull request number and head,
 //           finished no later than the merge. A review that postdates the merge
 //           reviewed nothing that was gated.
 //

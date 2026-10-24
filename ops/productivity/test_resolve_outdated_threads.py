@@ -36,10 +36,18 @@ class Candidates(unittest.TestCase):
         self.assertEqual(r.candidates([thread(login='greptile-apps')]), [])
 
 
-def cr(started, conclusion, title, name='Paperclip Review', app_id=TRUSTED,
-       head=HEAD, status='completed', slug='togetherweown-reviewer'):
+_MISSING = object()
+
+
+def cr(started, conclusion, title=_MISSING, name='Paperclip Review', app_id=TRUSTED,
+       head=HEAD, status='completed', slug='togetherweown-reviewer', summary=None):
+    output = {}
+    if title is not _MISSING:
+        output['title'] = title
+    if summary is not None:
+        output['summary'] = summary
     run = {'name': name, 'started_at': started, 'conclusion': conclusion,
-           'output': {'title': title}, 'status': status, 'head_sha': head}
+           'output': output, 'status': status, 'head_sha': head}
     if app_id is not None:
         run['app'] = {'id': app_id, 'slug': slug}
     return run
@@ -50,6 +58,27 @@ class Evidence(unittest.TestCase):
         ok, _ = r.review_evidence([cr('2026-10-06T11:00Z', 'success', '5/5')], HEAD)
         self.assertTrue(ok)
         self.assertTrue(r.head_is_5of5([cr('2026-10-06T11:00Z', 'success', '5/5')], HEAD))
+
+    def test_summary_fallback_for_missing_or_empty_title(self):
+        for title in (_MISSING, ''):
+            with self.subTest(title=title):
+                run = cr('2026-10-06T11:00Z', 'success', title,
+                         summary='5/5\nAdditional details')
+                self.assertTrue(r.head_is_5of5([run], HEAD))
+
+    def test_summary_fallback_tolerates_crlf(self):
+        run = cr('2026-10-06T11:00Z', 'success', '',
+                 summary='5/5\r\nAdditional details')
+        self.assertTrue(r.head_is_5of5([run], HEAD))
+
+    def test_nonempty_title_precedes_summary(self):
+        ok, reason = r.review_evidence(
+            [cr('2026-10-06T11:00Z', 'success', 'reviewed',
+                summary='5/5\nAdditional details')],
+            HEAD,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, 'incomplete_score')
 
     def test_latest_trusted_wins(self):
         runs = [cr('2026-10-06T10:00Z', 'failure', '3/5'),

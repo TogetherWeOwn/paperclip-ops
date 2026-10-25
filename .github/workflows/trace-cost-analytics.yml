@@ -2,9 +2,6 @@ name: Trace cost analytics
 
 on:
   pull_request:
-    paths:
-      - 'plugins/trace-cost-analytics/**'
-      - '.github/workflows/trace-cost-analytics.yml'
   push:
     branches: [main]
     paths:

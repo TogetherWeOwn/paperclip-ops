@@ -348,7 +348,8 @@
     "workspace sync-back signal acceptance suite:1",
     "workspace sync-back signal regression suite:1",
     "trace correlator suite:1",
-    "Dispatch sweep failure visibility acceptance:1"
+    "Dispatch sweep failure visibility acceptance:1",
+    "native runner coverage classifier suite:1"
   ],
   "retained": [
     {
@@ -1970,6 +1971,11 @@
       "name": "Dispatch sweep failure visibility acceptance",
       "definition_sha256": "2e075d5605362d844521a3a225c3fe04047c80fcf2aa0917997553221ccdfa29",
       "id": "Dispatch sweep failure visibility acceptance:1"
+    },
+    {
+      "name": "native runner coverage classifier suite",
+      "definition_sha256": "c688f1fbbcb023b3afd8dd80c8821306741f9060c3b1185833d6b0dcf68d142b",
+      "id": "native runner coverage classifier suite:1"
     }
   ],
   "removed": [

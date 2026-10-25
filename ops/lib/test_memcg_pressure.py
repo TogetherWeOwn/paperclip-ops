@@ -92,6 +92,7 @@ class FailClosedTest(unittest.TestCase):
             "zero limit": {"memory.max": "0\n"},
             "text limit": {"memory.max": "lots\n"},
             "no full row": {"memory.pressure": "some avg60=0.00\n"},
+            "duplicate full row": {"memory.pressure": "full avg60=1\nfull avg60=2\n"},
             "psi out of range": {"memory.pressure": "full avg60=101.0\n"},
             "duplicate psi key": {"memory.pressure": "full avg60=90 avg60=0\n"},
             "junk psi token": {"memory.pressure": "full avg60=1 junk\n"},

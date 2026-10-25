@@ -133,6 +133,13 @@ class MemcgGate(unittest.TestCase):
         self.assertEqual(result, (True, 'ok'))
         self.assertIn('memcg_unreclaimable', err.getvalue())
 
+    def test_shadow_reports_cgroup_memory_stalls_without_holding(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result = self.gate({'PAPERCLIP_MEMCG_DIR': '<dir>', 'PAPERCLIP_MEMCG_MODE': 'shadow'}, anon=10, psi=9.0)
+        self.assertEqual(result, (True, 'ok'))
+        self.assertIn('memcg_psi', err.getvalue())
+
     def test_unreadable_directory_holds_when_enforcing_and_passes_when_shadowing(self):
         with mock.patch.dict(os.environ, {'PAPERCLIP_MEMCG_DIR': '/nonexistent-cgroup'}):
             ok, why, _ = run_gate(HEALTHY, self.DISKS)

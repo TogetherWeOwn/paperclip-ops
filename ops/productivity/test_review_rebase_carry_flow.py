@@ -1506,6 +1506,294 @@ class DeltaRecord(unittest.TestCase):
         self.assertTrue(out)
 
 
+class DeltaRecordLifecycle(unittest.TestCase):
+    """A failed fresh evaluation cannot lend an earlier narrow review scope."""
+
+    @contextlib.contextmanager
+    def seeded_delta(self, identical=False):
+        with GitRepo() as repo:
+            repo.commit('auth.py', 'allowed = False\n', 'base auth')
+            old_base = repo.commit('base.txt', 'v1\n', 'base data')
+            git(repo.dir, 'checkout', '-q', '-b', 'pr')
+            h1 = repo.commit('auth.py', 'allowed = True\n', 'change auth')
+            new_base = advance_main(repo)
+            h2 = cherry_pick(self, repo, 'pr2', new_base, h1,
+                             message_suffix=' [replayed]')
+            if not identical:
+                h2 = repo.commit('other.py', 'x = 1\n', 'add other')
+            env = FakeEnv(repo.dir)
+            paths = flow.Paths(mktmp(self))
+            observe_head(env, paths, h1, old_base, env.now)
+            # For the empty-delta case, first observe main at H2 itself.
+            # Moving it back to new_base then restores an identical own-patch;
+            # the old auth.py delta was genuinely produced, not hand-forged.
+            env.prs[PR] = make_pr(h2, base_sha=h2 if identical else new_base)
+            env.checks[h2] = []
+            out = run_pass(env, paths)
+            self.assertEqual(out['decision'], 'review', out)
+            scene = {'repo': repo, 'old_base': old_base,
+                     'new_base': new_base, 'h1': h1, 'h2': h2}
+            self.assertEqual(self.scope(paths, scene),
+                             ['auth.py'] if identical else ['other.py'],
+                             'the stale-record probe needs a usable record first')
+            yield scene, env, paths
+
+    def scope(self, paths, scene, blocking=()):
+        # Keep the shipped seven-argument API: the findings caller does not
+        # provide a source_base, so producer-side refusal must stay effective.
+        return flow.scoped_delta(paths, 'on', REPO, PR, scene['h1'],
+                                 scene['h2'], list(blocking))
+
+    def test_retarget_same_base_sha_forces_compare_fallback(self):
+        # Losing the ref binding lets a cached ['other.py'] hide auth.py,
+        # even though the fresh flow correctly decides to perform a review.
+        with self.seeded_delta() as (scene, env, paths):
+            env.prs[PR]['base']['ref'] = 'dev'
+            out = run_pass(env, paths)
+            self.assertEqual(out['decision'], 'review', out)
+            compare = git(scene['repo'].dir, 'diff', '--name-only',
+                          f"{scene['new_base']}...{scene['h2']}").splitlines()
+            self.assertEqual(compare, ['auth.py', 'other.py'])
+            narrowed = self.scope(paths, scene)
+            self.assertIsNone(narrowed,
+                              'retarget must not reuse the old narrow record')
+            self.assertEqual(compare if narrowed is None else narrowed,
+                             ['auth.py', 'other.py'])
+
+    def test_produced_record_unions_blockers(self):
+        with self.seeded_delta() as (scene, env, paths):
+            self.assertEqual(self.scope(paths, scene,
+                                        [{'path': 'auth.py'},
+                                         {'path': 'blocker.py'},
+                                         {'path': 'other.py'}]),
+                             ['auth.py', 'blocker.py', 'other.py'])
+            self.assertEqual(env.created, [])
+
+    def test_unchanged_base_recomputation_remains_usable(self):
+        with self.seeded_delta() as (scene, env, paths):
+            out = run_pass(env, paths)
+            self.assertEqual(out['decision'], 'review', out)
+            self.assertEqual(self.scope(paths, scene), ['other.py'])
+            self.assertEqual(env.created, [])
+
+    def test_optional_source_base_still_accepts_matching_snapshot(self):
+        with self.seeded_delta() as (scene, env, paths):
+            args = (paths, 'on', REPO, PR, scene['h1'], scene['h2'], [])
+            self.assertEqual(flow.scoped_delta(
+                *args, source_base={'ref': 'main', 'sha': scene['old_base']}),
+                ['other.py'])
+            self.assertIsNone(flow.scoped_delta(
+                *args, source_base={'ref': 'dev', 'sha': scene['old_base']}))
+
+    def test_retarget_different_base_sha_forces_compare_fallback(self):
+        with self.seeded_delta() as (scene, env, paths):
+            repo = scene['repo']
+            git(repo.dir, 'checkout', '-q', '-b', 'dev', scene['new_base'])
+            git(repo.dir, 'commit', '-q', '--allow-empty', '-m', 'dev base')
+            env.prs[PR]['base'].update(ref='dev', sha=repo.head())
+            out = run_pass(env, paths)
+            self.assertEqual(out['decision'], 'review', out)
+            self.assertIsNone(self.scope(paths, scene))
+
+    def test_moved_base_sha_does_not_reuse_old_file_list(self):
+        with self.seeded_delta() as (scene, env, paths):
+            # H2 is now in main. The old source changed auth.py, while the
+            # new own-patch is empty: a fresh delta is auth.py, NOT other.py.
+            env.prs[PR]['base']['sha'] = scene['h2']
+            out = run_pass(env, paths)
+            self.assertEqual(out['decision'], 'review', out)
+            scoped = self.scope(paths, scene)
+            self.assertIn(scoped, (None, ['auth.py']),
+                          'either recompute for the moved base or fall back')
+
+    def test_no_source_after_ledger_loss_discards_stale_scope(self):
+        with self.seeded_delta() as (scene, env, paths):
+            paths.ledger.unlink()
+            out = run_pass(env, paths)
+            self.assertNotEqual(out['decision'], 'carry', out)
+            self.assertIsNone(self.scope(paths, scene))
+
+    def test_non_55_source_discards_stale_scope(self):
+        with self.seeded_delta() as (scene, env, paths):
+            env.checks[scene['h1']] = [
+                make_row(101, PR, scene['h1'], title='4/5',
+                         conclusion='failure', completed_at=env.now)]
+            out = run_pass(env, paths)
+            self.assertEqual(out['decision'], 'review', out)
+            self.assertIsNone(self.scope(paths, scene))
+
+    def test_existing_new_head_rows_discard_stale_scope(self):
+        with self.seeded_delta() as (scene, env, paths):
+            env.checks[scene['h2']] = [
+                make_row(200, PR, scene['h2'], name='CI', app_id=999)]
+            out = run_pass(env, paths)
+            self.assertNotEqual(out['decision'], 'carry', out)
+            self.assertIsNone(self.scope(paths, scene))
+
+    def test_empty_own_patch_delta_discards_stale_scope(self):
+        with self.seeded_delta(identical=True) as (scene, env, paths):
+            self.assertEqual(core.delta_files(
+                scene['repo'].dir, scene['h1'], scene['h2'],
+                {'ref': 'main', 'sha': scene['old_base']},
+                {'ref': 'main', 'sha': scene['new_base']}), [])
+            env.prs[PR]['base']['sha'] = scene['new_base']
+            env.publish_visible = True
+            out = run_pass(env, paths)
+            self.assertEqual(out['decision'], 'carry', out)
+            self.assertIsNone(self.scope(paths, scene))
+
+    def test_failed_or_incomplete_checks_discard_stale_scope(self):
+        for kind in ('head read failed', 'source read failed',
+                     'truncated inventory'):
+            with self.subTest(kind), self.seeded_delta() as (scene, env, paths):
+                if kind == 'head read failed':
+                    env.raise_on_checks.add(scene['h2'])
+                elif kind == 'source read failed':
+                    env.raise_on_checks.add(scene['h1'])
+                else:
+                    # Env.checks_for must return a complete inventory or
+                    # fail closed. Reaching its cap cannot prove completeness.
+                    env.checks[scene['h2']] = [None] * flow.MAX_ROWS
+                out = run_pass(env, paths)
+                self.assertEqual(out['decision'], 'review', out)
+                self.assertIsNone(self.scope(paths, scene))
+
+    def test_unresolvable_base_discards_stale_scope(self):
+        with self.seeded_delta() as (scene, env, paths):
+            env.prs[PR]['base']['sha'] = '0' * 40
+            out = run_pass(env, paths)
+            self.assertEqual(out['decision'], 'review', out)
+            self.assertIsNone(self.scope(paths, scene))
+
+    def test_corrupt_ledger_discards_stale_scope(self):
+        with self.seeded_delta() as (scene, env, paths):
+            paths.ledger.write_text('{invalid')
+            out = run_pass(env, paths)
+            self.assertEqual(out['decision'], 'review', out)
+            self.assertIsNone(self.scope(paths, scene))
+
+    def test_pr_read_exception_discards_stale_scope(self):
+        with self.seeded_delta() as (scene, env, paths):
+            def unavailable(number):
+                raise RuntimeError('pull request read failed')
+
+            env.get_pr = unavailable
+            out = run_pass(env, paths)
+            self.assertEqual(out['decision'], 'review', out)
+            self.assertIsNone(self.scope(paths, scene))
+
+    def test_object_fetch_exception_discards_stale_scope(self):
+        with self.seeded_delta() as (scene, env, paths):
+            def unavailable(*shas):
+                raise RuntimeError('object read failed')
+
+            env.ensure_objects = unavailable
+            out = run_pass(env, paths)
+            self.assertEqual(out['decision'], 'review', out)
+            self.assertIsNone(self.scope(paths, scene))
+
+    def test_busy_pass_preserves_lock_owners_fresh_scope(self):
+        with self.seeded_delta() as (scene, env, paths):
+            with flow.Ledger(paths):
+                out = run_pass(env, paths)
+                self.assertEqual(out['decision'], 'skip', out)
+                self.assertEqual(out['reason'], 'busy')
+                self.assertEqual(self.scope(paths, scene), ['other.py'])
+            self.assertEqual(self.scope(paths, scene), ['other.py'])
+            self.assertEqual(env.created, [])
+
+    def findings_scope(self, paths, scene, current=None, response=None,
+                       read_error=False):
+        # Execute the shipped findings hunk with a real produced record.
+        # A function-name/string assertion would miss the seven-arg wiring bug.
+        text = (PATCH_DIR / PINNED['ops/productivity/review_findings.py']).read_text()
+        _, _, hunks = parse_patch(text)
+        added = next([line for tag, line in body if tag == '+']
+                     for _, body in hunks
+                     if any('scoped_delta(' in line for _, line in body))
+        paths.control.write_text('{"mode": "on"}')
+        current = current or make_pr(scene['h2'], base_sha=scene['new_base'])
+
+        def read_pr(argv, env=None, timeout=None):
+            self.assertEqual(argv[:3],
+                             ['gh', 'api', f'repos/{REPO}/pulls/{PR}'])
+            self.assertFalse(set(argv) & {'-X', '--method', '-f', '-F',
+                                         '--field', '--raw-field'})
+            if read_error:
+                raise RuntimeError('current pull request unavailable')
+            if response is not None:
+                return response
+            value = current
+            if '--jq' in argv:
+                value = {'head': current['head']['sha'],
+                         'base': {key: current['base'][key]
+                                  for key in ('ref', 'sha')}}
+            return SimpleNamespace(returncode=0, stdout=json.dumps(value))
+
+        namespace = {'rebase_flow': flow, 'sh': read_pr,
+                     'gh_env': lambda: {}, 'json': json,
+                     'CTX_DIR': paths.delta_dir.parent / 'contexts',
+                     'full': REPO, 'pr': PR, 'head': scene['h2'],
+                     'last': {'head': scene['h1'], 'blocking': [{'path': 'blocker.py'}]},
+                     'd': {'from': scene['h1'], 'to': scene['h2'],
+                           'files': ['auth.py', 'other.py']}}
+        # The additions are indented inside the host's context builder. Wrap
+        # them in a block, preserving their original indentation and try/except.
+        exec(compile('if True:\n' + '\n'.join(added) + '\n',
+                     'shipped-findings-hunk', 'exec'), namespace)
+        return namespace['d']
+
+    def test_shipped_findings_hunk_narrows_only_while_record_is_fresh(self):
+        with self.seeded_delta() as (scene, env, paths):
+            self.assertEqual(self.findings_scope(paths, scene)['files'],
+                             ['blocker.py', 'other.py'])
+            env.prs[PR]['base']['ref'] = 'dev'
+            out = run_pass(env, paths)
+            self.assertEqual(out['decision'], 'review', out)
+            self.assertEqual(self.findings_scope(
+                paths, scene, current=env.prs[PR])['files'],
+                ['auth.py', 'other.py'])
+
+    def test_shipped_findings_hunk_rechecks_live_binding_before_writer_tick(self):
+        # The selected live-base reader must reject stale scope even before
+        # evaluate_pr has had a chance to remove the old record.
+        with self.seeded_delta() as (scene, env, paths):
+            snapshots = {
+                'retarget with same SHA': make_pr(
+                    scene['h2'], base_ref='dev', base_sha=scene['new_base']),
+                'moved base SHA': make_pr(scene['h2'], base_sha=scene['h2']),
+                'moved head': make_pr('f' * 40, base_sha=scene['new_base'])}
+            for kind, current in snapshots.items():
+                with self.subTest(kind):
+                    self.assertEqual(self.findings_scope(
+                        paths, scene, current=current)['files'],
+                        ['auth.py', 'other.py'])
+            self.assertEqual(self.scope(paths, scene), ['other.py'])
+            self.assertEqual(self.findings_scope(paths, scene)['files'],
+                             ['blocker.py', 'other.py'])
+
+    def test_shipped_findings_hunk_failed_live_reads_keep_compare_scope(self):
+        with self.seeded_delta() as (scene, env, paths):
+            bodies = {'malformed JSON': 'not-json',
+                      'truncated JSON': '{"head":',
+                      'base absent': json.dumps({'head': scene['h2']}),
+                      'base incomplete': json.dumps(
+                          {'head': scene['h2'], 'base': {'ref': 'main'}})}
+            responses = {kind: SimpleNamespace(returncode=0, stdout=body)
+                         for kind, body in bodies.items()}
+            responses['failed command'] = SimpleNamespace(returncode=1, stdout='')
+            responses['exception'] = None
+            for kind, response in responses.items():
+                with self.subTest(kind):
+                    self.assertEqual(self.findings_scope(
+                        paths, scene, response=response,
+                        read_error=(kind == 'exception'))['files'],
+                        ['auth.py', 'other.py'])
+            self.assertEqual(self.scope(paths, scene), ['other.py'])
+            self.assertEqual(self.findings_scope(paths, scene)['files'],
+                             ['blocker.py', 'other.py'])
+
+
 class AuditLines(unittest.TestCase):
     """Case 13: complete, neutralized, bounded lines; log never decides."""
 

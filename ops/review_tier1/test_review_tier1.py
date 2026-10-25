@@ -319,8 +319,8 @@ def gate_read(path):
 
 
 class EvidenceGateTest(unittest.TestCase):
-    def test_valid_anchor_without_quote_passes(self):
-        ok, reason = verify({"file": "src/app.py", "line": 4}, gate_read)
+    def test_valid_anchor_with_quote_passes(self):
+        ok, reason = verify({"file": "src/app.py", "line": 4, "evidence": "def push():"}, gate_read)
         self.assertEqual((ok, reason), (True, "verified"))
 
     def test_quote_must_match_the_cited_line_not_a_neighbour(self):
@@ -341,10 +341,10 @@ class EvidenceGateTest(unittest.TestCase):
         ok, reason = verify({"file": "src/app.py", "line": 5, "evidence": "return os.environ['Y']"}, gate_read)
         self.assertEqual((ok, reason), (False, "quote_mismatch"))
 
-    def test_empty_quote_falls_back_to_anchor_only(self):
+    def test_empty_quote_is_withheld(self):
         for quote in ("", "   ", None):
             ok, reason = verify({"file": "src/app.py", "line": 4, "evidence": quote}, gate_read)
-            self.assertEqual((ok, reason), (True, "verified"), quote)
+            self.assertEqual((ok, reason), (False, "missing_evidence"), quote)
 
     def test_wrong_line_is_withheld(self):
         for line in (0, -1, 7, 99, "4", 4.0, True, None):
@@ -380,7 +380,7 @@ class EvidenceGateTest(unittest.TestCase):
 
     def test_gate_partitions_counts_and_lists_withheld(self):
         findings = [
-            {"file": "src/app.py", "line": 4},
+            {"file": "src/app.py", "line": 4, "evidence": "def push():"},
             {"file": "src/app.py", "line": 99},
             {"file": "src/gone.py", "line": 1},
             {"file": "src/app.py", "line": 5, "evidence": "nope"},

@@ -170,7 +170,8 @@ class PublishGatedReview(unittest.TestCase):
                 "coverage": {"files_reviewed": ["a.ts"], "complete": True, "limitations": ""}}
 
     def finding(self, **kw):
-        base = {"file": "a.ts", "line": 2, "severity": "major", "title": "t", "rationale": "r"}
+        base = {"file": "a.ts", "line": 2, "severity": "major", "title": "t", "rationale": "r",
+                "evidence": "two"}
         base.update(kw)
         return base
 
@@ -199,12 +200,158 @@ class PublishGatedReview(unittest.TestCase):
             self.assertIn("unverified, withheld", line)
 
     def test_rationale_text_is_never_treated_as_a_quote(self):
-        # rationale "three" must not match line 2 ("two") nor rescue the finding;
-        # with no evidence/quote key the anchor alone decides.
+        # Reasoning need not repeat the cited code; the explicit evidence
+        # matches line 2, so rationale "three" does not invalidate it.
         review = self.review(self.finding(line=2, rationale="three"))
         gate = rr.publish_gated_review(review, "deadbeef", self.read)
         self.assertEqual(len(review["findings"]), 1)
         self.assertEqual(gate["refusal_count"], 0)
+
+
+class RunCaseEvidence(unittest.TestCase):
+    """Exercise publication with real Git; only the model transport is faked."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = Path(self.tmp.name) / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q")
+        (self.repo / "src").mkdir()
+        (self.repo / "src/app.py").write_text("first\nold\n")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "base")
+        self.base = self.git("rev-parse", "HEAD").strip()
+        (self.repo / "src/app.py").write_text("first\nsecond\n")
+        for name, text in {"vt.txt": "first\vsecond\n", "ls.txt": "first second\n",
+                           "cr.txt": "first\rsecond\n", "crlf.txt": "first\r\nsecond\r\n",
+                           "empty.txt": "", "last.txt": "last"}.items():
+            (self.repo / name).write_bytes(text.encode())
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "reviewed change")
+        self.head = self.git("rev-parse", "HEAD").strip()
+        self.case = {"id": "fixture", "kind": "real", "head_sha": self.head,
+                     "title": "reviewed change", "body": ""}
+
+    def git(self, *args):
+        import subprocess
+
+        return subprocess.run(["git", "-c", "user.name=fixture", "-c",
+                               "user.email=fixture@example.invalid", *args], cwd=self.repo,
+                              capture_output=True, text=True, check=True).stdout
+
+    def finding(self, **kw):
+        return {"file": "src/app.py", "line": 2, "severity": "major", "title": "defect",
+                "rationale": "The cited operation is incorrect.", "evidence": "second", **kw}
+
+    def run_model(self, findings=None, raw=None, case=None):
+        import os
+        import subprocess
+        from pathlib import Path
+        from unittest.mock import patch
+
+        real_run = subprocess.run
+        if raw is None:
+            raw = json.dumps({**GOOD, "findings": findings})
+
+        def transport(args, **kw):
+            if args[0] != "codex":
+                return real_run(args, **kw)
+            Path(args[args.index("-o") + 1]).write_text(raw)
+            return subprocess.CompletedProcess(args, 0, stdout='{"type":"turn.completed",'
+                                               '"usage":{"output_tokens":12}}\n', stderr="")
+
+        with patch.dict(os.environ, {"BAKEOFF_FIXTURE_KEY": "offline-fixture-not-a-key"}), \
+                patch.object(rr.subprocess, "run", side_effect=transport):
+            return rr.run_case(str(self.repo), case or self.case, "fixture-model", "medium",
+                               "BAKEOFF_FIXTURE_KEY", 5)
+
+    def test_schema_accepts_and_requires_quoted_evidence(self):
+        from pathlib import Path
+
+        schema = json.loads((Path(rr.HERE) / "output_schema.json").read_text())
+        item = schema["properties"]["findings"]["items"]
+        self.assertIn("evidence", item["required"])
+        self.assertEqual(item["properties"]["evidence"]["type"], "string")
+        self.assertEqual(set(self.finding()), set(item["properties"]))
+
+    def test_run_case_strips_invalid_citations_and_returns_refusal_metrics(self):
+        good = self.finding()
+        findings = [good, self.finding(evidence="invented_call()"),
+                    self.finding(file="missing.py"), self.finding(line=99),
+                    self.finding(file="src", line=1, evidence="tree HEAD:src"),
+                    self.finding(file="src\\app.py"), self.finding(file=" src/app.py ")]
+        result = self.run_model(findings)
+        self.assertIsNone(result["parse_error"])
+        self.assertEqual(result["review"]["findings"], [good])
+        self.assertEqual(result["evidence_gate"]["head"], self.head)
+        self.assertEqual(result["evidence_gate"]["total"], 7)
+        self.assertEqual(result["evidence_gate"]["refusal_count"], 6)
+        self.assertEqual(result["evidence_gate"]["refusal_rate"], 0.857)
+        self.assertEqual([w["reason"] for w in result["evidence_gate"]["withheld"]],
+                         ["quote_mismatch", "missing_file", "bad_line", "missing_file",
+                          "missing_file", "missing_file"])
+        self.assertEqual(len(result["evidence_gate"]["rationale"]), 6)
+        self.assertTrue(all("unverified, withheld" in r
+                            for r in result["evidence_gate"]["rationale"]))
+
+    def test_missing_or_blank_evidence_is_withheld_not_inferred_from_rationale(self):
+        missing = self.finding()
+        del missing["evidence"]
+        findings = [missing] + [self.finding(evidence=value, rationale="second")
+                                for value in ("", " \t", None, 42)]
+        result = self.run_model(findings)
+        self.assertEqual(result["review"]["findings"], [])
+        self.assertEqual(result["evidence_gate"]["refusal_count"], 5)
+        self.assertEqual([w["reason"] for w in result["evidence_gate"]["withheld"]],
+                         ["missing_evidence"] * 5)
+
+    def test_only_lf_creates_physical_source_lines(self):
+        good, bad = [], []
+        for name, separator in (("vt.txt", "\v"), ("ls.txt", " "), ("cr.txt", "\r")):
+            text = f"first{separator}second\n"
+            self.assertEqual(rr.read_git_file(str(self.repo), name), text)
+            self.assertEqual(rr.number_lines(text), f"    1  first{separator}second")
+            good.append(self.finding(file=name, line=1, evidence="first second"))
+            bad.append(self.finding(file=name, line=2))
+        self.assertEqual(rr.read_git_file(str(self.repo), "crlf.txt"), "first\r\nsecond\r\n")
+        good.append(self.finding(file="crlf.txt", line=2))
+        bad.extend([self.finding(file="crlf.txt", line=3),
+                    self.finding(file="empty.txt", line=1),
+                    self.finding(file="last.txt", line=2), self.finding(line=3)])
+        result = self.run_model(good + bad)
+        self.assertEqual(result["review"]["findings"], good)
+        self.assertEqual(result["evidence_gate"]["refusal_count"], 7)
+        self.assertEqual([w["reason"] for w in result["evidence_gate"]["withheld"]],
+                         ["bad_line"] * 7)
+
+    def test_directories_are_not_readable_file_blobs(self):
+        self.assertIsNone(rr.read_git_file(str(self.repo), "src"))
+
+    def test_planted_case_is_verified_against_its_new_committed_head(self):
+        from pathlib import Path
+
+        patch = Path(self.tmp.name) / "plant.patch"
+        patch.write_text("--- a/src/app.py\n+++ b/src/app.py\n@@ -1,2 +1,2 @@\n first\n-second\n+planted\n")
+        planted = {**self.case, "kind": "planted", "plant_patch": str(patch)}
+        good = self.finding(evidence="planted")
+        result = self.run_model([good, self.finding()], case=planted)
+        self.assertEqual(result["review"]["findings"], [good])
+        self.assertNotEqual(result["evidence_gate"]["head"], self.head)
+        self.assertEqual(len(result["evidence_gate"]["head"]), 40)
+        self.assertEqual(result["evidence_gate"]["refusal_count"], 1)
+        self.assertEqual(result["evidence_gate"]["withheld"][0]["reason"], "quote_mismatch")
+
+    def test_parse_failure_has_no_gate_and_preserves_raw_response(self):
+        result = self.run_model(raw="not a review")
+        self.assertIsNone(result["review"])
+        self.assertIsNone(result["evidence_gate"])
+        self.assertIn("not JSON", result["parse_error"])
+        self.assertEqual(result["raw_final"], "not a review")
+        self.assertEqual(result["usage"], {"output_tokens": 12})
 
 
 if __name__ == "__main__":

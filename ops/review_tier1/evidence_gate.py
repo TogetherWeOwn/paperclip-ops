@@ -7,12 +7,12 @@ present on the cited line (whitespace-normalized), is not published: it is
 counted and listed in the rationale as "unverified, withheld".
 
 Pure, $0, hermetic (no network): file content at the head is injected via
-`read_file`, so the bake-off harness passes `git show HEAD` reads and tests
-pass fakes. Finding shapes accepted: bake-off (`file`/`line`) and production
-assessment (`path`/`line`/`evidence`, `quote` alias).
+`read_file`, so the bake-off harness passes blob reads pinned to the reviewed
+commit and tests pass fakes. Finding shapes accepted: bake-off
+(`file`/`line`/`evidence`) and production assessment (`path` alias, `quote` alias).
 """
 
-REASONS = ("verified", "missing_file", "bad_line", "quote_mismatch", "malformed")
+REASONS = ("verified", "missing_file", "bad_line", "missing_evidence", "quote_mismatch", "malformed")
 
 
 def normalize(text):
@@ -20,17 +20,23 @@ def normalize(text):
     return " ".join(str(text).split())
 
 
-def _clean_path(value):
-    """Repo-relative path, or None when it cannot resolve to one file.
+def source_lines(text):
+    """Physical Git lines: only LF separates lines; a terminal LF adds none."""
+    if not text:
+        return []
+    lines = text.split("\n")
+    return lines[:-1] if text.endswith("\n") else lines
 
-    Absolute paths, parent escapes and non-strings fail closed: the caller
-    must not read them, so they never reach `read_file`.
+
+def _clean_path(value):
+    """Exact repo-relative path, or None; never rewrite a published citation.
+
+    Absolute paths, parent escapes, non-canonical paths and non-strings fail
+    closed before `read_file` is called.
     """
-    if not isinstance(value, str):
+    if not isinstance(value, str) or value != value.strip() or "\\" in value or "\0" in value:
         return None
-    path = value.strip().replace("\\", "/")
-    while path.startswith("./"):
-        path = path[2:]
+    path = value
     if not path or path.startswith("/") or path in (".", ".."):
         return None
     if any(part in ("", ".", "..") for part in path.split("/")):
@@ -77,11 +83,13 @@ def verify(finding, read_file):
     if not isinstance(text, str):
         return False, "missing_file"
     line = _clean_line(get("line"))
-    lines = text.splitlines()
+    lines = source_lines(text)
     if line is None or line > len(lines):
         return False, "bad_line"
     quote = _clean_quote(finding)
-    if quote is not None and normalize(quote) not in normalize(lines[line - 1]):
+    if quote is None:
+        return False, "missing_evidence"
+    if normalize(quote) not in normalize(lines[line - 1]):
         return False, "quote_mismatch"
     return True, "verified"
 

@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Offline controls for the portable docs accompaniment gate."""
+from contextlib import redirect_stdout
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -148,6 +152,58 @@ class DocsDrift(unittest.TestCase):
         self.put("new", "other history\n")
         self.assertEqual(self.check(2)["code"], "git_failed")
 
+    def test_criss_cross_merge_bases_are_unmeasurable_at_cli(self):
+        tree = self.git("rev-parse", self.base + "^{tree}")
+
+        def node(name, *parents):
+            args = ["commit-tree", tree, "-m", name + "\n\nCo-Authored-By: Paperclip <noreply@paperclip.ing>"]
+            for parent in parents:
+                args.extend(["-p", parent])
+            return self.git(*args)
+
+        left = node("left", self.base)
+        right = node("right", self.base)
+        base = node("left merge", left, right)
+        head = node("right merge", right, left)
+        self.assertCountEqual(self.git("merge-base", "--all", base, head).splitlines(), [left, right])
+        report = self.check(2, base=base, head=head)
+        self.assertEqual(report["status"], "unmeasurable")
+        self.assertEqual(report["code"], "ambiguous_base")
+        self.assertIs(report["retryable"], False)
+        self.assertTrue(report["next_action"].strip())
+
+    def synthetic_diff_main(self, count):
+        # Mock only the large git output; parsing, policy, main and JSON stay real.
+        raw = b"".join(f"M\0unmapped/file-{index}\0".encode() for index in range(count))
+        real_run = subprocess.run
+
+        def run(args, *positional, **kwargs):
+            if args[0] == "git" and "diff" in args and "--name-status" in args and "-z" in args:
+                return subprocess.CompletedProcess(args, 0, stdout=raw, stderr=b"")
+            return real_run(args, *positional, **kwargs)
+
+        output = io.StringIO()
+        argv = ["--repo", str(self.root), "--base", self.base, "--head", self.base]
+        with patch.object(GATE.subprocess, "run", side_effect=run):
+            with redirect_stdout(output):
+                code = GATE.main(argv)
+        return code, json.loads(output.getvalue())
+
+    def test_nul_diff_above_path_cap_is_unmeasurable_at_main(self):
+        code, report = self.synthetic_diff_main(100001)
+        self.assertEqual(code, 2, report)
+        self.assertEqual(report["status"], "unmeasurable")
+        self.assertEqual(report["code"], "invalid_diff")
+        self.assertIs(report["retryable"], False)
+        self.assertTrue(report["next_action"].strip())
+
+    def test_nul_diff_at_exact_path_cap_is_accepted(self):
+        code, report = self.synthetic_diff_main(100000)
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["status"], "clean")
+        self.assertEqual(report["changed_paths"], 100000)
+        self.assertEqual(report["checked_rules"], 0)
+
     def test_target_policy_uses_supplied_base_not_merge_base(self):
         self.change_source()
         head = self.commit()
@@ -192,6 +248,108 @@ class DocsDrift(unittest.TestCase):
             report = GATE.check(self.root, self.base, head)
         self.assertEqual(report["status"], "finding")
         self.assertEqual(report["checked_rules"], 1)
+
+
+class DocsWorkflow(unittest.TestCase):
+    def setUp(self):
+        workflow = (ROOT / ".github/workflows/docs-drift.yml").read_text()
+        # Read this workflow's scalar env/with fields and literal run block,
+        # without a YAML dependency or a second implementation of its routing.
+        job_env = re.search(r"^    env:\n((?:      .+\n)+)", workflow, re.M)
+        self.assertIsNotNone(job_env, "docs-drift job env not found")
+        self.job_env = self.fields(job_env[1], 6)
+        steps = dict(re.findall(r"^      - name: ([^\n]+)\n(.*?)(?=^      - |\Z)", workflow, re.M | re.S))
+        self.validator = textwrap.dedent(steps["Validate immutable inputs"].split("        run: |\n", 1)[1])
+        self.checkout, = [step for step in steps.values() if "path: docs-drift-tools" in step]
+        self.checker, = [step for step in steps.values() if "          CHECKER:" in step]
+
+    @staticmethod
+    def fields(block, indent):
+        return dict(re.findall(r"^" + " " * indent + r"([\w-]+): (.+)$", block, re.M))
+
+    def expression(self, value, contexts):
+        expression = value.strip().removeprefix("${{").removesuffix("}}").strip()
+        if expression == "toJSON(inputs)":
+            return json.dumps(contexts["inputs"])
+        # Evaluate only the string/boolean subset actually used here. Tokenize
+        # fully so unsupported syntax fails instead of silently testing a stub.
+        pattern = r"'[^']*'|(?:inputs|github|env)(?:\.[\w-]+)+|==|!=|&&|\|\||[()]|true|false"
+        self.assertRegex(expression, r"\A(?:\s*(?:" + pattern + r"))+\s*\Z",
+                         "unsupported workflow expression: " + expression)
+        tokens = re.findall(pattern, expression)
+        rendered = []
+        for token in tokens:
+            if token.startswith(("inputs.", "github.", "env.")):
+                resolved = contexts
+                for part in token.split("."):
+                    resolved = resolved.get(part, "") if isinstance(resolved, dict) else ""
+                rendered.append(repr(resolved))
+            else:
+                rendered.append({"&&": "and", "||": "or", "true": "True", "false": "False"}.get(token, token))
+        return eval(" ".join(rendered), {"__builtins__": {}})
+
+    def run_workflow(self, inputs, repository, event="pull_request"):
+        contexts = {"inputs": inputs, "github": {"repository": repository, "event_name": event,
+                    "sha": "4" * 40, "event": {"before": "3" * 40}}}
+        if event == "pull_request":
+            contexts["github"]["event"]["pull_request"] = {"base": {"sha": "1" * 40}, "head": {"sha": "2" * 40}}
+        env = {}
+        for name, value in self.job_env.items():
+            result = self.expression(value, contexts)
+            env[name] = str(result).lower() if isinstance(result, bool) else str(result)
+        contexts["env"] = env
+        validation = subprocess.run(["bash", "--noprofile", "--norc", "-c", self.validator],
+                                    env={"PATH": os.environ["PATH"], **env}, cwd=ROOT,
+                                    capture_output=True, text=True, timeout=10)
+        condition = self.fields(self.checkout, 8)["if"]
+        pinned = bool(self.expression(condition, contexts))
+        checker = self.expression(self.fields(self.checker, 10)["CHECKER"], contexts)
+        ref = self.expression(self.fields(self.checkout, 10)["ref"], contexts)
+        return validation, env, pinned, checker, ref
+
+    def test_native_pr_and_push_use_local_checker_without_tools_pin(self):
+        for repository in ["TogetherWeOwn/paperclip-ops", "fixture/fork"]:
+            for event, base, head in [("pull_request", "1" * 40, "2" * 40), ("push", "3" * 40, "4" * 40)]:
+                with self.subTest(repository=repository, event=event):
+                    validation, env, pinned, checker, _ = self.run_workflow({}, repository, event)
+                    self.assertEqual(validation.returncode, 0, validation.stderr)
+                    self.assertFalse(pinned)
+                    self.assertEqual(checker, "scripts/quality-gates/docs_drift.py")
+                    self.assertEqual((env["BASE_SHA"], env["HEAD_SHA"]), (base, head))
+
+    def test_reusable_calls_use_pinned_checker_and_explicit_shas(self):
+        for repository in ["TogetherWeOwn/paperclip-ops", "fixture/consumer"]:
+            for size in [40, 64]:
+                with self.subTest(repository=repository, sha_length=size):
+                    inputs = {"base-sha": "a" * size, "head-sha": "b" * size, "tools-ref": "c" * size}
+                    validation, env, pinned, checker, ref = self.run_workflow(inputs, repository)
+                    self.assertEqual(validation.returncode, 0, validation.stderr)
+                    self.assertTrue(pinned, "reusable calls must check out their pinned tool, even in the canonical repo")
+                    self.assertEqual(checker, "../docs-drift-tools/scripts/quality-gates/docs_drift.py")
+                    self.assertEqual(ref, "c" * size)
+                    self.assertEqual((env["BASE_SHA"], env["HEAD_SHA"]), ("a" * size, "b" * size))
+
+    def test_reusable_calls_reject_empty_or_mutable_tools_ref(self):
+        for repository in ["TogetherWeOwn/paperclip-ops", "fixture/consumer"]:
+            for ref in ["", "main", "refs/heads/main", "c" * 39, "C" * 40]:
+                with self.subTest(repository=repository, tools_ref=ref):
+                    inputs = {"base-sha": "a" * 40, "head-sha": "b" * 40, "tools-ref": ref}
+                    validation, *_ = self.run_workflow(inputs, repository)
+                    self.assertNotEqual(validation.returncode, 0, "invalid tools-ref accepted")
+                    self.assertIn("TOOLS_REF", validation.stderr)
+
+    def test_empty_required_call_shas_cannot_be_rescued_by_event_shas(self):
+        for key, name in [("base-sha", "BASE_SHA"), ("head-sha", "HEAD_SHA")]:
+            for missing in [False, True]:
+                with self.subTest(key=key, missing=missing):
+                    inputs = {"base-sha": "a" * 40, "head-sha": "b" * 40, "tools-ref": "c" * 40}
+                    if missing:
+                        inputs.pop(key)
+                    else:
+                        inputs[key] = ""
+                    validation, *_ = self.run_workflow(inputs, "TogetherWeOwn/paperclip-ops")
+                    self.assertNotEqual(validation.returncode, 0, "empty call SHA fell through to healthy event evidence")
+                    self.assertIn(name, validation.stderr)
 
 
 if __name__ == "__main__":

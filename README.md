@@ -150,6 +150,14 @@ offline verification command, see [Reconciler outcomes](docs/reconciler-outcomes
 The source contract does not imply runtime installation; flow guard's existing
 no-flag invocation is mutating.
 
+## Task authoring
+
+Use the [acceptance criteria and anti-goals contract](docs/task-scope.md) for
+implementation task descriptions. It includes a copy-ready template, verifiable
+milestones for oversized work, and an adoption fragment for an existing company
+adapter. These are native-field authoring guidelines, not an installed skill or
+a new admission gate; source publication does not establish live adoption.
+
 ## Verification
 
 Run the fast tier with `make verify-fast` (`make verify-fast-parse` for the

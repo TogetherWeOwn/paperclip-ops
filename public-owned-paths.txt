@@ -82,7 +82,6 @@ plugins/dispatch/dist/reporting.js
 plugins/dispatch/dist/selection.js
 plugins/dispatch/package-lock.json
 plugins/dispatch/package.json
-plugins/dispatch/test/dispatch.test.mjs
 plugins/gh-token-broker/dist/disclosure.js
 plugins/gh-token-broker/dist/ownership.js
 plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql

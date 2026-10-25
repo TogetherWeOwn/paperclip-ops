@@ -290,7 +290,9 @@ class DocsWorkflow(unittest.TestCase):
 
     def run_workflow(self, inputs, repository, event="pull_request"):
         contexts = {"inputs": inputs, "github": {"repository": repository, "event_name": event,
-                    "sha": "4" * 40, "event": {"before": "3" * 40}}}
+                    "sha": "4" * 40, "workflow_sha": "5" * 40,
+                    "workflow_ref": "TogetherWeOwn/paperclip-ops/.github/workflows/docs-drift.yml@refs/heads/main",
+                    "event": {"before": "3" * 40}}}
         if event == "pull_request":
             contexts["github"]["event"]["pull_request"] = {"base": {"sha": "1" * 40}, "head": {"sha": "2" * 40}}
         env = {}
@@ -301,20 +303,21 @@ class DocsWorkflow(unittest.TestCase):
         validation = subprocess.run(["bash", "--noprofile", "--norc", "-c", self.validator],
                                     env={"PATH": os.environ["PATH"], **env}, cwd=ROOT,
                                     capture_output=True, text=True, timeout=10)
-        condition = self.fields(self.checkout, 8)["if"]
+        condition = self.fields(self.checkout, 8).get("if", "true")
         pinned = bool(self.expression(condition, contexts))
         checker = self.expression(self.fields(self.checker, 10)["CHECKER"], contexts)
         ref = self.expression(self.fields(self.checkout, 10)["ref"], contexts)
         return validation, env, pinned, checker, ref
 
-    def test_native_pr_and_push_use_local_checker_without_tools_pin(self):
+    def test_native_events_select_immutable_workflow_checker_without_call_pin(self):
         for repository in ["TogetherWeOwn/paperclip-ops", "fixture/fork"]:
             for event, base, head in [("pull_request", "1" * 40, "2" * 40), ("push", "3" * 40, "4" * 40)]:
                 with self.subTest(repository=repository, event=event):
-                    validation, env, pinned, checker, _ = self.run_workflow({}, repository, event)
+                    validation, env, pinned, checker, ref = self.run_workflow({}, repository, event)
                     self.assertEqual(validation.returncode, 0, validation.stderr)
-                    self.assertFalse(pinned)
-                    self.assertEqual(checker, "scripts/quality-gates/docs_drift.py")
+                    self.assertTrue(pinned, "a native caller head need not contain the checker")
+                    self.assertEqual(ref, "5" * 40)
+                    self.assertNotEqual(checker, "scripts/quality-gates/docs_drift.py")
                     self.assertEqual((env["BASE_SHA"], env["HEAD_SHA"]), (base, head))
 
     def test_reusable_calls_use_pinned_checker_and_explicit_shas(self):
@@ -350,6 +353,311 @@ class DocsWorkflow(unittest.TestCase):
                     validation, *_ = self.run_workflow(inputs, "TogetherWeOwn/paperclip-ops")
                     self.assertNotEqual(validation.returncode, 0, "empty call SHA fell through to healthy event evidence")
                     self.assertIn(name, validation.stderr)
+
+
+class NativeDocsWorkflow(unittest.TestCase):
+    """Execute real workflow run blocks; replace only the network checkout boundary.
+
+    Fixtures deliberately separate caller history from the trusted checker repo.
+    A caller can omit/poison its checker and weaken its head policy. Neither may
+    change the trusted program or the policy snapshot used for the actual diff.
+    The parser accepts this workflow's block-scalar subset, not arbitrary YAML;
+    unsupported Actions/expressions fail loudly instead of being silently skipped.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="docs-native-workflow-")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.env = {"PATH": os.environ["PATH"], "HOME": self.tmp.name,
+                    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+                    "GIT_TERMINAL_PROMPT": "0", "PYTHONDONTWRITEBYTECODE": "1"}
+        self.workflow = (ROOT / ".github/workflows/docs-drift.yml").read_text()
+        self.caller = self.root / "caller-source"
+        self.tools = self.root / "trusted-source"
+        for repo in (self.caller, self.tools):
+            repo.mkdir()
+            self.git(repo, "init", "-q")
+            self.git(repo, "config", "user.name", "Fixture")
+            self.git(repo, "config", "user.email", "fixture@example.invalid")
+        self.policy = {"version": 1, "rules": [
+            {"id": "api", "sources": ["src/*"], "docs": ["docs/*"]}]}
+        self.put(self.caller, ".docs-drift.json", json.dumps(self.policy))
+        self.put(self.caller, "src/api.py", "before\n")
+        self.put(self.caller, "docs/api.md", "before\n")
+        self.base = self.commit(self.caller)
+        self.put(self.caller, "src/api.py", "after\n")
+        self.head = self.commit(self.caller)
+        # Instrument the real checker only to prove provenance and cwd. Its
+        # parser, Git calls, policy selection and exit status are unmodified.
+        trace = ('import json as _json, os as _os\n'
+                 'from pathlib import Path as _Path\n'
+                 '_Path(_os.environ["CHECKER_TRACE"]).write_text(_json.dumps({'
+                 '"cwd": _os.getcwd(), "file": str(_Path(__file__).resolve())}))\n')
+        self.put(self.tools, "scripts/quality-gates/docs_drift.py", trace + SCRIPT.read_text())
+        self.tools_sha = self.commit(self.tools)
+
+    def git(self, repo, *args):
+        return subprocess.check_output(["git", "-C", str(repo), *args], env=self.env,
+                                       text=True, stderr=subprocess.PIPE, timeout=10).strip()
+
+    @staticmethod
+    def put(repo, name, content):
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+
+    def commit(self, repo):
+        self.git(repo, "add", "-A")
+        self.git(repo, "commit", "-q", "--allow-empty", "-m",
+                 "test: workflow fixture\n\nCo-Authored-By: Paperclip <noreply@paperclip.ing>")
+        return self.git(repo, "rev-parse", "HEAD")
+
+    @staticmethod
+    def section(block, name, indent):
+        match = re.search(r"^" + " " * indent + re.escape(name) + r":\n"
+                          r"((?:" + " " * (indent + 2) + r"[^\n]*\n|\n)*)", block, re.M)
+        return DocsWorkflow.fields(match[1], indent + 2) if match else {}
+
+    def resolve(self, value, contexts):
+        if not isinstance(value, str) or "${{" not in value:
+            return str(value)
+        result = DocsWorkflow.expression(self, value, contexts)
+        return str(result).lower() if isinstance(result, bool) else str(result)
+
+    def run_native(self, event="pull_request", *, fork=False, inputs=None,
+                   workflow_sha=None, base=None, head=None, event_patch=None):
+        base = self.base if base is None else base
+        head = self.head if head is None else head
+        inputs = {} if inputs is None else inputs
+        workspace = self.root / ("run-" + str(len(list(self.root.glob("run-*")))))
+        workspace.mkdir()
+        trace = workspace / "checker-trace.json"
+        github = {"repository": "TogetherWeOwn/paperclip-ops", "event_name": event,
+                  "sha": head, "workflow_sha": self.tools_sha if workflow_sha is None else workflow_sha,
+                  "workflow_ref": "TogetherWeOwn/paperclip-ops/.github/workflows/docs-drift.yml@refs/heads/main",
+                  "workspace": str(workspace), "event": {"before": base}}
+        if event == "pull_request":
+            github["event"]["pull_request"] = {
+                "base": {"sha": base, "repo": {"full_name": github["repository"]}},
+                "head": {"sha": head, "repo": {"full_name": "fixture/fork" if fork else github["repository"]}}}
+        elif event == "merge_group":
+            github["event"]["merge_group"] = {"base_sha": base, "head_sha": head}
+        if event_patch:
+            event_patch(github)
+        contexts = {"inputs": inputs, "github": github, "env": {}, "steps": {}}
+        env = {**self.env, "GITHUB_WORKSPACE": str(workspace),
+               "GITHUB_SHA": str(github["sha"]), "GITHUB_EVENT_NAME": event,
+               "GITHUB_REPOSITORY": github["repository"], "CHECKER_TRACE": str(trace),
+               "GITHUB_ENV": str(workspace / "github-env"),
+               "GITHUB_OUTPUT": str(workspace / "github-output")}
+        for name, value in self.section(self.workflow, "env", 4).items():
+            contexts["env"][name] = self.resolve(value, contexts)
+        env.update(contexts["env"])
+        checkouts, stdout, stderr = [], "", ""
+        code = 0
+        caller_checkout = None
+        steps = re.findall(r"^      - name: [^\n]+\n(.*?)(?=^      - |\Z)",
+                           self.workflow, re.M | re.S)
+        self.assertTrue(steps, "no workflow steps parsed")
+        for block in steps:
+            fields = DocsWorkflow.fields(block, 8)
+            if "if" in fields:
+                condition = DocsWorkflow.expression(self, fields["if"], contexts)
+                if not condition:
+                    continue
+            if "uses" in fields:
+                self.assertRegex(fields["uses"], r"^actions/checkout@[0-9a-f]{40}(?:\s|$)")
+                options = {key: self.resolve(value, contexts)
+                           for key, value in self.section(block, "with", 8).items()}
+                repository = options.get("repository", github["repository"])
+                ref = options.get("ref", github["sha"])
+                checkouts.append({**options, "repository": repository, "ref": ref})
+                # Only known repository+commit pairs are available offline.
+                # A mutable/foreign ref is NOT rescued with the trusted fixture.
+                source = None
+                if repository == "TogetherWeOwn/paperclip-ops" and ref == self.tools_sha:
+                    source = self.tools
+                elif repository in (github["repository"], "fixture/fork") and ref in (self.base, self.head):
+                    source = self.caller
+                if source is None:
+                    code, stderr = 128, stderr + "fixture checkout: unknown repository or commit\n"
+                    break
+                destination = workspace / options.get("path", ".")
+                self.assertTrue(destination.resolve().is_relative_to(workspace.resolve()))
+                self.git(workspace, "clone", "-q", "--no-hardlinks", str(source), str(destination))
+                self.git(destination, "checkout", "-q", "--detach", ref)
+                if source == self.caller:
+                    caller_checkout = destination
+                continue
+            self.assertEqual(fields.get("shell", "bash"), "bash", "unsupported workflow shell")
+            match = re.search(r"^        run: \|\n(.*)", block, re.M | re.S)
+            self.assertIn("run", fields, "unsupported workflow step (must execute, never ignore)")
+            command = textwrap.dedent(match[1]) if match else fields["run"]
+            step_env = {name: self.resolve(value, contexts)
+                        for name, value in self.section(block, "env", 8).items()}
+            cwd = workspace / self.resolve(fields.get("working-directory", "."), contexts)
+            result = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
+                                     command], cwd=cwd, env={**env, **step_env},
+                                    capture_output=True, text=True, timeout=10)
+            stdout, stderr = stdout + result.stdout, stderr + result.stderr
+            code = result.returncode
+            if code:
+                break
+            exported = Path(env["GITHUB_ENV"])
+            if exported.exists():
+                for line in exported.read_text().splitlines():
+                    name, value = line.split("=", 1)
+                    env[name] = contexts["env"][name] = value
+                exported.write_text("")
+        if caller_checkout:
+            self.assertEqual(self.git(caller_checkout, "status", "--porcelain"), "",
+                             "documentation gate mutated caller files")
+            self.assertEqual(self.git(caller_checkout, "rev-parse", "HEAD"), head)
+        return {"code": code, "stdout": stdout, "stderr": stderr, "checkouts": checkouts,
+                "trace": json.loads(trace.read_text()) if trace.exists() else None,
+                "caller": caller_checkout, "workspace": workspace}
+
+    def assert_report(self, result, code, status):
+        self.assertEqual(result["code"], code, result["stdout"] + result["stderr"])
+        self.assertIsNotNone(result["trace"], "trusted checker did not execute (absence must not skip/pass)")
+        report = json.loads(result["stdout"])
+        self.assertEqual(report["status"], status)
+        self.assertEqual((report["base_sha"], report["head_sha"], report["policy_sha"]),
+                         (self.base, self.head, self.base))
+        self.assertEqual(Path(result["trace"]["cwd"]), result["caller"])
+        self.assertFalse(Path(result["trace"]["file"]).is_relative_to(result["caller"]),
+                         "checker came from caller-controlled history")
+        caller_checkout, = [item for item in result["checkouts"] if item["ref"] == self.head]
+        self.assertEqual(caller_checkout.get("fetch-depth"), "0", "caller diff requires full history")
+        for checkout in result["checkouts"]:
+            self.assertEqual(checkout.get("persist-credentials"), "false")
+        return report
+
+    def test_native_heads_without_checker_measure_real_diff_for_every_event(self):
+        # Removing the native tools checkout or falling back to HEAD must fail.
+        for event, fork in [("pull_request", False), ("pull_request", True),
+                            ("push", False), ("merge_group", False)]:
+            for change, want, status in [("undocumented", 1, "finding"),
+                                         ("covered", 0, "clean"), ("unrelated", 0, "clean")]:
+                with self.subTest(event=event, fork=fork, change=change):
+                    self.git(self.caller, "reset", "--hard", self.base)
+                    if change == "unrelated":
+                        self.put(self.caller, "unrelated.txt", "new\n")
+                    else:
+                        self.put(self.caller, "src/api.py", "after\n")
+                    if change == "covered":
+                        self.put(self.caller, "docs/api.md", "updated\n")
+                    self.head = self.commit(self.caller)
+                    report = self.assert_report(self.run_native(event, fork=fork), want, status)
+                    self.assertEqual(report["checked_rules"], 0 if change == "unrelated" else 1)
+                    if want:
+                        self.assertEqual(report["findings"][0]["paths"], ["src/api.py"])
+
+    def test_empty_native_diff_still_executes_trusted_checker(self):
+        self.head = self.base
+        report = self.assert_report(self.run_native(), 0, "clean")
+        self.assertEqual(report["changed_paths"], 0)
+
+    def test_native_head_checker_cannot_replace_trusted_program(self):
+        self.put(self.caller, "scripts/quality-gates/docs_drift.py", 'print("untrusted checker ran")\n')
+        self.head = self.commit(self.caller)
+        result = self.run_native(fork=True)
+        self.assertNotIn("untrusted checker ran", result["stdout"])
+        self.assert_report(result, 1, "finding")
+
+    def test_missing_trusted_checker_fails_even_when_caller_has_one(self):
+        self.git(self.tools, "rm", "scripts/quality-gates/docs_drift.py")
+        self.tools_sha = self.commit(self.tools)
+        for caller_has_checker in (False, True):
+            with self.subTest(caller_has_checker=caller_has_checker):
+                if caller_has_checker:
+                    self.put(self.caller, "scripts/quality-gates/docs_drift.py", 'print("caller fallback ran")\n')
+                    self.head = self.commit(self.caller)
+                result = self.run_native()
+                self.assertNotEqual(result["code"], 0, "missing trusted tool was silently skipped or replaced")
+                self.assertIsNone(result["trace"])
+                self.assertNotIn("caller fallback ran", result["stdout"])
+
+    def test_native_head_policy_cannot_disable_target_base_mapping(self):
+        for policy in [None, {"version": 1, "rules": []}]:
+            with self.subTest(policy=policy):
+                self.git(self.caller, "reset", "--hard", self.head)
+                if policy is None:
+                    self.git(self.caller, "rm", ".docs-drift.json")
+                else:
+                    self.put(self.caller, ".docs-drift.json", json.dumps(policy))
+                self.head = self.commit(self.caller)
+                self.assert_report(self.run_native("merge_group"), 1, "finding")
+
+    def test_diverged_target_policy_and_caller_history_are_preserved(self):
+        merge_base = self.base
+        self.git(self.caller, "checkout", "-q", "--detach", self.base)
+        self.policy["rules"][0]["docs"] = ["manual/*"]
+        self.put(self.caller, ".docs-drift.json", json.dumps(self.policy))
+        self.base = self.commit(self.caller)
+        report = self.assert_report(self.run_native("pull_request", fork=True), 1, "finding")
+        self.assertEqual(report["merge_base_sha"], merge_base)
+        self.assertEqual(report["findings"][0]["docs"], ["manual/*"])
+
+    def test_native_bad_or_empty_workflow_provenance_fails_before_checkout(self):
+        for sha in ["", "main", "refs/heads/main", "A" * 40, "a" * 39, "a" * 41, "$(id)"]:
+            with self.subTest(sha=sha):
+                result = self.run_native(workflow_sha=sha)
+                self.assertNotEqual(result["code"], 0)
+                self.assertEqual(result["checkouts"], [], "invalid provenance reached checkout")
+
+    def test_native_bad_raw_event_shas_fail_before_checkout(self):
+        for event in ("pull_request", "push", "merge_group"):
+            for field in ("base", "head"):
+                for value in ("", "main", "A" * 40, "a" * 39):
+                    with self.subTest(event=event, field=field, value=value):
+                        def poison(github):
+                            if event == "pull_request":
+                                github["event"][event][field]["sha"] = value
+                            elif event == "merge_group":
+                                github["event"][event][field + "_sha"] = value
+                            elif field == "base":
+                                github["event"]["before"] = value
+                            else:
+                                github["sha"] = value
+                        result = self.run_native(event, event_patch=poison)
+                        self.assertNotEqual(result["code"], 0)
+                        self.assertEqual(result["checkouts"], [], "invalid raw event SHA reached checkout")
+
+    def test_reusable_invalid_raw_inputs_never_reach_checkout(self):
+        for field in ("base-sha", "head-sha", "tools-ref"):
+            for value in (None, "", "main", "A" * 40, "a" * 39):
+                with self.subTest(field=field, value=value):
+                    inputs = {"base-sha": self.base, "head-sha": self.head, "tools-ref": self.tools_sha}
+                    if value is None:
+                        inputs.pop(field)
+                    else:
+                        inputs[field] = value
+                    result = self.run_native(inputs=inputs)
+                    self.assertNotEqual(result["code"], 0)
+                    self.assertEqual(result["checkouts"], [], "raw call input fell back to native evidence")
+
+    def test_reusable_pinned_checker_remains_trusted_in_consumer_repository(self):
+        inputs = {"base-sha": self.base, "head-sha": self.head, "tools-ref": self.tools_sha}
+        result = self.run_native(inputs=inputs, workflow_sha="f" * 40,
+                                 event_patch=lambda github: github.update(repository="fixture/consumer"))
+        report = self.assert_report(result, 1, "finding")
+        self.assertEqual(report["checked_rules"], 1)
+        tool_checkout, = [item for item in result["checkouts"] if item["ref"] == self.tools_sha]
+        self.assertEqual(tool_checkout["repository"], "TogetherWeOwn/paperclip-ops")
+
+    def test_workflow_stays_unprivileged_and_read_only(self):
+        self.assertNotRegex(self.workflow, r"(?m)^  (?:pull_request_target|workflow_run):")
+        self.assertEqual(self.section(self.workflow, "permissions", 0), {"contents": "read"})
+        self.assertEqual(self.section(self.workflow, "permissions", 4), {"contents": "read"})
+        self.assertNotRegex(self.workflow, r"(?m)^\s+(?:secrets|secrets-inherit):")
+        self.put(self.caller, "package.json", json.dumps({"scripts": {
+            "docs": "touch generator-ran", "postinstall": "touch generator-ran"}}))
+        self.head = self.commit(self.caller)
+        result = self.run_native()
+        self.assert_report(result, 1, "finding")
+        self.assertFalse((result["caller"] / "generator-ran").exists())
 
 
 if __name__ == "__main__":

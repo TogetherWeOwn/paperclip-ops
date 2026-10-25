@@ -720,7 +720,7 @@ test("one company's failure does not stop the sweep for the companies after it",
 
   await assert.rejects(
     () => harness.runJob("dispatch-sweep", { trigger: "schedule" }),
-    { message: "dispatch-sweep-failed", code: "dispatch-sweep-failed" },
+    { message: "dispatch-sweep-failed", code: "dispatch-sweep-failed", failedCompanies: 1 },
   );
 
   assert.ok(harness.logs.some((l) => l.level === "error" && l.message.includes("company sweep failed")));

@@ -28,6 +28,9 @@ The Python entry point is
 `{"cases": [...]}`, a list of `(result_key, result_object)` pairs and a judgment
 object. Inputs are never mutated. The CLI reads immediate `*.json` files using
 filename stems as keys, excluding `_*.json`, other extensions and nested files.
+Readable file symlinks are included; dangling or unreadable eligible links reject
+the whole audit instead of silently reducing its evidence inventory. Directories,
+including directory symlinks, remain excluded.
 
 Cases have unique nonempty `id` values and a `defects` list. Defect IDs are unique
 within a case (not globally); `invalid` and `valid-other` are reserved. Locations

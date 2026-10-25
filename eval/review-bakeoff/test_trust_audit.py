@@ -311,6 +311,34 @@ class CommandLine(unittest.TestCase):
         repeated, _ = self.cli(judgments=self.judgments)
         self.assertEqual(completed.stdout, repeated.stdout)
 
+    def test_dangling_result_reference_rejects_the_whole_inventory(self):
+        # Keep the valid run: losing one reference must not return partial success.
+        (self.results / "lost.json").symlink_to(self.root / "missing-result.json")
+        self.assert_cli_error()
+
+    def test_readable_result_symlink_is_included_in_the_inventory(self):
+        saved = self.root / "saved.json"
+        saved.write_text(json.dumps(result([finding()])), encoding="utf-8")
+        (self.results / "linked.json").symlink_to(saved)
+        completed, body = self.cli()
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(body["dimensions"]["dataset_audit"]["value"],
+                         {"cases": 1, "results": 2, "failed_results": 0, "findings": 2})
+        self.assertEqual({item["id"] for item in body["queue"]["items"]},
+                         {"linked#0", "run#0"})
+
+    def test_directory_and_ineligible_links_remain_excluded(self):
+        nested = self.results / "nested.json"
+        nested.mkdir()
+        (nested / "bad.json").write_text("not JSON", encoding="utf-8")
+        (self.results / "directory.json").symlink_to(nested, target_is_directory=True)
+        for name in ("_private.json", "ignored.txt"):
+            (self.results / name).symlink_to(self.root / "missing-result.json")
+        completed, body = self.cli()
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(body["dimensions"]["dataset_audit"]["value"],
+                         {"cases": 1, "results": 1, "failed_results": 0, "findings": 1})
+
     def test_empty_results_directory_is_valid_but_missing_paths_are_errors(self):
         empty = self.root / "empty"
         empty.mkdir()

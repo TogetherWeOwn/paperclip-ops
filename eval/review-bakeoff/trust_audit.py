@@ -228,8 +228,11 @@ def main(argv: list[str]) -> int:
         judgments = _load(args.judgments) if args.judgments is not None else {}
         if not args.results.is_dir():
             raise ValueError("results path: expected an existing directory")
+        # Read eligible links even when their targets are lost: is_file() alone
+        # would silently omit them and report a successful partial inventory.
         results = [(path.stem, _load(path)) for path in sorted(args.results.iterdir())
-                   if path.suffix == ".json" and not path.name.startswith("_") and path.is_file()]
+                   if path.suffix == ".json" and not path.name.startswith("_")
+                   and (path.is_file() or (path.is_symlink() and not path.is_dir()))]
         report = audit(cases, results, judgments)
     except (OSError, ValueError, UnicodeError, RecursionError) as exc:
         print(json.dumps({"error": str(exc)}, sort_keys=True))

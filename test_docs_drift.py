@@ -271,6 +271,8 @@ class DocsWorkflow(unittest.TestCase):
         expression = value.strip().removeprefix("${{").removesuffix("}}").strip()
         if expression == "toJSON(inputs)":
             return json.dumps(contexts["inputs"])
+        if expression == "toJSON(github.event)":
+            return json.dumps(contexts["github"]["event"])
         # Evaluate only the string/boolean subset actually used here. Tokenize
         # fully so unsupported syntax fails instead of silently testing a stub.
         pattern = r"'[^']*'|(?:inputs|github|env)(?:\.[\w-]+)+|==|!=|&&|\|\||[()]|true|false"
@@ -288,6 +290,12 @@ class DocsWorkflow(unittest.TestCase):
                 rendered.append({"&&": "and", "||": "or", "true": "True", "false": "False"}.get(token, token))
         return eval(" ".join(rendered), {"__builtins__": {}})
 
+    def resolve(self, value, contexts):
+        if not isinstance(value, str) or "${{" not in value:
+            return str(value)
+        result = DocsWorkflow.expression(self, value, contexts)
+        return str(result).lower() if isinstance(result, bool) else str(result)
+
     def run_workflow(self, inputs, repository, event="pull_request"):
         contexts = {"inputs": inputs, "github": {"repository": repository, "event_name": event,
                     "sha": "4" * 40, "workflow_sha": "5" * 40,
@@ -295,18 +303,15 @@ class DocsWorkflow(unittest.TestCase):
                     "event": {"before": "3" * 40}}}
         if event == "pull_request":
             contexts["github"]["event"]["pull_request"] = {"base": {"sha": "1" * 40}, "head": {"sha": "2" * 40}}
-        env = {}
-        for name, value in self.job_env.items():
-            result = self.expression(value, contexts)
-            env[name] = str(result).lower() if isinstance(result, bool) else str(result)
+        env = {name: self.resolve(value, contexts) for name, value in self.job_env.items()}
         contexts["env"] = env
         validation = subprocess.run(["bash", "--noprofile", "--norc", "-c", self.validator],
                                     env={"PATH": os.environ["PATH"], **env}, cwd=ROOT,
                                     capture_output=True, text=True, timeout=10)
         condition = self.fields(self.checkout, 8).get("if", "true")
         pinned = bool(self.expression(condition, contexts))
-        checker = self.expression(self.fields(self.checker, 10)["CHECKER"], contexts)
-        ref = self.expression(self.fields(self.checkout, 10)["ref"], contexts)
+        checker = self.resolve(self.fields(self.checker, 10)["CHECKER"], contexts)
+        ref = self.resolve(self.fields(self.checkout, 10)["ref"], contexts)
         return validation, env, pinned, checker, ref
 
     def test_native_events_select_immutable_workflow_checker_without_call_pin(self):
@@ -353,6 +358,79 @@ class DocsWorkflow(unittest.TestCase):
                     validation, *_ = self.run_workflow(inputs, "TogetherWeOwn/paperclip-ops")
                     self.assertNotEqual(validation.returncode, 0, "empty call SHA fell through to healthy event evidence")
                     self.assertIn(name, validation.stderr)
+
+
+class DocsWorkflowHelper(unittest.TestCase):
+    """The fixture must accept ordinary workflow values without hiding syntax errors."""
+
+    def setUp(self):
+        self.helper = DocsWorkflow()
+        self.helper.job_env = {"TOOLS_SHA": "${{ github.workflow_sha }}"}
+        self.helper.validator = "true"
+        self.helper.checkout = ("        if: github.event_name == 'pull_request'\n"
+                                "          ref: ${{ env.TOOLS_SHA }}\n")
+        self.helper.checker = "          CHECKER: ${{ '../docs-drift-tools/scripts/quality-gates/docs_drift.py' }}\n"
+
+    def test_literal_env_checker_and_ref_are_not_expressions(self):
+        self.helper.job_env["STATIC_VALUE"] = "ordinary env scalar"
+        self.helper.checker = "          CHECKER: ../docs-drift-tools/scripts/quality-gates/docs_drift.py\n"
+        self.helper.checkout = "        if: true\n          ref: literal-ref\n"
+        validation, env, pinned, checker, ref = self.helper.run_workflow({}, "fixture/repo")
+        self.assertEqual(validation.returncode, 0, validation.stderr)
+        self.assertEqual(env["STATIC_VALUE"], "ordinary env scalar")
+        self.assertEqual(env["TOOLS_SHA"], "5" * 40)
+        self.assertTrue(pinned)
+        self.assertEqual(checker, "../docs-drift-tools/scripts/quality-gates/docs_drift.py")
+        self.assertEqual(ref, "literal-ref")
+
+    def test_expression_fields_and_bare_conditions_still_evaluate(self):
+        self.helper.checker = ("          CHECKER: ${{ github.repository == 'fixture/repo' && "
+                               "'../docs-drift-tools/scripts/quality-gates/docs_drift.py' || 'wrong' }}\n")
+        for event, want in [("pull_request", True), ("push", False)]:
+            with self.subTest(event=event):
+                validation, _, pinned, checker, ref = self.helper.run_workflow({}, "fixture/repo", event)
+                self.assertEqual(validation.returncode, 0, validation.stderr)
+                self.assertIs(pinned, want)
+                self.assertEqual(checker, "../docs-drift-tools/scripts/quality-gates/docs_drift.py")
+                self.assertEqual(ref, "5" * 40)
+
+    def test_raw_event_json_reaches_shell_as_one_value(self):
+        self.helper.job_env["RAW_EVENT"] = "${{ toJSON(github.event) }}"
+        self.helper.validator = 'printf \'%s\' "$RAW_EVENT"'
+        validation, env, *_ = self.helper.run_workflow({}, "fixture/repo")
+        self.assertEqual(validation.returncode, 0, validation.stderr)
+        self.assertEqual(validation.stdout, env["RAW_EVENT"])
+        self.assertEqual(json.loads(validation.stdout), {
+            "before": "3" * 40,
+            "pull_request": {"base": {"sha": "1" * 40}, "head": {"sha": "2" * 40}}})
+
+    def test_raw_event_json_preserves_empty_and_nested_untrusted_values(self):
+        for event in [{}, {"before": "", "after": None, "deleted": False,
+                          "extra": ["quotes'\"\n☃", "${{ inputs.tools-ref }}", "$(id)"]}]:
+            with self.subTest(event=event):
+                result = self.helper.expression("${{ toJSON(github.event) }}", {"github": {"event": event}})
+                self.assertEqual(json.loads(result), event)
+        inputs = {"base-sha": "", "tools-ref": "main"}
+        self.assertEqual(json.loads(self.helper.expression("${{ toJSON(inputs) }}", {"inputs": inputs})), inputs)
+
+    def test_unsupported_expressions_fail_in_every_evaluated_field(self):
+        for expression in ["toJSON(github)", "toJSON(github.event) || '{}'",
+                           "github.workflow_sha + 'bad'", "github.workflow_sha ; true",
+                           "steps.checkout.outputs.ref"]:
+            for field in ("job_env", "checker", "ref", "if"):
+                with self.subTest(expression=expression, field=field):
+                    value = "${{ " + expression + " }}"
+                    if field == "job_env":
+                        overrides = {"job_env": {"INVALID": value}}
+                    elif field == "checker":
+                        overrides = {"checker": "          CHECKER: " + value + "\n"}
+                    elif field == "ref":
+                        overrides = {"checkout": "          ref: " + value + "\n"}
+                    else:
+                        overrides = {"checkout": "        if: " + expression + "\n"}
+                    with patch.multiple(self.helper, **overrides):
+                        with self.assertRaisesRegex(AssertionError, "unsupported workflow expression"):
+                            self.helper.run_workflow({}, "fixture/repo")
 
 
 class NativeDocsWorkflow(unittest.TestCase):
@@ -419,11 +497,7 @@ class NativeDocsWorkflow(unittest.TestCase):
                           r"((?:" + " " * (indent + 2) + r"[^\n]*\n|\n)*)", block, re.M)
         return DocsWorkflow.fields(match[1], indent + 2) if match else {}
 
-    def resolve(self, value, contexts):
-        if not isinstance(value, str) or "${{" not in value:
-            return str(value)
-        result = DocsWorkflow.expression(self, value, contexts)
-        return str(result).lower() if isinstance(result, bool) else str(result)
+    resolve = DocsWorkflow.resolve
 
     def run_native(self, event="pull_request", *, fork=False, inputs=None,
                    workflow_sha=None, base=None, head=None, event_patch=None):

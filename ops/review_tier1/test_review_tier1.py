@@ -25,6 +25,7 @@ from deterministic import (
     identifiers,
     shared_identifiers,
 )
+from evidence_gate import gate_findings, normalize, verify
 from eval import cost_per_pr, score, shippable, wilson
 from schemas import (
     AC_EVIDENCE_SCHEMA,
@@ -305,6 +306,109 @@ class RelevantHunksTest(unittest.TestCase):
         text, truncated = relevant_hunks(files, "Set the `cron_line` and `unrelated_x` values.", 120)
         self.assertTrue(truncated)
         self.assertLessEqual(len(text), 120)
+
+
+GATE_FILES = {
+    "src/app.py": "import os\n\n\ndef push():\n    return   os.environ['X']\n",
+    "docs/run.md": "# Run\n",
+}
+
+
+def gate_read(path):
+    return GATE_FILES.get(path)
+
+
+class EvidenceGateTest(unittest.TestCase):
+    def test_valid_anchor_without_quote_passes(self):
+        ok, reason = verify({"file": "src/app.py", "line": 4}, gate_read)
+        self.assertEqual((ok, reason), (True, "verified"))
+
+    def test_quote_must_match_the_cited_line_not_a_neighbour(self):
+        quote = "return os.environ['X']"
+        ok, _ = verify({"file": "src/app.py", "line": 5, "evidence": quote}, gate_read)
+        self.assertTrue(ok)
+        # same quote against the adjacent line is a mismatch, not a pass
+        ok, reason = verify({"file": "src/app.py", "line": 4, "evidence": quote}, gate_read)
+        self.assertEqual((ok, reason), (False, "quote_mismatch"))
+
+    def test_quote_comparison_is_whitespace_normalized(self):
+        # file line 5 is `    return   os.environ['X']`; spacing must not matter
+        ok, _ = verify({"file": "src/app.py", "line": 5, "evidence": "\treturn os.environ['X']  "}, gate_read)
+        self.assertTrue(ok)
+        self.assertEqual(normalize("  a\tb\nc "), "a b c")
+
+    def test_quote_mismatch_is_withheld(self):
+        ok, reason = verify({"file": "src/app.py", "line": 5, "evidence": "return os.environ['Y']"}, gate_read)
+        self.assertEqual((ok, reason), (False, "quote_mismatch"))
+
+    def test_empty_quote_falls_back_to_anchor_only(self):
+        for quote in ("", "   ", None):
+            ok, reason = verify({"file": "src/app.py", "line": 4, "evidence": quote}, gate_read)
+            self.assertEqual((ok, reason), (True, "verified"), quote)
+
+    def test_wrong_line_is_withheld(self):
+        for line in (0, -1, 7, 99, "4", 4.0, True, None):
+            ok, reason = verify({"file": "src/app.py", "line": line}, gate_read)
+            self.assertEqual((ok, reason), (False, "bad_line"), line)
+
+    def test_missing_file_is_withheld(self):
+        ok, reason = verify({"file": "src/gone.py", "line": 1}, gate_read)
+        self.assertEqual((ok, reason), (False, "missing_file"))
+
+    def test_unresolvable_paths_are_withheld_not_read(self):
+        seen = []
+        for path in ("", "/etc/passwd", "../app.py", "src/../../x.py", None, 42):
+            ok, reason = verify({"file": path, "line": 1}, lambda p: seen.append(p) or "x\n")
+            self.assertEqual((ok, reason), (False, "missing_file"), path)
+        self.assertEqual(seen, [])
+
+    def test_non_string_file_content_is_withheld(self):
+        ok, reason = verify({"file": "src/app.py", "line": 1}, lambda p: b"bytes\n")
+        self.assertEqual((ok, reason), (False, "missing_file"))
+
+    def test_production_shape_aliases(self):
+        ok, _ = verify({"path": "src/app.py", "line": 5, "quote": "return os.environ['X']"}, gate_read)
+        self.assertTrue(ok)
+        ok, reason = verify({"path": "src/app.py", "line": 4, "quote": "return os.environ['X']"}, gate_read)
+        self.assertEqual((ok, reason), (False, "quote_mismatch"))
+
+    def test_malformed_finding_is_withheld(self):
+        ok, reason = verify("not-a-finding", gate_read)
+        self.assertEqual((ok, reason), (False, "malformed"))
+        ok, reason = verify(None, gate_read)
+        self.assertEqual((ok, reason), (False, "malformed"))
+
+    def test_gate_partitions_counts_and_lists_withheld(self):
+        findings = [
+            {"file": "src/app.py", "line": 4},
+            {"file": "src/app.py", "line": 99},
+            {"file": "src/gone.py", "line": 1},
+            {"file": "src/app.py", "line": 5, "evidence": "nope"},
+        ]
+        gated = gate_findings(findings, "abc123", gate_read)
+        self.assertEqual(gated["verified"], [findings[0]])
+        self.assertEqual(gated["refusal_count"], 3)
+        self.assertEqual(gated["total"], 4)
+        self.assertAlmostEqual(gated["refusal_rate"], 0.75)
+        self.assertEqual(gated["head"], "abc123")
+        reasons = [w["reason"] for w in gated["withheld"]]
+        self.assertEqual(reasons, ["bad_line", "missing_file", "quote_mismatch"])
+        self.assertEqual(len(gated["rationale"]), 3)
+        for entry, line in zip(gated["withheld"], gated["rationale"]):
+            self.assertIn("unverified, withheld", line)
+            self.assertIn(str(entry["line"]), line)
+            self.assertIn(entry["reason"], line)
+
+    def test_gate_on_empty_findings_has_zero_rate(self):
+        gated = gate_findings([], "abc123", gate_read)
+        self.assertEqual((gated["verified"], gated["withheld"]), ([], []))
+        self.assertEqual((gated["refusal_count"], gated["refusal_rate"]), (0, 0.0))
+        self.assertEqual(gated["rationale"], [])
+
+    def test_gate_does_not_mutate_input_findings(self):
+        findings = [{"file": "src/app.py", "line": 99}]
+        gate_findings(findings, "abc123", gate_read)
+        self.assertEqual(findings, [{"file": "src/app.py", "line": 99}])
 
 
 if __name__ == "__main__":

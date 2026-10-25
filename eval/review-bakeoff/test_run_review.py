@@ -159,5 +159,53 @@ class CodexArgs(unittest.TestCase):
             self.assertTrue(served and lane, label)
 
 
+class PublishGatedReview(unittest.TestCase):
+    FILES = {"a.ts": "one\ntwo\nthree\n"}
+
+    def read(self, path):
+        return self.FILES.get(path)
+
+    def review(self, *findings):
+        return {"score": 3, "summary": "s", "findings": list(findings),
+                "coverage": {"files_reviewed": ["a.ts"], "complete": True, "limitations": ""}}
+
+    def finding(self, **kw):
+        base = {"file": "a.ts", "line": 2, "severity": "major", "title": "t", "rationale": "r"}
+        base.update(kw)
+        return base
+
+    def test_verified_findings_publish_and_refusal_count_is_zero(self):
+        review = self.review(self.finding())
+        gate = rr.publish_gated_review(review, "deadbeef", self.read)
+        self.assertEqual(review["findings"], [self.finding()])
+        self.assertEqual(gate["refusal_count"], 0)
+        self.assertEqual(gate["refusal_rate"], 0.0)
+        self.assertEqual(gate["withheld"], [])
+        self.assertEqual(gate["head"], "deadbeef")
+
+    def test_unverifiable_findings_are_stripped_counted_and_listed(self):
+        good = self.finding()
+        bad_line = self.finding(line=99)
+        missing = self.finding(file="gone.ts")
+        review = self.review(good, bad_line, missing)
+        gate = rr.publish_gated_review(review, "deadbeef", self.read)
+        self.assertEqual(review["findings"], [good])
+        self.assertEqual(gate["total"], 3)
+        self.assertEqual(gate["refusal_count"], 2)
+        self.assertAlmostEqual(gate["refusal_rate"], 0.667, places=3)
+        self.assertEqual([w["reason"] for w in gate["withheld"]], ["bad_line", "missing_file"])
+        self.assertEqual(len(gate["rationale"]), 2)
+        for line in gate["rationale"]:
+            self.assertIn("unverified, withheld", line)
+
+    def test_rationale_text_is_never_treated_as_a_quote(self):
+        # rationale "three" must not match line 2 ("two") nor rescue the finding;
+        # with no evidence/quote key the anchor alone decides.
+        review = self.review(self.finding(line=2, rationale="three"))
+        gate = rr.publish_gated_review(review, "deadbeef", self.read)
+        self.assertEqual(len(review["findings"]), 1)
+        self.assertEqual(gate["refusal_count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

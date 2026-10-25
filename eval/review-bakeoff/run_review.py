@@ -26,6 +26,10 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ops" / "review_tier1"))
+import evidence_gate
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROXY_BASE = "http://cliproxy:8317/v1"
@@ -163,6 +167,27 @@ def parse_review(text: str) -> tuple[dict | None, str | None]:
     return obj, None
 
 
+def publish_gated_review(review: dict, head_sha: str, read_file) -> dict:
+    """Strip findings that do not resolve at the exact reviewed head.
+
+    Every published finding must cite a file:line readable at `head_sha`;
+    any quoted evidence must appear on the cited line (whitespace-normalized).
+    Withheld findings are not published: they are counted and listed in the
+    returned record's rationale as "unverified, withheld". The refusal count
+    and rate are the review's citation-refusal metric.
+    """
+    gated = evidence_gate.gate_findings(review.get("findings", []), head_sha, read_file)
+    review["findings"] = gated["verified"]
+    return {
+        "head": gated["head"],
+        "total": gated["total"],
+        "refusal_count": gated["refusal_count"],
+        "refusal_rate": gated["refusal_rate"],
+        "withheld": gated["withheld"],
+        "rationale": gated["rationale"],
+    }
+
+
 def prepare_worktree(repo: str, case: dict, dest: str) -> None:
     """Detached worktree whose HEAD is the commit under review.
 
@@ -212,11 +237,19 @@ def run_case(repo: str, case: dict, model: str, effort: str, key_env: str, timeo
         events = parse_events(stdout)
         text = open(last, encoding="utf-8").read() if os.path.exists(last) else ""
         review, parse_error = parse_review(text) if text else (None, "no final message")
+        if review is not None:
+            # Planted cases commit a new HEAD in the worktree, so the reviewed
+            # head is re-read here, never taken from the case record.
+            head = sh("git", "rev-parse", "HEAD", cwd=wt).strip()
+            gate = publish_gated_review(review, head, lambda path: read_git_file(wt, path))
+        else:
+            gate = None
         return {
             "case_id": case["id"], "model": model, "effort": effort,
             "latency_s": latency, "exit_code": code, "timed_out": timed_out,
             "usage": events["usage"], "errors": events["errors"],
             "prompt_chars": len(prompt), "review": review, "parse_error": parse_error,
+            "evidence_gate": gate,
             "raw_final": text if review is None else None,
         }
     finally:
@@ -249,8 +282,9 @@ def main(argv: list[str]) -> int:
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(result, fh, indent=2)
     n = len(result["review"]["findings"]) if result["review"] else None
+    w = (result["evidence_gate"] or {}).get("refusal_count")
     print(f"{args.case_id} {args.model} score={result['review']['score'] if result['review'] else None} "
-          f"findings={n} latency={result['latency_s']}s tokens={result['usage']} -> {path}")
+          f"findings={n} withheld={w} latency={result['latency_s']}s tokens={result['usage']} -> {path}")
     return 0 if result["review"] else 1
 
 

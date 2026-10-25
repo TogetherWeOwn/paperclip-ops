@@ -72,7 +72,12 @@ python3 -B templates/org-github/ax-metrics/ax_metrics.py --from-file fixture.jso
 ```
 
 Identical fixtures produce identical JSON, independent of credentials. The
-existing workflow template is unchanged and is not activated by this contract.
+bundled workflow summary shows the green rate's validity, completeness and
+reason code, plus conclusive-versus-merged and sampled PR counts when available.
+Thus the same numeric fraction with partial coverage is visibly different from
+a complete result; withheld/no-evidence results retain their unknown status.
+Cost and card values remain redacted as `see log (internal)`. The template is
+not activated by this contract.
 Full reports can contain private costs/card data: retain them in private
 artifacts, never public PRs. Revert the source change to roll back schema 3;
 no stored state is migrated. This sanitized repository is not a live-host

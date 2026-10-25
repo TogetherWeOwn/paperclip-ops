@@ -8,6 +8,7 @@ side effects were never invoked.
 import collections
 import contextlib
 import io
+import os
 import sys
 import tempfile
 import types
@@ -89,6 +90,64 @@ def denied_host(reason='load5'):
     stub = types.ModuleType('host_ok')
     stub.host_ok = lambda: (False, reason)
     return stub
+
+
+def memcg_fixture(directory, limit=100, anon=0, psi=0.0):
+    """Write a synthetic cgroup v2 directory; `limit` and `anon` are in units of the limit."""
+    files = {'memory.max': str(limit), 'memory.current': str(limit),
+             'memory.pressure': f'some avg10=0 avg60={psi} avg300=0 total=0\nfull avg10=0 avg60={psi} avg300=0 total=0\n',
+             'memory.stat': f'anon {anon}\nfile 99\nshmem 0\nslab_unreclaimable 0\nkernel_stack 0\n'}
+    for name, text in files.items():
+        (Path(directory) / name).write_text(text)
+
+
+class MemcgGate(unittest.TestCase):
+    DISKS = {'/': usage_at(0.5), '/home': usage_at(0.5)}
+
+    def gate(self, env, **fixture):
+        with tempfile.TemporaryDirectory() as tmp:
+            memcg_fixture(tmp, **fixture)
+            env = {k: (tmp if v == '<dir>' else v) for k, v in env.items()}
+            with mock.patch.dict(os.environ, env, clear=False):
+                return run_gate(HEALTHY, self.DISKS)[:2]
+
+    def test_unset_directory_keeps_the_gate_unchanged(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('PAPERCLIP_MEMCG_DIR', None)
+            self.assertEqual(run_gate(HEALTHY, self.DISKS)[:2], (True, 'ok'))
+
+    def test_enforce_holds_on_unreclaimable_memory(self):
+        self.assertEqual(self.gate({'PAPERCLIP_MEMCG_DIR': '<dir>'}, anon=70), (False, 'memcg_unreclaimable'))
+
+    def test_page_cache_filling_the_cap_does_not_hold(self):
+        # memory.current == memory.max with a small anon share is the normal busy-container state.
+        self.assertEqual(self.gate({'PAPERCLIP_MEMCG_DIR': '<dir>'}, anon=30), (True, 'ok'))
+
+    def test_enforce_holds_on_cgroup_memory_stalls(self):
+        self.assertEqual(self.gate({'PAPERCLIP_MEMCG_DIR': '<dir>'}, anon=10, psi=9.0), (False, 'memcg_psi'))
+
+    def test_shadow_reports_but_never_holds(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result = self.gate({'PAPERCLIP_MEMCG_DIR': '<dir>', 'PAPERCLIP_MEMCG_MODE': 'shadow'}, anon=70)
+        self.assertEqual(result, (True, 'ok'))
+        self.assertIn('memcg_unreclaimable', err.getvalue())
+
+    def test_shadow_reports_cgroup_memory_stalls_without_holding(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result = self.gate({'PAPERCLIP_MEMCG_DIR': '<dir>', 'PAPERCLIP_MEMCG_MODE': 'shadow'}, anon=10, psi=9.0)
+        self.assertEqual(result, (True, 'ok'))
+        self.assertIn('memcg_psi', err.getvalue())
+
+    def test_unreadable_directory_holds_when_enforcing_and_passes_when_shadowing(self):
+        with mock.patch.dict(os.environ, {'PAPERCLIP_MEMCG_DIR': '/nonexistent-cgroup'}):
+            ok, why, _ = run_gate(HEALTHY, self.DISKS)
+        self.assertEqual(ok, False)
+        self.assertTrue(why.startswith('memcg unreadable'), why)
+        with mock.patch.dict(os.environ, {'PAPERCLIP_MEMCG_DIR': '/nonexistent-cgroup', 'PAPERCLIP_MEMCG_MODE': 'shadow'}), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(run_gate(HEALTHY, self.DISKS)[:2], (True, 'ok'))
 
 
 class GateVerdict(unittest.TestCase):

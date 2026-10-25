@@ -59,6 +59,49 @@ const ISSUE_PAGE_LIMIT = 1000;
  */
 const TERMINAL = new Set(["done", "cancelled"]);
 
+// Evidence only, never retry authority. SDK JSON-RPC codes and Node I/O codes
+// have defined meanings; arbitrary messages, names and nested causes do not.
+const FAILURE_CODES = new Map([
+  [-32001, ["policy", "capability-denied"]],
+  [-32005, ["policy", "invocation-scope-denied"]],
+  [-32006, ["policy", "cross-tenant-config"]],
+  [-32000, ["transport", "worker-unavailable"]],
+  [-32003, ["transport", "rpc-timeout"]],
+  ...["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE", "ENOTFOUND", "EAI_AGAIN"].map(
+    (code) => [code, ["transport", code]],
+  ),
+  ...["ENOENT", "EACCES", "EPERM", "ENOSPC", "EIO", "ENOTDIR", "EISDIR"].map(
+    (code) => [code, ["environment", code]],
+  ),
+]);
+
+function failureDiagnostic(error) {
+  let code;
+  try {
+    code = error && typeof error === "object" ? error.code : undefined;
+  } catch {
+    // Even a throwing accessor is unknown, not permission to expose the cause.
+  }
+  const [family, errorCode] = FAILURE_CODES.get(code) ?? ["unknown", "unknown"];
+  return { family, errorCode };
+}
+
+class SweepStageError extends Error {
+  constructor(stage, error) {
+    super("dispatch-company-failed");
+    this.stage = stage;
+    this.diagnostic = failureDiagnostic(error);
+  }
+}
+
+async function atStage(stage, operation) {
+  try {
+    return await operation();
+  } catch (error) {
+    throw new SweepStageError(stage, error);
+  }
+}
+
 const readConfig = async (ctx, companyId) => {
   const raw = (await ctx.config.get(companyId)) ?? {};
   return {
@@ -162,10 +205,12 @@ async function wakePicks(ctx, companyId, picks, jobRunId) {
 
 /** Sweep one company. Returns the firing summary, or null if nothing was read. */
 async function sweepCompany(ctx, companyId, job) {
-  const config = await readConfig(ctx, companyId);
+  const config = await atStage("config-read", () => readConfig(ctx, companyId));
   const notes = [];
 
-  const issues = await ctx.issues.list({ companyId, limit: ISSUE_PAGE_LIMIT });
+  const issues = await atStage("issues-read", () =>
+    ctx.issues.list({ companyId, limit: ISSUE_PAGE_LIMIT }),
+  );
   if (issues.length >= ISSUE_PAGE_LIMIT) {
     // Never silently truncated. A capped read that reports as a full read is
     // the same class of defect as the 88% undercount this design was corrected
@@ -230,12 +275,12 @@ async function sweepCompany(ctx, companyId, job) {
     ...live.filter((issue) => !issue.assigneeAgentId).map((issue) => ({ issue })),
   ];
 
-  const selection = selectDispatch(population, {
+  const selection = await atStage("selection", () => selectDispatch(population, {
     idleMinutes: config.idleMinutes,
     maxWakesPerFiring: config.maxWakesPerFiring,
     focusProjectIds: config.focusProjectIds,
     now: Date.parse(job.scheduledAt) || Date.now(),
-  });
+  }));
   selection.routingGap = routingGap;
 
   const wakeOutcomes = config.wakeEnabled
@@ -248,13 +293,17 @@ async function sweepCompany(ctx, companyId, job) {
     );
   }
 
-  const summary = summariseFiring(companyId, selection, wakeOutcomes);
-  await emitMetrics(ctx, { companyId, summary, wakeEnabled: config.wakeEnabled });
+  const summary = await atStage("summary", () => summariseFiring(companyId, selection, wakeOutcomes));
+  await atStage("metrics-write", async () => {
+    await emitMetrics(ctx, { companyId, summary, wakeEnabled: config.wakeEnabled });
+  });
 
-  const previous = await ctx.state.get(stateKey(companyId));
+  const previous = await atStage("state-read", () => ctx.state.get(stateKey(companyId)));
   if (hasStateChanged(previous, summary)) {
-    await logStateChange(ctx, { companyId, summary, wakeEnabled: config.wakeEnabled, notes });
-    await ctx.state.set(stateKey(companyId), summary);
+    await atStage("activity-write", () =>
+      logStateChange(ctx, { companyId, summary, wakeEnabled: config.wakeEnabled, notes }),
+    );
+    await atStage("state-write", () => ctx.state.set(stateKey(companyId), summary));
   }
 
   return { summary, notes };
@@ -264,19 +313,30 @@ export const plugin = definePlugin({
   async setup(ctx) {
     ctx.jobs.register("dispatch-sweep", async (job) => {
       const companies = await ctx.companies.list({});
+      let failedCompanies = 0;
 
       for (const company of companies) {
         try {
           await sweepCompany(ctx, company.id, job);
         } catch (error) {
-          // One company's failure must not cancel the others. A sweep that
-          // aborts on the first bad company would silently stop reporting for
-          // every company after it in the list.
+          // One company's failure must not cancel the others. Settle every
+          // company, then reject: isolation must not turn a failed sweep into
+          // a successful native job. Never include raw host errors.
+          failedCompanies += 1;
           ctx.logger.error("dispatch: company sweep failed", {
             companyId: company.id,
-            error: error instanceof Error ? error.message : String(error),
+            code: "dispatch-company-failed",
+            stage: error instanceof SweepStageError ? error.stage : "company-sweep",
+            ...(error instanceof SweepStageError ? error.diagnostic : failureDiagnostic(error)),
           });
         }
+      }
+
+      if (failedCompanies > 0) {
+        const error = new Error("dispatch-sweep-failed");
+        error.code = "dispatch-sweep-failed";
+        error.failedCompanies = failedCompanies;
+        throw error;
       }
     });
   },

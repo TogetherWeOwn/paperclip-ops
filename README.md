@@ -64,6 +64,10 @@ For the external, alert-only workspace sync-back size observer, see the
 [byte measurement and alert contract](docs/workspace-sync-back-signal.md).
 It does not instrument transport or authorize host installation.
 
+For native skill versions, reusable examples and isolated pinned-version tests,
+see the [versioned skill fixture procedure](docs/versioned-skill-fixtures.md).
+It adds no runtime registry, host automation or skill-assignment authority.
+
 | Tool |
 | --- |
 | `public_snapshot_test_support.py` (test-only private-artifact boundary; not a runtime policy or operator command) |
@@ -143,12 +147,27 @@ It does not instrument transport or authorize host installation.
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
 
+## Native delivery workflow
+
+Use the [single-doer delivery contract](docs/single-doer-delivery.md) for reusable
+planner/builder fields, deterministic defect-routing decisions, and a
+revision-linked multi-repository manifest. These are native task/document
+conventions, not an automatic dispatcher or a production ownership catalog.
+
 ## Productivity reconcilers
 
 For confirmed mutation counts, safe CLI modes, versioned JSON summaries and an
 offline verification command, see [Reconciler outcomes](docs/reconciler-outcomes.md).
 The source contract does not imply runtime installation; flow guard's existing
 no-flag invocation is mutating.
+
+## Task authoring
+
+Use the [acceptance criteria and anti-goals contract](docs/task-scope.md) for
+implementation task descriptions. It includes a copy-ready template, verifiable
+milestones for oversized work, and an adoption fragment for an existing company
+adapter. These are native-field authoring guidelines, not an installed skill or
+a new admission gate; source publication does not establish live adoption.
 
 ## Verification
 

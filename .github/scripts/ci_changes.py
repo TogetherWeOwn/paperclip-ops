@@ -166,6 +166,7 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
     ),
     "dispatch": (
         "plugins/dispatch/",
+        "test_dispatch_sweep_failure_visibility.py",
     ),
     "cliproxy": (
         "plugins/cliproxy-insight/",

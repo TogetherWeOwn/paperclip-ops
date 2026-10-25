@@ -1357,7 +1357,7 @@ jobs:
       # fast and they pin the gates this repo inherits. Gate enforcement
       # inside CI (a gates workflow) is a separate follow-up batch.
       - name: quality-gate helper suites
-        run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target
+        run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target test_docs_drift
 
       # case_6f2e8a41. Deterministic test-missing gate suites: the unit
       # contract (wider source suffixes, deleted-file handling, vacuity
@@ -1570,6 +1570,7 @@ jobs:
           (cd ops/owner-guard && python3 -m unittest -v test_owner_guard_state)
           (cd ops/pr-hygiene && python3 -m unittest -v test_owner_match)
           (cd ops/lib && python3 -m unittest -v test_live_run_guard)
+          (cd ops/lib && python3 -m unittest -v test_memcg_pressure)
 
       # Serena navigation guards must execute here: CI's parse-only tier
       # never reaches the suite in the full local verify-fast tier. Reuse the
@@ -1601,7 +1602,7 @@ jobs:
       # Reconciler holds and hide-noop predicates, backlog-promoter, board-jobs, orphan-PRs and focus-gate fail-closed timeouts, PR-supply card text, flow-guard stages and host-pressure gate fail-closed contract. Offline: temp files and stubs.
       - name: review reconciler and ops guard suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_pr_supply_listing_bound test_pr_supply_tick_health test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_resolve_outdated_incomplete_evidence test_stuck_run_reaper test_stuck_run_reaper_report test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_flake_ledger_report test_review_rebase_carry test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pr_controller_notify_guard test_pr_controller_notify_wiring test_pr_controller_ci test_pr_controller_ci_ops test_pr_controller_ci_host test_pr_controller_ci_patch test_pipeline_stall_watch) && (cd ops/paperclip && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -p 'test_focus*.py')
+        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_pr_supply_listing_bound test_pr_supply_tick_health test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_resolve_outdated_incomplete_evidence test_stuck_run_reaper test_stuck_run_reaper_report test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_flake_ledger_report test_review_rebase_carry test_review_rebase_carry_flow test_review_rebase_carry_base_binding test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pr_controller_notify_guard test_pr_controller_notify_wiring test_pr_controller_ci test_pr_controller_ci_ops test_pr_controller_ci_host test_pr_controller_ci_patch test_pipeline_stall_watch) && (cd ops/paperclip && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -p 'test_focus*.py')
 
       # sdlc-review-carry. Merge-queue 5/5 carry gate logic: patch
       # normalization/digest, PR-bound latest-review selection, hint-file
@@ -5353,6 +5354,11 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.dispatch == 'true'
         working-directory: plugins/dispatch
         run: npm test
+
+      - name: Dispatch sweep failure visibility acceptance
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.dispatch == 'true'
+        working-directory: .
+        run: python3 -B -m unittest -v test_dispatch_sweep_failure_visibility
 
       # The wake action is bought with a week of report-only evidence, not with
       # an argument (case_68ec5539 Q1, retirement plan step 3). A default of `true`

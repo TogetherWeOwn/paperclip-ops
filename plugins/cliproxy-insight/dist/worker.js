@@ -635,14 +635,14 @@ function createPlugin() {
             }
           }
         },
-        async (params) => {
+        async (params, runCtx) => {
           const input = asRecord(params);
           const companyId = typeof input.companyId === "string" ? input.companyId : "";
           const windowSeconds = input.windowSeconds === void 0 ? 3600 : input.windowSeconds;
           if (!companyId || !Number.isInteger(windowSeconds) || typeof windowSeconds !== "number" || windowSeconds < 60 || windowSeconds > 86400 || Object.keys(input).some((name) => name !== "companyId" && name !== "windowSeconds")) {
             return { error: "invalid_evidence_request", data: toolRejection("invalid_evidence_request") };
           }
-          if (!isConfiguredCompany(companyId)) {
+          if (runCtx.companyId !== companyId || !isConfiguredCompany(companyId)) {
             return { error: "company is not configured", data: toolRejection("company is not configured") };
           }
           try {

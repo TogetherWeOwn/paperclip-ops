@@ -775,7 +775,7 @@ export function createPlugin() {
             },
           },
         },
-        async (params) => {
+        async (params, runCtx) => {
           const input = asRecord(params);
           const companyId = typeof input.companyId === "string" ? input.companyId : "";
           const windowSeconds = input.windowSeconds === undefined ? 3600 : input.windowSeconds;
@@ -784,7 +784,7 @@ export function createPlugin() {
               Object.keys(input).some((name) => name !== "companyId" && name !== "windowSeconds")) {
             return { error: "invalid_evidence_request", data: toolRejection("invalid_evidence_request") };
           }
-          if (!isConfiguredCompany(companyId)) {
+          if (runCtx.companyId !== companyId || !isConfiguredCompany(companyId)) {
             return { error: "company is not configured", data: toolRejection("company is not configured") };
           }
           try {

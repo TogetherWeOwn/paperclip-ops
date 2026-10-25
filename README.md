@@ -165,6 +165,13 @@ offline verification command, see [Reconciler outcomes](docs/reconciler-outcomes
 The source contract does not imply runtime installation; flow guard's existing
 no-flag invocation is mutating.
 
+## Grounded answers
+
+See the proposed [evidence-grounding recipe](docs/grounded-answers.md) for factual
+claims, incident history, compact code maps and explicit abstention. It is generic
+documentation, not an installed instruction, automatic gate or measured live
+improvement. Adoption remains a separately authorized instruction experiment.
+
 ## Task authoring
 
 Use the [acceptance criteria and anti-goals contract](docs/task-scope.md) for

@@ -54,7 +54,16 @@ class VerdictTest(unittest.TestCase):
         deny_line = int(mp.DENY_RATIO * LIMIT)
         self.assertEqual(mp.evaluate_memcg(sample(anon=deny_line - 7 * GIB))["workersFit"], 2)
         self.assertEqual(mp.evaluate_memcg(sample(anon=deny_line + GIB))["workersFit"], 0)
-        self.assertEqual(mp.evaluate_memcg(sample(anon=deny_line - 7 * GIB), per_worker_bytes=GIB)["workersFit"], 7)
+        self.assertEqual(mp.evaluate_memcg(sample(anon=deny_line - 7 * GIB), per_worker_bytes=GIB)["workersFit"], 6)
+
+    def test_worker_budget_stays_strictly_below_the_denial_line(self):
+        for offset, expected in ((-1, 3), (0, 2), (1, 2)):
+            with self.subTest(offset=offset):
+                measured = sample(anon=15 * GIB + offset)
+                fit = mp.evaluate_memcg(measured)["workersFit"]
+                self.assertEqual(fit, expected)
+                self.assertTrue(mp.evaluate_memcg({**measured, "anon": measured["anon"] + fit * 3 * GIB})["allowed"])
+                self.assertFalse(mp.evaluate_memcg({**measured, "anon": measured["anon"] + (fit + 1) * 3 * GIB})["allowed"])
 
     def test_psi_hold_advertises_no_workers(self):
         verdict = mp.evaluate_memcg(sample(anon=GIB, psi=9.0))
@@ -124,7 +133,7 @@ class CliTest(unittest.TestCase):
 
     def test_per_worker_override_and_usage_errors(self):
         code, out = self.run_cli(["--per-worker-gib", "1"], anon=GIB)
-        self.assertEqual((code, json.loads(out)["workersFit"]), (0, 23))
+        self.assertEqual((code, json.loads(out)["workersFit"]), (0, 22))
         with contextlib.redirect_stderr(io.StringIO()):
             for argv in (["--bogus"], ["--per-worker-gib"], ["--per-worker-gib", "0"], ["--per-worker-gib", "inf"]):
                 self.assertEqual(mp.main(argv), 2)

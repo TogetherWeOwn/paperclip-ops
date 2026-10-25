@@ -127,7 +127,7 @@ def evaluate_memcg(sample: Any, per_worker_bytes: int = PER_WORKER_BYTES) -> dic
     headroom = int(DENY_RATIO * limit) - unreclaimable
     reason = ("memcg_psi" if psi > PSI_FULL_MAX else
               "memcg_unreclaimable" if ratio >= DENY_RATIO else "headroom")
-    fit = max(0, headroom) // per_worker_bytes if reason == "headroom" else 0
+    fit = max(0, headroom - 1) // per_worker_bytes if reason == "headroom" else 0
     return {"allowed": reason == "headroom", "reason": reason, "unreclaimable": unreclaimable,
             "ratio": round(ratio, 4), "workersFit": fit}
 

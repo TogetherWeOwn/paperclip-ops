@@ -8,7 +8,8 @@ cannot be the signal: it includes page cache and sits near `memory.max` on a hea
 Signal (`ops/lib/memcg_pressure.py`): `(anon + shmem + slab_unreclaimable + kernel_stack) / memory.max`
 held at 0.60 or more, or cgroup `memory.pressure` full avg60 above 5. Unreadable telemetry fails closed.
 `python3 ops/lib/memcg_pressure.py` prints the verdict and how many 3 GiB test trees still fit
-(`workersFit`, a memory budget that is 0 whenever the verdict is a hold); size local `--workers` / `PW_WORKERS` from it. Exit 0 allowed, 1 held, 2 unreadable.
+(`workersFit`, a memory budget that is 0 whenever the verdict is a hold); size local `--workers` / `PW_WORKERS` from it. Workers must stay strictly below the denial line: at 15 GiB unreclaimable
+of a 40 GiB cap, two 3 GiB workers fit, not three. Exit 0 allowed, 1 held, 2 unreadable.
 
 Consumers: `ops/productivity/host_ok.py` (wake-producing reconcilers) reads the gate when
 `PAPERCLIP_MEMCG_DIR` is set. Any other pacer that already owns admission can import

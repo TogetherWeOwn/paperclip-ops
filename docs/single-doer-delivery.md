@@ -20,9 +20,9 @@ in this public repository.
 ## Delivery contract
 - Service and canonical repository: <service>; <owner/repository>
 - Delivery owner: <one native assigneeAgentId OR assigneeUserId, never both>
-- Assignment evidence: <existing delivery card OR authoritative metadata source>
+- Assignment evidence: <existing task/PR ownership OR explicit authorized planner assignment OR verified catalog entry>
 - Ownership metadata revision: <immutable revision, or not applicable with reason>
-- Routing result and reason: <existing_delivery | unique_owner | hold>; <evidence>
+- Routing result and reason: <existing_delivery | planner_assignment | unique_owner | hold>; <evidence>
 - Existing owning card: <link or none after duplicate check>
 - Decision-changing questions: <none, or question + evidence + recommendation>
 - Prerequisites: <native blockedByIssueIds, or []>
@@ -31,8 +31,9 @@ in this public repository.
 
 Do not infer a delivery owner from a role title, project lead, GitHub author, or
 repository name. A service's code-owning team and a task's named delivery doer
-are distinct: metadata must explicitly select one eligible doer, not merely name
-a team. Preserve the doer through implementation, review fixes, replies, and
+are distinct: for catalog-based routing, metadata must explicitly select one
+eligible doer, not merely name a team. Preserve the doer through implementation,
+review fixes, replies, and
 delivery. Reviewers and authorized host executors retain their separate roles
 and permission boundaries.
 
@@ -45,10 +46,19 @@ router or mutate another agent's running task.
 | --- | --- | --- |
 | 1 | Exactly one explicitly linked active delivery card owns the defective change and has one native assignee | `existing_delivery`: retain that card and assignee; no duplicate task or reassignment |
 | 2 | More than one possible owning card, a missing assignee, or a closed/cancelled linked card | `hold`: resolve lifecycle/ownership ambiguity before creating or reopening work |
-| 3 | No existing owning card; authoritative revision-pinned service/repository metadata has exactly one matching eligible delivery owner | `unique_owner`: create one assigned defect task through the native API |
-| 4 | Metadata is missing, stale, ambiguous, or identifies only a team or an ineligible owner | `hold`: record the unresolved lookup and seek the specific missing evidence; do not guess or fan out |
+| 3 | No existing owning card; the designated work-supply planner has established an explicit authorized assignment on the actual task | `planner_assignment`: retain that native assignment and its evidence; do not create another task |
+| 4 | No existing owning card or explicit planner assignment; verified revision-pinned service/repository metadata has exactly one matching eligible delivery owner | `unique_owner`: the designated work-supply planner creates one assigned defect task through the native API |
+| 5 | Metadata is missing, stale, ambiguous, or identifies only a team or an ineligible owner | `hold`: the designated work-supply planner must establish the assignment on the actual task; do not guess or fan out |
 
-For step 3, use the canonical service and full repository identity from the
+Preserve existing native task and PR ownership. Only the designated work-supply
+planner establishes assignments for unmapped new services or defects; a role
+label is not assignment evidence. A failed lookup does not prove no catalog
+exists. Do not build a duplicate registry or reroute a running sibling. Keep live
+new-defect routing and canonical-catalog integration **UNVERIFIED** until a
+revision-bound source or explicit authorized native assignment is evidenced.
+Planner assignment does not itself prove catalog integration or delivery.
+
+For step 4, use the canonical service and full repository identity from the
 report and catalog. A repository match must not override a conflicting service
 match. Use path rules or specificity precedence only if the authoritative
 metadata explicitly defines them; do not invent a longest-prefix tie-breaker.
@@ -137,8 +147,9 @@ the baseline before changing records, then apply the same measurements after:
 - Tasks with a filled contract and revision-linked manifest: count / sampled tasks.
 - Existing-delivery defects retaining the same owning card and doer: count /
   observed existing-delivery defects.
-- New-service defects routed from unique authoritative mappings: count /
-  observed new-service defects; report held cases separately with reasons.
+- New-service defects: record separate counts for verified catalog mappings,
+  explicit authorized planner assignments, and held cases with reasons, over all
+  observed new-service defects. A planner assignment is not catalog integration.
 - Real repository slices with complete verification/delivery/rollback evidence:
   count / actual slices, not planned or synthetic slices.
 

@@ -15,6 +15,7 @@ import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
 import type { PluginContext, PluginJobContext } from "@paperclipai/plugin-sdk";
 
 import { validateSecretRefShape } from "./config/secret-ref.js";
+import { collectorEvidence } from "./collector-evidence.js";
 import {
   DEFAULT_LANE_FILES,
   JOB_KEYS,
@@ -757,6 +758,54 @@ export function createPlugin() {
           await ctx.metrics.write("cliproxy_insight.poll_ok", 1, { companyId });
         }
       };
+
+      // ---- scoped aggregate evidence (no producer strings) -------------
+      ctx.tools.register(
+        TOOL_NAMES.getCollectorEvidence,
+        {
+          displayName: "Get collector evidence",
+          description: "Read bounded aggregate snapshot evidence without raw provider or lane records.",
+          parametersSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["companyId"],
+            properties: {
+              companyId: { type: "string", minLength: 1 },
+              windowSeconds: { type: "integer", minimum: 60, maximum: 86400, default: 3600 },
+            },
+          },
+        },
+        async (params) => {
+          const input = asRecord(params);
+          const companyId = typeof input.companyId === "string" ? input.companyId : "";
+          const windowSeconds = input.windowSeconds === undefined ? 3600 : input.windowSeconds;
+          if (!companyId || !Number.isInteger(windowSeconds) ||
+              typeof windowSeconds !== "number" || windowSeconds < 60 || windowSeconds > 86400 ||
+              Object.keys(input).some((name) => name !== "companyId" && name !== "windowSeconds")) {
+            return { error: "invalid_evidence_request", data: toolRejection("invalid_evidence_request") };
+          }
+          if (!isConfiguredCompany(companyId)) {
+            return { error: "company is not configured", data: toolRejection("company is not configured") };
+          }
+          try {
+            const config = resolveConfig(await ctx.config.get(companyId));
+            if (!isConfiguredCompany(companyId)) {
+              return { error: "company is not configured", data: toolRejection("company is not configured") };
+            }
+            const data = await collectorEvidence(
+              (stateKey) => ctx.state.get(key(companyId, stateKey)),
+              companyId, windowSeconds, Date.now(), config,
+            );
+            if (!isConfiguredCompany(companyId)) {
+              return { error: "company is not configured", data: toolRejection("company is not configured") };
+            }
+            return { data };
+          } catch {
+            // State/config errors can contain identities and paths too.
+            return { error: "evidence_unavailable", data: toolRejection("evidence_unavailable") };
+          }
+        },
+      );
 
       // ---- agent tool: get_provider_usage -----------------------------
       ctx.tools.register(

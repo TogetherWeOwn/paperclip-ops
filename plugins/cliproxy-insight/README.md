@@ -17,6 +17,40 @@ Built per case_22968ca3 against dispatch (`wakeEnabled`) and model-selection
 
 ---
 
+## Unreleased: counts-only collector evidence
+
+`get_collector_evidence` is a separate read-only surface for callers that must
+not receive the broad `get_provider_usage` payload. It accepts the configured
+`companyId` and an optional integer `windowSeconds` (60–86400, default 3600).
+The manifest adds no capability, route, job, network destination or secret read.
+Registration in source is not a deployed tool grant; existing installation and
+polling holds above remain in force.
+
+The response allowlists plugin identity/version, generation time, three resolved
+non-secret settings, and aggregate current-snapshot counts/JSON byte lengths.
+It returns no provider names, lane names, accounts, producer records, reason
+strings, URLs, paths or secret references. Reads are bounded to 64 indexed
+providers, 32 indexed lanes and one model snapshot; oversized/malformed indexes
+fail closed rather than silently truncating. Unknown companies and a changed
+single-company binding are refused. Read errors return bounded error codes in
+object-valued `data`, never an underlying error message.
+
+The window selects current snapshots by their worker `polledAt`, not diagnostic
+or request events. Bytes mean UTF-8 serialized JSON snapshot values, excluding
+state keys and storage overhead. Missing indexes remain `null`; missing values,
+invalid timestamps and snapshots outside the window are counted separately.
+No cooldown/audit history is read, rewritten or pruned, and control counters
+are neither sampled nor changed.
+
+Every receipt is explicitly **partial**: immutable deployed artifact, installed
+lifecycle, diagnostic sampling/redaction/retention, diagnostic input/events,
+self-origin drops and redacted-field counts remain `null` because this source
+cannot observe them. A snapshot count is not a traffic count, and a running
+worker version is not proof of the installed artifact. This surface alone does
+not qualify a live before/after baseline or establish a repaired MCP envelope.
+Independent acceptance coverage, release versioning and supported deployment
+remain outstanding; no live success is claimed.
+
 ## What changed in 0.3.1
 
 The stock scheduler sends `runJob` without a company scope. The host permits

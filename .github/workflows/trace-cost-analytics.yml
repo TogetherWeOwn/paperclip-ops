@@ -1,0 +1,31 @@
+name: Trace cost analytics
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/trace-cost-analytics/**'
+      - '.github/workflows/trace-cost-analytics.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/trace-cost-analytics/**'
+      - '.github/workflows/trace-cost-analytics.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+      - name: Run passive analytics acceptance tests
+        run: node --test plugins/trace-cost-analytics/tests/analytics.test.mjs

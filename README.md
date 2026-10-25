@@ -64,6 +64,10 @@ For the external, alert-only workspace sync-back size observer, see the
 [byte measurement and alert contract](docs/workspace-sync-back-signal.md).
 It does not instrument transport or authorize host installation.
 
+For native skill versions, reusable examples and isolated pinned-version tests,
+see the [versioned skill fixture procedure](docs/versioned-skill-fixtures.md).
+It adds no runtime registry, host automation or skill-assignment authority.
+
 | Tool |
 | --- |
 | `public_snapshot_test_support.py` (test-only private-artifact boundary; not a runtime policy or operator command) |

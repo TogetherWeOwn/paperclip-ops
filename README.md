@@ -143,6 +143,13 @@ It does not instrument transport or authorize host installation.
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
 
+## Native delivery workflow
+
+Use the [single-doer delivery contract](docs/single-doer-delivery.md) for reusable
+planner/builder fields, deterministic defect-routing decisions, and a
+revision-linked multi-repository manifest. These are native task/document
+conventions, not an automatic dispatcher or a production ownership catalog.
+
 ## Productivity reconcilers
 
 For confirmed mutation counts, safe CLI modes, versioned JSON summaries and an

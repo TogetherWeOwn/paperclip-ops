@@ -64,6 +64,10 @@ For the external, alert-only workspace sync-back size observer, see the
 [byte measurement and alert contract](docs/workspace-sync-back-signal.md).
 It does not instrument transport or authorize host installation.
 
+For the offline card/run/PR/head/deploy trace correlator, see the
+[evidence, join and SLO contract](docs/trace-correlation.md).
+It reads caller-assembled evidence only and authorizes no host action.
+
 For source-to-documentation accompaniment in pull requests, see the portable
 [documentation drift gate](docs/docs-drift.md), including its JSON contract,
 base-policy trust model and reusable CI interface.

@@ -347,6 +347,7 @@
     "capacity evidence and CLI refusal contract:1",
     "workspace sync-back signal acceptance suite:1",
     "workspace sync-back signal regression suite:1",
+    "trace correlator suite:1",
     "Dispatch sweep failure visibility acceptance:1",
     "native runner coverage classifier suite:1"
   ],
@@ -1960,6 +1961,11 @@
       "name": "workspace sync-back signal regression suite",
       "definition_sha256": "3d72cd44d7c856a77dc32e6dbc3a66b610e3b7f47c3ff3fa2675ab93238f1163",
       "id": "workspace sync-back signal regression suite:1"
+    },
+    {
+      "name": "trace correlator suite",
+      "definition_sha256": "970ea2be13fd1d0c9b2503d02aa6725f3f9ac47d4b883cf246d600c17cc4dd9f",
+      "id": "trace correlator suite:1"
     },
     {
       "name": "Dispatch sweep failure visibility acceptance",

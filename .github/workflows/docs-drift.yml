@@ -40,11 +40,7 @@ jobs:
       CALL_INPUTS: ${{ toJSON(inputs) }}
       REUSABLE_CALL: ${{ inputs.head-sha != '' }}
       EVENT_NAME: ${{ github.event_name }}
-      PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-      GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
-      PUSH_BASE_SHA: ${{ github.event.before }}
+      EVENT_JSON: ${{ toJSON(github.event) }}
       PUSH_HEAD_SHA: ${{ github.sha }}
     steps:
       - name: Validate immutable inputs
@@ -62,12 +58,21 @@ jobs:
           else:
               # Validate the event's raw SHAs too: an empty PR/merge-group head
               # must not be rescued by github.sha (a different comparison).
-              prefix = {"pull_request": "PR", "merge_group": "GROUP", "push": "PUSH"}.get(os.environ["EVENT_NAME"])
-              if prefix is None:
+              event = json.loads(os.environ["EVENT_JSON"])
+              event_name = os.environ["EVENT_NAME"]
+              if event_name == "pull_request":
+                  pr = event.get("pull_request", {})
+                  base, head = pr.get("base", {}).get("sha", ""), pr.get("head", {}).get("sha", "")
+              elif event_name == "merge_group":
+                  group = event.get("merge_group", {})
+                  base, head = group.get("base_sha", ""), group.get("head_sha", "")
+              elif event_name == "push":
+                  base, head = event.get("before", ""), os.environ["PUSH_HEAD_SHA"]
+              else:
                   raise SystemExit("EVENT_NAME: use a supported native event or explicit workflow_call inputs")
-              values.update({name: os.environ[f"{prefix}_{name}"] for name in ("BASE_SHA", "HEAD_SHA")})
+              values.update(BASE_SHA=base, HEAD_SHA=head)
           for name, value in values.items():
-              if not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", value):
+              if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", value):
                   raise SystemExit(f"{name}: provide a full lowercase commit SHA, not a branch or expression")
           PY
       - name: Check out the caller history
@@ -88,7 +93,7 @@ jobs:
         working-directory: caller
         shell: bash
         env:
-          CHECKER: ${{ '../docs-drift-tools/scripts/quality-gates/docs_drift.py' }}
+          CHECKER: ../docs-drift-tools/scripts/quality-gates/docs_drift.py
         run: |
           python3 - <<'PY'
           import json, os, sys

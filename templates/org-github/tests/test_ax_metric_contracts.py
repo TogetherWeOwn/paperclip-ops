@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BASE = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(BASE, "ax-metrics"))
 
-import ax_metrics  # noqa: E402
+import ax_metrics
 
 WINDOW_START = "2026-10-13T00:00:00Z"
 WINDOW_END = "2026-10-20T00:00:00Z"

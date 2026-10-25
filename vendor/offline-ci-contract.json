@@ -347,6 +347,7 @@
     "capacity evidence and CLI refusal contract:1",
     "workspace sync-back signal acceptance suite:1",
     "workspace sync-back signal regression suite:1",
+    "Dispatch sweep failure visibility acceptance:1",
     "AX metric contract suites:1"
   ],
   "retained": [
@@ -537,12 +538,12 @@
     },
     {
       "name": "guard state fail-closed suites",
-      "definition_sha256": "cc4f8a604969e0c70933c2fff7b461c71ae4ae29645bc2e34e3df8f4fa45498f",
+      "definition_sha256": "4f6d5cf9f030fa254feb868b2929f0aad15cc5cf076dabe5996b1ccc57d67ec5",
       "id": "guard state fail-closed suites:1"
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "f3905423046c39675c710523fd0f77006b7368f65a2ff5619e70988763b1300d",
+      "definition_sha256": "28a647c5d010f9181946c361a7ccc840295d1b6a6b580178f5dce7b69c9b1e38",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1787,7 +1788,7 @@
     },
     {
       "name": "quality-gate helper suites",
-      "definition_sha256": "68b4abdbd85871ca024089f0ce025a71292090ad4ee86f0f4389a1fa4e8d5d80",
+      "definition_sha256": "eff2ed20e1d4d438acec4567c8f59687ae4d72049050fa12122563c0a3021b65",
       "id": "quality-gate helper suites:1"
     },
     {
@@ -1959,6 +1960,11 @@
       "name": "workspace sync-back signal regression suite",
       "definition_sha256": "3d72cd44d7c856a77dc32e6dbc3a66b610e3b7f47c3ff3fa2675ab93238f1163",
       "id": "workspace sync-back signal regression suite:1"
+    },
+    {
+      "name": "Dispatch sweep failure visibility acceptance",
+      "definition_sha256": "2e075d5605362d844521a3a225c3fe04047c80fcf2aa0917997553221ccdfa29",
+      "id": "Dispatch sweep failure visibility acceptance:1"
     },
     {
       "name": "AX metric contract suites",
@@ -2401,7 +2407,6 @@
     "plugins/dispatch/dist/selection.js": "ab9d41fc8d2f421689d94a884b53d694060991775c1e03438045382a0e2a6006",
     "plugins/dispatch/package-lock.json": "6659c5a6e6510c5c8845caa3f1c8b0f9e9559b3c87f15fb5ea3f938102c44d43",
     "plugins/dispatch/package.json": "4b1c33e26b40c10fd104f9923793dcae9f99d68558892b7eefe7065086384a5a",
-    "plugins/dispatch/test/dispatch.test.mjs": "e9cfa9bd45e6340385bf39599dff43d6e9c7074150854700e030274601d4b71d",
     "plugins/gh-token-broker/dist/disclosure.js": "e57bd6c71ab31a459242cb0d80f77fb0ff1bf4fa0267c997fe8b324bb1cf3e9d",
     "plugins/gh-token-broker/dist/ownership.js": "2bc828e418c4250cc039510f621230c84ab9a04b5e4c5cc5540d84ea33550a6a",
     "plugins/gh-token-broker/migrations/001_external_disclosure_receipts.sql": "90a7b4bbc5b6f58d07df212c065f2ce04eeed18e4c1cdb1bd44b9f1a1e90e2df",

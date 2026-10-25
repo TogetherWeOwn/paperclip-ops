@@ -160,6 +160,13 @@ and cites a single pinned rubric in every phase.
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
 
+## Planning depth
+
+Use [right-sized planning](docs/right-sized-planning.md) to bound a reviewable
+slice, choose preparation by risk/coupling, and record prototypes, investment
+reviews and followups in native task fields. It supplements existing acceptance
+criteria and anti-goals; publishing the guide is not company instruction rollout.
+
 ## Native delivery workflow
 
 Use the [single-doer delivery contract](docs/single-doer-delivery.md) for reusable

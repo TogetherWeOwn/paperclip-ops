@@ -56,6 +56,12 @@ execution or deployment checklist; inspect each utility's usage and prerequisite
 before running it. `cliproxy_seam_extract.py` is an exempt one-shot forensic
 parser, not a standing operator command. Test entry points begin with `test_`.
 
+For executable verification commands, use the [generated verification registry](docs/verify-fast-registry.md)
+or its [machine-readable JSON view](docs/verify-fast-registry.json).
+`bash scripts/verify-fast.sh --registry` lists every suite with a content revision,
+without running commands or prerequisite probes. `--check-docs` verifies both
+views against the inventory and renderer; CI rejects stale derived indexes.
+
 For `host_db_backup.sh`, see the [publication receipt contract](docs/host-db-backup.md)
 for offline discovery, no-write planning, machine outcomes and fixture checks.
 This documentation does not authorize running a backup or changing a host.

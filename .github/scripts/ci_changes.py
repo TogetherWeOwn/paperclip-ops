@@ -234,6 +234,9 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
 # fails when a step's script classifies without `core`, so a new suite cannot
 # repeat this.
 ALSO_CORE_PREFIXES: tuple[str, ...] = (
+    # Machine-consumed generated docs must run their drift gate even alone.
+    "docs/verify-fast-registry.json",
+    "docs/verify-fast-registry.md",
     # code-nav tests pin the hash-checked install command, so this spec is
     # executable contract surface even on a markdown-only PR.
     "ops/agent-tooling/serena-pilot-b/OPERATOR_SPEC.md",

@@ -16,7 +16,7 @@
 #   readiness block reports these from CI.
 #
 # Usage:
-#   scripts/verify-fast.sh [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--no-prepare] [--help]
+#   scripts/verify-fast.sh [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--no-prepare] [--registry|--docs|--check-docs] [--help]
 #   make verify-fast | make verify-fast-parse | make verify-fast-plan
 #
 # Worktree setup: scratch worktrees have no node_modules. The translator
@@ -43,14 +43,15 @@ WANT_LIST=0
 WANT_JSON=0
 WANT_NO_PREPARE=0
 WANT_HELP=0
+REGISTRY_MODE=""
 
 usage() {
-  echo "usage: $0 [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--no-prepare] [--help]" >&2
+  echo "usage: $0 [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--no-prepare] [--registry|--docs|--check-docs] [--help]" >&2
 }
 
 print_help() {
   cat <<'HELP'
-usage: verify-fast.sh [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--no-prepare] [--help]
+usage: verify-fast.sh [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--no-prepare] [--registry|--docs|--check-docs] [--help]
 
 Fast verification tier. The default run executes the parse gate plus the fast
 suites; --parse-only executes the parse gate only.
@@ -60,6 +61,9 @@ Modes (plan and list modes are read-only; execution modes are not):
   --parse-only         run the parse gate only
   --plan, --dry-run    print the suite plan without running anything (read-only)
   --list               print one stable suite id per line (read-only)
+  --registry           print complete, revisioned JSON docs; no probes or execution
+  --docs               print generated Markdown from the same registry (read-only)
+  --check-docs         refuse missing/stale generated JSON or Markdown (read-only)
   --no-prepare         run without preparing; refuse (exit 3) if prerequisites are missing
 
 Options:
@@ -70,13 +74,16 @@ Examples:
   ./scripts/verify-fast.sh --plan --json
   ./scripts/verify-fast.sh --dry-run
   ./scripts/verify-fast.sh --list
+  ./scripts/verify-fast.sh --registry
+  ./scripts/verify-fast.sh --check-docs
   ./scripts/verify-fast.sh --no-prepare
   ./scripts/verify-fast.sh --parse-only
   make verify-fast-plan
 
 Normal execution is not read-only: it may restore toolkit files, install the
 pinned TypeScript compiler, and write bytecode caches. Only --plan, --dry-run
-and --list make no changes.
+and --list make no changes. --registry, --docs and --check-docs additionally
+skip prerequisite probes; see docs/verify-fast-registry.md for bounds/schema.
 HELP
 }
 
@@ -86,6 +93,17 @@ while (($# > 0)); do
     --parse-only) WANT_PARSE=1 ;;
     --plan|--dry-run) WANT_PLAN=1 ;;
     --list) WANT_LIST=1 ;;
+    --registry|--docs|--check-docs)
+      if [[ -n "$REGISTRY_MODE" ]]; then
+        echo "verify-fast: choose one registry/docs output" >&2
+        exit 2
+      fi
+      case "$arg" in
+        --registry) REGISTRY_MODE="--emit-registry-json" ;;
+        --docs) REGISTRY_MODE="--emit-docs" ;;
+        --check-docs) REGISTRY_MODE="--check-docs" ;;
+      esac
+      ;;
     --json) WANT_JSON=1 ;;
     --no-prepare) WANT_NO_PREPARE=1 ;;
     --help|-h) WANT_HELP=1 ;;
@@ -97,6 +115,10 @@ while (($# > 0)); do
   esac
 done
 
+if [[ -n "$REGISTRY_MODE" ]] && (( WANT_PLAN || WANT_LIST || WANT_PARSE || WANT_NO_PREPARE || WANT_JSON )); then
+  echo "verify-fast: registry/docs require one complete output, without execution/plan/list flags or --json" >&2
+  exit 2
+fi
 if (( WANT_JSON )) && (( ! WANT_PLAN )) && (( ! WANT_LIST )); then
   echo "verify-fast: --json requires --plan, --dry-run or --list" >&2
   usage
@@ -126,6 +148,10 @@ cd "$REPO_ROOT"
 
 INVENTORY_FILE="$REPO_ROOT/scripts/verify-fast-inventory.json"
 PLAN_HELPER="$REPO_ROOT/scripts/verify-fast-plan.py"
+if [[ -n "$REGISTRY_MODE" ]]; then
+  python3 -B "$PLAN_HELPER" --inventory "$INVENTORY_FILE" "$REGISTRY_MODE"
+  exit 0
+fi
 TIER_ARGS=()
 if (( WANT_PARSE )); then
   TIER_ARGS=(--tier parse)
@@ -358,7 +384,8 @@ python3 -m unittest test_migration_drift_gate || fail "migration drift-gate suit
 python3 -m unittest test_migration_evidence_ax || fail "migration evidence-AX suite failed"
 # Plan/list/no-prepare contract plus the strict inventory-to-execution drift
 # check and the PREPARE-guard check. Offline: stdlib unittest, synthetic stubs.
-python3 -B -m unittest test_verify_fast_plan test_verify_fast_plan_gates || fail "verify-fast plan suites failed"
+python3 -B -m unittest test_verify_fast_plan test_verify_fast_plan_gates test_verify_fast_registry || fail "verify-fast plan suites failed"
+bash scripts/verify-fast.sh --check-docs || fail "verify-fast registry docs are stale"
 
 if [[ "$rc" -ne 0 ]]; then
   echo "verify-fast: FAILED"

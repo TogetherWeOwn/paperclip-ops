@@ -1,0 +1,1495 @@
+{
+  "schema_version": 1,
+  "registry_revision": "sha256:3830fd000b89a304df05947d38443291b88cc41f87ba69ddef16368b26cfdbfd",
+  "complete": true,
+  "total": 84,
+  "limit": 256,
+  "prerequisite_catalog": {
+    "bash": {
+      "probe": {
+        "which": "bash"
+      }
+    },
+    "git": {
+      "probe": {
+        "which": "git"
+      }
+    },
+    "node": {
+      "probe": {
+        "which": "node"
+      }
+    },
+    "python3": {
+      "probe": {
+        "which": "python3"
+      }
+    },
+    "pyyaml": {
+      "probe": {
+        "argv": [
+          "python3",
+          "-B",
+          "-c",
+          "import yaml; assert yaml.__version__ == '6.0.3'"
+        ]
+      }
+    },
+    "toolkit-vendored-files": {
+      "probe": {
+        "argv": [
+          "python3",
+          "verification/offline_ci_contract.py",
+          "--check-restored"
+        ]
+      }
+    },
+    "typescript@5.9.3": {
+      "probe": {
+        "argv": [
+          "node",
+          "-e",
+          "require.resolve('typescript/bin/tsc')"
+        ]
+      }
+    }
+  },
+  "suites": [
+    {
+      "id": "parse-bash",
+      "tier": "parse",
+      "prerequisites": [
+        "bash"
+      ],
+      "preparation": {
+        "actions": []
+      },
+      "command": "for f in *.sh lib/*.sh mcp/deploy/*.sh omniroute/*.sh host-ops/*.sh scripts/*.sh templates/org-github/*.sh templates/org-github/tests/*.sh ops/productivity/*.sh verification/private-mutation-gates.sh; do bash -n \"$f\"; done",
+      "description": "Run parse-bash verification checks."
+    },
+    {
+      "id": "parse-node",
+      "tier": "parse",
+      "prerequisites": [
+        "node"
+      ],
+      "preparation": {
+        "actions": []
+      },
+      "command": "for f in *.js scripts/*.js; do node --check \"$f\"; done",
+      "description": "Run parse-node verification checks."
+    },
+    {
+      "id": "parse-python",
+      "tier": "parse",
+      "prerequisites": [
+        "python3"
+      ],
+      "preparation": {
+        "actions": []
+      },
+      "command": "for f in omniroute/*.py *.py; do python3 -m py_compile \"$f\"; done",
+      "description": "Plus two python3 -c ast.parse passes over ops/productivity, ops/lib, ops/paperclip, ops/pr-hygiene and ops/case_* (exact file lists live in the verify-fast.sh parse gate); no single argv covers this suite."
+    },
+    {
+      "id": "parse-esm",
+      "tier": "parse",
+      "prerequisites": [
+        "node"
+      ],
+      "preparation": {
+        "actions": []
+      },
+      "command": "for f in mcp/*.mjs mcp/test/*.mjs; do node --check --input-type=module < \"$f\"; done",
+      "description": "Run parse-esm verification checks."
+    },
+    {
+      "id": "vendored-tracked-gate",
+      "tier": "parse",
+      "prerequisites": [
+        "bash",
+        "git"
+      ],
+      "preparation": {
+        "actions": []
+      },
+      "command": [
+        "bash",
+        "scripts/check-toolkit-vendored-tracked.sh"
+      ],
+      "description": "Run vendored-tracked-gate verification checks."
+    },
+    {
+      "id": "orphan-suite-ratchet",
+      "tier": "parse",
+      "prerequisites": [
+        "python3"
+      ],
+      "preparation": {
+        "actions": []
+      },
+      "command": [
+        "python3",
+        "verification/orphan_suites.py"
+      ],
+      "description": "Run orphan-suite-ratchet verification checks."
+    },
+    {
+      "id": "backup-observation-contract",
+      "tier": "fast",
+      "prerequisites": [
+        "python3"
+      ],
+      "preparation": {
+        "actions": []
+      },
+      "command": "run_backup_observation_contract",
+      "description": "verify-fast.sh function: python3 -m unittest -v test_backup_observation_contract test_backup_observation_regressions under a run-owned TMPDIR, removed on pass and fail."
+    },
+    {
+      "id": "external-disclosure",
+      "tier": "fast",
+      "prerequisites": [
+        "node",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "node",
+        "--test",
+        "test/external-disclosure.test.mjs"
+      ],
+      "description": "Run external-disclosure verification checks."
+    },
+    {
+      "id": "muse-stop-guard",
+      "tier": "fast",
+      "prerequisites": [
+        "node",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "node",
+        "--test",
+        "hooks/muse-stop-guard/muse-stop-guard.test.mjs"
+      ],
+      "description": "Run muse-stop-guard verification checks."
+    },
+    {
+      "id": "disposition-stop-guard",
+      "tier": "fast",
+      "prerequisites": [
+        "node",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "node",
+        "--test",
+        "hooks/disposition-stop-guard/disposition-stop-guard.test.mjs",
+        "hooks/disposition-stop-guard/measure/census.test.mjs"
+      ],
+      "description": "Run disposition-stop-guard verification checks."
+    },
+    {
+      "id": "deploy-window-open",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_deploy_window_open.sh"
+      ],
+      "description": "Run deploy-window-open verification checks."
+    },
+    {
+      "id": "activation-contract",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./paperclip-upgrade/test-activation-offline.sh"
+      ],
+      "description": "Run activation-contract verification checks."
+    },
+    {
+      "id": "reharden-relative-targets",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_reharden_relative_targets"
+      ],
+      "description": "Run reharden-relative-targets verification checks."
+    },
+    {
+      "id": "deploy-window-manifest",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_deploy_window_manifest"
+      ],
+      "description": "Run deploy-window-manifest verification checks."
+    },
+    {
+      "id": "credential-chain-lockdown",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_credential_chain_lockdown.sh"
+      ],
+      "description": "Run credential-chain-lockdown verification checks."
+    },
+    {
+      "id": "ci-required-checks-audit",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_ci_required_checks_audit"
+      ],
+      "description": "Run ci-required-checks-audit verification checks."
+    },
+    {
+      "id": "test-missing-gate",
+      "tier": "fast",
+      "prerequisites": [
+        "python3"
+      ],
+      "preparation": {
+        "actions": []
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_blocker_test_checks",
+        "test_test_missing_org_template"
+      ],
+      "description": "Run test-missing-gate verification checks."
+    },
+    {
+      "id": "beszel-adapter",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-B",
+        "test_beszel_adapter.py"
+      ],
+      "description": "Run beszel-adapter verification checks."
+    },
+    {
+      "id": "beszel-discord-forwarder",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-B",
+        "test_beszel_discord_forwarder.py"
+      ],
+      "description": "Run beszel-discord-forwarder verification checks."
+    },
+    {
+      "id": "beszel-fetch-normalized",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "bash",
+        "test_fetch_beszel_normalized.sh"
+      ],
+      "description": "Run beszel-fetch-normalized verification checks."
+    },
+    {
+      "id": "private-mutation-gates",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_private_mutation_gates"
+      ],
+      "description": "Run private-mutation-gates verification checks."
+    },
+    {
+      "id": "quality-gates",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_quality_gates",
+        "test_floor_guard",
+        "test_no_pull_request_target"
+      ],
+      "description": "Run quality-gates verification checks."
+    },
+    {
+      "id": "mutmut-changed",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_mutmut_changed.sh"
+      ],
+      "description": "Run mutmut-changed verification checks."
+    },
+    {
+      "id": "ci-gating",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_ci_gating.sh"
+      ],
+      "description": "Run ci-gating verification checks."
+    },
+    {
+      "id": "workflow-job-permissions",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "check_workflow_job_permissions.py"
+      ],
+      "description": "Run workflow-job-permissions verification checks."
+    },
+    {
+      "id": "workflow-job-permissions-acceptance",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_check_workflow_job_permissions"
+      ],
+      "description": "Run workflow-job-permissions-acceptance verification checks."
+    },
+    {
+      "id": "readme-script-index",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_readme_script_index.sh"
+      ],
+      "description": "Run readme-script-index verification checks."
+    },
+    {
+      "id": "public-comment-hygiene",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_public_comment_hygiene_gate.sh"
+      ],
+      "description": "Run public-comment-hygiene verification checks."
+    },
+    {
+      "id": "acceptance-transport",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_acceptance_transport.sh"
+      ],
+      "description": "Run acceptance-transport verification checks."
+    },
+    {
+      "id": "upstream-prepush-hook",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_upstream_prepush_hook.sh"
+      ],
+      "description": "Run upstream-prepush-hook verification checks."
+    },
+    {
+      "id": "cliproxy-mgmt-recon",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_cliproxy_mgmt_recon_argv.sh"
+      ],
+      "description": "Run cliproxy-mgmt-recon verification checks."
+    },
+    {
+      "id": "runner-contract",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_case_b2acfa5c_selfhosted_runner.sh"
+      ],
+      "description": "Run runner-contract verification checks."
+    },
+    {
+      "id": "pr6-acceptance",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_pr6_acceptance"
+      ],
+      "description": "Run pr6-acceptance verification checks."
+    },
+    {
+      "id": "dropchannel-scan",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_dropchannel_scan.sh"
+      ],
+      "description": "Run dropchannel-scan verification checks."
+    },
+    {
+      "id": "approval-timeout-probe",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "env",
+        "-u",
+        "BASH_ENV",
+        "./test_approval_timeout_probe.sh"
+      ],
+      "description": "Run approval-timeout-probe verification checks."
+    },
+    {
+      "id": "credential-chain-offline",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_credential_chain_offline.sh"
+      ],
+      "description": "Run credential-chain-offline verification checks."
+    },
+    {
+      "id": "gh-access-dispatch",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_gh_access_dispatch.sh"
+      ],
+      "description": "Run gh-access-dispatch verification checks."
+    },
+    {
+      "id": "org-snapshot",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_org_snapshot.sh"
+      ],
+      "description": "Run org-snapshot verification checks."
+    },
+    {
+      "id": "op-queue-reject",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_op_queue_reject.sh"
+      ],
+      "description": "Run op-queue-reject verification checks."
+    },
+    {
+      "id": "pr2-acceptance",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_pr2_acceptance"
+      ],
+      "description": "Run pr2-acceptance verification checks."
+    },
+    {
+      "id": "alert-queue",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_alert_queue"
+      ],
+      "description": "Run alert-queue verification checks."
+    },
+    {
+      "id": "watchdog-snapshot-builder",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_watchdog_snapshot_builder"
+      ],
+      "description": "Run watchdog-snapshot-builder verification checks."
+    },
+    {
+      "id": "fleet-run-stall",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_case_da79e241_fleet_run_stall"
+      ],
+      "description": "Run fleet-run-stall verification checks."
+    },
+    {
+      "id": "assignment-bundle",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_case_dcf07273_assignment_bundle"
+      ],
+      "description": "Run assignment-bundle verification checks."
+    },
+    {
+      "id": "orphan-suite-fixtures",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_orphan_suites"
+      ],
+      "description": "Run orphan-suite-fixtures verification checks."
+    },
+    {
+      "id": "stop-guard-landing",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_pr3_stop_guard_landing"
+      ],
+      "description": "Run stop-guard-landing verification checks."
+    },
+    {
+      "id": "warn-first-inventory",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_warn_first_inventory"
+      ],
+      "description": "Run warn-first-inventory verification checks."
+    },
+    {
+      "id": "regen-receipt",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./ops/case_34c2c99f/test_regen_dry_run_receipt.sh"
+      ],
+      "description": "Run regen-receipt verification checks."
+    },
+    {
+      "id": "pr-tracker",
+      "tier": "fast",
+      "prerequisites": [
+        "node",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "node",
+        "--test",
+        "plugins/pr-tracker/test/collect-rest.test.mjs",
+        "plugins/pr-tracker/test/poll-prs.test.mjs",
+        "plugins/pr-tracker/test/setup.test.mjs",
+        "plugins/pr-tracker/test/upstream-watcher.test.mjs",
+        "plugins/pr-tracker/test/view-model.test.mjs"
+      ],
+      "description": "Run pr-tracker verification checks."
+    },
+    {
+      "id": "settings-bind-rehearsal",
+      "tier": "fast",
+      "prerequisites": [
+        "node",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "node",
+        "--test",
+        "paperclip-upgrade/settings-bind-rehearsal.test.mjs"
+      ],
+      "description": "Run settings-bind-rehearsal verification checks."
+    },
+    {
+      "id": "ops-productivity-unittests",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_resolve_outdated_incomplete_evidence test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_flake_ledger test_flake_ledger_report test_review_rebase_carry test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pr_controller_notify_guard test_pr_controller_notify_wiring test_pipeline_stall_watch)",
+      "description": "Run ops-productivity-unittests verification checks."
+    },
+    {
+      "id": "review-gate-acceptance",
+      "tier": "fast",
+      "prerequisites": [
+        "python3"
+      ],
+      "preparation": {
+        "actions": []
+      },
+      "command": "PAPERCLIP_RUN_SCRATCH_DIR=\"${PAPERCLIP_RUN_SCRATCH_DIR:-${PAPERCLIP_SCRATCH_DIR:-${TMPDIR:-/tmp}}}\" python3 -B verification/review_gate_acceptance/run.py --source-dir ops/review_gate --legacy",
+      "description": "Run review-gate-acceptance verification checks."
+    },
+    {
+      "id": "focus-gate-bounds",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/paperclip && python3 -B -m unittest test_focus_gate_bounds)",
+      "description": "Run focus-gate-bounds verification checks."
+    },
+    {
+      "id": "review-carry",
+      "tier": "fast",
+      "prerequisites": [
+        "python3"
+      ],
+      "preparation": {
+        "actions": []
+      },
+      "command": "(cd ops/sdlc && python3 -B -m unittest test_review_carry)",
+      "description": "Run review-carry verification checks."
+    },
+    {
+      "id": "atomic-state",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/lib && python3 -m unittest test_atomic_state)",
+      "description": "Run atomic-state verification checks."
+    },
+    {
+      "id": "code-nav",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "pyyaml"
+      ],
+      "preparation": {
+        "actions": [
+          "Activate the external Python 3.12 test venv with hash-pinned PyYAML (README.md#verification)"
+        ]
+      },
+      "command": "(cd ops/agent-tooling/serena-pilot-b && python3 -B -m unittest test_code_nav)",
+      "description": "Run code-nav verification checks."
+    },
+    {
+      "id": "stuck-run-state",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/productivity && python3 -m unittest test_stuck_run_state)",
+      "description": "Run stuck-run-state verification checks."
+    },
+    {
+      "id": "idle-waiter-state",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/productivity && python3 -B -m unittest test_idle_waiters_state test_idle_waiter_live_path test_idle_waiters_cli)",
+      "description": "Run idle-waiter-state verification checks."
+    },
+    {
+      "id": "owner-guard-state",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/owner-guard && python3 -m unittest test_owner_guard_state)",
+      "description": "Run owner-guard-state verification checks."
+    },
+    {
+      "id": "review-tier1",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/review_tier1 && python3 -m unittest test_review_tier1)",
+      "description": "Run review-tier1 verification checks."
+    },
+    {
+      "id": "review-findings-classify",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/analysis/review-findings && python3 -B -m unittest test_classify)",
+      "description": "Run review-findings-classify verification checks."
+    },
+    {
+      "id": "survival-atomic-write",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/case_1ccef1dc/reviewer-eval/v2 && python3 -m unittest test_survival_all_atomic)",
+      "description": "Run survival-atomic-write verification checks."
+    },
+    {
+      "id": "observational-collect-atomic",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/case_1ccef1dc/reviewer-eval/observational && python3 -m unittest test_collect_atomic)",
+      "description": "Run observational-collect-atomic verification checks."
+    },
+    {
+      "id": "pr-hygiene-owner-match",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/pr-hygiene && python3 -m unittest test_owner_match)",
+      "description": "Run pr-hygiene-owner-match verification checks."
+    },
+    {
+      "id": "live-run-guard",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/lib && python3 -m unittest test_live_run_guard)",
+      "description": "Run live-run-guard verification checks."
+    },
+    {
+      "id": "nongit-quarantine-custody",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/productivity && python3 -m unittest test_nongit_quarantine_custody)",
+      "description": "Run nongit-quarantine-custody verification checks."
+    },
+    {
+      "id": "review-route",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_review_route.sh"
+      ],
+      "description": "Run review-route verification checks."
+    },
+    {
+      "id": "shell-subst-guard",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_shell_subst_guard.sh"
+      ],
+      "description": "Run shell-subst-guard verification checks."
+    },
+    {
+      "id": "arm-import",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_arm_import)",
+      "description": "Run arm-import verification checks."
+    },
+    {
+      "id": "corpus-atomic-write",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_build_corpus_atomic)",
+      "description": "Run corpus-atomic-write verification checks."
+    },
+    {
+      "id": "merge-survival-atomic",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/case_1ccef1dc/reviewer-eval/v2 && python3 -m unittest test_merge_survival_atomic)",
+      "description": "Run merge-survival-atomic verification checks."
+    },
+    {
+      "id": "operator-workspace",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/case_af881f62 && python3 -m unittest test_operator_workspace_reconciler test_operator_workspace_sweep)",
+      "description": "Run operator-workspace verification checks."
+    },
+    {
+      "id": "feed-contract",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/case_0b2823ef && python3 -B -m unittest test_feed_contract)",
+      "description": "Run feed-contract verification checks."
+    },
+    {
+      "id": "operator-copy-risk",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/case_629b4da2 && python3 -m unittest test_check_operator_copy_risk)",
+      "description": "Run operator-copy-risk verification checks."
+    },
+    {
+      "id": "sweep-pressure-gate",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": "(cd ops/case_0ce22efa && python3 -B -m unittest test_node7b1ff338_pressure_gate)",
+      "description": "Run sweep-pressure-gate verification checks."
+    },
+    {
+      "id": "translator-fixture",
+      "tier": "fast",
+      "prerequisites": [
+        "node",
+        "toolkit-vendored-files",
+        "typescript@5.9.3"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh",
+          "npm install --no-save --ignore-scripts typescript@5.9.3"
+        ]
+      },
+      "command": [
+        "node",
+        "--test",
+        "test_omniroute_rehearsal_translator.mjs"
+      ],
+      "description": "Run translator-fixture verification checks."
+    },
+    {
+      "id": "staged-drift",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "test_staged_drift.py"
+      ],
+      "description": "Run staged-drift verification checks."
+    },
+    {
+      "id": "migration-timeout-preamble",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_migration_timeout_preamble.sh"
+      ],
+      "description": "Run migration-timeout-preamble verification checks."
+    },
+    {
+      "id": "migration-squawk",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_migration_squawk.sh"
+      ],
+      "description": "Run migration-squawk verification checks."
+    },
+    {
+      "id": "migration-rehearsal",
+      "tier": "fast",
+      "prerequisites": [
+        "bash",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "./test_migration_rehearsal.sh"
+      ],
+      "description": "Run migration-rehearsal verification checks."
+    },
+    {
+      "id": "migration-drift-gate",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_migration_drift_gate"
+      ],
+      "description": "Run migration-drift-gate verification checks."
+    },
+    {
+      "id": "migration-evidence-ax",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "toolkit-vendored-files"
+      ],
+      "preparation": {
+        "actions": [
+          "bash scripts/sync-toolkit.sh"
+        ]
+      },
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_migration_evidence_ax"
+      ],
+      "description": "Run migration-evidence-ax verification checks."
+    },
+    {
+      "id": "verify-fast-plan",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "node",
+        "bash"
+      ],
+      "preparation": {
+        "actions": []
+      },
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "test_verify_fast_plan",
+        "test_verify_fast_plan_gates",
+        "test_verify_fast_registry"
+      ],
+      "description": "Run verify-fast-plan verification checks."
+    },
+    {
+      "id": "verify-fast-registry-docs",
+      "tier": "fast",
+      "prerequisites": [
+        "python3",
+        "bash"
+      ],
+      "preparation": {
+        "actions": []
+      },
+      "command": [
+        "bash",
+        "scripts/verify-fast.sh",
+        "--check-docs"
+      ],
+      "description": "Reject stale generated verification docs and machine indexes."
+    }
+  ]
+}

@@ -120,14 +120,20 @@ def main(argv):
     inventory_path = Path(__file__).resolve().parent / "verify-fast-inventory.json"
     mode = None
     tier = None
+    expected_revision = None
+    registry_modes = ("--emit-registry-json", "--emit-docs", "--check-docs")
     args = list(argv)
     while args:
         arg = args.pop(0)
         if arg == "--inventory" and args:
             inventory_path = Path(args.pop(0))
         elif arg in ("--emit-json", "--emit-text", "--emit-list",
-                     "--emit-list-json", "--missing-prereqs"):
+                     "--emit-list-json", "--missing-prereqs") + registry_modes:
+            if mode is not None:
+                return fail("choose one output mode")
             mode = arg
+        elif arg == "--expect-revision" and args:
+            expected_revision = args.pop(0)
         elif arg == "--tier" and args:
             tier = args.pop(0)
             if tier not in ("parse", "fast"):
@@ -135,8 +141,19 @@ def main(argv):
         else:
             return fail(f"unknown flag {arg!r}")
     if mode is None:
-        return fail("need one of --emit-json, --emit-text, --emit-list, "
-                    "--emit-list-json, --missing-prereqs")
+        return fail("need one output mode: --emit-json, --emit-text, --emit-list, "
+                    "--emit-list-json, --missing-prereqs, --emit-registry-json, "
+                    "--emit-docs or --check-docs")
+    if mode in registry_modes:
+        if tier is not None:
+            return fail("registry/docs must be complete; --tier is not supported")
+        # Import only on this path: legacy copied planner fixtures need no
+        # registry module, and documentation must never reach readiness probes.
+        sys.dont_write_bytecode = True
+        from verify_fast_registry import run
+        return run(mode, inventory_path, Path(__file__).resolve().parent, expected_revision)
+    if expected_revision is not None:
+        return fail("--expect-revision requires a registry/docs mode")
     inventory, error = load_inventory(inventory_path)
     if error is not None:
         return fail(error)

@@ -10,6 +10,7 @@ Pure, $0, hermetic (no network): file content at the head is injected via
 `read_file`, so the bake-off harness passes blob reads pinned to the reviewed
 commit and tests pass fakes. Finding shapes accepted: bake-off
 (`file`/`line`/`evidence`) and production assessment (`path` alias, `quote` alias).
+Conflicting aliases are withheld as malformed, never silently preferred.
 """
 
 REASONS = ("verified", "missing_file", "bad_line", "missing_evidence", "quote_mismatch", "malformed")
@@ -72,6 +73,10 @@ def verify(finding, read_file):
     """
     if not isinstance(finding, dict):
         return False, "malformed"
+    # Keep every published alias consistent: consumers may use either shape.
+    for primary, alias in (("file", "path"), ("evidence", "quote")):
+        if primary in finding and alias in finding and finding[primary] != finding[alias]:
+            return False, "malformed"
     get = finding.get
     path = _clean_path(get("path", get("file")))
     if path is None:

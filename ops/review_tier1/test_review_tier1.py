@@ -372,6 +372,24 @@ class EvidenceGateTest(unittest.TestCase):
         ok, reason = verify({"path": "src/app.py", "line": 4, "quote": "return os.environ['X']"}, gate_read)
         self.assertEqual((ok, reason), (False, "quote_mismatch"))
 
+    def test_conflicting_aliases_are_withheld_without_reading_a_file(self):
+        base = {"file": "src/app.py", "line": 4, "evidence": "def push():"}
+        for aliases in ({"path": "docs/run.md"}, {"path": None},
+                        {"quote": "invented()"}, {"quote": None}):
+            with self.subTest(aliases=aliases):
+                seen = []
+                result = verify({**base, **aliases}, lambda p: seen.append(p) or gate_read(p))
+                self.assertEqual(result, (False, "malformed"))
+                self.assertEqual(seen, [])
+
+    def test_matching_aliases_preserve_the_published_finding(self):
+        finding = {"file": "src/app.py", "path": "src/app.py", "line": 4,
+                   "evidence": "def push():", "quote": "def push():"}
+        gated = gate_findings([finding], "abc123", gate_read)
+        self.assertEqual(gated["verified"], [finding])
+        self.assertIs(gated["verified"][0], finding)
+        self.assertEqual(gated["refusal_count"], 0)
+
     def test_malformed_finding_is_withheld(self):
         ok, reason = verify("not-a-finding", gate_read)
         self.assertEqual((ok, reason), (False, "malformed"))

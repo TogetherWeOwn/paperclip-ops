@@ -247,7 +247,7 @@ class RunCaseEvidence(unittest.TestCase):
         return {"file": "src/app.py", "line": 2, "severity": "major", "title": "defect",
                 "rationale": "The cited operation is incorrect.", "evidence": "second", **kw}
 
-    def run_model(self, findings=None, raw=None, case=None):
+    def run_model(self, findings=None, raw=None, case=None, during_review=None):
         import os
         import subprocess
         from pathlib import Path
@@ -260,6 +260,8 @@ class RunCaseEvidence(unittest.TestCase):
         def transport(args, **kw):
             if args[0] != "codex":
                 return real_run(args, **kw)
+            if during_review is not None:
+                during_review(kw["cwd"])
             Path(args[args.index("-o") + 1]).write_text(raw)
             return subprocess.CompletedProcess(args, 0, stdout='{"type":"turn.completed",'
                                                '"usage":{"output_tokens":12}}\n', stderr="")
@@ -297,6 +299,48 @@ class RunCaseEvidence(unittest.TestCase):
         self.assertEqual(len(result["evidence_gate"]["rationale"]), 6)
         self.assertTrue(all("unverified, withheld" in r
                             for r in result["evidence_gate"]["rationale"]))
+
+    def test_conflicting_path_aliases_are_withheld_before_scoring(self):
+        from score import score_result
+
+        good = self.finding(path="src/app.py")
+        result = self.run_model([good, self.finding(file="missing.py", path="src/app.py"),
+                                 self.finding(path="missing.py"),
+                                 self.finding(file="last.txt", path="src/app.py"),
+                                 self.finding(file="missing.py", path="last.txt", line=1,
+                                              evidence="last")])
+        self.assertIsNone(result["parse_error"])
+        self.assertEqual(result["review"]["findings"], [good])
+        self.assertEqual(result["evidence_gate"]["refusal_count"], 4)
+        self.assertEqual(result["evidence_gate"]["refusal_rate"], 0.8)
+        self.assertEqual([w["reason"] for w in result["evidence_gate"]["withheld"]],
+                         ["malformed"] * 4)
+        case = {"defects": [{"id": "nonexistent", "file": "missing.py", "line_start": 1,
+                             "line_end": 2, "severity": "major"}]}
+        scored = score_result(result, case, {}, "fixture")
+        self.assertEqual(scored["findings"], 1)
+        self.assertEqual(scored["matched"], 0)
+        self.assertEqual(scored["found"], set())
+
+    def test_verification_stays_at_reviewed_commit_when_head_moves_during_review(self):
+        observed = []
+
+        def move_head(wt):
+            before = rr.sh("git", "rev-parse", "HEAD", cwd=wt).strip()
+            rr.sh("git", "checkout", "--detach", self.base, cwd=wt)
+            after = rr.sh("git", "rev-parse", "HEAD", cwd=wt).strip()
+            observed.append((before, after, rr.read_git_file(wt, "src/app.py")))
+
+        good = self.finding()
+        result = self.run_model([good, self.finding(evidence="old")], during_review=move_head)
+        self.assertEqual(observed, [(self.head, self.base, "first\nold\n")])
+        self.assertEqual(result["review"]["findings"], [good])
+        self.assertEqual(result["evidence_gate"]["head"], self.head)
+        self.assertEqual(result["evidence_gate"]["total"], 2)
+        self.assertEqual(result["evidence_gate"]["refusal_count"], 1)
+        self.assertEqual(result["evidence_gate"]["refusal_rate"], 0.5)
+        self.assertEqual(result["evidence_gate"]["withheld"],
+                         [{"file": "src/app.py", "line": 2, "reason": "quote_mismatch"}])
 
     def test_missing_or_blank_evidence_is_withheld_not_inferred_from_rationale(self):
         missing = self.finding()

@@ -1542,6 +1542,7 @@ jobs:
       - name: context evidence synthetic replay
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: |
+          python3 -B -m unittest discover -s eval/context-evidence -p test_audit.py -v
           python3 -B eval/context-evidence/audit.py eval/context-evidence/example.json > "$RUNNER_TEMP/context-evidence.json"
           jq -e '.status == "pass" and .fidelity.retained == 3 and .fidelity.total == 3 and .capacity.headroomTokens == 188000' "$RUNNER_TEMP/context-evidence.json"
 

@@ -124,6 +124,14 @@ new packet is saved through the native mechanism and its use is observed in a
 subsequent authorized handoff. Token savings and model quality require separate
 measurements; a passing synthetic example proves neither.
 
-CI replays the synthetic example as a smoke check. It is not an independent
-acceptance suite, live trace validation or a semantic compaction test. Roll back
-by reverting the PR; there is no job or host service to disable.
+CI runs the independently authored `eval/context-evidence/test_audit.py`
+acceptance suite before replaying the synthetic example in the same step. The
+suite checks API and CLI fail/unknown verdicts, evidence validation, served-model
+attribution, request occupancy, strict JSON and the 8 MiB boundary. Run it locally:
+
+```sh
+python3 -B -m unittest discover -s eval/context-evidence -p test_audit.py -v
+```
+
+These synthetic checks are not live trace validation or semantic compaction
+tests. Roll back by reverting the PR; there is no job or host service to disable.

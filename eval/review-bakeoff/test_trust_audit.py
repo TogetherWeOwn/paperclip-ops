@@ -14,6 +14,7 @@ CLI errors are JSON objects with a nonempty error, on stdout, and exit 2.
 """
 import copy
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -405,6 +406,16 @@ class CommandLine(unittest.TestCase):
                          {"cases": 1, "results": 2, "failed_results": 0, "findings": 2})
         self.assertEqual({item["id"] for item in body["queue"]["items"]},
                          {"linked#0", "run#0"})
+
+    def test_nonregular_result_entries_and_links_remain_excluded(self):
+        # A file-link policy must not open a FIFO and wait forever for a writer.
+        fifo = self.results / "pipe.json"
+        os.mkfifo(fifo)
+        (self.results / "linked-pipe.json").symlink_to(fifo)
+        completed, body = self.cli()
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(body["dimensions"]["dataset_audit"]["value"],
+                         {"cases": 1, "results": 1, "failed_results": 0, "findings": 1})
 
     def test_directory_and_ineligible_links_remain_excluded(self):
         nested = self.results / "nested.json"

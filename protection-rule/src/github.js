@@ -334,7 +334,7 @@ export function createGithubReader({ fetchImpl, token, allowedRepositories, time
       requireValue(typeof run.name === 'string' && run.name.length > 0 && typeof run.status === 'string', 'GitHub check run metadata is invalid')
       requireValue(typeof run.head_sha === 'string' && SHA40.test(run.head_sha), 'GitHub check run head is invalid')
       let title = run.output?.title
-      if (title == null || title === '') {
+      if (title == null || (typeof title === 'string' && title.trim() === '')) {
         title = typeof run.output?.summary === 'string' ? run.output.summary.split(/\r?\n/, 1)[0] : null
       }
       return { id: decimalId(run.id), name: run.name, headSha: run.head_sha, status: run.status,

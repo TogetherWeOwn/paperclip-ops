@@ -36,15 +36,23 @@ jobs:
       BASE_SHA: ${{ inputs.base-sha || github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
       HEAD_SHA: ${{ inputs.head-sha || github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
       TOOLS_REF: ${{ inputs.tools-ref }}
-      EXTERNAL_CALLER: ${{ github.repository != 'TogetherWeOwn/paperclip-ops' }}
+      CALL_INPUTS: ${{ toJSON(inputs) }}
+      REUSABLE_CALL: ${{ inputs.head-sha != '' }}
     steps:
       - name: Validate immutable inputs
         shell: bash
         run: |
           python3 - <<'PY'
-          import os, re
-          for name in ("BASE_SHA", "HEAD_SHA") + (("TOOLS_REF",) if os.environ["EXTERNAL_CALLER"] == "true" else ()):
-              if not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", os.environ[name]):
+          import json, os, re
+          values = {name: os.environ[name] for name in ("BASE_SHA", "HEAD_SHA")}
+          call_inputs = json.loads(os.environ["CALL_INPUTS"])
+          if call_inputs:
+              # Validate raw call inputs: empty required values must not fall
+              # through to the native-event SHA expressions above.
+              values = {name: call_inputs.get(key, "") for name, key in
+                        (("BASE_SHA", "base-sha"), ("HEAD_SHA", "head-sha"), ("TOOLS_REF", "tools-ref"))}
+          for name, value in values.items():
+              if not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", value):
                   raise SystemExit(f"{name}: provide a full lowercase commit SHA, not a branch or expression")
           PY
       - name: Check out the caller history
@@ -54,8 +62,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           path: caller
-      - name: Check out pinned checker for external callers
-        if: env.EXTERNAL_CALLER == 'true'
+      - name: Check out pinned checker for reusable calls
+        if: env.REUSABLE_CALL == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: TogetherWeOwn/paperclip-ops
@@ -66,5 +74,5 @@ jobs:
         working-directory: caller
         shell: bash
         env:
-          CHECKER: ${{ github.repository == 'TogetherWeOwn/paperclip-ops' && 'scripts/quality-gates/docs_drift.py' || '../docs-drift-tools/scripts/quality-gates/docs_drift.py' }}
+          CHECKER: ${{ env.REUSABLE_CALL == 'true' && '../docs-drift-tools/scripts/quality-gates/docs_drift.py' || 'scripts/quality-gates/docs_drift.py' }}
         run: python3 "$CHECKER" --base "$BASE_SHA" --head "$HEAD_SHA"

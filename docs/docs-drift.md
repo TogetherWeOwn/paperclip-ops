@@ -73,11 +73,16 @@ only where a real source-to-doc contract exists; avoid broad unrelated-doc bypas
 ## Reusable CI
 
 `.github/workflows/docs-drift.yml` runs here on PRs, main pushes and merge groups.
-External callers can use its `workflow_call` interface with `base-sha`, `head-sha`
-and `tools-ref`. Pin both `uses: TogetherWeOwn/paperclip-ops/.github/workflows/docs-drift.yml@<full-sha>`
+These native events use their own checkout's checker, including in forks or
+renamed copies; repository identity does not select the checker.
+Reusable callers, including this same repository, use its `workflow_call`
+interface with `base-sha`, `head-sha` and `tools-ref`. Pin both
+`uses: TogetherWeOwn/paperclip-ops/.github/workflows/docs-drift.yml@<full-sha>`
 and `tools-ref` to the **same reviewed paperclip-ops commit**. The workflow checks
 out the caller at head with complete history, and the checker separately at
-`tools-ref`. For PR callers pass `github.event.pull_request.base.sha` and
+`tools-ref` for every reusable call. Raw call inputs are validated before checkout;
+empty or mutable inputs fail rather than falling back to event SHAs or local tools.
+For PR callers pass `github.event.pull_request.base.sha` and
 `github.event.pull_request.head.sha`; other events must supply their own real
 comparison SHAs. No arbitrary commands, generators or auto-fixes are executed.
 

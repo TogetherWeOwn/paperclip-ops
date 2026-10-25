@@ -23,6 +23,7 @@
     "Live public-fork disclosure audit": 15,
     "public-safety": 5,
     "docs-verdict": 5,
+    "docs-drift": 3,
     "probe": 15,
     "service-db": 15,
     "fresh-vm": 15,

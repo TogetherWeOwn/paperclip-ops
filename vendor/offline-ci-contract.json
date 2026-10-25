@@ -1787,7 +1787,7 @@
     },
     {
       "name": "quality-gate helper suites",
-      "definition_sha256": "68b4abdbd85871ca024089f0ce025a71292090ad4ee86f0f4389a1fa4e8d5d80",
+      "definition_sha256": "eff2ed20e1d4d438acec4567c8f59687ae4d72049050fa12122563c0a3021b65",
       "id": "quality-gate helper suites:1"
     },
     {

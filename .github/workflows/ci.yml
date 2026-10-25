@@ -1539,6 +1539,12 @@ jobs:
         working-directory: eval/review-bakeoff
         run: python3 -B -m unittest -v test_batch test_build_cases test_run_review test_score test_szz_pairs
 
+      - name: context evidence synthetic replay
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: |
+          python3 -B eval/context-evidence/audit.py eval/context-evidence/example.json > "$RUNNER_TEMP/context-evidence.json"
+          jq -e '.status == "pass" and .fidelity.retained == 3 and .fidelity.total == 3 and .capacity.headroomTokens == 188000' "$RUNNER_TEMP/context-evidence.json"
+
       # case_999adcc5. Disk sweep class 7 (orphaned run scratch): reap only marked,
       # unreferenced, idle dirs; fail closed without a readable process table.
       # Offline: fake /proc and /tmp trees under mktemp, mutants per guard.

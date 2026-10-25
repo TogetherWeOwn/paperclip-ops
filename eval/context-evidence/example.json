@@ -1,0 +1,46 @@
+{
+  "schema": "context-evidence.v1",
+  "run": {
+    "usageJson": {
+      "model": "example-served-model",
+      "inputTokens": 9000000
+    },
+    "resultJson": {
+      "modelUsage": {
+        "example-served-model": {
+          "contextWindow": 320000
+        }
+      }
+    }
+  },
+  "rawEvidence": [
+    {
+      "id": "decision",
+      "body": "The write failed with HTTP 422. Do not retry the conflicting write. No source changes were made."
+    }
+  ],
+  "statePacket": "The write failed with HTTP 422. Do not retry the conflicting write. No source changes were made.",
+  "anchors": [
+    {
+      "id": "error",
+      "sourceId": "decision",
+      "text": "HTTP 422"
+    },
+    {
+      "id": "stop",
+      "sourceId": "decision",
+      "text": "Do not retry the conflicting write."
+    },
+    {
+      "id": "work-state",
+      "sourceId": "decision",
+      "text": "No source changes were made."
+    }
+  ],
+  "request": {
+    "model": "example-served-model",
+    "inputTokens": 100000,
+    "outputReserveTokens": 32000,
+    "source": "synthetic single-request measurement, not run totals"
+  }
+}

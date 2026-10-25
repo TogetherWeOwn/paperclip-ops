@@ -15,6 +15,15 @@ Skills: `agent-experience` for anything agents consume; `<REPO SKILLS>`.
 6. Every change ships with a runnable check that proves it worked.
 7. An "agent-friendly" change is a hypothesis until a metric moves; name the metric.
 
+## Planning rules
+
+- One doer and one independently reviewable outcome per slice; include its check and rollback.
+- Scale planning to risk and coupling, not diff size; preserve every existing gate.
+- Bound uncertain prototypes by question, budget and stop condition; retaining code needs normal review.
+- Reassess remaining cost/benefit on changed evidence; ignore sunk cost and expose high-impact risks early.
+- Queue only concrete followups with a doer, exit evidence and reconsideration trigger; optional polish is not a blocker.
+- Use native task plans and dependencies, never host automation. Copy-ready planning fragment and adoption checks: [right-sized planning](https://github.com/TogetherWeOwn/paperclip-ops/blob/main/docs/right-sized-planning.md).
+
 ## Operator seeding note
 
 Destination: `repo-template/AGENTS.md` in the org `.github` repo, plus

@@ -5351,13 +5351,13 @@ jobs:
           echo "install ok: plugin-sdk present"
 
       # Pass the FILE, not the directory: `node --test test/` resolves `test` as
-      # a module specifier on Node 24 and dies before running anything, which
-      # looks exactly like a broken suite and is not. package.json's `test`
-      # script passes the file, and is invoked here so the two cannot drift.
+      # a module specifier on Node 24 and dies before running anything. Name the
+      # tracked suite explicitly so the orphan check sees its producer before
+      # the ignored package.json is restored from the toolkit archive.
       - name: Dispatch suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.dispatch == 'true'
         working-directory: plugins/dispatch
-        run: npm test
+        run: node --test test/dispatch.test.mjs
 
       - name: Dispatch sweep failure visibility acceptance
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.dispatch == 'true'

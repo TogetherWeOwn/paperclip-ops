@@ -88,9 +88,12 @@ repeat the apply on copies of the real pinned files and run the host suites.
 6. The gate skips a review only when exactly one row exists on the head and it is the verified
    carried check. Anything else requests a review as today.
 7. When carry does not apply because the own-patch changed, `review_carry` writes a delta
-   record; `review_findings.context` uses it only if its source head equals the last reviewed
-   head, and always unions all prior blocking-finding paths. The round-context note names the
-   scope (`own-patch` or `compare`).
+   record. Each enabled pass first clears this PR's previous derived records under the
+   ledger lock, before reading evidence; a fallback cannot leave an old narrow scope behind.
+   `review_findings.context` checks the live target head and base (ref AND SHA) before using
+   a record, requires its source head to equal the last reviewed head, and always unions
+   all prior blocking-finding paths. The round-context note names the scope (`own-patch`
+   or `compare`).
 8. Audit lines (SHAs, refs, digest, bounded reason, `UNDO:` text) go through the host log helper.
 
 ## Pure helper contract
@@ -153,21 +156,6 @@ The integration must satisfy all of these before it is eligible for installation
    on missing/truncated findings or any exception. Update the JSON context
    and ROUND CONTEXT note together; no unavailable-data-as-zero-files message.
 
-### Delta-record base binding, and the one thing the packet does not do
-
-`scoped_delta` accepts an optional `source_base`. When the caller supplies the current
-base of the head that produced the record, a record computed against a **different**
-base is refused and the caller keeps the compare-based list. Omitted (the default), the
-record's own `old_base` stands and the behavior is exactly the seven-argument call the
-current `review-rebase-carry-findings.patch` makes.
-
-`review_findings.context()` has no base in scope today, and the host `review_gate`
-GraphQL `QUERY` selects no base field, so this packet leaves that call site unchanged
-rather than inventing a base. A later host change that selects the PR's base ref can pass
-it through and get the binding; until then the record stays valid, because the own-patch
-diff of a fixed head pair is base-invariant (advancing the base advances both merge-bases
-in lockstep, so the changed-file set does not move). Tested in
-`test_review_rebase_carry_base_binding.py`.
 6. Add a fail-closed control for **both carry and delta scoping**. Absent,
    unreadable or malformed configuration means disabled. Explicit shadow mode
    is log-only. Every carry and fallback must have a bounded, sanitized audit
@@ -178,6 +166,39 @@ in lockstep, so the changed-file set does not move). Tested in
    adversarial coverage of identity, receipt, concurrency, TOCTOU, publication
    failures, missing historical bases and default-off behavior. Do not copy
    credential/mint code into a public integration packet.
+
+### Delta-record freshness and live base binding
+
+The earlier claim that a fixed head pair makes every base change safe was too broad:
+a PR can be retargeted from `main` to `dev` without changing its head. Reusing a record
+from `main` would then narrow a review even though the proof correctly requires full
+review. A binding that the shipped caller never supplies does not fix that case.
+
+The enabled writer now invalidates this PR's derived records **after acquiring** the
+ledger lock but **before** loading the ledger or reading the PR/checks. Only a new
+successful own-patch computation writes a new record. Base-ref changes, unavailable or
+invalid evidence, early skips and empty deltas therefore leave no previous scope. A
+Busy pass never deletes the active writer's record. Different short-repository/PR cache
+keys are untouched; a same-name repository collision can only discard an optimization,
+not authorize narrower scope (the reader also validates the full repository name).
+Off/shadow remain read-disabled and do not mutate delta records.
+
+The findings patch also makes one bounded, read-only PR request through the existing
+`sh`/`gh_env` seam when enabled. It verifies the current head and passes the live base
+as `current_base` to `scoped_delta`. The record's `new_base` must match **both** ref and
+SHA, and its old/new base refs must agree. This rejects a retarget or base advance even
+between writer ticks. Read, parse, identity or base validation failure preserves the
+compare-based list. Control is re-read after the lookup, so a kill switch engaged during
+that request also retains compare scope. Missing control/off/shadow make no extra provider
+request.
+
+`source_base` remains an optional check against the historical `old_base` for existing
+callers. It is distinct from `current_base`: a normal rebase advances the current base
+SHA without rewriting the historical snapshot. The seven-argument helper API remains
+compatible; the shipped findings call always supplies the live target-base binding.
+No gate query or credential helper is changed or copied. The transport and insertion
+anchors were verified against the hash-checked, sanitized source captures; full pinned
+host apply and host suites remain installation requirements.
 
 Final-head security APPROVE and same-head CI plus Paperclip Review 5/5 remain
 required before the authorized executor receives an installation request.

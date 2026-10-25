@@ -196,8 +196,9 @@ class Ledger:
     is never substituted: such a head stays `other` and cannot be a carry source.
     """
 
-    def __init__(self, paths, clock=time.time):
+    def __init__(self, paths, clock=time.time, clear_delta_for=None):
         self.paths, self.clock = paths, clock
+        self.clear_delta_for = clear_delta_for
         self.data = {'v': 1, 'prs': {}}
         self._held = None
 
@@ -211,6 +212,10 @@ class Ledger:
             self._held = None
             raise Busy() from None
         try:
+            # Invalidate before loading evidence or doing IO. Every early return/error
+            # must leave no earlier scope behind; a Busy pass never reaches this point.
+            if self.clear_delta_for is not None:
+                clear_delta(self.paths, *self.clear_delta_for)
             self._load()
         except Exception:
             self.__exit__()
@@ -368,16 +373,23 @@ def write_delta(paths, record):
     os.replace(tmp, target)
 
 
-def scoped_delta(paths, mode, repo, number, last_head, head, blocking, source_base=None):
+def clear_delta(paths, repo, number):
+    """Discard this PR's derived scope records while holding the ledger lock."""
+    prefix = f"{repo.split('/')[-1].lower()}-{int(number)}-"
+    for target in paths.delta_dir.glob(f'{prefix}*.json'):
+        target.unlink(missing_ok=True)
+
+
+def scoped_delta(paths, mode, repo, number, last_head, head, blocking, source_base=None,
+                 current_base=None):
     """Own-patch delta ∪ prior-blocking paths, or None meaning use the compare-based list.
 
     Union-only: never narrower than the changed own-patch files plus every prior blocker.
-    `source_base` is the current base of the head that produced this record (`last_head`),
-    as `{'ref':..., 'sha':...}`. When given, the record must have been computed against that
-    same base or the call returns None, so a base that moved after the record was written
-    falls back to the compare-based list instead of reusing a stale union. It defaults to
-    None, which keeps the record's own `old_base` binding and leaves callers that cannot
-    supply the source base on today's behavior.
+    Optional `source_base` binds the historical source head to the record's `old_base`.
+    The shipped findings caller supplies `current_base`, read live with the target head,
+    to bind `new_base` by BOTH ref and SHA. Retargets and base movement between writer ticks
+    then fall back to compare, even before the next pass invalidates the old record.
+    Omitted bindings retain compatibility with the original seven-argument helper API.
     """
     try:
         if mode != 'on' or not isinstance(blocking, (list, tuple)):
@@ -393,12 +405,14 @@ def scoped_delta(paths, mode, repo, number, last_head, head, blocking, source_ba
                 or not isinstance(rec.get('files'), list) or not rec['files']
                 or len(rec['files']) > MAX_DELTA_FILES):
             return None
-        # The record is a record of one head pair on one source base. Bind it to that
-        # base whenever the caller can name the source's current base, so a stale record
-        # is never reused after the base moved.
         if source_base is not None:
             record_base = rec.get('old_base')
             if not isinstance(record_base, Mapping) or core._base(record_base) != core._base(source_base):
+                return None
+        if current_base is not None:
+            old_ref, _ = core._base(rec.get('old_base'))
+            record_ref, record_sha = core._base(rec.get('new_base'))
+            if old_ref != record_ref or (record_ref, record_sha) != core._base(current_base):
                 return None
         files = {core._relative_path(f) for f in rec['files']}
         for finding in blocking:
@@ -467,7 +481,7 @@ def evaluate_pr(env, paths, repo, number, mode):
         return result
     head = old_head = None
     try:
-        with Ledger(paths) as ledger:
+        with Ledger(paths, clear_delta_for=(repo, number) if mode == 'on' else None) as ledger:
             head, base = _pr_view(env.get_pr(number), repo)
             rows = env.checks_for(head)
             own = core.latest_review(genuine_rows(rows, number, head), number, head)

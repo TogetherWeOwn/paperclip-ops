@@ -121,18 +121,35 @@ where a real source-to-doc contract exists; avoid broad unrelated-doc bypasses.
 ## Reusable CI
 
 `.github/workflows/docs-drift.yml` runs here on PRs, main pushes and merge groups.
-These native events use their own checkout's checker, including in forks or
-renamed copies; repository identity does not select the checker.
+The caller is checked out at the comparison head with complete history. The
+checker is **always a separate checkout**: native events use `github.repository`
+at `github.workflow_sha` (the immutable workflow-file revision), including in
+forks or renamed copies. A PR head may predate the checker, or contain a different
+checker; neither selects the executable. The workflow revision must contain the
+checker. Missing tools fail the job, never fall back to caller files or skip.
+
 Reusable callers, including this same repository, use its `workflow_call`
 interface with `base-sha`, `head-sha` and `tools-ref`. Pin both
 `uses: TogetherWeOwn/paperclip-ops/.github/workflows/docs-drift.yml@<full-sha>`
-and `tools-ref` to the **same reviewed paperclip-ops commit**. The workflow checks
-out the caller at head with complete history, and the checker separately at
-`tools-ref` for every reusable call. Raw call inputs are validated before checkout;
-empty or mutable inputs fail rather than falling back to event SHAs or local tools.
-For PR callers pass `github.event.pull_request.base.sha` and
+and `tools-ref` to the **same reviewed paperclip-ops commit**. Every reusable call
+checks out the canonical paperclip-ops checker at `tools-ref`, not the caller's
+workflow revision. Full lowercase SHAs, including native workflow provenance,
+are validated before any checkout. Raw call inputs and native event SHAs are
+validated too: empty or mutable values cannot fall back to different event
+SHAs or tools. For PR callers pass `github.event.pull_request.base.sha` and
 `github.event.pull_request.head.sha`; other events must supply their own real
-comparison SHAs. No arbitrary commands, generators or auto-fixes are executed.
+comparison SHAs.
+
+The checker still runs **in the caller directory**, so diffs and policy come from
+caller history; the policy snapshot remains the supplied target/base commit,
+not the tools checkout or PR policy. Stdout remains the single checker JSON
+report. Stderr includes a `docs-drift.tools.v1` provenance object with exact
+base/head, tools repository/ref and reusable-call mode. For hosted verification,
+record the run/job URL, this provenance and the checker's policy/merge-base SHAs,
+`changed_paths`, `checked_rules` and findings; a green job alone is not coverage.
+Rerunning an old failed run uses that run's old workflow revision, not this repair;
+verify on a genuine new native event instead. No arbitrary commands, generators
+or auto-fixes are executed.
 
 Both checkouts disable persisted credentials; permissions are only `contents:
 read`. Do not inherit secrets. No host actions, package installs, production

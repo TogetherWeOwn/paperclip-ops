@@ -72,6 +72,11 @@ For native skill versions, reusable examples and isolated pinned-version tests,
 see the [versioned skill fixture procedure](docs/versioned-skill-fixtures.md).
 It adds no runtime registry, host automation or skill-assignment authority.
 
+For one policy across plan, build, and review phases, see the
+[role, provider, and rubric coherence procedure](docs/role-provider-rubric-coherence.md).
+It scopes guidance to role and phase, keeps task policy provider-independent,
+and cites a single pinned rubric in every phase.
+
 | Tool |
 | --- |
 | `public_snapshot_test_support.py` (test-only private-artifact boundary; not a runtime policy or operator command) |

@@ -200,6 +200,16 @@ to do a `SELECT`. `getOrchestration` reaches the same rows through the same JSON
 filter with a read-only capability, at the cost of one host call per assigned
 issue. That is the better trade and the test suite asserts it stays that way.
 
+## Offline CI
+
+The dispatch area in `.github/workflows/ci.yml` restores the pinned toolkit
+inputs, installs the pinned development dependencies, then runs
+`node --test test/dispatch.test.mjs` from `plugins/dispatch`. The explicit file
+keeps the tracked suite discoverable by the orphan-suite check on a fresh
+checkout, before the ignored `package.json` is restored. It also avoids Node 24's
+directory-target resolution trap. No live host or credentials are used by the
+suite; dependency installation is a separate setup step.
+
 ## Install
 
 Needs an operator; every step needs `uid 0`. The plugin is installed from a local

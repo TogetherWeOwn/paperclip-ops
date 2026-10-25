@@ -139,6 +139,38 @@ class AuditContract(unittest.TestCase):
         self.assertEqual({key: counts[key] for key in expected}, expected)
         self.assertEqual(report["dimensions"]["scoring_mechanism_attribution"]["denominator"], 6)
 
+    def test_coverage_requires_nonconflicting_positive_explicit_evidence(self):
+        # Independent expected counts, not a comparison with another audit call.
+        examples = [
+            ("src/a.ts", None, 0),
+            ("src/a.ts", "d1", 1),
+            ("src/a.ts", "d2", 0),
+            ("src/a.ts", "invalid", 0),
+            ("src/a.ts", "valid-other", 0),
+            ("other.ts", None, 0),
+            ("other.ts", "d1", 1),
+            ("other.ts", "d2", 1),
+            ("other.ts", "invalid", 0),
+            ("other.ts", "valid-other", 1),
+        ]
+        for file, label, credit in examples:
+            with self.subTest(file=file, label=label):
+                labels = {} if label is None else {"run#0": label}
+                report = self.audit([("run", result([finding(file)]))], labels)
+                self.assertEqual(report["coverage"], {
+                    "explicit_judgments": 0 if label is None else 1,
+                    "findings": 1, "nonconflicting_explicit_credit": credit,
+                })
+
+    def test_mixed_coverage_does_not_restore_location_only_credit(self):
+        run = result([finding(), finding("other.ts", 1), finding("other.ts", 2),
+                      finding("other.ts", 3), finding("other.ts", 4), finding()])
+        labels = {"run#0": "invalid", "run#1": "valid-other", "run#2": "d1",
+                  "run#3": "invalid", "run#5": "d1"}
+        report = self.audit([("run", run)], labels)
+        self.assertEqual(report["coverage"], {"explicit_judgments": 5, "findings": 6,
+                                            "nonconflicting_explicit_credit": 3})
+
     def test_other_disagreeing_labels_also_expose_location_conflicts(self):
         for label in ("valid-other", "d2"):
             with self.subTest(label=label):
@@ -245,6 +277,53 @@ class AuditContract(unittest.TestCase):
             with self.subTest(finding=bad_finding):
                 self.assert_rejected({"cases": [CASE]}, [("bad", result([bad_finding]))],
                                      {}, "finding", "bad")
+
+    def test_finding_lines_require_positive_nonboolean_integers(self):
+        for value in (0, -1, False, True, 1.0, "1", None):
+            with self.subTest(line=value):
+                self.assert_rejected({"cases": [CASE]},
+                                     [("bad-line", result([finding(line=value)]))], {},
+                                     "positive integer", "finding bad-line#0 line")
+
+    def test_both_defect_endpoints_require_positive_nonboolean_integers(self):
+        for endpoint in ("line_start", "line_end"):
+            for value in (0, -1, False, True, 1.0, "1", None):
+                with self.subTest(endpoint=endpoint, value=value):
+                    case = copy.deepcopy(CASE)
+                    case["defects"][0][endpoint] = value
+                    self.assert_rejected({"cases": [case]}, [], {},
+                                         "positive integer", f"case c1 defect 0 {endpoint}")
+
+    def test_severity_is_validated_on_findings_and_defects(self):
+        for value in ("", "MAJOR", "unknown", None, 1, [], {}):
+            with self.subTest(record="finding", severity=value):
+                bad_finding = {**finding(), "severity": value}
+                self.assert_rejected({"cases": [CASE]},
+                                     [("bad-severity", result([bad_finding]))], {},
+                                     "severity", "finding bad-severity#0")
+            with self.subTest(record="defect", severity=value):
+                case = copy.deepcopy(CASE)
+                case["defects"][0]["severity"] = value
+                self.assert_rejected({"cases": [case]}, [], {}, "severity", "case c1 defect 0")
+
+    def test_judgment_verdict_names_cannot_be_defect_ids(self):
+        for reserved in ("invalid", "valid-other"):
+            with self.subTest(id=reserved):
+                case = copy.deepcopy(CASE)
+                case["defects"][0]["id"] = reserved
+                self.assert_rejected({"cases": [case]}, [], {}, "reserved defect id", reserved)
+
+    def test_positive_line_and_severity_boundaries_remain_valid(self):
+        for severity in ("minor", "major", "critical"):
+            with self.subTest(severity=severity):
+                case = {"id": "c1", "defects": [{"id": "d1", "file": "src/a.ts",
+                        "line_start": 1, "line_end": 1, "severity": severity}]}
+                first_line = {**finding(line=1), "severity": severity}
+                report = self.audit([("run", result([first_line]))], {"run#0": "d1"},
+                                    {"cases": [case]})
+                self.assertEqual(report["coverage"], {"explicit_judgments": 1, "findings": 1,
+                                                    "nonconflicting_explicit_credit": 1})
+                self.assertEqual(self.attribution(report)["automatic_location"], 1)
 
     def test_queue_is_bounded_deterministic_and_does_not_copy_review_text(self):
         sentinel = "SYNTHETIC_REVIEW_TEXT_NOT_FOR_AUDIT_OUTPUT"

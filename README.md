@@ -68,6 +68,10 @@ For the offline card/run/PR/head/deploy trace correlator, see the
 [evidence, join and SLO contract](docs/trace-correlation.md).
 It reads caller-assembled evidence only and authorizes no host action.
 
+For source-to-documentation accompaniment in pull requests, see the portable
+[documentation drift gate](docs/docs-drift.md), including its JSON contract,
+base-policy trust model and reusable CI interface.
+
 For native skill versions, reusable examples and isolated pinned-version tests,
 see the [versioned skill fixture procedure](docs/versioned-skill-fixtures.md).
 It adds no runtime registry, host automation or skill-assignment authority.

@@ -6,21 +6,50 @@ credentials, no board. Fixture identifiers are DEMO placeholders.
 """
 
 import datetime as dt
+import io
 import json
 import subprocess
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "ops" / "paperclip"))
 
+import trace_correlator
 from trace_correlator import InputError, correlate, load_document
 
 AT = "2026-10-25T07:30:00Z"
 SHA_A = "a" * 40
 SHA_B = "b" * 40
 SHA_C = "c" * 40
+INVALID_IGNORED_JSON = (
+    ("positive_overflow", b'{"schema_version":1,"ignored":1e999}'),
+    ("negative_overflow", b'{"schema_version":1,"ignored":-1e999}'),
+    ("high_surrogate_key", b'{"schema_version":1,"\\ud800":"ignored"}'),
+    ("low_surrogate_key", b'{"schema_version":1,"\\udfff":"ignored"}'),
+    ("high_surrogate_value", b'{"schema_version":1,"ignored":"\\ud800"}'),
+    ("low_surrogate_value", b'{"schema_version":1,"ignored":"\\udfff"}'),
+    ("nested_surrogate_key",
+     b'{"schema_version":1,"ignored":[{"\\ud800":0}]}'),
+    ("nested_surrogate_value",
+     b'{"schema_version":1,"ignored":[{"value":"\\udfff"}]}'),
+)
+
+
+class BoundedInput(io.BytesIO):
+    def __init__(self, raw, limit):
+        super().__init__(raw)
+        self.limit = limit
+        self.read_sizes = []
+
+    def read(self, size=-1):
+        self.read_sizes.append(size)
+        if size != self.limit + 1:
+            raise AssertionError(f"stdin read must be bounded, got {size}")
+        return super().read(size)
 
 
 def run_row(run="run-1", card="DEMO-1", created="2026-10-20T10:00:00Z",
@@ -152,6 +181,97 @@ class JoinTest(unittest.TestCase):
         self.assertEqual(report["delivery"]["orphanWorkProducts"], 2)
         self.assertEqual(report["delivery"]["orphanDeployments"], 1)
         self.assertEqual(report["delivery"]["coveragePrJoin"], 0.0)
+
+    def test_valid_pr_link_never_joins_wrong_sha_or_repository(self):
+        wrong_sha = deploy_row(sha=SHA_B, deploy="wrong-sha")
+        wrong_repo = deploy_row(repo="other-org/other-repo", deploy="wrong-repo")
+        for deployments in ([wrong_sha], [wrong_repo], [wrong_sha, wrong_repo]):
+            with self.subTest(deployments=deployments):
+                report = correlate(
+                    doc(runs=[run_row()], work_products=[link_row()],
+                        deployments=deployments), AT)
+                (trace,) = report["traces"]
+                self.assertEqual(trace["repo"], "demo-org/demo-repo")
+                self.assertEqual(trace["pr"], 7)
+                self.assertEqual(trace["headSha"], SHA_A)
+                self.assertIsNone(trace["deployId"])
+                self.assertIsNone(trace["shaMatch"])
+                self.assertIsNone(trace["stages"]["mergeToProdS"])
+                self.assertEqual(trace["missing"], ["deploy"])
+                self.assertEqual(report["slo"]["verdict"], "unknown")
+                self.assertEqual(report["slo"]["samples"], 0)
+                delivery = report["delivery"]
+                self.assertEqual(delivery["prLinksJoined"], 1)
+                self.assertEqual(delivery["coveragePrJoin"], 1.0)
+                self.assertEqual(delivery["orphanWorkProducts"], 0)
+                self.assertEqual(delivery["deploysValid"], len(deployments))
+                self.assertEqual(delivery["orphanDeployments"], len(deployments))
+                self.assertEqual(delivery["deploysJoined"], 0)
+                self.assertEqual(delivery["coverageDeployJoin"], 0.0)
+
+    def test_pr_identifiers_reject_trailing_newline_without_trimming(self):
+        for field, reason in (
+            ("headSha", "link_head_not_exact_sha"),
+            ("mergeSha", "link_merge_not_exact_sha"),
+            ("repo", "link_bad_repo"),
+        ):
+            for suffix in ("", "\n"):
+                with self.subTest(field=field, suffix=repr(suffix)):
+                    link = link_row(merge=SHA_B)
+                    link[field] += suffix
+                    report = correlate(
+                        doc(runs=[run_row()], work_products=[link],
+                            deployments=[deploy_row(sha=SHA_B)]), AT)
+                    (trace,) = report["traces"]
+                    delivery = report["delivery"]
+                    if not suffix:
+                        self.assertEqual(trace["headSha"], SHA_A)
+                        self.assertEqual(trace["mergeSha"], SHA_B)
+                        self.assertEqual(trace["repo"], "demo-org/demo-repo")
+                        self.assertEqual(trace["deployId"], "2026.10.20.1+aaaaaaa")
+                        self.assertEqual(trace["missing"], [])
+                        self.assertEqual(delivery["invalidRows"], 0)
+                        self.assertEqual(delivery["prLinksJoined"], 1)
+                    else:
+                        self.assertEqual(delivery["unknowns"], [reason])
+                        self.assertEqual(delivery["invalidRows"], 1)
+                        self.assertEqual(delivery["prLinksExplicit"], 0)
+                        self.assertEqual(delivery["prLinksJoined"], 0)
+                        self.assertEqual(trace["missing"], ["pr_link"])
+                        self.assertIsNone(trace["headSha"])
+                        self.assertIsNone(trace["mergeSha"])
+                        self.assertIsNone(trace["repo"])
+                        self.assertIsNone(trace["deployId"])
+
+    def test_deploy_identifiers_reject_trailing_newline_without_trimming(self):
+        for field, reason in (
+            ("sha", "deploy_sha_not_exact"),
+            ("repo", "deploy_bad_repo"),
+        ):
+            for suffix in ("", "\n"):
+                with self.subTest(field=field, suffix=repr(suffix)):
+                    deploy = deploy_row()
+                    deploy[field] += suffix
+                    report = correlate(
+                        doc(runs=[run_row()], work_products=[link_row()],
+                            deployments=[deploy]), AT)
+                    (trace,) = report["traces"]
+                    delivery = report["delivery"]
+                    self.assertEqual(delivery["prLinksJoined"], 1)
+                    if not suffix:
+                        self.assertEqual(trace["deployId"], "2026.10.20.1+aaaaaaa")
+                        self.assertEqual(trace["missing"], [])
+                        self.assertEqual(delivery["invalidRows"], 0)
+                        self.assertEqual(delivery["deploysValid"], 1)
+                        self.assertEqual(delivery["deploysJoined"], 1)
+                    else:
+                        self.assertEqual(delivery["unknowns"], [reason])
+                        self.assertEqual(delivery["invalidRows"], 1)
+                        self.assertEqual(delivery["deploysValid"], 0)
+                        self.assertEqual(delivery["deploysJoined"], 0)
+                        self.assertEqual(trace["missing"], ["deploy"])
+                        self.assertIsNone(trace["deployId"])
+                        self.assertIsNone(trace["stages"]["mergeToProdS"])
 
     def test_earliest_deploy_wins_tie_keeps_file_order(self):
         late = deploy_row(deploy="2026.10.20.2+aaaaaaa",
@@ -327,6 +447,38 @@ class SloMathTest(unittest.TestCase):
         # rank 2.7: 1800 + 0.7 * (20000 - 1800)
         self.assertEqual(slo["p90S"], 14540.0)
 
+    def test_p50_only_breach_is_missed(self):
+        parts = [self._chain(n, 7200) for n in range(1, 5)]
+        report = correlate(
+            doc(runs=[p[0] for p in parts],
+                work_products=[p[1] for p in parts],
+                deployments=[p[2] for p in parts]), AT)
+        slo = report["slo"]
+        self.assertEqual(slo["samples"], 4)
+        self.assertEqual(slo["p50S"], 7200.0)
+        self.assertEqual(slo["p90S"], 7200.0)
+        self.assertEqual(slo["verdict"], "missed")
+
+    def test_thresholds_are_inclusive_and_independently_enforced(self):
+        for samples, p50, p90, verdict in (
+            ((3600, 3600), 3600.0, 3600.0, "met"),
+            ((0, 0, 3600, 10800, 10800), 3600.0, 10800.0, "met"),
+            ((3601, 3601), 3601.0, 3601.0, "missed"),
+            ((0, 0, 3600, 10801, 10801), 3600.0, 10801.0, "missed"),
+        ):
+            with self.subTest(samples=samples):
+                parts = [self._chain(n, s) for n, s in
+                         enumerate(samples, start=1)]
+                report = correlate(
+                    doc(runs=[p[0] for p in parts],
+                        work_products=[p[1] for p in parts],
+                        deployments=[p[2] for p in parts]), AT)
+                slo = report["slo"]
+                self.assertEqual(slo["samples"], len(samples))
+                self.assertEqual(slo["p50S"], p50)
+                self.assertEqual(slo["p90S"], p90)
+                self.assertEqual(slo["verdict"], verdict)
+
     def test_single_sample_percentile_is_the_sample(self):
         run, link, deploy = self._chain(1, 900)
         report = correlate(
@@ -352,6 +504,27 @@ class DocumentTest(unittest.TestCase):
         with self.assertRaises(InputError):
             load_document(b'{"schema_version": 1, "runs": {}}')
 
+    def test_rejects_nonfinite_and_surrogate_ignored_keys_and_values(self):
+        for name, raw in INVALID_IGNORED_JSON:
+            with self.subTest(name=name):
+                with self.assertRaises(InputError):
+                    load_document(raw)
+
+    def test_accepts_finite_and_unicode_ignored_values(self):
+        raw = ('{"schema_version":1,"ignored":{"snowman":"☃",'
+               '"value":1e99,"pair":"\\ud83d\\ude00"}}').encode("utf-8")
+        self.assertEqual(load_document(raw),
+                         {"runs": [], "workProducts": [], "deployments": []})
+
+    def test_input_size_boundary_accepts_limit_and_rejects_one_byte_over(self):
+        limit = 256
+        raw = b'{"schema_version":1}'.ljust(limit, b" ")
+        with patch.object(trace_correlator, "MAX_INPUT_BYTES", limit):
+            self.assertEqual(load_document(raw),
+                             {"runs": [], "workProducts": [], "deployments": []})
+            with self.assertRaises(InputError):
+                load_document(raw + b" ")
+
     def test_rejects_oversize_documents(self):
         with self.assertRaises(InputError):
             load_document(b"x" * (1_048_576 + 1))
@@ -369,10 +542,82 @@ class CliTest(unittest.TestCase):
         self.assertEqual(report["slo"]["verdict"], "met")
         self.assertEqual(len(report["traces"]), 1)
 
-    def test_unknown_and_missed_exit_one(self):
+    def test_unknown_exits_one(self):
         done = cli(json.dumps(doc(runs=[run_row()])).encode())
         self.assertEqual(done.returncode, 1, done.stderr)
         self.assertEqual(json.loads(done.stdout)["slo"]["verdict"], "unknown")
+
+    def test_missed_exits_one_with_report(self):
+        raw = json.dumps(doc(
+            runs=[run_row()], work_products=[link_row()],
+            deployments=[deploy_row(deployed="2026-10-20T12:07:00Z")])).encode()
+        done = cli(raw)
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertEqual(done.stderr, b"")
+        report = json.loads(done.stdout)
+        self.assertEqual(report["slo"]["verdict"], "missed")
+        self.assertEqual(report["slo"]["samples"], 1)
+        self.assertEqual(report["slo"]["p50S"], 7200.0)
+        self.assertEqual(report["slo"]["p90S"], 7200.0)
+
+    def test_utc_overflow_is_named_without_losing_valid_sibling_traces(self):
+        stages = {"admissionToStartS": 120.0, "executionS": 300.0,
+                  "mergeToProdS": 1200.0}
+        for overflow in ("0001-01-01T00:00:00+01:00",
+                         "9999-12-31T23:59:59-01:00"):
+            for source, field, affected in (
+                ("run", "createdAt", ("admissionToStartS",)),
+                ("run", "startedAt", ("admissionToStartS", "executionS")),
+                ("run", "finishedAt", ("executionS",)),
+                ("deploy", "mergedAt", ("mergeToProdS",)),
+                ("deploy", "deployedAt", ("mergeToProdS",)),
+            ):
+                with self.subTest(overflow=overflow, source=source, field=field):
+                    bad_run = run_row(run="run-2", card="DEMO-2")
+                    bad_deploy = deploy_row(sha=SHA_B, deploy="sibling-deploy")
+                    row = bad_run if source == "run" else bad_deploy
+                    row[field] = overflow
+                    raw = json.dumps(doc(
+                        runs=[run_row(), bad_run],
+                        work_products=[link_row(),
+                                       link_row(run="run-2", card="DEMO-2",
+                                                head=SHA_B, pr=8)],
+                        deployments=[deploy_row(), bad_deploy])).encode()
+                    done = cli(raw)
+                    self.assertEqual(done.returncode, 0, done.stderr)
+                    self.assertEqual(done.stderr, b"")
+                    report = json.loads(done.stdout)
+                    self.assertEqual(len(report["traces"]), 2)
+                    traces = {trace["run"]: trace for trace in report["traces"]}
+                    good = traces["run-1"]
+                    self.assertEqual(good["stages"], stages)
+                    self.assertEqual(good["missing"], [])
+                    self.assertEqual(good["headSha"], SHA_A)
+                    self.assertEqual(good["deployId"], "2026.10.20.1+aaaaaaa")
+                    bad = traces["run-2"]
+                    self.assertEqual(bad["missing"], [f"{source}.{field}"])
+                    for stage, measured in stages.items():
+                        if stage in affected:
+                            self.assertIsNone(bad["stages"][stage])
+                        else:
+                            self.assertEqual(bad["stages"][stage], measured)
+                    self.assertEqual(bad["headSha"], SHA_B)
+                    self.assertEqual(bad["deployId"], "sibling-deploy")
+                    self.assertEqual(report["slo"]["verdict"], "met")
+                    self.assertEqual(report["slo"]["samples"],
+                                     2 if source == "run" else 1)
+                    self.assertEqual(report["delivery"]["runsValid"], 2)
+                    self.assertEqual(report["delivery"]["deploysJoined"], 2)
+                    self.assertEqual(report["delivery"]["invalidRows"], 0)
+
+    def test_invalid_ignored_json_exits_two_with_empty_stdout(self):
+        for name, raw in INVALID_IGNORED_JSON:
+            with self.subTest(name=name):
+                done = cli(raw)
+                self.assertEqual(done.returncode, 2, done.stderr)
+                self.assertEqual(done.stdout, b"")
+                self.assertIn(b"trace_correlator", done.stderr)
+                self.assertNotIn(b"Traceback", done.stderr)
 
     def test_bad_input_exits_two_with_no_report(self):
         done = cli(b"{not json")
@@ -383,6 +628,41 @@ class CliTest(unittest.TestCase):
         done = cli(b"x" * (1_048_576 + 1))
         self.assertEqual(done.returncode, 2)
         self.assertEqual(done.stdout, b"")
+
+
+class MainInputTest(unittest.TestCase):
+    def _invoke(self, raw, limit):
+        source = BoundedInput(raw, limit)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.object(trace_correlator, "MAX_INPUT_BYTES", limit), \
+                patch.object(sys, "stdin", SimpleNamespace(buffer=source)), \
+                patch.object(sys, "stdout", stdout), \
+                patch.object(sys, "stderr", stderr):
+            status = trace_correlator.main([])
+        self.assertEqual(source.read_sizes, [limit + 1])
+        self.assertLessEqual(source.tell(), limit + 1)
+        return status, stdout.getvalue(), stderr.getvalue(), source.tell()
+
+    def test_exact_input_limit_is_accepted_with_one_bounded_read(self):
+        limit = 256
+        raw = b'{"schema_version":1}'.ljust(limit, b" ")
+        status, stdout, stderr, consumed = self._invoke(raw, limit)
+        self.assertEqual(status, 1)
+        self.assertEqual(json.loads(stdout)["slo"]["verdict"], "unknown")
+        self.assertEqual(stderr, "")
+        self.assertEqual(consumed, limit)
+
+    def test_oversize_refusal_does_not_drain_stdin(self):
+        limit = 256
+        for size in (limit + 1, limit * 3):
+            with self.subTest(size=size):
+                raw = b'{"schema_version":1}'.ljust(size, b" ")
+                status, stdout, stderr, consumed = self._invoke(raw, limit)
+                self.assertEqual(status, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn("trace_correlator", stderr)
+                self.assertNotIn("Traceback", stderr)
+                self.assertEqual(consumed, limit + 1)
 
 
 if __name__ == "__main__":

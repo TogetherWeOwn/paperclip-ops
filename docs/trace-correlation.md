@@ -71,10 +71,11 @@ Output schema is `trace-correlation.v1`: `traces`, one `slo` row and one
   `pr_link`, `pr.headSha`, `deploy`, `deploy.mergedAt`, ...).
 - Negative spans (clock skew) stay null with a `*_negative` marker.
 - Mutable head refs (branch names, `latest`) are rejected
-  (`link_head_not_exact_sha`), never resolved. Deploys whose sha does
-  not exactly equal a trace head are orphans: counted, never joined.
-  When several deploys share one head, the earliest `deployedAt` wins;
-  ties keep file order.
+  (`link_head_not_exact_sha`), never resolved. A deploy matches on repo
+  and full SHA against a link's `mergeSha` or `headSha`; a merge-SHA
+  match wins. For the chosen repo and SHA, the earliest `deployedAt`
+  wins; ties keep file order. A deploy that no trace selects is an
+  orphan, including unselected duplicates: counted, never joined.
 - Duplicate run IDs after the first are invalid (`run_duplicate_id`).
 - Invalid rows are counted in `delivery.invalidRows` with their reasons
   in `delivery.unknowns`; they never abort the report.
@@ -95,8 +96,9 @@ The `delivery` row measures whether the evidence pipeline delivers
 joinable IDs: per-handoff coverage (`coverageRunCard` = valid run rows
 carrying a (run, card) pair over rows seen; `coveragePrJoin` = explicit
 PR links joined to a matching run and card; `coverageDeployJoin` =
-deploys joined to a trace head), orphan counts (evidence matching
-nothing, reported never guessed) and invalid counts. Coverage is receipt
+deploys selected by a trace through `mergeSha` or `headSha`), orphan
+counts (work products with no matching run/card and deployments no trace
+selects, reported never guessed) and invalid counts. Coverage is receipt
 coverage, not a success rate: a joined row with failed effects still
 counts as joined. A silent producer shows up as missing evidence and an
 `unknown` verdict, not as a clean board.

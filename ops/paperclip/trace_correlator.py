@@ -88,11 +88,11 @@ def parse_time(value):
         if text.endswith("Z"):
             text = text[:-1] + "+00:00"
         moment = dt.datetime.fromisoformat(text)
-    except ValueError:
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=dt.timezone.utc)
+        return moment.astimezone(dt.timezone.utc)
+    except (ValueError, OverflowError):
         return None
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=dt.timezone.utc)
-    return moment.astimezone(dt.timezone.utc)
 
 
 def unique_object(pairs):
@@ -198,18 +198,18 @@ def normalize_pr_link(row):
         return None, "link_missing_card"
     if not run_id or not isinstance(run_id, str):
         return None, "link_missing_run"
-    if not repo or not isinstance(repo, str) or not REPO_RE.match(repo):
+    if not repo or not isinstance(repo, str) or not REPO_RE.fullmatch(repo):
         return None, "link_bad_repo"
     if type(pr_number) is not int or pr_number <= 0:
         return None, "link_bad_pr"
     head_sha = row.get("headSha")
     if head_sha is not None and (
-        not isinstance(head_sha, str) or not FULL_SHA_RE.match(head_sha)
+        not isinstance(head_sha, str) or not FULL_SHA_RE.fullmatch(head_sha)
     ):
         return None, "link_head_not_exact_sha"
     merge_sha = row.get("mergeSha")
     if merge_sha is not None and (
-        not isinstance(merge_sha, str) or not FULL_SHA_RE.match(merge_sha)
+        not isinstance(merge_sha, str) or not FULL_SHA_RE.fullmatch(merge_sha)
     ):
         return None, "link_merge_not_exact_sha"
     return (
@@ -231,9 +231,9 @@ def normalize_deploy(row, index):
         return None, "deploy_not_an_object"
     repo = row.get("repo")
     sha = row.get("sha")
-    if not repo or not isinstance(repo, str) or not REPO_RE.match(repo):
+    if not repo or not isinstance(repo, str) or not REPO_RE.fullmatch(repo):
         return None, "deploy_bad_repo"
-    if not sha or not isinstance(sha, str) or not FULL_SHA_RE.match(sha):
+    if not sha or not isinstance(sha, str) or not FULL_SHA_RE.fullmatch(sha):
         return None, "deploy_sha_not_exact"
     deploy_id = row.get("deployId")
     if deploy_id is not None and (

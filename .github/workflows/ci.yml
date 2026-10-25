@@ -5349,6 +5349,11 @@ jobs:
         working-directory: plugins/dispatch
         run: npm test
 
+      - name: Dispatch sweep failure visibility acceptance
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.dispatch == 'true'
+        working-directory: .
+        run: python3 -B -m unittest -v test_dispatch_sweep_failure_visibility
+
       # The wake action is bought with a week of report-only evidence, not with
       # an argument (case_68ec5539 Q1, retirement plan step 3). A default of `true`
       # would make INSTALLING the plugin the thing that enables it — precisely

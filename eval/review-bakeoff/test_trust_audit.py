@@ -20,6 +20,7 @@ import sys
 import tempfile
 import unittest
 
+import run_review
 import score
 import trust_audit
 
@@ -92,6 +93,26 @@ class AuditContract(unittest.TestCase):
         self.assertIn(reason, message)
         if identity is not None:
             self.assertIn(identity.lower(), message)
+
+    def test_producer_score_boundaries_remain_valid_saved_reviews(self):
+        for value in (0, 5):
+            with self.subTest(score=value):
+                run = result([finding()], score_=value)
+                parsed, error = run_review.parse_review(json.dumps(run["review"]))
+                self.assertIsNone(error)
+                self.assertIsNotNone(parsed)
+                run["review"] = parsed
+                report = self.audit([("boundary", run)])
+                self.assertEqual(report["dimensions"]["dataset_audit"]["value"],
+                                 {"cases": 1, "results": 1, "failed_results": 0, "findings": 1})
+                self.assertEqual(self.attribution(report)["automatic_location"], 1)
+
+    def test_scores_outside_producer_domain_are_rejected(self):
+        for value in (-1, 6, False, True, 0.0, 5.0, "3", None):
+            with self.subTest(score=value):
+                self.assert_rejected({"cases": [CASE]},
+                                     [("bad-score", result([], score_=value))], {},
+                                     "score", "bad-score")
 
     def test_invalid_location_hit_is_a_conflict_not_silent_credit(self):
         run = result([finding()])

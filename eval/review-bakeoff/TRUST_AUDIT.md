@@ -34,8 +34,9 @@ within a case (not globally); `invalid` and `valid-other` are reserved. Location
 require nonempty file paths and positive integer lines, inclusive ordered ranges
 for defects, and severity `minor`, `major` or `critical`. Results have unique keys,
 a known `case_id` and explicit `review`: either null (a counted failed run), or an
-object with integer `score` 1–5 and a findings list with valid locations. Additional
-metadata is allowed but is not treated as evidence provenance.
+object with integer `score` 0–5 (the existing producer's domain, excluding booleans)
+and a findings list with valid locations. Additional metadata is allowed but is
+not treated as evidence provenance.
 
 Judgments are `{"result-key#finding-index": "invalid" | "valid-other" | defect_id}`.
 Indices are zero-based, canonical decimal indices in the saved findings list.

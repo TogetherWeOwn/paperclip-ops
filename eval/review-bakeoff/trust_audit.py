@@ -107,8 +107,8 @@ def audit(cases_document: dict, results: list[tuple[str, dict]],
         if review is not None:
             if not isinstance(review, dict) or not isinstance(review.get("findings"), list):
                 raise ValueError(f"result {key}: expected review object with findings list or null")
-            if type(review.get("score")) is not int or not 1 <= review["score"] <= 5:
-                raise ValueError(f"result {key}: expected five-point review score")
+            if type(review.get("score")) is not int or not 0 <= review["score"] <= 5:
+                raise ValueError(f"result {key}: expected integer review score in 0..5")
             for i, finding in enumerate(review["findings"]):
                 identity = f"{key}#{i}"
                 _location(finding, f"finding {identity}")

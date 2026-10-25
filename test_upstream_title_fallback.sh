@@ -86,7 +86,9 @@ hdr "pass: missing/empty title + exact first-line 5/5 (green controls here)"
 expect_pass "missing title, summary 5/5" '{"summary":"5/5"}'
 expect_pass "empty title, summary 5/5" '{"title":"","summary":"5/5"}'
 expect_pass "null title, summary 5/5" '{"title":null,"summary":"5/5"}'
+expect_pass "whitespace title, summary 5/5" '{"title":"   ","summary":"5/5"}'
 expect_pass "missing title, multiline first-line 5/5" '{"summary":"5/5\n## details"}'
+expect_pass "missing title, CRLF first-line 5/5" '{"summary":"5/5\r\n## details"}'
 expect_pass "title 5/5 with heading summary" '{"title":"5/5","summary":"## Paperclip Review — 5/5"}'
 
 hdr "refuse: whitespace/adverse/second-line/suffix + incidental (RED on main)"

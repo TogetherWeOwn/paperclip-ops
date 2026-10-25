@@ -94,6 +94,9 @@ class TitleFallbackPasses(unittest.TestCase):
     def test_empty_title_multiline_first_line_55(self):
         self.assertIsNotNone(latest(title="", summary="5/5\nsecond line"))
 
+    def test_missing_title_crlf_first_line_55(self):
+        self.assertIsNotNone(latest(summary="5/5\r\n## details"))
+
 
 class TitleFallbackRefuses(unittest.TestCase):
     """Variants that MUST return None even with the fallback (green on main)."""

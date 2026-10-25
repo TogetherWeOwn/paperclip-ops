@@ -1144,6 +1144,10 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_workspace_sync_back_signal_regressions
 
+      - name: trace correlator suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_trace_correlator
+
       # Assignment host-source bundle: the builder, normalizer and detector
       # run as CLIs with the SQL under a SQLite translation — no database,
       # no network, no credential. Without this step the suite runs only
@@ -1600,7 +1604,7 @@ jobs:
       # Reconciler holds and hide-noop predicates, backlog-promoter, board-jobs, orphan-PRs and focus-gate fail-closed timeouts, PR-supply card text, flow-guard stages and host-pressure gate fail-closed contract. Offline: temp files and stubs.
       - name: review reconciler and ops guard suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_pr_supply_listing_bound test_pr_supply_tick_health test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_resolve_outdated_incomplete_evidence test_stuck_run_reaper test_stuck_run_reaper_report test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_flake_ledger_report test_review_rebase_carry test_review_rebase_carry_flow test_review_rebase_carry_base_binding test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pr_controller_notify_guard test_pr_controller_notify_wiring test_pr_controller_ci test_pr_controller_ci_ops test_pr_controller_ci_host test_pr_controller_ci_patch test_pipeline_stall_watch) && (cd ops/paperclip && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -p 'test_focus*.py')
+        run: (cd ops/productivity && python3 -m unittest -v test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_pr_supply_listing_bound test_pr_supply_tick_health test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_resolve_outdated_incomplete_evidence test_resolve_outdated_title_fallback test_stuck_run_reaper test_stuck_run_reaper_report test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_nongit_quarantine_custody test_flake_ledger test_flake_ledger_report test_review_rebase_carry test_review_rebase_carry_flow test_review_rebase_carry_base_binding test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pr_controller_notify_guard test_pr_controller_notify_wiring test_pr_controller_ci test_pr_controller_ci_ops test_pr_controller_ci_host test_pr_controller_ci_patch test_pipeline_stall_watch) && (cd ops/paperclip && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -p 'test_focus*.py')
 
       # sdlc-review-carry. Merge-queue 5/5 carry gate logic: patch
       # normalization/digest, PR-bound latest-review selection, hint-file
@@ -1611,7 +1615,7 @@ jobs:
       # merge green.
       - name: sdlc review-carry suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: (cd ops/sdlc && python3 -m unittest -v test_review_carry)
+        run: (cd ops/sdlc && python3 -m unittest -v test_review_carry test_review_carry_title_fallback)
       # case_0d0fab73. reviewer-eval survival report atomic write: the eval
       # report persists through write_json_atomic (same-dir temp, fsync,
       # atomic rename) and a failing write exits non-zero with the previous
@@ -3581,7 +3585,7 @@ jobs:
       # full=true; main pushes run only the affected areas.
       - name: upstream gate suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.upstream == 'true'
-        run: ./test_upstream_gate.sh
+        run: ./test_upstream_gate.sh && ./test_upstream_title_fallback.sh
 
       # case_214e61d3. The pre-push linter, per-repo maintainer memory, the
       # second-model reputation pass and the git pre-push hook. Offline:
@@ -5345,13 +5349,13 @@ jobs:
           echo "install ok: plugin-sdk present"
 
       # Pass the FILE, not the directory: `node --test test/` resolves `test` as
-      # a module specifier on Node 24 and dies before running anything, which
-      # looks exactly like a broken suite and is not. package.json's `test`
-      # script passes the file, and is invoked here so the two cannot drift.
+      # a module specifier on Node 24 and dies before running anything. Name the
+      # tracked suite explicitly so the orphan check sees its producer before
+      # the ignored package.json is restored from the toolkit archive.
       - name: Dispatch suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.dispatch == 'true'
         working-directory: plugins/dispatch
-        run: npm test
+        run: node --test test/dispatch.test.mjs
 
       - name: Dispatch sweep failure visibility acceptance
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.dispatch == 'true'

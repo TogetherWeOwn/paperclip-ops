@@ -64,6 +64,10 @@ For the external, alert-only workspace sync-back size observer, see the
 [byte measurement and alert contract](docs/workspace-sync-back-signal.md).
 It does not instrument transport or authorize host installation.
 
+For the offline card/run/PR/head/deploy trace correlator, see the
+[evidence, join and SLO contract](docs/trace-correlation.md).
+It reads caller-assembled evidence only and authorizes no host action.
+
 For source-to-documentation accompaniment in pull requests, see the portable
 [documentation drift gate](docs/docs-drift.md), including its JSON contract,
 base-policy trust model and reusable CI interface.
@@ -71,6 +75,11 @@ base-policy trust model and reusable CI interface.
 For native skill versions, reusable examples and isolated pinned-version tests,
 see the [versioned skill fixture procedure](docs/versioned-skill-fixtures.md).
 It adds no runtime registry, host automation or skill-assignment authority.
+
+For one policy across plan, build, and review phases, see the
+[role, provider, and rubric coherence procedure](docs/role-provider-rubric-coherence.md).
+It scopes guidance to role and phase, keeps task policy provider-independent,
+and cites a single pinned rubric in every phase.
 
 | Tool |
 | --- |
@@ -150,6 +159,13 @@ It adds no runtime registry, host automation or skill-assignment authority.
 | `upstream_watch.sh` |
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
+
+## Planning depth
+
+Use [right-sized planning](docs/right-sized-planning.md) to bound a reviewable
+slice, choose preparation by risk/coupling, and record prototypes, investment
+reviews and followups in native task fields. It supplements existing acceptance
+criteria and anti-goals; publishing the guide is not company instruction rollout.
 
 ## Native delivery workflow
 

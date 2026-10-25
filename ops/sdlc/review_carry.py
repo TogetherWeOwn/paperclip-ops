@@ -274,11 +274,14 @@ def latest_review(checks, head, number):
     external_id = str(latest.get('external_id') or '')
     output = latest.get('output') or {}
     score = output.get('title')
-    if score is None or score == '':
+    if score is None or (isinstance(score, str) and score.strip() == ''):
         summary = output.get('summary')
-        score = summary.split('\n', 1)[0] if isinstance(summary, str) else None
+        first = summary.split('\n', 1)[0] if isinstance(summary, str) else None
+        # CRLF summaries end the first line with \r; drop it so '5/5\r\n…'
+        # matches exactly like '5/5\n…' (mirrors github.js /\r?\n/ split).
+        score = first.removesuffix('\r') if isinstance(first, str) else None
     if (latest.get('status') != 'completed' or latest.get('conclusion') != 'success'
-            or not isinstance(score, str) or score.strip() != '5/5'
+            or not isinstance(score, str) or score != '5/5'
             or external_id.startswith(PREFIX)):
         return None
     return latest

@@ -1357,7 +1357,7 @@ jobs:
       # fast and they pin the gates this repo inherits. Gate enforcement
       # inside CI (a gates workflow) is a separate follow-up batch.
       - name: quality-gate helper suites
-        run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target
+        run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target test_docs_drift
 
       # case_6f2e8a41. Deterministic test-missing gate suites: the unit
       # contract (wider source suffixes, deleted-file handling, vacuity
@@ -5349,6 +5349,11 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.dispatch == 'true'
         working-directory: plugins/dispatch
         run: npm test
+
+      - name: Dispatch sweep failure visibility acceptance
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.dispatch == 'true'
+        working-directory: .
+        run: python3 -B -m unittest -v test_dispatch_sweep_failure_visibility
 
       # The wake action is bought with a week of report-only evidence, not with
       # an argument (case_68ec5539 Q1, retirement plan step 3). A default of `true`

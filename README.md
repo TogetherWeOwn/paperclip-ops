@@ -64,6 +64,10 @@ For the external, alert-only workspace sync-back size observer, see the
 [byte measurement and alert contract](docs/workspace-sync-back-signal.md).
 It does not instrument transport or authorize host installation.
 
+For source-to-documentation accompaniment in pull requests, see the portable
+[documentation drift gate](docs/docs-drift.md), including its JSON contract,
+base-policy trust model and reusable CI interface.
+
 For native skill versions, reusable examples and isolated pinned-version tests,
 see the [versioned skill fixture procedure](docs/versioned-skill-fixtures.md).
 It adds no runtime registry, host automation or skill-assignment authority.

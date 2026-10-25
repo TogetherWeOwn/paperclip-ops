@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/decide.test.mjs test/verify.test.mjs test/app.test.mjs test/evidence.test.mjs test/board.test.mjs test/environments.test.mjs test/source.test.mjs",
+    "test": "node --test test/decide.test.mjs test/verify.test.mjs test/app.test.mjs test/evidence.test.mjs test/board.test.mjs test/environments.test.mjs test/source.test.mjs test/title-fallback.test.mjs",
     "check": "for file in src/*.js test/*.mjs test/*.cjs; do node --check \"$file\" || exit; done"
   },
   "devDependencies": {}

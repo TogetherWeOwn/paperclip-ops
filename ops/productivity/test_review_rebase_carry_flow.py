@@ -1794,6 +1794,67 @@ class DeltaRecordLifecycle(unittest.TestCase):
                              ['blocker.py', 'other.py'])
 
 
+    def test_shipped_findings_hunk_honors_control_lowered_during_live_read(self):
+        # Reusing the pre-read "on" mode would hide auth.py after the kill
+        # flag or a control restriction takes effect during the live lookup.
+        text = (PATCH_DIR / PINNED['ops/productivity/review_findings.py']).read_text()
+        _, _, hunks = parse_patch(text)
+        added = next([line for tag, line in body if tag == '+']
+                     for _, body in hunks
+                     if any('scoped_delta(' in line for _, line in body))
+        code = compile('if True:\n' + '\n'.join(added) + '\n',
+                       'shipped-findings-hunk', 'exec')
+        for transition in ('enabled', 'kill flag', 'off', 'shadow'):
+            with self.subTest(transition), self.seeded_delta() as (scene, env, paths):
+                paths.control.write_text('{"mode": "on"}')
+                self.assertEqual(flow.control_mode(paths), 'on')
+                compare = {'from': scene['h1'], 'to': scene['h2'],
+                           'files': ['auth.py', 'other.py']}
+                before = {path: path.read_bytes()
+                          for path in paths.state_dir.rglob('*') if path.is_file()}
+                reads = []
+
+                def read_pr(argv, env=None, timeout=None):
+                    self.assertEqual(argv[:3],
+                                     ['gh', 'api', f'repos/{REPO}/pulls/{PR}'])
+                    self.assertFalse(set(argv) & {'-X', '--method', '-f', '-F',
+                                                 '--field', '--raw-field'})
+                    self.assertIsNotNone(timeout, 'the live read must be bounded')
+                    self.assertGreater(timeout, 0)
+                    self.assertLessEqual(timeout, 30)
+                    reads.append(list(argv))
+                    self.assertEqual(len(reads), 1, 'no provider retry')
+                    if transition == 'kill flag':
+                        paths.kill.write_text('stop')
+                    elif transition in ('off', 'shadow'):
+                        paths.control.write_text(json.dumps({'mode': transition}))
+                    current = make_pr(scene['h2'], base_sha=scene['new_base'])
+                    if '--jq' in argv:
+                        current = {'head': scene['h2'],
+                                   'base': {'ref': 'main', 'sha': scene['new_base']}}
+                    return SimpleNamespace(returncode=0, stdout=json.dumps(current))
+
+                namespace = {'rebase_flow': flow, 'sh': read_pr,
+                             'gh_env': lambda: {}, 'json': json,
+                             'CTX_DIR': paths.delta_dir.parent / 'contexts',
+                             'full': REPO, 'pr': PR, 'head': scene['h2'],
+                             'last': {'head': scene['h1'],
+                                      'blocking': [{'path': 'blocker.py'}]},
+                             'd': dict(compare)}
+                exec(code, namespace)
+                self.assertEqual(len(reads), 1)
+                self.assertEqual(env.created, [])
+                self.assertEqual(env.patched, [])
+                self.assertEqual(
+                    {path: path.read_bytes() for path in paths.state_dir.rglob('*')
+                     if path.is_file()}, before, 'the reader must not mutate state')
+                want = dict(compare)
+                if transition == 'enabled':
+                    want.update(files=['blocker.py', 'other.py'], scope='own-patch')
+                self.assertEqual(namespace['d'], want,
+                                 'only a still-enabled reader may narrow scope')
+
+
 class AuditLines(unittest.TestCase):
     """Case 13: complete, neutralized, bounded lines; log never decides."""
 

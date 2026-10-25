@@ -76,6 +76,11 @@ For native skill versions, reusable examples and isolated pinned-version tests,
 see the [versioned skill fixture procedure](docs/versioned-skill-fixtures.md).
 It adds no runtime registry, host automation or skill-assignment authority.
 
+For one policy across plan, build, and review phases, see the
+[role, provider, and rubric coherence procedure](docs/role-provider-rubric-coherence.md).
+It scopes guidance to role and phase, keeps task policy provider-independent,
+and cites a single pinned rubric in every phase.
+
 | Tool |
 | --- |
 | `public_snapshot_test_support.py` (test-only private-artifact boundary; not a runtime policy or operator command) |
@@ -154,6 +159,13 @@ It adds no runtime registry, host automation or skill-assignment authority.
 | `upstream_watch.sh` |
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
+
+## Planning depth
+
+Use [right-sized planning](docs/right-sized-planning.md) to bound a reviewable
+slice, choose preparation by risk/coupling, and record prototypes, investment
+reviews and followups in native task fields. It supplements existing acceptance
+criteria and anti-goals; publishing the guide is not company instruction rollout.
 
 ## Native delivery workflow
 

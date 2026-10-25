@@ -16,8 +16,9 @@ Review evidence (case_0a5a55e4): a check NAME is claimable by any App with write
 authenticates nothing. The resolver accepts only the latest check run that carries ALL of:
   - name "Paperclip Review" from the trusted review App (id 5191093, slug togetherweown-reviewer);
   - head_sha equal to the PR's current headRefOid (the expected head);
-  - status "completed", conclusion "success", output title "5/5" (or first summary line
-    only when the title is missing or empty; whitespace is stripped, as before).
+  - status "completed", conclusion "success", output title exactly "5/5" (or first summary line
+    only when the title is missing, empty, or whitespace-only; no score trimming).
+    A CRLF first-line terminator is tolerated; other title values remain authoritative.
 Anything else refuses with a diagnostic and zero mutations: missing_head (no expected head to bind to),
 missing_identity (same-name check with no App id), no_trusted_evidence (no same-name check from the
 trusted App), wrong_head (trusted checks exist but none on the expected head), or incomplete_* (latest
@@ -128,9 +129,11 @@ def review_evidence(check_runs, head):
     """Authenticate the 5/5 claim for the expected head. Returns (ok, reason).
 
     ok is True only for the latest trusted-App run on `head` with status completed,
-    conclusion success and score 5/5 in the title or, when missing/empty, first summary
-    line. Every other shape refuses with a machine-readable reason and the caller
-    must make zero mutations.
+    conclusion success and score exactly 5/5 in the title or, when the title is
+    missing, empty, or whitespace-only, the first summary line. A CRLF first-line
+    terminator is tolerated, but score whitespace is never trimmed. Every other
+    shape refuses with a machine-readable reason and the caller must make zero
+    mutations.
     """
     if not head:
         return False, 'missing_head'
@@ -153,10 +156,13 @@ def review_evidence(check_runs, head):
         return False, 'incomplete_conclusion'
     output = latest.get('output') or {}
     score = output.get('title')
-    if score is None or score == '':
+    if score is None or (isinstance(score, str) and score.strip() == ''):
         summary = output.get('summary')
-        score = summary.split('\n', 1)[0] if isinstance(summary, str) else None
-    if not isinstance(score, str) or score.strip() != '5/5':
+        first = summary.split('\n', 1)[0] if isinstance(summary, str) else None
+        # CRLF summaries end the first line with \r; drop it so '5/5\r\n…'
+        # matches exactly like '5/5\n…' (mirrors github.js /\r?\n/ split).
+        score = first.removesuffix('\r') if isinstance(first, str) else None
+    if not isinstance(score, str) or score != '5/5':
         return False, 'incomplete_score'
     return True, 'ok'
 

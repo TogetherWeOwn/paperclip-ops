@@ -152,6 +152,22 @@ The integration must satisfy all of these before it is eligible for installation
    `review_gate|review_carry|review_findings|rebase_carry` as HIGH. Never narrow
    on missing/truncated findings or any exception. Update the JSON context
    and ROUND CONTEXT note together; no unavailable-data-as-zero-files message.
+
+### Delta-record base binding, and the one thing the packet does not do
+
+`scoped_delta` accepts an optional `source_base`. When the caller supplies the current
+base of the head that produced the record, a record computed against a **different**
+base is refused and the caller keeps the compare-based list. Omitted (the default), the
+record's own `old_base` stands and the behavior is exactly the seven-argument call the
+current `review-rebase-carry-findings.patch` makes.
+
+`review_findings.context()` has no base in scope today, and the host `review_gate`
+GraphQL `QUERY` selects no base field, so this packet leaves that call site unchanged
+rather than inventing a base. A later host change that selects the PR's base ref can pass
+it through and get the binding; until then the record stays valid, because the own-patch
+diff of a fixed head pair is base-invariant (advancing the base advances both merge-bases
+in lockstep, so the changed-file set does not move). Tested in
+`test_review_rebase_carry_base_binding.py`.
 6. Add a fail-closed control for **both carry and delta scoping**. Absent,
    unreadable or malformed configuration means disabled. Explicit shadow mode
    is log-only. Every carry and fallback must have a bounded, sanitized audit

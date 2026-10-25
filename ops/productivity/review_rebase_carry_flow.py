@@ -368,10 +368,16 @@ def write_delta(paths, record):
     os.replace(tmp, target)
 
 
-def scoped_delta(paths, mode, repo, number, last_head, head, blocking):
+def scoped_delta(paths, mode, repo, number, last_head, head, blocking, source_base=None):
     """Own-patch delta ∪ prior-blocking paths, or None meaning use the compare-based list.
 
     Union-only: never narrower than the changed own-patch files plus every prior blocker.
+    `source_base` is the current base of the head that produced this record (`last_head`),
+    as `{'ref':..., 'sha':...}`. When given, the record must have been computed against that
+    same base or the call returns None, so a base that moved after the record was written
+    falls back to the compare-based list instead of reusing a stale union. It defaults to
+    None, which keeps the record's own `old_base` binding and leaves callers that cannot
+    supply the source base on today's behavior.
     """
     try:
         if mode != 'on' or not isinstance(blocking, (list, tuple)):
@@ -387,6 +393,13 @@ def scoped_delta(paths, mode, repo, number, last_head, head, blocking):
                 or not isinstance(rec.get('files'), list) or not rec['files']
                 or len(rec['files']) > MAX_DELTA_FILES):
             return None
+        # The record is a record of one head pair on one source base. Bind it to that
+        # base whenever the caller can name the source's current base, so a stale record
+        # is never reused after the base moved.
+        if source_base is not None:
+            record_base = rec.get('old_base')
+            if not isinstance(record_base, Mapping) or core._base(record_base) != core._base(source_base):
+                return None
         files = {core._relative_path(f) for f in rec['files']}
         for finding in blocking:
             if not isinstance(finding, Mapping):

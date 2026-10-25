@@ -536,12 +536,12 @@
     },
     {
       "name": "guard state fail-closed suites",
-      "definition_sha256": "cc4f8a604969e0c70933c2fff7b461c71ae4ae29645bc2e34e3df8f4fa45498f",
+      "definition_sha256": "4f6d5cf9f030fa254feb868b2929f0aad15cc5cf076dabe5996b1ccc57d67ec5",
       "id": "guard state fail-closed suites:1"
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "d374be018ae74bee966ae9e65c4a0e1191801f3009c938ee3c6331c57530ce42",
+      "definition_sha256": "e2b6a42d8e1ed099307c9e7bf0ca6c745f25cb9a025a187f3ef103599497ebf6",
       "id": "review reconciler and ops guard suites:1"
     },
     {

@@ -3598,7 +3598,7 @@ jobs:
       # loopback stubs only, no network, no token, no model key.
       - name: upstream lint and reputation suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.upstream == 'true'
-        run: python3 -m unittest test_upstream_lint test_upstream_reputation
+        run: python3 -m unittest test_upstream_lint test_upstream_lint_streamed_body_acceptance test_upstream_reputation
 
       # And those suites plus the gate's new cases are worth nothing unverified:
       # each mutation removes ONE check (DCO, test presence, diff budget, the

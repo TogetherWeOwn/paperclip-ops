@@ -167,3 +167,60 @@ REFUSED, not by deletion.
 - Availability: a `paperclip-ops` checkout at the merged commit
   (`git rev-parse HEAD`), with the `check --help` surface smoke and one
   read-only `check` receipt.
+
+## 4. Draft-body lint intake
+
+`upstream_lint.py lint` is read-only and inherently dry-run: it does not
+publish a PR, post a receipt, change maintainer memory, or install hooks.
+A successful lint is not publishing authority and does not replace any
+independent filing, CI, reputation or review gate.
+
+Use `--body-file PATH` for a UTF-8 draft file, or `--body-file -` to consume
+stdin once without a scratch body file. Both feed the same template,
+public-text, claims, memory and stage checks. UTF-8 is strict; whitespace
+and newlines are preserved. Stdin is bounded at **1048576 bytes**: input
+above that limit is refused, never truncated. File intake keeps its existing
+unbounded size behavior. An explicitly supplied empty body is checked,
+not converted into `--no-pr-text`. That option remains a deliberately
+commits-and-diff-only check. `--live` still opts into template freshness
+calls; without it these examples use local fixtures/repository and memory.
+
+Synthetic layout override (replace the sample with the complete recorded
+template, and supply a local fixture layout and maintainer memory):
+
+```sh
+printf '%s\n' '## Summary' 'Synthetic change.' |
+  python3 upstream_lint.py lint --repo acme/widget \
+    --layout ./fixture-layout --memory-dir ./fixture-memory --body-file - --json
+```
+
+The same intake works for an exact git range:
+
+```sh
+printf '%s\n' '## Summary' 'Synthetic change.' |
+  python3 upstream_lint.py lint --repo acme/widget --repo-dir . \
+    --git-range main..HEAD --title 'fix: sample change' \
+    --memory-dir ./fixture-memory --body-file - --json
+```
+
+The deliberately incomplete sample is not a template-passing positive
+control. For a file instead, replace `--body-file -` with `--body-file
+./draft.md` and omit the producer/pipe. To reuse a generated draft, retain
+the exact bytes in the owning caller; do not re-render or trim between
+lint and any separately authorized publication.
+
+Recovery: exit **1** means measured lint findings, **2** is REFUSED (never
+pass), and **4** is a usage error. Unreadable files, invalid UTF-8,
+interrupted/failed input reads and stdin overflow produce the existing
+refused JSON report with `code: "body-input"`, a `body-input` REFUSED item,
+`retryable: false`, and a fixed `next_action`: provide readable UTF-8 within
+the stdin bound, then rerun lint. These errors never print input bytes,
+paths, snippets or underlying exceptions. Text and gate-line formats keep
+exit 2 (gate-line prints one `REFUSED` line). Usage errors are checked
+before reading stdin. Correct the input or flags; do not blindly retry,
+parse tracebacks, or substitute `--no-pr-text` to bypass a refusal.
+
+Offline verification: `python3 -B -m unittest -v test_upstream_lint
+ test_upstream_lint_streamed_body_acceptance` (one command, two modules).
+The paired acceptance module is immutable and exercises both input modes,
+positive/negative template controls, privacy, input recovery and side effects.

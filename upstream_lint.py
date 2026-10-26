@@ -60,6 +60,10 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXIT_PASS, EXIT_FAIL, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2, 4
 SCHEMA_VERSION = 1
+STDIN_BODY_MAX_BYTES = 1048576
+BODY_INPUT_NEXT_ACTION = (
+    "Provide a readable UTF-8 body file or pipe at most %d bytes to --body-file -, then rerun lint."
+    % STDIN_BODY_MAX_BYTES)
 # GitHub author_association values that speak for the maintainers of a repo.
 MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER"})
 OWN_ORG = "togetherweown"
@@ -179,6 +183,10 @@ class Refused(Exception):
     """Something could not be measured. Never a pass."""
 
 
+class BodyInputError(Refused):
+    """PR body intake failed; never expose the input or underlying exception."""
+
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
@@ -199,6 +207,26 @@ def load_json(path: str):
             return json.load(fh)
     except (OSError, ValueError) as exc:
         raise Refused("cannot read %s: %s" % (os.path.basename(path), exc))
+
+
+def read_body_input(path: str) -> str:
+    """Read a body once as strict UTF-8, preserving whitespace and newlines."""
+    detail = "PR body input could not be read as UTF-8 within the input limits."
+    try:
+        if path == "-":
+            stream = getattr(sys.stdin, "buffer", None)
+            if stream is None:
+                raise BodyInputError(detail)
+            # One extra byte distinguishes overflow from a body exactly at the cap.
+            data = stream.read(STDIN_BODY_MAX_BYTES + 1)
+            if len(data) > STDIN_BODY_MAX_BYTES:
+                raise BodyInputError(detail)
+        else:
+            with open(path, "rb") as fh:
+                data = fh.read()
+        return data.decode("utf-8")
+    except (OSError, ValueError, KeyboardInterrupt):
+        raise BodyInputError(detail) from None
 
 
 def sha256(text: str) -> str:
@@ -1880,6 +1908,20 @@ def render(rep: Report, as_json: bool, gate_line: bool, repo: str, head: str, ex
 # ---------------------------------------------------------------------------
 
 def cmd_lint(a) -> int:
+    # Reject usage errors before any potentially blocking stdin read.
+    nobody = bool(a.no_pr_text)
+    if not a.layout:
+        if not (a.git_range and a.repo_dir):
+            print("lint needs --layout DIR, or --repo-dir with --git-range BASE..HEAD", file=sys.stderr)
+            return EXIT_USAGE
+        base, _, head = a.git_range.partition("..")
+        if not head:
+            print("--git-range must be BASE..HEAD", file=sys.stderr)
+            return EXIT_USAGE
+        if not nobody and not (a.title and a.body_file):
+            print("lint needs --title and --body-file (or --no-pr-text for a commits-and-diff-only run)", file=sys.stderr)
+            return EXIT_USAGE
+    lay = {"head": ""}
     try:
         if a.layout:
             lay = layout_from_dir(a.layout)
@@ -1887,22 +1929,11 @@ def cmd_lint(a) -> int:
             if a.title is not None:
                 title = a.title
             if a.body_file:
-                body = open(a.body_file, encoding="utf-8").read()
+                body = read_body_input(a.body_file)
         else:
-            if not (a.git_range and a.repo_dir):
-                print("lint needs --layout DIR, or --repo-dir with --git-range BASE..HEAD", file=sys.stderr)
-                return EXIT_USAGE
-            base, _, head = a.git_range.partition("..")
-            if not head:
-                print("--git-range must be BASE..HEAD", file=sys.stderr)
-                return EXIT_USAGE
-            body = open(a.body_file, encoding="utf-8").read() if a.body_file else ""
+            body = read_body_input(a.body_file) if a.body_file else ""
             lay = layout_from_git(a.repo_dir, base, head, a.title or "", body)
             title = a.title or ""
-        nobody = bool(a.no_pr_text)
-        if not nobody and not a.layout and not (a.title and a.body_file):
-            print("lint needs --title and --body-file (or --no-pr-text for a commits-and-diff-only run)", file=sys.stderr)
-            return EXIT_USAGE
         branch = a.branch or lay["branch"]
         rep = lint(a.repo, title, body, branch, lay["commits"], lay["files"], a.stage,
                    a.memory_dir, nobody, a.live)
@@ -1910,6 +1941,11 @@ def cmd_lint(a) -> int:
             mem = load_memory(a.repo, a.memory_dir)
             br = batch_check(a.repo, branch, title, lay["files"], load_json(a.open_prs_file), mem, a.maintainer_split_url)
             rep.items.extend(br.items)
+    except BodyInputError as exc:
+        rep = Report()
+        rep.add("REFUSED", "body-input", str(exc))
+        return render(rep, a.json, a.gate_line, a.repo, lay.get("head", ""),
+                      {"code": "body-input", "retryable": False, "next_action": BODY_INPUT_NEXT_ACTION})
     except Refused as exc:
         rep = Report()
         rep.add("REFUSED", "lint", str(exc))
@@ -2004,13 +2040,32 @@ class _Parser(argparse.ArgumentParser):
 def main(argv=None) -> int:
     p = _Parser(prog="upstream_lint.py", description=__doc__.split("\n")[0])
     sub = p.add_subparsers(dest="cmd", parser_class=_Parser)
-    pl = sub.add_parser("lint")
+    pl = sub.add_parser("lint", formatter_class=argparse.RawDescriptionHelpFormatter, epilog="""\
+Read-only draft lint; this command does not publish or authorize a PR.
+Use --body-file PATH for a UTF-8 file, or --body-file - for stdin.
+Stdin limit: %d bytes; overflow is refused, never truncated.
+An empty supplied body is checked, not treated as --no-pr-text.
+
+Synthetic pipe (replace with the complete recorded PR template):
+  printf '%%s\\n' '## Summary' 'Synthetic change.' | \\
+    python3 upstream_lint.py lint --repo acme/widget --layout ./fixture-layout --body-file - --json
+Git-range mode uses the same input:
+  printf '%%s\\n' '## Summary' 'Synthetic change.' | \\
+    python3 upstream_lint.py lint --repo acme/widget --repo-dir . --git-range main..HEAD --title 'fix: sample change' --body-file - --json
+
+Recovery: exit 1 means lint findings; exit 2 means REFUSED (not a pass);
+exit 4 means usage error. Body input failures include unreadable files,
+invalid UTF-8, interrupted/failed reads and stdin overflow. With --json,
+code=body-input, retryable=false and next_action identify input recovery.
+Correct the input before rerunning; do not blindly retry or skip PR text.
+--live remains opt-in; without it, lint uses local input and memory only.
+""" % STDIN_BODY_MAX_BYTES)
     pl.add_argument("--repo", required=True, help="upstream owner/repo")
     pl.add_argument("--layout")
     pl.add_argument("--repo-dir")
     pl.add_argument("--git-range", help="BASE..HEAD of the commits to push")
     pl.add_argument("--title")
-    pl.add_argument("--body-file")
+    pl.add_argument("--body-file", help="UTF-8 PR body file; '-' reads stdin once (bounded, no trimming)")
     pl.add_argument("--branch")
     pl.add_argument("--stage", choices=["first-push", "ready"], default="first-push")
     pl.add_argument("--no-pr-text", action="store_true", help="lint commits, branch and diff only")

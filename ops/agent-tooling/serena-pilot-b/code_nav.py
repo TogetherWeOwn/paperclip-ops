@@ -14,10 +14,10 @@ Offline discovery (no server, no state, no PyYAML/git required):
   code-nav --describe --json
 Prints the command catalog as one JSON object and exits. Described
 capabilities are not proof of installed/runtime readiness. Any other use
-of the --describe/--json spellings, including --flag=value forms
-(missing partner flag, extra operands, --timeout override, unknown
-option), is rejected with exit 2 and a JSON refusal on stderr.
-Abbreviated prefixes (e.g. --desc) keep stock argparse errors.
+of the --describe/--json spellings, including --flag=value forms and any
+abbreviated prefix argparse would resolve to them (e.g. --desc, --j),
+is rejected with exit 2 and a JSON refusal on stderr. --d/--de remain
+usable as --depth abbreviations after a subcommand.
 
 Uses PyYAML from the pinned Serena venv. Concurrent calls for the same repo are serialized with a flock
 (each call starts a ~1.9 GB language server); the whole operation (queue wait
@@ -421,8 +421,10 @@ def _build_parser():
         epilog="Discovery: code-nav --describe --json prints the command catalog as JSON "
                "without starting Serena, touching state, or requiring PyYAML/git; described "
                "capabilities are not proof of installed/runtime readiness. Any other use of "
-               "these spellings, including --flag=value forms, is rejected (exit 2) with a "
-               "JSON refusal on stderr; abbreviated prefixes keep stock argparse errors.",
+               "these spellings, including --flag=value forms and abbreviated prefixes "
+               "argparse would resolve to them, is rejected (exit 2) with a JSON refusal "
+               "on stderr; --d/--de remain usable as --depth abbreviations after a "
+               "subcommand.",
     )
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_S,
                     help="bound in seconds for queue wait plus the tool call (default %(default)s)")
@@ -494,25 +496,82 @@ def _refuse_discovery():
     sys.exit(2)
 
 
+# Root longs argparse accepts abbreviations for. Derived sets below stay
+# correct if options are added: a prefix is discovery only when argparse
+# would uniquely resolve it to --describe/--json at root level.
+_ROOT_LONGS = ("--timeout", "--describe", "--json", "--help")
+_DISCOVERY_TARGETS = ("--describe", "--json")
+
+
+def _accepted_by_subparser(base):
+    for spec in COMMAND_SPECS:
+        opts = ["--help"] + [a["name"] for a in spec["arguments"]
+                             if a["name"].startswith("--")]
+        if len([o for o in opts if o.startswith(base)]) == 1:
+            return True
+    return False
+
+
+def _discovery_abbrevs():
+    safe, positional = set(), set()
+    for target in _DISCOVERY_TARGETS:
+        for i in range(3, len(target)):
+            base = target[:i]
+            if [o for o in _ROOT_LONGS if o.startswith(base)] != [target]:
+                continue
+            if _accepted_by_subparser(base):
+                # e.g. --d/--de double as --depth abbreviations after
+                # outline/symbol; only discovery in root position.
+                positional.add(base)
+            else:
+                safe.add(base)
+    return safe, positional
+
+
+_SAFE_DISCOVERY_ABBREVS, _POSITIONAL_DISCOVERY_ABBREVS = _discovery_abbrevs()
+
+
 def _is_discovery_token(token):
-    return token in ("--describe", "--json") or token.startswith("--describe=") or token.startswith("--json=")
+    if token in ("--describe", "--json"):
+        return True
+    if token.startswith("--describe=") or token.startswith("--json="):
+        return True
+    base = token.split("=", 1)[0]
+    return base in _SAFE_DISCOVERY_ABBREVS
+
+
+def _is_positional_discovery(index, token, subcommand_index):
+    base = token.split("=", 1)[0]
+    if base not in _POSITIONAL_DISCOVERY_ABBREVS:
+        return False
+    return subcommand_index is None or index < subcommand_index
 
 
 def main(argv=None):
     raw = list(argv) if argv is not None else sys.argv[1:]
-    if any(_is_discovery_token(token) for token in raw):
+    subcommand_index = next(
+        (i for i, tok in enumerate(raw) if tok in ("outline", "symbol", "refs")),
+        None,
+    )
+    if (any(_is_discovery_token(token) for token in raw)
+            or any(_is_positional_discovery(i, token, subcommand_index)
+                   for i, token in enumerate(raw))):
         # Offline path: no parser side effects, no runtime, no yaml, no git.
         # Exactly the two bare flags in either order is valid; every other
-        # use of these spellings (including --flag=value forms) is a stable
-        # safe refusal with no stdout and no side effects. Abbreviated
-        # prefixes (e.g. --desc) are not discovery tokens: argparse handles
-        # them with its usual exit-2 text error.
+        # use of these spellings (including --flag=value forms and any
+        # abbreviated prefix argparse would resolve to them) is a stable
+        # safe refusal with no stdout and no side effects.
         if len(raw) == 2 and set(raw) == {"--describe", "--json"}:
             _emit_description()
             return 0
         _refuse_discovery()
     ap = _build_parser()
     a = ap.parse_args(argv)
+    if a.describe or a.json:
+        # Defense in depth: any spelling argparse resolved to discovery that
+        # slipped past the pre-parser (e.g. future options) still refuses
+        # before repo lookup, locking, state or server startup.
+        _refuse_discovery()
     if a.timeout <= 0:
         die("--timeout must be positive", code=2)
 

@@ -215,6 +215,88 @@ class DispatchTest(RootRelTest):
             run.assert_not_called()
 
 
+class DiscoveryAbbrevTest(RootRelTest):
+    """Abbreviated --describe/--json spellings must refuse with JSON, never
+    execute. Argparse resolves unique prefixes (allow_abbrev), so --desc
+    outline would otherwise start Serena. --d/--de stay usable as --depth
+    abbreviations after a subcommand; --timeout abbreviations still work."""
+
+    ERROR = {
+        "code": "invalid_discovery_arguments",
+        "retryable": False,
+        "next_action": "use code-nav --describe --json without execution arguments",
+    }
+
+    def assert_refusal(self, argv):
+        with mock.patch.object(code_nav, "_repo_root") as repo, \
+                mock.patch.object(code_nav, "_run_once") as run, \
+                contextlib.redirect_stdout(io.StringIO()) as out, \
+                contextlib.redirect_stderr(io.StringIO()) as err, \
+                self.assertRaises(SystemExit) as c:
+            code_nav.main(argv)
+        self.assertEqual(c.exception.code, 2, argv)
+        self.assertEqual(out.getvalue(), "", argv)
+        self.assertEqual(json.loads(err.getvalue()), self.ERROR, argv)
+        repo.assert_not_called()
+        run.assert_not_called()
+
+    def test_prefixes_before_subcommand_refuse(self):
+        prefixes = ["--d", "--de", "--des", "--desc", "--descr", "--descri",
+                    "--describ", "--j", "--js", "--jso"]
+        for prefix in prefixes:
+            with self.subTest(prefix=prefix):
+                self.assert_refusal([prefix, "outline", "a.ts"])
+
+    def test_prefix_equals_forms_refuse(self):
+        for argv in (["--desc=x", "outline", "a.ts"],
+                     ["--j=x", "outline", "a.ts"],
+                     ["--d=x", "outline", "a.ts"],
+                     ["--de=x", "symbol", "Thing"]):
+            with self.subTest(argv=argv):
+                self.assert_refusal(argv)
+
+    def test_safe_prefixes_without_subcommand_refuse(self):
+        for argv in (["--desc"], ["--j"], ["--desc", "--json"],
+                     ["--desc", "--help"]):
+            with self.subTest(argv=argv):
+                self.assert_refusal(argv)
+
+    def test_d_de_root_position_refuse(self):
+        for argv in (["--d"], ["--de"], ["--d", "--json"], ["--d", "--help"]):
+            with self.subTest(argv=argv):
+                self.assert_refusal(argv)
+
+    def test_safe_prefixes_after_subcommand_refuse(self):
+        for argv in (["outline", "a.ts", "--desc"],
+                     ["symbol", "Thing", "--j"]):
+            with self.subTest(argv=argv):
+                self.assert_refusal(argv)
+
+    def test_d_de_after_subcommand_still_depth(self):
+        cases = [
+            (["outline", "a.ts", "--d", "0"], "get_symbols_overview",
+             {"relative_path": "src/a.ts", "depth": 0}),
+            (["outline", "a.ts", "--de", "2"], "get_symbols_overview",
+             {"relative_path": "src/a.ts", "depth": 2}),
+            (["symbol", "Thing", "--d", "1"], "find_symbol",
+             {"name_path_pattern": "Thing", "depth": 1, "relative_path": "",
+              "include_body": False, "include_info": False}),
+        ]
+        for argv, tool, args in cases:
+            with self.subTest(argv=argv), \
+                    mock.patch.object(code_nav, "_repo_root", return_value=self.root), \
+                    mock.patch.object(code_nav, "_run_once") as run:
+                code_nav.main(argv)
+                run.assert_called_once_with(tool, args, 120)
+
+    def test_timeout_abbrev_still_works(self):
+        with mock.patch.object(code_nav, "_repo_root", return_value=self.root), \
+                mock.patch.object(code_nav, "_run_once") as run:
+            code_nav.main(["--t", "10", "outline", "a.ts"])
+            run.assert_called_once_with(
+                "get_symbols_overview", {"relative_path": "src/a.ts", "depth": 1}, 10)
+
+
 class RunOnceTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=os.environ.get("PAPERCLIP_RUN_SCRATCH_DIR"))

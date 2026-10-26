@@ -205,16 +205,58 @@ class ProfileRoleLookupAcceptance(unittest.TestCase):
         self.assertLessEqual(len(next_action), 700)
         self.assertIsNone(record.get("declaring_profile"))
 
+    @staticmethod
+    def _record_strings(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                if isinstance(key, str):
+                    yield key
+                yield from ProfileRoleLookupAcceptance._record_strings(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                yield from ProfileRoleLookupAcceptance._record_strings(item)
+
+    @staticmethod
+    def _spans(field, needle):
+        start = 0
+        while needle:
+            found = field.find(needle, start)
+            if found < 0:
+                return
+            yield found, found + len(needle)
+            start = found + 1
+
     def assert_no_leak(self, output, *, queried, documents):
         self.assertNotIn(SENTINEL, output,
                          "output echoes a role/pool/profile-body value")
+        others = set()
         for doc in documents.values():
             labels = doc["labels"]
-            others = (set(labels["eligible"]) - {"self-hosted", queried})
-            for other in others:
-                self.assertNotIn(
-                    other, output,
-                    f"output enumerates unrelated role label {other!r}")
+            others |= set(labels["eligible"]) - {"self-hosted", queried}
+        try:
+            record = json.loads(output)
+        except json.JSONDecodeError:
+            fields = [output]
+        else:
+            fields = list(self._record_strings(record))
+        # Value-aware, per parsed field: an occurrence of another label is
+        # excused only when it lies wholly inside an echo of the exact
+        # queried value in that same field (a required role_label such as
+        # "two-alpha-alt" necessarily contains "two-alpha").  Any other
+        # occurrence -- a separate field or list entry, a second mention in
+        # prose, or a longer label that merely contains the queried one --
+        # is still an enumeration of an unrelated label.
+        for field in fields:
+            queried_spans = list(self._spans(field, queried))
+            for other in sorted(others):
+                for start, end in self._spans(field, other):
+                    if any(q_start <= start and end <= q_end
+                           for q_start, q_end in queried_spans):
+                        continue
+                    self.fail(
+                        f"output enumerates unrelated role label {other!r}")
 
     def assert_rejected_before_lookup(self, directory, label, *, raw=None):
         proc = self.run_cli(str(directory), "--role-label", label)
@@ -316,6 +358,28 @@ class ProfileRoleLookupAcceptance(unittest.TestCase):
                         f"{flag} must not be accepted: {proc.stdout!r}")
                     self.assertNotIn('"outcome": "matched"', proc.stdout)
             self.assertEqual(before, self.snapshot(tmp))
+
+    def test_control_no_leak_distinguishes_queried_from_disclosed(self):
+        documents = synthetic_profiles()
+        # The exact queried value, echoed as a field and in prose, is
+        # allowed even though ALPHA is a prefix substring of ALPHA_ALT.
+        allowed = json.dumps({
+            "role_label": ALPHA_ALT,
+            "explanation": f"matched {ALPHA_ALT}",
+        })
+        self.assert_no_leak(allowed, queried=ALPHA_ALT,
+                            documents=documents)
+        disclosures = [
+            (ALPHA_ALT, {"role_label": ALPHA_ALT, "others": [ALPHA]}),
+            (ALPHA_ALT, {"explanation": f"{ALPHA_ALT} or {ALPHA}"}),
+            (ALPHA, {"role_label": ALPHA, "others": [ALPHA_ALT]}),
+            (ALPHA_ALT, {"role_label": ALPHA_ALT, "others": [BETA]}),
+        ]
+        for queried, record in disclosures:
+            with self.subTest(queried=queried, record=record):
+                with self.assertRaises(AssertionError):
+                    self.assert_no_leak(json.dumps(record), queried=queried,
+                                        documents=documents)
 
     # ------------------------------------------------------ discoverable
     def test_help_documents_role_label_lookup_and_non_proof(self):

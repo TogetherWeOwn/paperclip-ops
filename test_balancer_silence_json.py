@@ -698,6 +698,13 @@ class JsonGapsBounded(JsonCase):
         self.assertParity(t_rc, t_out, t_err, j_rc, env)
 
     def test_window_excludes_old_gaps_json(self):
+        # Gaps count when they END in-window (see GAPS in the header).
+        # now=20:35 with window=2h gives window_start=18:35. The
+        # 00:00->00:30 gap ends before 18:35, so it is excluded. The
+        # bridge gap 00:30->20:00 starts before the window but ends at
+        # 20:00, inside it, so it counts exactly as text mode reports it;
+        # a start-in-window rule would wrongly drop it. The recent
+        # 20:00->20:30 gap also counts: 2 gaps total, matching text parity.
         base = datetime(2026, 10, 5, 0, 0, tzinfo=timezone.utc)
         old_left = base.isoformat()
         old_right = (base + timedelta(minutes=30)).isoformat()
@@ -719,10 +726,19 @@ class JsonGapsBounded(JsonCase):
         j_rc, j_out, j_err, env = self.run_json(*args)
         env = self.assertSingleJsonStdout(j_out)
         self.assertEnvelopeShape(env, threshold=10.0)
-        self.assertEqual(len(env["gaps"]), 1)
+        self.assertEqual(len(env["gaps"]), 2)
         self.assertEqual(env["gaps_truncated"], 0)
-        self.assertEqual(guard.parse_instant(env["gaps"][0]["start"]),
+        bridge, recent = env["gaps"]
+        self.assertEqual(guard.parse_instant(bridge["start"]),
+                         guard.parse_instant(old_right))
+        self.assertEqual(guard.parse_instant(bridge["end"]),
                          guard.parse_instant(recent_left))
+        self.assertAlmostEqual(bridge["duration_min"], 1170.0, delta=0.01)
+        self.assertEqual(guard.parse_instant(recent["start"]),
+                         guard.parse_instant(recent_left))
+        self.assertEqual(guard.parse_instant(recent["end"]),
+                         guard.parse_instant(recent_right))
+        self.assertAlmostEqual(recent["duration_min"], 30.0, delta=0.01)
         self.assertParity(t_rc, t_out, t_err, j_rc, env)
 
 

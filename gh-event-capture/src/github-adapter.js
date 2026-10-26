@@ -110,6 +110,30 @@ export function snapshotFailureCode(error) {
   return error instanceof SnapshotReadError ? error.code : 'snapshot-invalid'
 }
 
+class WriteFailureError extends Error {
+  constructor(message, code) {
+    super(message)
+    this.code = code
+  }
+}
+
+// Closed diagnostic set for write failures, so the sweep log can name the
+// failure class — a nonexistent endpoint, a credential/scope refusal and a
+// transport failure are three different fixes. Child text itself is never
+// echoed: it can carry tokens or private bodies.
+export function writeFailureCode(error) {
+  return error instanceof WriteFailureError ? error.code : 'unknown'
+}
+
+// `gh api` prints the HTTP status it received (`(HTTP NNN)` on stderr and in
+// the execFile error message). Keep only that fixed-shape number; every other
+// byte of child output stays out of logs and errors.
+function writeStatusFromChild(error) {
+  const text = `${typeof error?.stderr === 'string' ? error.stderr : ''}\n${error?.message ?? ''}`
+  const match = text.match(/\(HTTP ([1-5][0-9]{2})\)/)
+  return match ? `http-${match[1]}` : 'unknown'
+}
+
 function requireValue(condition, message, code = null) {
   if (!condition) throw code === null ? new Error(message) : new SnapshotReadError(message, code)
 }
@@ -540,28 +564,49 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
         '--input', file, `repos/${owner}/${name}/pulls/${number}`], {
         encoding: 'utf8', shell: false, timeout: 30000, maxBuffer: 1024 * 1024,
       })
-    } catch {
-      throw new Error('GitHub body update failed: transport, timeout or output limit')
+    } catch (error) {
+      throw new WriteFailureError('GitHub body update failed: transport, timeout or output limit', writeStatusFromChild(error))
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   }
 
+  // GraphQL only: GitHub ships no REST pulls/{n}/ready_for_review endpoint
+  // (the REST OpenAPI has no such path), so the earlier REST writer 404'd on
+  // every call while the identical-shape GraphQL convert-to-draft below
+  // worked. Mark-ready resolves the node id the same way and confirms the
+  // mutation left the PR non-draft, so a silent no-op fails closed.
   async function markReadyForReview(repository, number) {
     requireValue(prNumber(number), 'GitHub PR number is invalid')
     requireValue(repositories.has(repository), 'GitHub repository is outside the configured scope')
     const [owner, name] = repository.split('/')
-    let result
+    const idQuery = 'query ReadinessNodeId($owner: String!, $name: String!, $number: Int!) {' +
+      ' repository(owner: $owner, name: $name) { nameWithOwner pullRequest(number: $number) { id } } }'
+    const mutation = 'mutation ReadinessToReady($pullRequestId: ID!) {' +
+      ' markPullRequestReadyForReview(input: {pullRequestId: $pullRequestId}) { pullRequest { isDraft } } }'
     try {
-      const { stdout } = await run('gh', ['api', '--hostname', 'github.com', '--method', 'POST',
-        `repos/${owner}/${name}/pulls/${number}/ready_for_review`], {
+      const idOut = await run('gh', ['api', '--hostname', 'github.com', 'graphql',
+        '-f', `query=${idQuery}`, '-f', `owner=${owner}`, '-f', `name=${name}`,
+        '-F', `number=${number}`], {
         encoding: 'utf8', shell: false, timeout: 30000, maxBuffer: 1024 * 1024,
       })
-      result = JSON.parse(stdout)
-    } catch {
-      throw new Error('GitHub mark-ready failed: transport, timeout, output limit or invalid JSON')
+      const idResult = JSON.parse(idOut.stdout)
+      const nodeId = idResult?.data?.repository?.pullRequest?.id
+      if (!(typeof nodeId === 'string' && /^[A-Za-z0-9+/=_-]+$/.test(nodeId) && nodeId.length <= 256)) {
+        throw new WriteFailureError('GitHub PR node id is incomplete', 'node-id-incomplete')
+      }
+      const mutateOut = await run('gh', ['api', '--hostname', 'github.com', 'graphql',
+        '-f', `query=${mutation}`, '-f', `pullRequestId=${nodeId}`], {
+        encoding: 'utf8', shell: false, timeout: 30000, maxBuffer: 1024 * 1024,
+      })
+      const mutateResult = JSON.parse(mutateOut.stdout)
+      if (mutateResult?.data?.markPullRequestReadyForReview?.pullRequest?.isDraft !== false) {
+        throw new WriteFailureError('GitHub mark-ready did not confirm a non-draft', 'unconfirmed')
+      }
+    } catch (error) {
+      if (error instanceof WriteFailureError) throw error
+      throw new WriteFailureError('GitHub mark-ready failed: transport, timeout, output limit or invalid JSON', writeStatusFromChild(error))
     }
-    requireValue(result && typeof result === 'object' && !Array.isArray(result), 'GitHub mark-ready response is incomplete')
   }
 
   async function convertToDraft(repository, number) {
@@ -587,12 +632,13 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
         encoding: 'utf8', shell: false, timeout: 30000, maxBuffer: 1024 * 1024,
       })
       const mutateResult = JSON.parse(mutateOut.stdout)
-      requireValue(mutateResult?.data?.convertPullRequestToDraft?.pullRequest?.isDraft === true,
-        'GitHub convert-to-draft did not confirm a draft')
+      if (mutateResult?.data?.convertPullRequestToDraft?.pullRequest?.isDraft !== true) {
+        throw new WriteFailureError('GitHub convert-to-draft did not confirm a draft', 'unconfirmed')
+      }
     } catch (error) {
-      if (String(error?.message ?? error).startsWith('GitHub PR node id') ||
-        String(error?.message ?? error).startsWith('GitHub convert-to-draft did not')) throw error
-      throw new Error('GitHub convert-to-draft failed: transport, timeout, output limit or invalid JSON')
+      if (String(error?.message ?? error).startsWith('GitHub PR node id')) throw error
+      if (error instanceof WriteFailureError) throw error
+      throw new WriteFailureError('GitHub convert-to-draft failed: transport, timeout, output limit or invalid JSON', writeStatusFromChild(error))
     }
   }
 
@@ -615,8 +661,8 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
         '--auto', '--squash', '--match-head-commit', headSha], {
         encoding: 'utf8', shell: false, timeout: 30000, maxBuffer: 1024 * 1024,
       })
-    } catch {
-      throw new Error('GitHub auto-merge arm failed: transport, timeout or output limit')
+    } catch (error) {
+      throw new WriteFailureError('GitHub auto-merge arm failed: transport, timeout or output limit', writeStatusFromChild(error))
     }
   }
 

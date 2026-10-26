@@ -73,14 +73,18 @@ The local policy has these exact-path contracts:
 | `docs-drift` | `scripts/quality-gates/docs_drift.py`, `.github/workflows/docs-drift.yml`, `.docs-drift.json` | `docs/docs-drift.md` |
 | `capacity-evidence-contract` | `coolify_capacity_headroom.sh`, `coolify_capacity_headroom.py` | `docs/capacity-evidence.md` |
 | `trace-correlation-contract` | `ops/paperclip/trace_correlator.py` | `docs/trace-correlation.md` |
+| `migration-contract` | `.github/workflows/reusable-migration-squawk.yml`, `.github/workflows/reusable-migration-rehearsal.yml`, `.github/workflows/reusable-migration-drift.yml`, `migration_squawk.sh`, `migration_rehearsal.sh`, `migration_timeout_preamble.sh`, `migration_sql.py`, `migration_drift_gate.py` | `docs/migration-standard.md` |
 
 Run the local check above with full target/head SHAs. New mappings enforce only
 after merge, when present in the supplied target's policy. Accompaniment is not
 semantic correctness, capacity admission, deployment authorization or evidence
 freshness. Checking the trace source's documentation does not make the correlator
 an execution/transport gate; its report and exit status must never admit or refuse
-work. This policy does not cover all repository modules. Expand mappings only
-where a real source-to-doc contract exists; avoid broad unrelated-doc bypasses.
+work. Likewise, accompanying a migration interface or helper change with the
+migration standard does not prove the standard is semantically accurate, a
+migration is safe to deploy, or rehearsal evidence is fresh. This policy does
+not cover all repository modules. Expand mappings only where a real
+source-to-doc contract exists; avoid broad unrelated-doc bypasses.
 
 ## Reusable CI
 

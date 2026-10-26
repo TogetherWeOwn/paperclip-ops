@@ -22,6 +22,20 @@
       "id": "trace-correlation-contract",
       "sources": ["ops/paperclip/trace_correlator.py"],
       "docs": ["docs/trace-correlation.md"]
+    },
+    {
+      "id": "migration-contract",
+      "sources": [
+        ".github/workflows/reusable-migration-squawk.yml",
+        ".github/workflows/reusable-migration-rehearsal.yml",
+        ".github/workflows/reusable-migration-drift.yml",
+        "migration_squawk.sh",
+        "migration_rehearsal.sh",
+        "migration_timeout_preamble.sh",
+        "migration_sql.py",
+        "migration_drift_gate.py"
+      ],
+      "docs": ["docs/migration-standard.md"]
     }
   ]
 }

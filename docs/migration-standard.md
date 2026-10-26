@@ -284,3 +284,31 @@ Verify offline with the focused command (synthetic fixtures only):
 ```bash
 python3 -B -m unittest test_migration_evidence_ax test_migration_drift_gate
 ```
+
+## 7. Documentation accompaniment for these interfaces
+
+The existing documentation gate (see [docs-drift](docs-drift.md)) carries one
+exact-path rule, `migration-contract`, for the three reusable interface
+families above. Changing any listed source requires an added or
+content-modified change to this standard in the same patch; a deleted or
+chmod-only doc change does not satisfy it.
+
+| Family | Interface and helpers (exact tracked paths) | Required documentation |
+|---|---|---|
+| Gate A — squawk | `.github/workflows/reusable-migration-squawk.yml`, `migration_squawk.sh` | `docs/migration-standard.md` |
+| Gate B — rehearsal | `.github/workflows/reusable-migration-rehearsal.yml`, `migration_rehearsal.sh` | `docs/migration-standard.md` |
+| Gate C — drift | `.github/workflows/reusable-migration-drift.yml`, `migration_drift_gate.py` | `docs/migration-standard.md` |
+| Shared helpers | `migration_timeout_preamble.sh`, `migration_sql.py` | `docs/migration-standard.md` |
+
+The shared helpers cross family boundaries: the timeout preamble injects
+timeouts for the rehearsal and apply paths, and `migration_sql.py` serves
+both the squawk file-standard checks and the preamble injector. All eight
+paths are therefore sources of the same single rule rather than exclusive
+per-family ownership. The mapping lives only in `.docs-drift.json`; there is
+no second registry or checker, and a new mapping enforces only after merge,
+when it is present in the target commit's policy.
+
+This checks accompaniment only. A passing result does not prove that this
+document accurately describes the interfaces, that a migration is safe to
+deploy, or that rehearsal evidence is fresh; Gates A–C and review own those
+claims.

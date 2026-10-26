@@ -25,6 +25,11 @@ per admitted card per pass. There is no --apply flag on purpose.
        --snapshot ledger_snapshot.json --prior-ledger ledger_state.json \\
        --ledger-out ledger_state_new.json --plan-out plan.json --cards cards.json
 
+Preview with the same evaluator but no output files (preview history and
+deadlines are not persisted; recommendations are diagnostic only):
+
+   python3 pr_closeout_ledger.py --registry pr_closeout_registry.json --snapshot ledger_snapshot.json --dry-run --json
+
 Exit codes: 0 healthy-or-terminal (no action due), 1 action due (proposals
 emitted), 2 usage/error, 5 COULD NOT MEASURE. Exit 5 is the load-bearing one:
 an empty registry, an empty snapshot, or an unreadable input must refuse to
@@ -1328,40 +1333,78 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--snapshot", required=True, help="snapshot doc with snapshots/reviews/cards")
     parser.add_argument("--prior-ledger", default=None, help="prior ledger_state JSON for history")
     parser.add_argument("--cards", default=None, help="extra cards doc merged over snapshot cards")
-    parser.add_argument("--ledger-out", required=True, help="where to write the canonical ledger state")
-    parser.add_argument("--plan-out", required=True, help="where to write the bounded proposal plan")
+    parser.add_argument("--ledger-out", default=None,
+                        help="where to write the canonical ledger state (required unless --dry-run)")
+    parser.add_argument("--plan-out", default=None,
+                        help="where to write the bounded proposal plan (required unless --dry-run)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="preview only: compute proposals without writing output files; "
+                             "preview history and deadlines are not persisted and "
+                             "recommendations are diagnostic only")
     parser.add_argument("--json", action="store_true", help="emit the plan as JSON instead of a table")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.dry_run:
+        if args.ledger_out is not None or args.plan_out is not None:
+            parser.error("--dry-run conflicts with output paths: "
+                         "--ledger-out/--plan-out are not allowed in a dry run")
+    else:
+        missing = [name for name, value in
+                   (("--ledger-out", args.ledger_out), ("--plan-out", args.plan_out))
+                   if value is None]
+        if missing:
+            parser.error(f"the following arguments are required: {', '.join(missing)}")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
     now = utcnow()
+    stamp = now.isoformat().replace("+00:00", "Z")
     try:
         registry, snapshots, reviews, cards, prior_records = load_inputs(
             args.registry, args.snapshot, args.prior_ledger, args.cards)
+        records: dict[str, dict[str, Any]] = {}
+        for entry in registry:
+            key = registry_key(str(entry["repo"]), int(entry["pr"]))
+            records[key] = evaluate(
+                entry, snapshots.get(key), reviews.get(key), prior_records.get(key), now)
+        proposals = plan_proposals(records, cards, now)
     except LedgerError as error:
+        if args.dry_run and args.json:
+            # Safe preview failure: stable codes only, never raw input or
+            # exception text (a malformed evidence file can hold anything).
+            print(json.dumps({
+                "generatedAt": stamp,
+                "dry_run": True,
+                "persisted": False,
+                "error": {
+                    "code": "unmeasurable_evidence",
+                    "message": "evidence could not be measured; refusing to report a clean board",
+                    "retryable": False,
+                    "next_action": "fix the caller-supplied registry/snapshot/cards/"
+                                   "prior-ledger evidence and re-run the preview",
+                },
+            }, indent=2, sort_keys=True))
+            return 5
         print(f"pr_closeout_ledger: {error}", file=sys.stderr)
         return 5
-    records: dict[str, dict[str, Any]] = {}
-    for entry in registry:
-        key = registry_key(str(entry["repo"]), int(entry["pr"]))
-        records[key] = evaluate(
-            entry, snapshots.get(key), reviews.get(key), prior_records.get(key), now)
-    proposals = plan_proposals(records, cards, now)
-    stamp = now.isoformat().replace("+00:00", "Z")
-    ledger_doc = {"generatedAt": stamp, "records": records}
-    plan_doc = {"generatedAt": stamp, "proposals": [p.as_dict() for p in proposals]}
-    try:
-        with open(args.ledger_out, "w", encoding="utf-8") as handle:
-            json.dump(ledger_doc, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-        with open(args.plan_out, "w", encoding="utf-8") as handle:
-            json.dump(plan_doc, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-    except OSError as error:
-        print(f"pr_closeout_ledger: cannot write output: {error}", file=sys.stderr)
-        return 2
+    plan_doc: dict[str, Any] = {"generatedAt": stamp,
+                                "proposals": [p.as_dict() for p in proposals]}
+    if args.dry_run:
+        plan_doc["dry_run"] = True
+        plan_doc["persisted"] = False
+    else:
+        ledger_doc = {"generatedAt": stamp, "records": records}
+        try:
+            with open(args.ledger_out, "w", encoding="utf-8") as handle:
+                json.dump(ledger_doc, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+            with open(args.plan_out, "w", encoding="utf-8") as handle:
+                json.dump(plan_doc, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+        except OSError as error:
+            print(f"pr_closeout_ledger: cannot write output: {error}", file=sys.stderr)
+            return 2
     if args.json:
         print(json.dumps(plan_doc, indent=2, sort_keys=True))
     else:
@@ -1379,6 +1422,9 @@ def main(argv: list[str] | None = None) -> int:
                       f"owner={proposal.owner}: {proposal.recommended_action}")
         else:
             print("proposals: none -- owned and monitored, or terminal/excluded")
+        if args.dry_run:
+            print("dry-run preview: history and deadlines were not persisted; "
+                  "recommendations are diagnostic only")
     return 1 if proposals else 0
 
 

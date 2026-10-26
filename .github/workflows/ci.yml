@@ -1585,7 +1585,7 @@ jobs:
         env:
           STATIC_LABEL_PYTHON: ${{ steps.static-label-python.outputs.python-path || '/usr/bin/python3' }}
           PYTHONPATH: ${{ runner.temp }}/static-label-guard-deps
-        run: (cd ops/agent-tooling/serena-pilot-b && "$STATIC_LABEL_PYTHON" -B -m unittest -v test_code_nav)
+        run: (cd ops/agent-tooling/serena-pilot-b && "$STATIC_LABEL_PYTHON" -B -m unittest -v test_code_nav test_code_nav_description_acceptance)
 
       # case_8c53addb. Tier-1 cheap-model review checks: fixed verdict schemas
       # (block/hold/pass, never approve), deterministic prefilters, eval math

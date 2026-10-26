@@ -317,7 +317,7 @@ PAPERCLIP_RUN_SCRATCH_DIR="${PAPERCLIP_RUN_SCRATCH_DIR:-${PAPERCLIP_SCRATCH_DIR:
 (cd ops/paperclip && python3 -B -m unittest test_focus_gate_bounds) || fail "focus-gate bounds suite failed"
 (cd ops/sdlc && python3 -B -m unittest test_review_carry) || fail "review-carry suite failed"
 (cd ops/lib && python3 -m unittest test_atomic_state) || fail "atomic state suite failed"
-(cd ops/agent-tooling/serena-pilot-b && python3 -B -m unittest test_code_nav) || fail "code-nav suite failed"
+(cd ops/agent-tooling/serena-pilot-b && python3 -B -m unittest test_code_nav test_code_nav_description_acceptance) || fail "code-nav suite failed"
 (cd ops/productivity && python3 -m unittest test_stuck_run_state) || fail "stuck-run state suite failed"
 (cd ops/productivity && python3 -B -m unittest test_idle_waiters_state test_idle_waiter_live_path test_idle_waiters_cli) || fail "idle-waiter state/live-path/cli suites failed"
 (cd ops/owner-guard && python3 -m unittest test_owner_guard_state) || fail "owner-guard state suite failed"

@@ -10,6 +10,14 @@ Usage (run from anywhere inside the repo to navigate):
   code-nav symbol <name_path> [--body] [--in <file-or-dir>] [--depth 0] [--info]
   code-nav refs <name_path> <file>
 
+Offline discovery (no server, no state, no PyYAML/git required):
+  code-nav --describe --json
+Prints the command catalog as one JSON object and exits. Described
+capabilities are not proof of installed/runtime readiness. Any other use
+of --describe/--json (missing partner flag, extra operands, --timeout
+override, unknown option) is rejected with exit 2 and a JSON refusal on
+stderr.
+
 Uses PyYAML from the pinned Serena venv. Concurrent calls for the same repo are serialized with a flock
 (each call starts a ~1.9 GB language server); the whole operation (queue wait
 plus the tool call) is bounded by --timeout (default 120 s).
@@ -32,10 +40,102 @@ import subprocess
 import sys
 import tempfile
 
-import yaml
-
 DEFAULT_TIMEOUT_S = 120
 MCP_PROTOCOL_VERSION = "2024-11-05"
+
+DISCOVERY_SCHEMA = "code-nav-description.v1"
+DISCOVERY_ERROR = {
+    "code": "invalid_discovery_arguments",
+    "retryable": False,
+    "next_action": "use code-nav --describe --json without execution arguments",
+}
+DISCOVERY_TIMEOUT = {
+    "argument": "--timeout",
+    "default": DEFAULT_TIMEOUT_S,
+    "unit": "seconds",
+    "scope": "queue-plus-call",
+    "exit_code": 124,
+}
+DISCOVERY_RUNTIME = {
+    "dependencies": ["git", "serena-agent==2.0.0", "PyYAML"],
+    "side_effects": [
+        "repo-lock",
+        "external-config",
+        "external-project-state",
+        "language-server-cache",
+        "language-server-download",
+        "serena-server-process",
+    ],
+    "writes_repository": False,
+    "read_only_tools": True,
+}
+DISCOVERY_META = {"requires_runtime": False, "side_effects": [], "runtime_ready": None}
+
+# Single source for parser/help and machine discovery. Both are built from
+# these rows, so they cannot drift independently. Names, types, requiredness,
+# defaults and tool arguments below are the frozen offline contract.
+COMMAND_SPECS = (
+    {
+        "id": "outline",
+        "tool": "get_symbols_overview",
+        "help": "outline of symbols defined in a file",
+        "arguments": (
+            {"name": "file", "type": "string", "required": True, "default": None,
+             "tool_argument": "relative_path",
+             "help": "file to outline (cwd-, repo-relative or absolute)"},
+            {"name": "--depth", "type": "integer", "required": False, "default": 1,
+             "tool_argument": "depth",
+             "help": "descendant depth: 0 = top-level only, 1 = plus immediate children like methods (default %(default)s)"},
+        ),
+    },
+    {
+        "id": "symbol",
+        "tool": "find_symbol",
+        "help": "find symbols by name path, optionally with body",
+        "arguments": (
+            {"name": "name_path", "type": "string", "required": True, "default": None,
+             "tool_argument": "name_path_pattern",
+             "help": "symbol name or path, e.g. MyClass/my_method"},
+            {"name": "--body", "type": "boolean", "required": False, "default": False,
+             "tool_argument": "include_body",
+             "help": "include symbol source code"},
+            {"name": "--in", "type": "string", "required": False, "default": "",
+             "tool_argument": "relative_path", "dest": "within",
+             "help": "restrict search to this file or directory (much faster)"},
+            {"name": "--depth", "type": "integer", "required": False, "default": 0,
+             "tool_argument": "depth",
+             "help": "descendant depth (default %(default)s)"},
+            {"name": "--info", "type": "boolean", "required": False, "default": False,
+             "tool_argument": "include_info",
+             "help": "include hover-like signature/doc info"},
+        ),
+    },
+    {
+        "id": "refs",
+        "tool": "find_referencing_symbols",
+        "help": "exact references to a symbol (language server)",
+        "arguments": (
+            {"name": "name_path", "type": "string", "required": True, "default": None,
+             "tool_argument": "name_path",
+             "help": "name path of the symbol"},
+            {"name": "file", "type": "string", "required": True, "default": None,
+             "tool_argument": "relative_path",
+             "help": "file containing the symbol"},
+        ),
+    },
+)
+
+
+def __getattr__(name):
+    # Runtime-only PyYAML stays out of the offline path: discovery and --help
+    # must work with no yaml installed. Execution helpers import yaml locally;
+    # this hook keeps `code_nav.yaml` available for execution and tests.
+    if name == "yaml":
+        import yaml as _yaml
+
+        globals()["yaml"] = _yaml
+        return _yaml
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))
 
 # Verified against the serena-agent 2.0.0 sdist (src layout, cli.py,
 # tools/symbol_tools.py, config/serena_config.py, solidlsp/). Do not change
@@ -130,6 +230,10 @@ def _ensure_home(home):
 
 def _load_config(path):
     try:
+        import yaml
+    except ImportError:
+        die("PyYAML missing (broken install)", code=2)
+    try:
         with open(path) as f:
             return yaml.safe_load(f)
     except (OSError, ValueError, yaml.YAMLError):
@@ -152,6 +256,10 @@ def _ensure_global_config(home, template):
     """Render the effective home once; validate safety-critical values on
     every call. Preserve Serena's normalized config, project list and secret.
     Unsafe old configs fail closed, never silently overwrite operator state."""
+    try:
+        import yaml
+    except ImportError:
+        die("PyYAML missing (broken install)", code=2)
     dest = os.path.join(home, "serena_config.yml")
     if not os.path.lexists(dest):
         config = _load_config(template)
@@ -305,32 +413,96 @@ def _run_once(tool, args, timeout):
     sys.stdout.write(out if out.endswith("\n") else out + "\n")
 
 
-def main(argv=None):
+def _build_parser():
     ap = argparse.ArgumentParser(
         prog="code-nav",
         description="Serena-backed symbolic code navigation (Pilot B). Run from inside the repo.",
+        epilog="Discovery: code-nav --describe --json prints the command catalog as JSON "
+               "without starting Serena, touching state, or requiring PyYAML/git; described "
+               "capabilities are not proof of installed/runtime readiness. Any other use of "
+               "--describe/--json is rejected (exit 2) with a JSON refusal on stderr.",
     )
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_S,
                     help="bound in seconds for queue wait plus the tool call (default %(default)s)")
+    ap.add_argument("--describe", action="store_true",
+                    help="describe commands as machine-readable JSON and exit "
+                         "(only with --json; offline, starts no server, writes nothing)")
+    ap.add_argument("--json", action="store_true",
+                    help="select JSON output for --describe (only valid together; "
+                         "offline, starts no server)")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    for spec in COMMAND_SPECS:
+        p = sub.add_parser(spec["id"], help=spec["help"])
+        for arg in spec["arguments"]:
+            if arg["name"].startswith("--"):
+                kwargs = {"help": arg["help"]}
+                if "dest" in arg:
+                    kwargs["dest"] = arg["dest"]
+                if arg["type"] == "boolean":
+                    kwargs["action"] = "store_true"
+                else:
+                    kwargs["default"] = arg["default"]
+                    if arg["type"] == "integer":
+                        kwargs["type"] = int
+                p.add_argument(arg["name"], **kwargs)
+            else:
+                p.add_argument(arg["name"], help=arg["help"])
+    return ap
 
-    p_out = sub.add_parser("outline", help="outline of symbols defined in a file")
-    p_out.add_argument("file", help="file to outline (cwd-, repo-relative or absolute)")
-    p_out.add_argument("--depth", type=int, default=1,
-                       help="descendant depth: 0 = top-level only, 1 = plus immediate children like methods (default %(default)s)")
 
-    p_sym = sub.add_parser("symbol", help="find symbols by name path, optionally with body")
-    p_sym.add_argument("name_path", help="symbol name or path, e.g. MyClass/my_method")
-    p_sym.add_argument("--body", action="store_true", help="include symbol source code")
-    p_sym.add_argument("--in", dest="within", default="",
-                       help="restrict search to this file or directory (much faster)")
-    p_sym.add_argument("--depth", type=int, default=0, help="descendant depth (default %(default)s)")
-    p_sym.add_argument("--info", action="store_true", help="include hover-like signature/doc info")
+def _description():
+    return {
+        "schema": DISCOVERY_SCHEMA,
+        "program": "code-nav",
+        "note": "Describes command capabilities only; not proof of installed/runtime readiness.",
+        "commands": [
+            {
+                "id": spec["id"],
+                "tool": spec["tool"],
+                "arguments": [
+                    {
+                        "name": arg["name"],
+                        "type": arg["type"],
+                        "required": arg["required"],
+                        "default": arg["default"],
+                        "tool_argument": arg["tool_argument"],
+                    }
+                    for arg in spec["arguments"]
+                ],
+            }
+            for spec in COMMAND_SPECS
+        ],
+        "timeout": dict(DISCOVERY_TIMEOUT),
+        "runtime": {
+            "dependencies": list(DISCOVERY_RUNTIME["dependencies"]),
+            "side_effects": list(DISCOVERY_RUNTIME["side_effects"]),
+            "writes_repository": DISCOVERY_RUNTIME["writes_repository"],
+            "read_only_tools": DISCOVERY_RUNTIME["read_only_tools"],
+        },
+        "discovery": dict(DISCOVERY_META),
+    }
 
-    p_ref = sub.add_parser("refs", help="exact references to a symbol (language server)")
-    p_ref.add_argument("name_path", help="name path of the symbol")
-    p_ref.add_argument("file", help="file containing the symbol")
 
+def _emit_description():
+    sys.stdout.write(json.dumps(_description(), sort_keys=True, indent=2) + "\n")
+
+
+def _refuse_discovery():
+    sys.stderr.write(json.dumps(DISCOVERY_ERROR, sort_keys=True) + "\n")
+    sys.exit(2)
+
+
+def main(argv=None):
+    raw = list(argv) if argv is not None else sys.argv[1:]
+    if "--describe" in raw or "--json" in raw:
+        # Offline path: no parser side effects, no runtime, no yaml, no git.
+        # Exactly --describe --json in either order; everything else is a
+        # stable safe refusal with no stdout and no side effects.
+        if len(raw) == 2 and set(raw) == {"--describe", "--json"}:
+            _emit_description()
+            return 0
+        _refuse_discovery()
+    ap = _build_parser()
     a = ap.parse_args(argv)
     if a.timeout <= 0:
         die("--timeout must be positive", code=2)

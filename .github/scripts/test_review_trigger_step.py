@@ -51,7 +51,12 @@ class Stub:
         if path == "/pulls/7":
             return dict(self.pr)
         if path.startswith("/commits/") and "/check-runs?" in path:
-            return {"check_runs": page_of(self.runs, path)}
+            query = dict(kv.split("=") for kv in path.split("?", 1)[1].split("&"))
+            runs = self.runs
+            if query.get("filter", "latest") != "all":
+                # Fixtures append newer attempts last, as in the API's latest view.
+                runs = list({r["name"]: r for r in runs}.values())
+            return {"check_runs": page_of(runs, path)}
         if path == "/pulls/7/files?per_page=100":
             return list(self.files)
         if path.startswith("/issues/7/comments?"):
@@ -87,7 +92,8 @@ def run_with(stub):
 
 
 def green_runs():
-    return [{"name": "ci-ok", "status": "completed", "conclusion": "success"}]
+    return [{"name": "ci-ok", "status": "completed", "conclusion": "success",
+             "head_sha": OUT_OF_SAMPLE_SHA}]
 
 
 class StepTest(unittest.TestCase):
@@ -117,7 +123,7 @@ class StepTest(unittest.TestCase):
 
     def test_ci_red_exits_zero_without_posting(self):
         stub = Stub(runs=[{"name": "ci-ok", "status": "completed",
-                           "conclusion": "failure"}])
+                           "conclusion": "failure", "head_sha": OUT_OF_SAMPLE_SHA}])
         self.assertEqual(run_with(stub), 0)
         self.assertEqual(stub.posts, [])
 

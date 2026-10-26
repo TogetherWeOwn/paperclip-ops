@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { createGithubAdapter } from '../src/github-adapter.js'
+import { createGithubAdapter, writeFailureCode } from '../src/github-adapter.js'
 import { createConsumer } from '../src/consumer.js'
 import { classifyCloseout, closeoutPolicy } from '../src/closeout.js'
 
@@ -545,15 +545,59 @@ test('body updates travel via a file, never argv', async () => {
   assert.equal(calls.length, 0)
 })
 
-test('mark-ready posts to ready_for_review and validates the response', async () => {
-  const { adapter, calls } = fake([{ id: 1 }])
+test('mark-ready resolves the node id then runs the GraphQL mutation, confirming non-draft', async () => {
+  const nodeId = 'UHVsbFJlcXVlc3Q0Mg=='
+  const { adapter, calls } = fake([
+    { data: { repository: { nameWithOwner: repository, pullRequest: { id: nodeId } } } },
+    { data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } },
+  ])
   await adapter.markReadyForReview(repository, 42)
-  assert.deepEqual(calls[0][1], ['api', '--hostname', 'github.com', '--method', 'POST',
-    `repos/${repository}/pulls/42/ready_for_review`])
-  const empty = fake([null])
-  await assert.rejects(empty.adapter.markReadyForReview(repository, 42))
-  const failing = createGithubAdapter({ allowedRepositories: [repository], run: async () => { throw new Error('PRIVATE') } })
-  await assert.rejects(failing.markReadyForReview(repository, 42), /GitHub mark-ready failed/)
+  assert.equal(calls.length, 2)
+  assert.ok(calls[0][1].join(' ').includes('pullRequest'))
+  assert.ok(calls[1][1].some((arg) => arg.includes('markPullRequestReadyForReview')))
+  assert.ok(calls[1][1].some((arg) => arg === `pullRequestId=${nodeId}`))
+  // No REST pulls/{n}/ready_for_review ever: GitHub has no such endpoint.
+  assert.equal(calls.flatMap((call) => call[1]).some((arg) => typeof arg === 'string' && arg.includes('ready_for_review')), false)
+})
+
+test('mark-ready fails closed on an unconfirmed mutation and a missing node id', async () => {
+  const nodeId = 'UHVsbFJlcXVlc3Q0Mg=='
+  const unconfirmed = fake([
+    { data: { repository: { nameWithOwner: repository, pullRequest: { id: nodeId } } } },
+    { data: { markPullRequestReadyForReview: { pullRequest: { isDraft: true } } } },
+  ])
+  await assert.rejects(unconfirmed.adapter.markReadyForReview(repository, 42), /did not confirm/)
+  const noId = fake([{ data: { repository: { nameWithOwner: repository, pullRequest: { id: null } } } }])
+  await assert.rejects(noId.adapter.markReadyForReview(repository, 42), /node id/)
+  assert.equal(noId.calls.length, 1)
+})
+
+test('mark-ready surfaces sanitized failure classes and never echoes child output', async () => {
+  for (const [stderr, expected] of [
+    ['gh: Not Found (HTTP 404)', 'http-404'],
+    ['GraphQL: Resource not accessible by integration (HTTP 403)', 'http-403'],
+    ['gh: Validation Failed (HTTP 422)', 'http-422'],
+    ['PRIVATE transport detail', 'unknown'],
+  ]) {
+    const boom = Object.assign(new Error('PRIVATE'), { stdout: 'PRIVATE', stderr: `${stderr} PRIVATE` })
+    const failing = createGithubAdapter({ allowedRepositories: [repository], run: async () => { throw boom } })
+    await assert.rejects(failing.markReadyForReview(repository, 42), (error) => {
+      assert.match(error.message, /GitHub mark-ready failed/)
+      assert.equal(writeFailureCode(error), expected)
+      assert.equal(String(error).includes('PRIVATE'), false)
+      assert.equal(Object.hasOwn(error, 'stdout'), false)
+      assert.equal(Object.hasOwn(error, 'stderr'), false)
+      return true
+    })
+  }
+  const unconfirmed = fake([
+    { data: { repository: { nameWithOwner: repository, pullRequest: { id: 'UHVsbFJlcXVlc3Q0Mg==' } } } },
+    { data: { markPullRequestReadyForReview: { pullRequest: { isDraft: true } } } },
+  ])
+  await assert.rejects(unconfirmed.adapter.markReadyForReview(repository, 42), (error) => {
+    assert.equal(writeFailureCode(error), 'unconfirmed')
+    return true
+  })
 })
 
 test('convert-to-draft resolves the node id then mutates, confirming draft', async () => {
@@ -634,10 +678,16 @@ test('every GraphQL document the adapter sends is brace- and paren-balanced', as
   ])
   await draftCall.adapter.convertToDraft(repository, 42)
   collect(draftCall.calls)
-  // Four module-level queries plus the two inline convert-to-draft documents.
+  const readyCall = fake([
+    { data: { repository: { nameWithOwner: repository, pullRequest: { id: nodeId } } } },
+    { data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } },
+  ])
+  await readyCall.adapter.markReadyForReview(repository, 42)
+  collect(readyCall.calls)
+  // Four module-level queries plus the two inline documents per lifecycle mutation.
   // If a call shape changes and a document stops being collected, this fails
   // loudly instead of silently shrinking the contract.
-  assert.equal(documents.length, 6)
+  assert.equal(documents.length, 8)
   for (const document of documents) {
     for (const [open, close, label] of [['{', '}', 'brace'], ['(', ')', 'paren']]) {
       let depth = 0

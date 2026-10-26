@@ -333,6 +333,9 @@ test('a failed write records the step and counts the error without blinding the 
   assert.equal(records[0].decision, 'error')
   assert.deepEqual(records[0].steps.map((s) => [s.action, s.result]),
     [['update-body', 'done'], ['mark-ready', 'failed']])
+  // A writer error with no adapter diagnostic lands as the closed-set unknown class.
+  assert.deepEqual(records[0].steps[1],
+    { action: 'mark-ready', result: 'failed', error: 'mark-ready-failed', failure: 'unknown' })
   assert.equal(records[1].decision, 'error')
   assert.equal(counters.errors, 2)
   assert.equal(counters.updatedBody, 2)

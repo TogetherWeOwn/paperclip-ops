@@ -230,6 +230,16 @@ test('snapshotFacts and record lines are exact for control, null-date and repeat
   }
 })
 
+test('sweep log surfaces the sanitized writeFailure class of a failed mark-ready', async () => {
+  const record = {
+    repository, number: 7, headSha: HEAD, decision: 'error',
+    actions: ['mark-ready'], reason: 'mark-ready',
+    steps: [{ action: 'mark-ready', result: 'failed', error: 'mark-ready-failed', failure: 'http-404' }],
+  }
+  assert.equal(recordLine(record),
+    `readiness ${repository}#7@${HEAD}: error (mark-ready) writeFailure=mark-ready:http-404`)
+})
+
 test('snapshotFailure is exact for every failure class', async (t) => {
   const classes = {
     'query-transport': { snapshotError: new Error('boom') },

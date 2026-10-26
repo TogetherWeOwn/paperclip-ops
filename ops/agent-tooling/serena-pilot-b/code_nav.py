@@ -14,9 +14,10 @@ Offline discovery (no server, no state, no PyYAML/git required):
   code-nav --describe --json
 Prints the command catalog as one JSON object and exits. Described
 capabilities are not proof of installed/runtime readiness. Any other use
-of --describe/--json (missing partner flag, extra operands, --timeout
-override, unknown option) is rejected with exit 2 and a JSON refusal on
-stderr.
+of the --describe/--json spellings, including --flag=value forms
+(missing partner flag, extra operands, --timeout override, unknown
+option), is rejected with exit 2 and a JSON refusal on stderr.
+Abbreviated prefixes (e.g. --desc) keep stock argparse errors.
 
 Uses PyYAML from the pinned Serena venv. Concurrent calls for the same repo are serialized with a flock
 (each call starts a ~1.9 GB language server); the whole operation (queue wait
@@ -420,7 +421,8 @@ def _build_parser():
         epilog="Discovery: code-nav --describe --json prints the command catalog as JSON "
                "without starting Serena, touching state, or requiring PyYAML/git; described "
                "capabilities are not proof of installed/runtime readiness. Any other use of "
-               "--describe/--json is rejected (exit 2) with a JSON refusal on stderr.",
+               "these spellings, including --flag=value forms, is rejected (exit 2) with a "
+               "JSON refusal on stderr; abbreviated prefixes keep stock argparse errors.",
     )
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_S,
                     help="bound in seconds for queue wait plus the tool call (default %(default)s)")
@@ -492,12 +494,19 @@ def _refuse_discovery():
     sys.exit(2)
 
 
+def _is_discovery_token(token):
+    return token in ("--describe", "--json") or token.startswith("--describe=") or token.startswith("--json=")
+
+
 def main(argv=None):
     raw = list(argv) if argv is not None else sys.argv[1:]
-    if "--describe" in raw or "--json" in raw:
+    if any(_is_discovery_token(token) for token in raw):
         # Offline path: no parser side effects, no runtime, no yaml, no git.
-        # Exactly --describe --json in either order; everything else is a
-        # stable safe refusal with no stdout and no side effects.
+        # Exactly the two bare flags in either order is valid; every other
+        # use of these spellings (including --flag=value forms) is a stable
+        # safe refusal with no stdout and no side effects. Abbreviated
+        # prefixes (e.g. --desc) are not discovery tokens: argparse handles
+        # them with its usual exit-2 text error.
         if len(raw) == 2 and set(raw) == {"--describe", "--json"}:
             _emit_description()
             return 0

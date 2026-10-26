@@ -1965,7 +1965,7 @@
     },
     {
       "name": "trace correlator suite",
-      "definition_sha256": "970ea2be13fd1d0c9b2503d02aa6725f3f9ac47d4b883cf246d600c17cc4dd9f",
+      "definition_sha256": "8aed74a5e0f58a50119fdcbbb0280e49023b423173ba8806dd5b5db21ecdafc0",
       "id": "trace correlator suite:1"
     },
     {

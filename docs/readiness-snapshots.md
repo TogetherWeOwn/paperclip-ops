@@ -12,7 +12,15 @@ push age to decide readiness.
   entries pass (`success`, `neutral`, `skipped`). A completed failure wins over
   pending, and pending wins over passing. Ties and output order are deterministic.
   This deliberately does not infer which workflow run is newest: a later passing
-  rerun cannot hide another failure on the same head.
+  rerun cannot hide another failure on the same head. One narrow exception: a
+  `cancelled` entry is dropped before aggregation when the same check-suite app
+  started a later attempt of that name on the same head that completed passing —
+  a superseded rerun (for example a concurrency cancel), not a result. The app
+  is the producer identity branch protection itself pins beside a required
+  context, and the finest identity readable under the sweep token's
+  `checks: read` grant. Genuine failures, a latest attempt's own cancellation,
+  other producers' passes and entries without provenance keep the conservative
+  merge unchanged.
 - Strict closeout readers retain their push-age and duplicate-name guards.
   Lifecycle, identity, head-window, label and rollup completeness guards remain
   in force for both readers. Snapshot failure causes no ruleset read or write,

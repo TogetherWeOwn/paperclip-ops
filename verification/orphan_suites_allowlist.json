@@ -52,6 +52,7 @@
   "templates/org-github/tests/test_security_rules.sh": "template-repo suite; runs in template consumers' CI, not this repo",
   "templates/org-github/tests/test_template_contract.py": "template-repo suite; runs in template consumers' CI, not this repo",
   "templates/org-github/tests/test_tier0_org_template.sh": "template-repo suite; runs in template consumers' CI, not this repo",
+  "test_docs_policy_ambiguity_acceptance.py": "immutable expected-red acceptance staged for the paired duplicate-policy implementation; activate in existing docs-drift CI suite and remove this entry when implemented",
   "test_github_runner_bundle.py": "asserts on a private-only doc absent from the public repo",
   "verification/review_gate_acceptance/test_contract.py": "executes via verification/review_gate_acceptance/run.py --legacy in the paginated review-gate acceptance CI step; importlib dispatch invisible to the orphan detector",
   "verification/tool-gateway-identity/case_8e88152b-identity.test.ts": "manual vitest probe with pinned RESULT.txt evidence; needs gateway deps no package here installs"

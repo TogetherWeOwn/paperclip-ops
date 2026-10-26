@@ -82,10 +82,9 @@ json_field() {
 
 # assert_schema_version <label> <stdout>
 assert_schema_version() {
-  local label="$1" out="$2" v
-  v="$(json_field "$out" '.schema_version')"
-  if [[ "$v" == "1" ]]; then ok "$label"
-  else bad "$label" "expected .schema_version == 1; got: $v; out: $out"; fi
+  local label="$1" out="$2"
+  if jq -e '.schema_version == 1' <<<"$out" >/dev/null 2>&1; then ok "$label"
+  else bad "$label" "expected .schema_version == 1 (JSON number); got: $out"; fi
 }
 
 # assert_json_cause <label> <expected_exit> <expected_cause> <stdout> <actual_exit>

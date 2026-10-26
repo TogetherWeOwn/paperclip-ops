@@ -841,7 +841,7 @@ export function createPlugin() {
         {
           displayName: "Get provider usage",
           description:
-            "Read the most recently persisted CLIProxy usage state: per-provider success/failed counters, cooldown history, and per-model capacity windows, each flagged stale when older than the freshness budget. Optionally select one persisted lane to return only that lane's stored history; provider snapshots and modelUsage keep their existing scope. Stored history only — not serving readiness or an admission decision. Read-only; consults stored history, never calls CLIProxy.",
+            "Read the most recently persisted CLIProxy usage state: per-provider success/failed counters, current cooldown status, and per-model capacity windows, each flagged stale when older than the freshness budget. Optionally select one persisted lane to return only that lane's stored history; provider snapshots and modelUsage keep their existing scope. Stored history only — not serving readiness or an admission decision. Read-only; consults stored history, never calls CLIProxy.",
           parametersSchema: {
             type: "object",
             required: ["companyId"],

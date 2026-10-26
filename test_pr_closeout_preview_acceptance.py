@@ -601,7 +601,26 @@ class DryRunSamePathAndClock(unittest.TestCase):
             self.assertEqual(plan_a["generatedAt"], stamp_for(NOW))
             self.assertEqual(plan_b["generatedAt"], stamp_for(NOW_LATER))
             self.assertNotEqual(plan_a["generatedAt"], plan_b["generatedAt"])
-            self.assertEqual(plan_a["proposals"], plan_b["proposals"])
+            # Proposals match apart from nextCheckAt, which is anchored to
+            # the caller clock (+1h) -- the same anchoring same-clock
+            # preview/persisted parity (DryRunParity) requires.
+            def without_next_check(proposals):
+                return [
+                    {k: v for k, v in proposal.items() if k != "nextCheckAt"}
+                    for proposal in proposals
+                ]
+
+            self.assertEqual(
+                without_next_check(plan_a["proposals"]),
+                without_next_check(plan_b["proposals"]),
+            )
+            for plan, moment in ((plan_a, NOW), (plan_b, NOW_LATER)):
+                self.assertTrue(plan["proposals"])
+                for proposal in plan["proposals"]:
+                    self.assertEqual(
+                        proposal["nextCheckAt"],
+                        stamp_for(moment + dt.timedelta(hours=1)),
+                    )
         finally:
             shutil.rmtree(work, ignore_errors=True)
 

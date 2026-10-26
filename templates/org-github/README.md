@@ -113,8 +113,9 @@ python3 -B -m unittest discover -v -s templates/org-github/tests -p 'test_ax_org
 Each command preserves unittest's non-TTY output and exit status (0 passes;
 nonzero fails), and its filename identifies the failed CI step. Fix the
 implementation or configuration, not the immutable acceptance tests; rerun the
-same command. The Paperclip-window suite and unrelated template suites remain
-outside this lane.
+same command. The separate `AX metric contract suites` step also discovers
+`test_ax_*py`, including the Paperclip-window suite; its now-covered exemption
+is absent. Unrelated non-AX template suites remain outside these lanes.
 
 ## Security-rule fixture verification
 

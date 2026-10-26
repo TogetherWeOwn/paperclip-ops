@@ -66,6 +66,12 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
         # suites step next to its sibling; pin it so a change to the suite
         # wakes the suites job at PR time.
         "test_provider_baseline_integrity.py",
+        # ready-time-stored-integrity: the stored-integrity suite runs as
+        # its own suites step next to its sibling; pin the tool and both
+        # suites so a change to any of them wakes the suites job.
+        "garm_ready_time_baseline.py",
+        "test_garm_ready_time_baseline.py",
+        "test_garm_ready_time_stored_integrity.py",
         "kofra_preview_parity.py",
         "test_kofra_preview_parity.py",
         "test_kofra_preview_parity_json.py",

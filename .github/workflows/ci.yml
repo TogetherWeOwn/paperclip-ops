@@ -1848,6 +1848,14 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 test_garm_ready_time_baseline.py
 
+      # Stored-maturity integrity: the companion suite pins refusal of a
+      # stored baseline whose samples/statistics/provisional/provenance do
+      # not reconcile (unknown + invalid_baseline on check, byte-intact
+      # refusal on record). Same offline/stdin-only bounds as its sibling.
+      - name: GARM ready-time stored integrity suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -m unittest -v test_garm_ready_time_stored_integrity
+
       # case_4c7b19b7. Watchdog host-disk detector D8 (Coolify 99% on 2026-10-03):
       # warn 85 / page 95 with DevOps then CEO-desk routing, Gatus
       # platform_host-disk push, fail-closed reads, hermetic stub-curl suite.

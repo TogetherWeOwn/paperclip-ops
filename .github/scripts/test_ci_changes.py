@@ -526,6 +526,21 @@ class Classify(unittest.TestCase):
         self.assertTrue(r["core"])
         self.assertFalse(r["full"])
 
+    def test_ready_time_stored_integrity_wakes_core(self):
+        # ready-time-stored-integrity: the stored-integrity suite runs as
+        # its own suites step next to its sibling. A change to the tool or
+        # either suite must wake the suites job at PR time without
+        # latching a full run.
+        for path in (
+            "garm_ready_time_baseline.py",
+            "test_garm_ready_time_baseline.py",
+            "test_garm_ready_time_stored_integrity.py",
+        ):
+            with self.subTest(path=path):
+                r = self.result(path)
+                self.assertTrue(r["core"])
+                self.assertFalse(r["full"])
+
     def test_case_7452fc43_watchdog_delivery_wakes_core(self):
         # case_f708f865: the watchdog-delivery proof runs in CI via the
         # platform watchdog gate. Its suite and delivery source must

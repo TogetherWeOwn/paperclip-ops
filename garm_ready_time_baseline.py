@@ -64,6 +64,24 @@
 # provisional threshold that pages is the same false green as a dead feed
 # reading quiet — both report confidence the data cannot support.
 #
+# STORED INTEGRITY. A stored baseline is evidence, not a claim: maturity
+# is established from its validated stored history, never from a
+# caller-set flag. Before `check` verdicts or `record` merges, the stored
+# document must reconcile exactly: startup samples are finite numbers
+# (never booleans/strings) from 0 through six hours, at most MAX_SAMPLES
+# of them, duplicates valid; count equals the number of stored samples;
+# min/p50/p95/max equal the nearest-rank recomputation from those samples
+# (null exactly when empty); `provisional` is a boolean equal to
+# count < MIN_SAMPLES; provenance total_samples equals count. Any
+# mismatch is refused, never silently repaired or reset: `check` answers
+# UNKNOWN (exit 3) with verdict/detail keys plus the additive machine
+# code `invalid_baseline` and a human remediation string; library
+# `evaluate` mirrors that as ("unknown", {"code": "invalid_baseline",
+# "reason": ...}); `record` raises the existing validation failure
+# (exit 1) before mutating anything, leaving the file bytes intact.
+# Genuinely empty/provisional baselines and valid mature documents the
+# tool itself wrote keep their existing verdicts and carry no code.
+#
 # EXIT CODES
 #   0  recorded / checked OK
 #   1  usage or validation failure (bad shape, bad value, write failed)
@@ -130,6 +148,22 @@ class InvalidInput(ValueError):
 
 def _reject(message):
     raise InvalidInput(message)
+
+
+def _is_finite(value):
+    """math.isfinite without int-to-float overflow.
+
+    math.isfinite(10**1000) raises OverflowError instead of returning
+    False, which would escape validation as a traceback. Ints are
+    finite by definition, so only floats take the isfinite path.
+    Callers exclude bool and non-numbers before calling this.
+    """
+    return not isinstance(value, float) or math.isfinite(value)
+
+
+def _is_number(value):
+    # bool is an int subclass; True == 1 would otherwise pass as 1 ms.
+    return not isinstance(value, bool) and isinstance(value, (int, float))
 
 
 def _read_json(path, what):
@@ -271,6 +305,17 @@ def init_baseline(source):
 
 
 def _check_baseline_shape(base):
+    """Validate persisted baseline evidence and reconcile its metadata.
+
+    Stored samples face the same numeric domain and bounded window as
+    fresh samples (finite numbers, not booleans/strings, 0 through six
+    hours, at most MAX_SAMPLES, duplicates valid). Stored
+    count/statistics/provisional/provenance metadata must reconcile
+    exactly with the stored samples: maturity is established from the
+    evidence, never from a caller-set flag. Raises InvalidInput on any
+    violation; invalid evidence must be refused, never repaired here.
+    This validator reads only; it never mutates ``base``.
+    """
     if type(base) is not dict:
         _reject("baseline: object required")
     if base.get("schema") != BASELINE_SCHEMA:
@@ -280,14 +325,65 @@ def _check_baseline_shape(base):
         _reject("baseline.thresholds: object required")
     for key in ("p50_alert_ms", "p95_alert_ms", "ready_timeout_ms"):
         value = thresholds.get(key)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        if not _is_number(value):
             _reject("baseline.thresholds.%s: number required" % key)
-        if not math.isfinite(value) or value <= 0:
+        if not _is_finite(value) or value <= 0:
             _reject("baseline.thresholds.%s: finite value > 0 required"
                     % key)
     ops = base.get("operations")
-    if type(ops) is not dict or OPERATION not in ops:
+    if type(ops) is not dict:
         _reject("baseline.operations.%s: object required" % OPERATION)
+    startup = ops.get(OPERATION)
+    if type(startup) is not dict:
+        _reject("baseline.operations.%s: object required" % OPERATION)
+    stored = startup.get("samples")
+    if type(stored) is not list:
+        _reject("baseline.operations.%s.samples: array required" % OPERATION)
+    if len(stored) > MAX_SAMPLES:
+        _reject("baseline.operations.%s.samples: exceeds %d-sample window"
+                % (OPERATION, MAX_SAMPLES))
+    for index, value in enumerate(stored):
+        where = "baseline.operations.%s.samples[%d]" % (OPERATION, index)
+        if not _is_number(value):
+            _reject("%s: number required" % where)
+        if not _is_finite(value) or value < 0:
+            _reject("%s: finite value >= 0 required" % where)
+        if value > MAX_DURATION_MS:
+            _reject("%s: exceeds 6h, refusing clock/join error" % where)
+    count = startup.get("count")
+    if type(count) is not int:
+        _reject("baseline.operations.%s.count: integer required" % OPERATION)
+    if count != len(stored):
+        _reject("baseline.operations.%s.count: disagrees with stored "
+                "sample count (%d)" % (OPERATION, len(stored)))
+    if stored:
+        expected = summarize(stored)
+        for key in ("min_ms", "p50_ms", "p95_ms", "max_ms"):
+            actual = startup.get(key)
+            if not _is_number(actual) or not _is_finite(actual):
+                _reject("baseline.operations.%s.%s: finite number required"
+                        % (OPERATION, key))
+            if actual != expected[key]:
+                _reject("baseline.operations.%s.%s: stored value disagrees "
+                        "with stored samples" % (OPERATION, key))
+    else:
+        for key in ("min_ms", "p50_ms", "p95_ms", "max_ms"):
+            if key not in startup or startup[key] is not None:
+                _reject("baseline.operations.%s.%s: must be null with no "
+                        "stored samples" % (OPERATION, key))
+    provisional = base.get("provisional")
+    if type(provisional) is not bool:
+        _reject("baseline.provisional: boolean required")
+    if provisional != (len(stored) < MIN_SAMPLES):
+        _reject("baseline.provisional: disagrees with stored evidence; "
+                "refusing inconsistent maturity")
+    provenance = base.get("provenance")
+    if type(provenance) is not dict:
+        _reject("baseline.provenance: object required")
+    total = provenance.get("total_samples")
+    if type(total) is not int or total != len(stored):
+        _reject("baseline.provenance.total_samples: must equal stored "
+                "sample count (%d)" % len(stored))
 
 
 def record(base, parsed, source, recorded_by, now):
@@ -333,9 +429,22 @@ def evaluate(base, parsed):
 
     Returns (verdict, detail) with verdict one of "ok", "breach",
     "unknown". Breach is OR across p50/p95 on the FRESH samples, never on
-    the baseline's own history.
+    the baseline's own history. An internally inconsistent stored
+    baseline answers ("unknown", {"code": "invalid_baseline",
+    "reason": ...}) instead of raising: `check` is a read-only verdict,
+    so bad stored evidence means the instrument has no standing. The
+    "code" field is additive; genuinely provisional baselines keep the
+    original reason-only detail. `record` raises InvalidInput instead.
     """
-    _check_baseline_shape(base)
+    try:
+        _check_baseline_shape(base)
+    except InvalidInput as exc:
+        return ("unknown", {
+            "code": "invalid_baseline",
+            "reason": ("baseline is internally inconsistent: %s; restore "
+                       "a backup or rebuild it with init/record from "
+                       "auditable samples" % exc),
+        })
     if base.get("provisional"):
         return ("unknown", {"reason": "baseline is provisional"})
     stored_count = base["operations"][OPERATION].get("count") or 0
@@ -401,6 +510,9 @@ def cmd_record(args):
 
 
 def cmd_check(args):
+    # check is read-only: it never writes, so its inherited dry-run needs
+    # no separate flag. An inconsistent stored baseline answers unknown
+    # (exit 3) with code "invalid_baseline"; see evaluate().
     samples_doc = _read_json(args.samples, "samples")
     parsed = parse_samples(samples_doc)
     try:

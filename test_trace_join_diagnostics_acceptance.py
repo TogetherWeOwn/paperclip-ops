@@ -108,7 +108,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "ops" / "paperclip"))
 
-from trace_correlator import correlate  # noqa: E402
+from trace_correlator import correlate
 
 AT = "2026-10-25T07:30:00Z"
 SHA_A = "a" * 40

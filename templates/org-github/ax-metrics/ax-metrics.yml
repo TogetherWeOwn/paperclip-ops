@@ -69,8 +69,15 @@ jobs:
                       "escalations_per_100_cards"):
               metric = report["metrics"][key]
               if key == "first_push_green_rate":
-                  print(f"- {key}: {metric['value']}")
+                  print(f"- {key}: {metric['value']} "
+                        f"(validity={metric['validity']}; "
+                        f"completeness={metric['completeness']}; "
+                        f"reason_code={metric['reason_code']})")
+                  counts = metric.get("counts")
+                  if counts is not None:
+                      print(f"  - conclusive_prs={counts['conclusive_prs']}/"
+                            f"{counts['merged_prs']} merged_prs; "
+                            f"sampled_prs={counts['sampled_prs']}")
               else:
-                  shown = metric["value"] is not None
-                  print(f"- {key}: {'see log (internal)' if shown else 'n/a: ' + str(metric['provenance'])}")
+                  print(f"- {key}: see log (internal)")
           PY

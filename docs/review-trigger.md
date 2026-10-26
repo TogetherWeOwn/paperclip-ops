@@ -27,29 +27,45 @@ from every push:
 | `.github/scripts/review_trigger.py` | Pure stdlib decision (`decide()`); no network, no model. |
 | `.github/scripts/review_trigger_step.py` | GitHub reads + idempotent trigger post. |
 | `ops/productivity/review_dedup.py` | Shared same-head idempotency guard, also used by `review_error_rerequest.py`. |
-| `test_review_trigger.py`, `test_review_trigger_step.py` | Offline unit tests, run in `pr-lint`. |
+| `.github/scripts/test_review*.py` | Offline decision, step and exact-head acceptance suites, discovered by CI. |
 
 Precedence: draft → already-reviewed head → ci-ok red → release-please →
 risky → checklist → audit sample → ready head. Every skip exits 0 with a
 notice; anything that prevents reaching a decision exits 1 (fail closed).
 Check-run and comment reads follow `page=N` to the last page, and exit 1 past
 3000 items rather than decide on a partial view. The file list is capped at
-one page; a full page routes the PR to review.
+one page; a full page routes the PR to review. Read the file list again for
+final readiness, applying the same full-page rule: a base retarget can change
+paths without changing the head SHA. Final PR labels also come from the current
+PR read, not the initial risk-routing snapshot.
 
 Trigger record per head: the `review-ready` label (machine signal) first,
 then one `@togetherweown-reviewer review <sha>` comment (audit trail, checked
 before posting). Label-first avoids an orphan comment when the label write
 fails; the reviewer invocation evaluates the label at review time and
 tolerates either order, but this repo always writes label-first.
-The verdict check-run test is the one-review-per-head enforcer:
-a success/failure verdict is never re-requested on the same head, but
-incomplete runs (action_required, cancelled, timed_out, stale) never block a
-re-request on the next CI completion. Same-head idempotency: just
-before posting, the step re-reads the head's check-runs and suppresses the
-post when a live Paperclip Review run already covers the head (manual
-mention, gate listing, or an overlapping delivery started it without leaving
-the sha marker the comment check looks for). Error outcomes stay retryable;
-the host reconciler owns the wake path for those heads (one wake per head via its state key; repeated errors still wake).
+Immediately before publication, the step re-reads the PR and latest checks.
+It requires affirmative open, non-draft, unchanged-head facts and completed
+successful `ci-ok` runs carrying that exact SHA, and re-evaluates the current
+checklist and risk labels. Missing SHA, missing CI, pending or red reruns,
+closed PRs and draft transitions withhold both writes. An older green attempt
+cannot override a newer pending or failed attempt. These are read-then-write
+REST operations, not an atomic lock against subsequent GitHub changes; the
+reviewer must still validate its target head when consuming the trigger.
+
+The initial CI read uses `filter=latest`. The final read uses all check
+attempts (`filter=all`), selecting the newest `ci-ok` run per app by check-run
+ID while retaining complete review history. Ambiguous duplicate CI attempts
+without distinct numeric IDs fail closed. A live Paperclip Review attempt or
+any success/failure verdict suppresses another trigger, even if a later error
+would otherwise hide that verdict. The workflow also applies the shared
+one-error-retry limit: two completed non-verdict review attempts exhaust the
+budget. Findings (`failure`) are verdicts, never transport retries. The existing
+comment-marker guard and label-first publication order remain unchanged.
+
+Run the offline contract with:
+`python3 -B -m unittest discover -s .github/scripts -p 'test_review*.py'`.
+This source change does not install or enable a live workflow on any host.
 
 ## Platform half (Operator)
 

@@ -144,6 +144,23 @@ Input refusal codes: `MISSING_OPTION_VALUE`, `INVALID_OPTION_VALUE`,
 Errors never echo raw job rows/file contents or tracebacks. Additional fields may
 be added within version 1; consumers should branch on verdict/code, not prose.
 
+## Documentation accompaniment
+
+In `.docs-drift.json`, `capacity-evidence-contract` maps the exact source paths
+`coolify_capacity_headroom.sh` and `coolify_capacity_headroom.py` to
+`docs/capacity-evidence.md`. Once the mapping is in the supplied target commit,
+a change to either source needs an added or content-modified regular file at
+this doc path in the same patch; unrelated, deleted or chmod-only docs do not count.
+
+```sh
+python3 scripts/quality-gates/docs_drift.py --base <full-target-sha> --head <full-pr-head-sha>
+```
+
+See [the gate contract](docs-drift.md) for base-owned policy and JSON/exit details.
+Accompaniment is not semantic correctness, capacity admission, deployment
+authorization or evidence freshness. It does not validate supplied job evidence
+or change the read-only replay, versioned output, errors or dry-run behavior above.
+
 ## Offline verification boundary
 
 The immutable acceptance suite executes the real entrypoint with an empty

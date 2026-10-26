@@ -4,7 +4,9 @@ var PLUGIN_API_VERSION = 1;
 var PLUGIN_VERSION = "0.3.1";
 var TOOL_NAMES = {
   /** Read-only: current usage/cooldown state for one or all providers. */
-  getProviderUsage: "get_provider_usage"
+  getProviderUsage: "get_provider_usage",
+  /** Counts-only evidence; never returns provider or lane records. */
+  getCollectorEvidence: "get_collector_evidence"
 };
 var ROUTE_KEYS = {
   usageSummary: "usage-summary"
@@ -133,6 +135,20 @@ var manifest = {
   ],
   instanceConfigSchema: CLIPROXY_INSIGHT_CONFIG_SCHEMA,
   tools: [
+    {
+      name: TOOL_NAMES.getCollectorEvidence,
+      displayName: "Get collector evidence",
+      description: "Read company-scoped aggregate snapshot counts and JSON byte lengths for a bounded observation window, without provider identities or raw records. Missing lifecycle and diagnostic instrumentation remain unavailable. Never polls or changes the collector.",
+      parametersSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["companyId"],
+        properties: {
+          companyId: { type: "string", minLength: 1 },
+          windowSeconds: { type: "integer", minimum: 60, maximum: 86400, default: 3600 }
+        }
+      }
+    },
     {
       name: TOOL_NAMES.getProviderUsage,
       displayName: "Get provider usage",

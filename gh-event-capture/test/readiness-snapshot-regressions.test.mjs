@@ -189,8 +189,12 @@ function permutations(items) {
 // repeats can matter.
 function arrangements(name, entries) {
   const others = baseChecks().filter((node) => (node.name ?? node.context) !== name)
+  // The arm requires the heavy job's own completed success on the head
+  // (flag-on proof A): carry passing suites evidence in every arrangement so
+  // these cases pin repeated-name strictness, not the heavy-evidence gate.
+  const heavy = [ok('suites')]
   return permutations(entries).flatMap((p) => [
-    [...p, ...others], [...others, ...p], [p[0], ...others, ...p.slice(1)],
+    [...p, ...others, ...heavy], [...others, ...p, ...heavy], [p[0], ...others, ...p.slice(1), ...heavy],
   ])
 }
 

@@ -780,7 +780,7 @@
     },
     {
       "name": "benign agent-error proposer suite",
-      "definition_sha256": "102fe60e89c8ae324c9829317a578bcca1f68fa014b94a378b62782a6e6ea8ee",
+      "definition_sha256": "ce54b43c3dfeb3314d971adfd4e6f0fd3a010e63709c9045c1310bdb74254927",
       "id": "benign agent-error proposer suite:1"
     },
     {

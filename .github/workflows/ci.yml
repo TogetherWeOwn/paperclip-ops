@@ -2416,7 +2416,7 @@ jobs:
 
       - name: benign agent-error proposer suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: python3 -m unittest -v test_agent_error_proposer.py
+        run: python3 -m unittest -v test_agent_error_proposer.py test_agent_error_proposer_refusals.py
 
       # case_1017ef76. Platform watchdog detectors on recorded snapshots: the
       # stranded-429 detector plus every earlier family. Pure fixtures and

@@ -54,6 +54,7 @@ consumers must read ``slo.verdict``. See docs/trace-correlation.md.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import re
 import sys
@@ -61,6 +62,60 @@ import sys
 SCHEMA = "trace-correlation.v1"
 SCHEMA_VERSION = 1
 MAX_INPUT_BYTES = 1_048_576
+
+DIAGNOSTICS_SCHEMA = "trace-join-diagnostics.v1"
+DEFAULT_DIAGNOSTIC_LIMIT = 100
+MAX_DIAGNOSTIC_LIMIT = 1000
+COLLECTION_ORDER = {"runs": 0, "workProducts": 1, "deployments": 2}
+
+# Bounded, input-independent guidance per diagnostic code. These strings
+# never interpolate input data: diagnostics locate a supplied row, they
+# do not echo it.
+NEXT_ACTIONS = {
+    "run_not_an_object": "Replace the row with a run object carrying a run id and card id, then re-run.",
+    "run_missing_id": "Add the run id (runId or id) to the row, then re-run.",
+    "run_missing_card": "Add the card id (contextIssueId or issueId) to the row, then re-run.",
+    "run_duplicate_id": "Remove the duplicate run row or correct its run id; the first row with that id wins.",
+    "work_product_not_an_object": "Replace the row with a work-product object, then re-run.",
+    "link_missing_card": "Add the card id (issueId) to the PR-link row, then re-run.",
+    "link_missing_run": "Add the creating run id (createdByRunId) to the PR-link row, then re-run.",
+    "link_bad_repo": "Set repo to an owner/name value on the PR-link row, then re-run.",
+    "link_bad_pr": "Set pr to a positive integer on the PR-link row, then re-run.",
+    "link_head_not_exact_sha": "Set headSha to the full 40-hex PR head commit, or omit it when unknown; refs are never resolved.",
+    "link_merge_not_exact_sha": "Set mergeSha to the full 40-hex merge commit, or omit it when unknown; refs are never resolved.",
+    "link_orphan_missing_run": "Supply the run row this link names, or correct its createdByRunId, then re-run.",
+    "link_orphan_card_mismatch": "The named run belongs to a different card; correct the link card or run id, then re-run.",
+    "deploy_not_an_object": "Replace the row with a deployment object, then re-run.",
+    "deploy_bad_repo": "Set repo to an owner/name value on the deployment row, then re-run.",
+    "deploy_sha_not_exact": "Set sha to the full 40-hex deployed commit on the deployment row, then re-run.",
+    "deploy_bad_id": "Set deployId to a nonempty string, or omit it when unknown, then re-run.",
+    "deploy_not_selected": "Another exact-match candidate won merge-before-head, earliest-deployment, file-order selection; keep the row only if it is real evidence.",
+    "deploy_no_eligible_match": "No joined PR link has this repo and SHA as head or merge; check the repo/SHA or supply the missing link.",
+}
+
+ERROR_NEXT_ACTIONS = {
+    "invalid_input": "Supply one schema_version 1 JSON document on stdin within the input size limit, then re-run.",
+    "invalid_diagnostic_limit": "Pass --diagnostic-limit with an integer from 1 to 1000, then re-run.",
+    "diagnostic_limit_requires_explain_joins": "Add --explain-joins, or drop --diagnostic-limit, then re-run.",
+    "invalid_usage": "Use only --explain-joins, --diagnostic-limit N, --dry-run or --help; evidence comes from stdin.",
+}
+
+HELP = """usage: trace_correlator.py [--explain-joins] [--diagnostic-limit N]
+                           [--dry-run] [--help] < evidence.json
+
+Join one evidence JSON document from stdin into a trace-correlation.v1
+report on stdout. Exit 0 when the SLO verdict is met, 1 when missed or
+unknown, 2 on unreadable or invalid input. Read-only and offline.
+
+options:
+  --explain-joins       add a trace-join-diagnostics.v1 section locating
+                        rejected, orphaned and unselected input rows
+  --diagnostic-limit N  cap returned diagnostics (integer 1-1000,
+                        default 100); only valid with --explain-joins
+  --dry-run             no-op: accepted for symmetry; this tool never
+                        writes, with or without the flag
+  -h, --help            show this help and exit without reading stdin
+"""
 
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REPO_RE = re.compile(r"^[^/\s]+/[^/\s]+$")
@@ -329,25 +384,46 @@ def build_trace(run, link, deploy, sha_match):
     return trace
 
 
+def _diagnostic(collection, index, code):
+    return {
+        "collection": collection,
+        "index": index,
+        "code": code,
+        "retryable": False,
+        "next_action": NEXT_ACTIONS[code],
+    }
+
+
 def correlate(evidence, checked_at):
     """Join evidence into the report. Pure: no I/O, no clock reads."""
+    report, _diagnostics = _correlate_with_diagnostics(evidence, checked_at)
+    return report
+
+
+def _correlate_with_diagnostics(evidence, checked_at):
+    """correlate() plus row diagnostics from the same join decisions."""
+    diagnostics = []
     runs = []
     invalid = []
-    for row in evidence["runs"]:
+    for index, row in enumerate(evidence["runs"]):
         record, reason = normalize_run(row)
         if record is None:
             invalid.append(reason)
+            diagnostics.append(_diagnostic("runs", index, reason))
         else:
+            record["index"] = index
             runs.append(record)
 
     links = []
     orphan_links = 0
-    for row in evidence["workProducts"]:
+    for index, row in enumerate(evidence["workProducts"]):
         link, reason = normalize_pr_link(row)
         if link is None:
             if reason is not None:
                 invalid.append(reason)
+                diagnostics.append(_diagnostic("workProducts", index, reason))
             continue
+        link["index"] = index
         links.append(link)
 
     deploys = []
@@ -355,6 +431,7 @@ def correlate(evidence, checked_at):
         record, reason = normalize_deploy(row, index)
         if record is None:
             invalid.append(reason)
+            diagnostics.append(_diagnostic("deployments", index, reason))
         else:
             deploys.append(record)
 
@@ -363,16 +440,30 @@ def correlate(evidence, checked_at):
     for run in runs:
         if run["run"] in runs_by_id:
             invalid.append("run_duplicate_id")
+            diagnostics.append(
+                _diagnostic("runs", run["index"], "run_duplicate_id")
+            )
             continue
         runs_by_id[run["run"]] = run
         deduped.append(run)
     runs = deduped
     links_by_run = {}
     for link in links:
-        if link["run"] not in runs_by_id or (
-            runs_by_id[link["run"]]["card"] != link["card"]
-        ):
+        if link["run"] not in runs_by_id:
             orphan_links += 1
+            diagnostics.append(
+                _diagnostic(
+                    "workProducts", link["index"], "link_orphan_missing_run"
+                )
+            )
+            continue
+        if runs_by_id[link["run"]]["card"] != link["card"]:
+            orphan_links += 1
+            diagnostics.append(
+                _diagnostic(
+                    "workProducts", link["index"], "link_orphan_card_mismatch"
+                )
+            )
             continue
         links_by_run.setdefault(link["run"], []).append(link)
 
@@ -421,6 +512,29 @@ def correlate(evidence, checked_at):
 
     orphan_deploys = sum(
         1 for deploy in deploys if id(deploy) not in matched_deploys
+    )
+    # A valid deploy no trace selected is located, not just counted. It
+    # was an eligible candidate only when a joined link (one attached to
+    # a trace) names its exact repo+SHA as head or merge; anything else
+    # never had an eligible match. No temporal/causal claim is made.
+    eligible_keys = {
+        (link["repo"], sha)
+        for joined in links_by_run.values()
+        for link in joined
+        for sha in (link["headSha"], link["mergeSha"])
+        if sha is not None
+    }
+    for deploy in deploys:
+        if id(deploy) in matched_deploys:
+            continue
+        code = (
+            "deploy_not_selected"
+            if (deploy["repo"], deploy["sha"]) in eligible_keys
+            else "deploy_no_eligible_match"
+        )
+        diagnostics.append(_diagnostic("deployments", deploy["index"], code))
+    diagnostics.sort(
+        key=lambda row: (COLLECTION_ORDER[row["collection"]], row["index"])
     )
 
     samples = sorted(
@@ -474,29 +588,113 @@ def correlate(evidence, checked_at):
         "unknowns": sorted(set(invalid)),
         "at": checked_at,
     }
-    return {
+    report = {
         "schema": SCHEMA,
         "traces": traces,
         "slo": slo,
         "delivery": delivery,
     }
+    return report, diagnostics
+
+
+def _diagnostics_requested(argv):
+    return any(
+        arg in ("--explain-joins", "--dry-run", "--diagnostic-limit")
+        or arg.startswith("--diagnostic-limit=")
+        for arg in argv
+    )
+
+
+def _refuse(code, diagnostics_requested, detail=None):
+    """Exit-2 refusal: pure JSON in requested mode, text otherwise."""
+    if diagnostics_requested:
+        payload = {
+            "schema": DIAGNOSTICS_SCHEMA,
+            "error": {
+                "code": code,
+                "retryable": False,
+                "next_action": ERROR_NEXT_ACTIONS[code],
+            },
+        }
+        print(json.dumps(payload, sort_keys=True))
+    else:
+        message = detail or ERROR_NEXT_ACTIONS[code]
+        print(f"trace_correlator: {message}", file=sys.stderr)
+    return 2
+
+
+def _parse_args(argv):
+    """Parse CLI flags; (explain, limit, error_code|None)."""
+    explain = False
+    limit = None
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--explain-joins":
+            explain = True
+        elif arg == "--dry-run":
+            pass  # documented no-op: every mode is read-only
+        elif arg == "--diagnostic-limit" or arg.startswith(
+            "--diagnostic-limit="
+        ):
+            if arg == "--diagnostic-limit":
+                index += 1
+                if index >= len(argv):
+                    return explain, limit, "invalid_diagnostic_limit"
+                value = argv[index]
+            else:
+                value = arg.split("=", 1)[1]
+            if not re.fullmatch(r"-?[0-9]+", value):
+                return explain, limit, "invalid_diagnostic_limit"
+            limit = int(value)
+            if not 1 <= limit <= MAX_DIAGNOSTIC_LIMIT:
+                return explain, limit, "invalid_diagnostic_limit"
+        else:
+            return explain, limit, "invalid_usage"
+        index += 1
+    if limit is not None and not explain:
+        return explain, limit, "diagnostic_limit_requires_explain_joins"
+    return explain, limit, None
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:]) if argv is None else list(argv)
+    if any(arg in ("-h", "--help") for arg in argv):
+        print(HELP, end="")
+        return 0
+    requested = _diagnostics_requested(argv)
+    explain, limit, error = _parse_args(argv)
+    if error is not None:
+        return _refuse(error, requested)
     try:
         raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
     except OSError as exc:
-        print(f"trace_correlator: cannot read stdin: {exc}", file=sys.stderr)
-        return 2
+        return _refuse(
+            "invalid_input", requested, detail=f"cannot read stdin: {exc}"
+        )
     try:
         evidence = load_document(raw)
     except InputError as exc:
-        print(f"trace_correlator: {exc}", file=sys.stderr)
-        return 2
+        return _refuse("invalid_input", requested, detail=str(exc))
     checked_at = (
         dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
     )
-    report = correlate(evidence, checked_at)
+    report, diagnostics = _correlate_with_diagnostics(evidence, checked_at)
+    if explain:
+        effective_limit = (
+            DEFAULT_DIAGNOSTIC_LIMIT if limit is None else limit
+        )
+        returned = diagnostics[:effective_limit]
+        report["joinDiagnostics"] = {
+            "schema": DIAGNOSTICS_SCHEMA,
+            "inputDigest": hashlib.sha256(raw).hexdigest(),
+            "limit": effective_limit,
+            "total": len(diagnostics),
+            "returned": len(returned),
+            "truncated": len(returned) < len(diagnostics),
+            "complete": len(returned) == len(diagnostics),
+            "diagnostics": returned,
+        }
     print(json.dumps(report, sort_keys=True))
     return 0 if report["slo"]["verdict"] == "met" else 1
 

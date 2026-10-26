@@ -99,6 +99,59 @@ Output schema is `trace-correlation.v1`: `traces`, one `slo` row and one
 - Invalid rows are counted in `delivery.invalidRows` with their reasons
   in `delivery.unknowns`; they never abort the report.
 
+## Locating rejected and orphaned rows (`--explain-joins`)
+
+Aggregate counts say a join failed, not which supplied row to repair.
+The opt-in explanation path locates those rows without changing any
+join, SLO or delivery decision:
+
+```sh
+python3 ops/paperclip/trace_correlator.py --explain-joins < evidence.json
+python3 ops/paperclip/trace_correlator.py --explain-joins --diagnostic-limit 20 < evidence.json
+```
+
+`--explain-joins` adds exactly one top-level key, `joinDiagnostics`
+(schema `trace-join-diagnostics.v1`), to the otherwise identical report.
+It carries `inputDigest` (lowercase hex SHA-256 of the exact stdin
+bytes, binding every row pointer to one input snapshot), the effective
+`limit`, `total`/`returned` counts, `truncated`/`complete` booleans (a
+truncated list is never labelled complete), and `diagnostics`: at most
+one entry per input row, in stable input order (runs, then
+workProducts, then deployments, each by ascending zero-based `index`).
+Each entry has exactly `collection`, `index`, a stable snake-case
+`code`, `retryable: false` and a bounded single-line `next_action`.
+Codes reuse the normalization reasons above, plus
+`link_orphan_missing_run` vs `link_orphan_card_mismatch` for valid PR
+links that cannot join a run, and `deploy_not_selected` (an exact
+repo+SHA match for a joined link that lost merge-before-head,
+earliest-deployment, file-order selection) vs
+`deploy_no_eligible_match` (no joined link was ever eligible to select
+it) for valid deployments no trace selected. No temporal or production
+causation is inferred. Ignored non-PR work products and valid rows
+with mere evidence gaps (missing timestamps or SHAs) produce no
+diagnostic. New fields carry only row pointers, controlled codes, the
+bounded guidance and the digest: never raw rows, note bodies, URLs,
+arbitrary identifiers, input paths or parser exception text.
+
+`--diagnostic-limit N` (integer 1-1000, default 100) is valid only
+with `--explain-joins` and returns the exact prefix of the diagnostic
+list; changing it never changes traces, SLO, delivery or the exit
+status. `--dry-run` is a documented no-op alias: every mode is already
+read-only, so it is accepted alone or with `--explain-joins` and
+changes nothing. `--help`/`-h` exits 0 without reading stdin.
+
+When any of `--explain-joins`, `--diagnostic-limit` or `--dry-run` is
+present, an input or usage refusal exits 2 with a single pure-JSON
+object on stdout (`{"schema": "trace-join-diagnostics.v1", "error":
+{...}}` with a stable `code` — `invalid_input`,
+`invalid_diagnostic_limit`,
+`diagnostic_limit_requires_explain_joins` or `invalid_usage` —
+`retryable: false` and a bounded `next_action`) and nothing on stderr:
+never a fabricated successful explanation. With no diagnostics flag,
+refusals keep the original form (exit 2, empty stdout, text on
+stderr). A diagnostic cannot repair input, fetch evidence, admit work
+or turn the advisory SLO exit into a gate.
+
 ## SLO contract
 
 The `slo` row evaluates G4 merge-to-prod lead time (goal

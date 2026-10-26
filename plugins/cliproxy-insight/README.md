@@ -9,13 +9,50 @@ Built per case_22968ca3 against dispatch (`wakeEnabled`) and model-selection
 | | |
 |---|---|
 | Version | **0.3.1** — bounded single-company scheduled polling; retains per-lane cooldown state |
-| Code | manifest, config schema, secret-ref guard, worker (poll job, one agent tool, one API route) |
-| Tests | 95 vitest (all 82 existing + 13 scope cases; `it.each` rows count separately), 9 rebuilt-worker checks, 9 stock-runtime integration scenario groups. Two pre-repair scenarios reproduce the exact operator rejection. No live DB, credentials or lane requests. See [contract evidence](deploy/COMPANY-SCOPE-CONTRACT.md). |
+| Code | manifest, config schema, secret-ref guard, worker (poll job, two agent tools including the unreleased counts-only tool, one API route) |
+| Tests | 194 vitest (101 existing + 93 aggregate-evidence cases; `it.each` rows count separately). Separate rebuilt-worker and stock-runtime harnesses cover the company-scope contract; see [contract evidence](deploy/COMPANY-SCOPE-CONTRACT.md) for their recorded execution, not a current live claim. No live DB, credentials or lane requests. |
 | Manifest | validated against the **host's own** `pluginManifestV1Schema` — PASS, `pluginId: "togetherweown.cliproxy-insight"`. `validateManifestCapabilities` could not be run standalone here — it lives at `/app/server/dist/services/plugin-capability-validator.js` and resolves internal `@paperclipai/shared` source paths that only exist inside the live server process. Every declared feature was hand-checked against the capabilities list instead, and that check caught one real gap (`activity.log.write`) |
 | Installed | **0.3.1: no**. Operator installed 0.3.0 on 2026-09-23, then disabled it after the scheduled scope failure. Keep it disabled pending reviewed replacement through case_22d743e1. |
 | Polling | **off** by default; installing is not enabling |
 
 ---
+
+## Unreleased: counts-only collector evidence
+
+`get_collector_evidence` is a separate read-only surface for callers that must
+not receive the broad `get_provider_usage` payload. It accepts the configured
+`companyId` and an optional integer `windowSeconds` (60–86400, default 3600).
+The manifest adds no capability, route, job, network destination or secret read.
+Registration in source is not a deployed tool grant; existing installation and
+polling holds above remain in force.
+
+The response allowlists plugin identity/version, generation time, three resolved
+non-secret settings, and aggregate current-snapshot counts/JSON byte lengths.
+It returns no provider names, lane names, accounts, producer records, reason
+strings, URLs, paths or secret references. Reads are bounded to 64 indexed
+providers, 32 indexed lanes and one model snapshot; oversized/malformed indexes
+fail closed rather than silently truncating. The invoking run's company must
+match the requested company before any config or state read. Unknown companies
+and a changed single-company binding are refused. Read errors return bounded
+error codes in object-valued `data`, never an underlying error message.
+
+The window selects current snapshots by their worker `polledAt`, not diagnostic
+or request events. Bytes mean UTF-8 serialized JSON snapshot values, excluding
+state keys and storage overhead. Missing indexes remain `null`; missing values,
+invalid timestamps and snapshots outside the window are counted separately.
+No cooldown/audit history is read, rewritten or pruned, and control counters
+are neither sampled nor changed.
+
+Every receipt is explicitly **partial**: immutable deployed artifact, installed
+lifecycle, diagnostic sampling/redaction/retention, diagnostic input/events,
+self-origin drops and redacted-field counts remain `null` because this source
+cannot observe them. A snapshot count is not a traffic count, and a running
+worker version is not proof of the installed artifact. This surface alone does
+not qualify a live before/after baseline or establish a repaired MCP envelope.
+Independent synthetic acceptance covers the aggregate contract and invoking-company
+boundary (93 cases; 194 tests including existing regressions). Release versioning,
+immutable artifact preparation and supported deployment remain separate work; this
+unreleased source is not a new installable release, and no live success is claimed.
 
 ## What changed in 0.3.1
 

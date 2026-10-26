@@ -14,6 +14,11 @@ checker can:
 
 A new ``*-image-profile.json`` is picked up by the glob with no code change.
 Messages name the field and the profile file, never a value read from it.
+
+Optional --role-label LABEL resolves one literal eligible-minus-self-hosted
+label to its source profile, only after the complete matrix passes validation.
+Declaration lookup does not prove live runner eligibility, selector exclusivity,
+capacity, permission or host isolation. It is read-only and inherently dry-run.
 """
 
 import argparse
@@ -194,7 +199,37 @@ def validate(profiles, pool_specs=None):
             "migration_complete": False}
 
 
-def validate_directory(directory):
+def _role_lookup(profiles, role_label):
+    """Query the already validated source snapshot; never inspect live state."""
+    declaring = next((name for name, document in sorted(profiles.items())
+                      if role_label in role_labels(name, document, [])), None)
+    outcome = ("shared_label" if role_label == SHARED_LABEL else
+               "matched" if declaring is not None else "unrecognized_label")
+    result = {
+        "schema": "profile-role-lookup.v1", "outcome": outcome,
+        "role_label": role_label, "declaring_profile": declaring,
+        "explicitly_excluding_profiles": sorted(
+            name for name, document in profiles.items()
+            if role_label in label_list(name, document,
+                                        "explicitly_ineligible", [])),
+        "explanation": (
+            "Source declaration lookup only; does not prove live runner "
+            "eligibility, selector exclusivity, capacity, permission or host "
+            "isolation."),
+        "admission_authorized": False, "host_verified": False,
+        "migration_complete": False,
+    }
+    if outcome != "matched":
+        result.update(code=outcome, retryable=False, next_action=(
+            "Choose an exact role-specific label from the intended source "
+            "profile's labels.eligible; the shared label cannot identify a role."
+            if outcome == "shared_label" else
+            "Check the exact label and intended source directory; if a source "
+            "contract change is needed, review it separately before querying again."))
+    return result
+
+
+def validate_directory(directory, role_label=None):
     profiles, violations = read_documents(directory, PROFILE_GLOB)
     pool_specs, more = read_documents(directory, POOL_SPEC_GLOB)
     violations += more
@@ -204,7 +239,7 @@ def validate_directory(directory):
         raise InvalidMatrix(violations + exc.violations) from None
     if violations:
         raise InvalidMatrix(violations)
-    return result
+    return result if role_label is None else _role_lookup(profiles, role_label)
 
 
 def main():
@@ -212,14 +247,23 @@ def main():
     parser.add_argument("directory", type=Path, nargs="?",
                         default=Path(__file__).resolve().parent,
                         help="directory holding the *-image-profile.json files")
+    parser.add_argument("--role-label", metavar="LABEL",
+                        help="look up one exact literal source role label "
+                             "(self-hosted is shared); exits: match 0, "
+                             "invalid matrix 1, shared/unrecognized 2")
     args = parser.parse_args()
     try:
-        result = validate_directory(args.directory)
+        result = validate_directory(args.directory, args.role_label)
     except InvalidMatrix as exc:
-        print(json.dumps({"result": REJECTED, "violations": exc.violations,
-                          "admission_authorized": False}))
+        result = {"result": REJECTED, "violations": exc.violations,
+                  "admission_authorized": False}
+        if args.role_label is not None:
+            result.update(host_verified=False, migration_complete=False)
+        print(json.dumps(result))
         return 1
     print(json.dumps(result, sort_keys=True))
+    if args.role_label is not None and result["outcome"] != "matched":
+        return 2
     return 0
 
 

@@ -24,6 +24,11 @@ principals; this gate never touches the network or a database):
   --max-age-hours N   rehearsal evidence freshness requirement (default 24)
   --json              emit one machine-readable verdict object on stdout
                       instead of text lines (see JSON_SCHEMA_VERSION)
+  --include-pending-tags
+                      requires --json: the verdict object also carries
+                      pending_tags (the complete sorted candidate tag IDs
+                      pending against the ledger, no digests) and
+                      pending_tags_evaluated; diagnostic only
 
 Output: one line per check on stdout ("ok: ..." / "FAIL: ..."); never row
 data beyond tags and counts. No secrets are read or printed. With --json,
@@ -121,6 +126,11 @@ class _InputError(Exception):
         self.checks = []
         self.pending_count = 0
         self.unknown_count = 0
+        # Pending-tag projection state: stays unevaluated until candidate
+        # and ledger parsing both succeed and the pending subset is
+        # computed; only then may a refusal carry the exact sorted list.
+        self.pending_tags = None
+        self.pending_tags_evaluated = False
         # Text lines evaluated before the refusal (evidence path only), so
         # text mode still prints them like the pre-buffering gate did.
         self.lines = []
@@ -347,7 +357,9 @@ def check_evidence(path, max_age_hours, candidate=None):
     return rc
 
 
-def _verdict_object(checks, pending_count, unknown_count):
+def _verdict_object(checks, pending_count, unknown_count,
+                    pending_tags=None, pending_tags_evaluated=False,
+                    include_pending_tags=False):
     verdict = "pass"
     if any(status == "refused" for _, status, _ in checks):
         verdict = "refused"
@@ -361,7 +373,7 @@ def _verdict_object(checks, pending_count, unknown_count):
               + [c for c in checks if c[1] == "fail"])
     if ranked:
         next_action = NEXT_ACTIONS[ranked[0][2]]
-    return {
+    obj = {
         "version": JSON_SCHEMA_VERSION,
         "verdict": verdict,
         "pending_count": pending_count,
@@ -370,6 +382,14 @@ def _verdict_object(checks, pending_count, unknown_count):
                    for cid, status, reason in checks],
         "next_action": next_action,
     }
+    if include_pending_tags:
+        # Opt-in projection only: tag IDs sorted by the caller, never
+        # digests. Unevaluated stays null so a partial subset can never
+        # be mistaken for the complete one.
+        evaluated = bool(pending_tags_evaluated) and pending_tags is not None
+        obj["pending_tags"] = list(pending_tags) if evaluated else None
+        obj["pending_tags_evaluated"] = evaluated
+    return obj
 
 
 def _run(args):
@@ -384,12 +404,16 @@ def _run(args):
     checks = [("input_files", "pass", "ok")]
     rc = 0
     pending = {tag: digest for tag, digest in candidate.items() if digest not in applied}
+    # Both parses succeeded and the subset is complete from here on:
+    # this exact sorted list is what the opt-in projection may emit,
+    # even if a later evidence stage refuses.
+    pending_tags = sorted(pending)
     if pending:
         if args.evidence:
             lines.append(f"ok: {len(pending)} pending migration(s) require bound rehearsal evidence")
             checks.append(("candidate_chain", "pass", "ok"))
         else:
-            first = sorted(pending)[0]
+            first = pending_tags[0]
             lines.append(f"FAIL: {len(pending)} candidate migration(s) are pending without "
                          f"rehearsal evidence; first: {first}")
             checks.append(("candidate_chain", "fail", "pending_without_evidence"))
@@ -420,6 +444,8 @@ def _run(args):
             exc.checks = checks
             exc.pending_count = len(pending)
             exc.unknown_count = len(unknown)
+            exc.pending_tags = pending_tags
+            exc.pending_tags_evaluated = True
             exc.lines = list(lines)
             raise
         rc_ev, ev_lines, ev_checks = evaluate_evidence(
@@ -429,8 +455,11 @@ def _run(args):
         rc = rc_ev or rc
 
     if args.json:
-        print(json.dumps(_verdict_object(checks, len(pending), len(unknown)),
-                         sort_keys=True))
+        print(json.dumps(_verdict_object(
+            checks, len(pending), len(unknown),
+            pending_tags=pending_tags, pending_tags_evaluated=True,
+            include_pending_tags=getattr(args, "include_pending_tags", False)),
+            sort_keys=True))
     else:
         for line in lines:
             print(line)
@@ -448,7 +477,11 @@ def main(argv):
                      "and an actionable next_action on refusal."),
         epilog=("JSON contract: {version, verdict, pending_count, unknown_count, "
                 "checks[{id, status, reason}], next_action}. The verdict maps to "
-                "the exit code: pass 0, fail 1, refused 2. "
+                "the exit code: pass 0, fail 1, refused 2. Opt-in projection: "
+                "--json --include-pending-tags also emits pending_tags (the "
+                "complete sorted candidate tag IDs pending against the ledger, "
+                "or null before candidate and ledger parsing both succeed) and "
+                "pending_tags_evaluated. "
                 "See docs/migration-standard.md for the full contract."))
     ap.add_argument("--sql-hashes", required=True)
     ap.add_argument("--ledger", required=True)
@@ -457,16 +490,28 @@ def main(argv):
     ap.add_argument("--json", action="store_true",
                     help="emit one machine-readable JSON verdict object on "
                          "stdout instead of text lines")
+    ap.add_argument("--include-pending-tags", action="store_true",
+                    help="requires --json: also emit pending_tags (the complete "
+                         "sorted candidate tag IDs pending against the ledger, "
+                         "no digests) and pending_tags_evaluated in the JSON "
+                         "verdict; diagnostic only, never an authorization. "
+                         "Next command: add --json --include-pending-tags")
     args = ap.parse_args(argv)
+    if args.include_pending_tags and not args.json:
+        ap.error("--include-pending-tags requires --json: "
+                 "re-run with --json --include-pending-tags")
     try:
         return _run(args)
     except _InputError as exc:
         if args.json:
             refused = list(exc.checks)
             refused.append((exc.check_id, "refused", exc.reason))
-            print(json.dumps(_verdict_object(refused, exc.pending_count,
-                                             exc.unknown_count),
-                             sort_keys=True))
+            print(json.dumps(_verdict_object(
+                refused, exc.pending_count, exc.unknown_count,
+                pending_tags=exc.pending_tags,
+                pending_tags_evaluated=exc.pending_tags_evaluated,
+                include_pending_tags=args.include_pending_tags),
+                sort_keys=True))
             return 2
         for line in exc.lines:
             print(line)

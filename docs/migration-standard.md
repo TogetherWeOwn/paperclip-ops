@@ -254,6 +254,27 @@ The object shape (the single canonical schema source is
 - `"next_action"` is empty on pass and names the concrete next step on
   any refusal, so callers can act without parsing prose.
 
+Opt-in pending-tag projection: `--include-pending-tags` requires `--json`
+(re-run with `--json --include-pending-tags`; without `--json` it is a
+usage error, exit 2). Requested JSON then adds exactly two fields;
+default text and default JSON are unchanged and carry neither:
+
+- `"pending_tags"` is the complete, sorted list of candidate tag IDs
+  whose digests are absent from the ledger (tag IDs only, never digests;
+  unknown ledger rows remain counts only). Before candidate and ledger
+  parsing both succeed it is `null` — never a partial list. After the
+  pending computation succeeds it is the exact sorted subset, including
+  `[]` when nothing is pending, and it is preserved when a later
+  evidence stage fails or refuses.
+- `"pending_tags_evaluated"` is the explicit boolean companion: `true`
+  exactly when `"pending_tags"` holds that complete list, `false` when
+  it is `null`.
+
+The projection reuses the gate's existing pending computation and never
+changes the verdict or exit code. It is diagnostic only — an exact
+handoff list for whoever prepares an authorized rehearsal — and does
+not authorize a rehearsal or a deploy and never bypasses a failed gate.
+
 Reason-to-`next_action` examples (each reason below is a stable ID from
 the verdict object):
 
@@ -282,5 +303,5 @@ invocation is already a dry-run and no separate preview flag exists.
 Verify offline with the focused command (synthetic fixtures only):
 
 ```bash
-python3 -B -m unittest test_migration_evidence_ax test_migration_drift_gate
+python3 -B -m unittest test_migration_evidence_ax test_migration_drift_gate test_migration_pending_tags_acceptance
 ```

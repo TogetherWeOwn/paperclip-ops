@@ -112,6 +112,7 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
         "test_migration_rehearsal.sh",
         "test_migration_drift_gate.py",
         "test_migration_evidence_ax.py",
+        "test_migration_pending_tags_acceptance.py",
         # Harness code, fixtures and scored tables are offline suite inputs.
         "eval/review-bakeoff/",
         # Native-SSH citation gate and its hermetic mutation suite, wired

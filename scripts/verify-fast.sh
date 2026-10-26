@@ -359,6 +359,7 @@ python3 test_staged_drift.py || fail "staged Tier-0 drift gate failed"
 ./test_migration_rehearsal.sh || fail "migration rehearsal suite failed"
 python3 -m unittest test_migration_drift_gate || fail "migration drift-gate suite failed"
 python3 -m unittest test_migration_evidence_ax || fail "migration evidence-AX suite failed"
+python3 -m unittest test_migration_pending_tags_acceptance || fail "migration pending-tags acceptance suite failed"
 # Plan/list/no-prepare contract plus the strict inventory-to-execution drift
 # check and the PREPARE-guard check. Offline: stdlib unittest, synthetic stubs.
 python3 -B -m unittest test_verify_fast_plan test_verify_fast_plan_gates test_typescript_readiness_acceptance || fail "verify-fast plan suites failed"

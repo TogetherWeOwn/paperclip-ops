@@ -122,8 +122,7 @@ and cites a single pinned rubric in every phase.
 | `dlq_redrive.sh` |
 | `docker_hygiene.sh` |
 | `dropchannel_scan.sh` |
-| `garm_image_lint.py` |
-| `garm_image_lint.sh` |
+| `garm_image_lint.py` and `garm_image_lint.sh` ([image lint contract](docs/garm-image-lint.md); keep these siblings together) |
 | `garm_provider_latency_baseline.py` |
 | `garm_ready_time_baseline.py` |
 | `gh_access.sh` |

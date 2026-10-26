@@ -8,6 +8,19 @@ import sys
 from typing import NamedTuple
 
 PROFILE = Path(__file__).resolve().parent / "github-runner/garm/isolated-image-profile.json"
+# --json emits exactly one object of this frozen shape; see docs/garm-image-lint.md.
+JSON_SCHEMA = "garm-image-lint.v1"
+ERROR_ACTIONS = {
+    "INPUT_READ_ERROR": "restore_input",
+    "INPUT_DECODE_ERROR": "encode_utf8",
+    "PROFILE_READ_ERROR": "restore_profile",
+    "PROFILE_INVALID": "fix_profile",
+    "NO_INPUT": "provide_input",
+}
+HELP = ("Usage: garm_image_lint.sh [--json] [--] <Dockerfile> [...]\n"
+        "Offline structural lint; no image or host operations.\n"
+        "--json prints one garm-image-lint.v1 object on stdout (see docs/garm-image-lint.md).")
+USAGE = "Usage: garm_image_lint.sh [--json] [--] <Dockerfile> [...]"
 SECRET_NAME = re.compile(r"password|passwd|secret|token|api[-_]?key|_key", re.I)
 PACKAGE_PIN = re.compile(r"[a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?=[a-zA-Z0-9][a-zA-Z0-9.+:~_-]*")
 KNOWN_INSTRUCTIONS = {"FROM", "RUN", "COPY", "ADD", "USER", "ENV", "ARG", "ENTRYPOINT",
@@ -221,35 +234,154 @@ def findings(text, distribution):
     return problems
 
 
-def main(argv):
-    if argv in (["-h"], ["--help"]):
-        print("Usage: garm_image_lint.sh <Dockerfile> [...]\nOffline structural lint; no image or host operations.")
-        return 0
-    if not argv:
-        print("Usage: garm_image_lint.sh <Dockerfile> [...]", file=sys.stderr)
-        return 2
+def parse_args(argv):
+    """Split flags from operands. Returns (json_mode, operands, error) with
+    error "help" for human help or None; raises ValueError for an unknown
+    flag so the caller can refuse before any report construction.
+    --help/-h wins over --json; -- ends flag parsing; a later bare --, a
+    lone - and values not starting with - are operands."""
+    prefix = argv[:argv.index("--")] if "--" in argv else argv
+    if any(arg in ("-h", "--help") for arg in prefix):
+        return False, [], "help"
+    json_mode = False
+    operands = []
+    parsing = True
+    for arg in argv:
+        if parsing and arg == "--":
+            parsing = False
+        elif parsing and arg == "--json":
+            json_mode = True
+        elif parsing and arg.startswith("-") and arg != "-":
+            raise ValueError("unrecognized option")
+        else:
+            operands.append(arg)
+    return json_mode, operands, None
+
+
+def load_profile():
+    """Return (distribution, None) or (None, stable error code). A missing
+    or unreadable profile differs from decodable-but-invalid content."""
     try:
-        distribution = json.loads(PROFILE.read_text())["base"]["distribution"]
+        raw = PROFILE.read_bytes()
+    except OSError:
+        return None, "PROFILE_READ_ERROR"
+    try:
+        # Undecodable bytes are invalid content, not a read failure.
+        distribution = json.loads(raw.decode("utf-8"))["base"]["distribution"]
         if not isinstance(distribution, str) or not re.fullmatch(r"[a-z0-9]+-[0-9]+\.[0-9]+", distribution):
             raise ValueError("invalid profile base")
-    except (OSError, ValueError, KeyError, TypeError):
-        print("RULE GARM-USAGE profile:0 unreadable or invalid isolated profile", file=sys.stderr)
-        return 2
-    failed = False
-    unreadable = False
-    for path in argv:
+    except (ValueError, KeyError, TypeError):
+        return None, "PROFILE_INVALID"
+    return distribution, None
+
+
+def scan_operands(operands, distribution):
+    """Read each operand occurrence in argv order and evaluate the same nine
+    rules. Returns (events, evaluated, refused); events are
+    ("finding", code, file, line, message) sorted per occurrence by
+    (line, code) or ("error", code, file, 0, message), all in argv order, so
+    both output modes consume one stream. Evaluated and refused are the raw
+    operand strings and partition the occurrences. Read/decode refusals are
+    errors, never GARM-FORMAT-09 findings."""
+    events = []
+    evaluated = []
+    refused = []
+    for path in operands:
         try:
-            problems = findings(Path(path).read_text(), distribution)
+            text = Path(path).read_bytes()
         except OSError:
-            print(f"RULE GARM-USAGE {path}:0 unreadable file", file=sys.stderr)
-            unreadable = True
+            events.append(("error", "INPUT_READ_ERROR", path, 0, "unreadable file"))
+            refused.append(path)
             continue
+        try:
+            text = text.decode("utf-8")
+        except UnicodeDecodeError:
+            events.append(("error", "INPUT_DECODE_ERROR", path, 0, "file is not valid UTF-8"))
+            refused.append(path)
+            continue
+        try:
+            problems = findings(text, distribution)
         except (ValueError, TypeError):
+            # Same fail-closed refusal findings() already applies internally.
             problems = [("GARM-FORMAT-09", 0, "malformed instruction operands")]
-        for code, line, detail in problems:
-            print(f"RULE {code} {path}:{line} {detail}", file=sys.stderr)
-            failed = True
-    return 1 if failed else 2 if unreadable else 0
+        evaluated.append(path)
+        for code, line, detail in sorted(problems, key=lambda problem: (problem[1], problem[0])):
+            events.append(("finding", code, path, line, detail))
+    return events, evaluated, refused
+
+
+def emit_json(operands, evaluated, refused, events, exit_code):
+    """One garm-image-lint.v1 object on stdout; nothing else is printed.
+    Fixed insertion order and ensure_ascii make repeat bytes identical."""
+    complete = bool(evaluated) and not refused
+    found = [event for event in events if event[0] == "finding"]
+    report = {
+        "schema": JSON_SCHEMA,
+        "exit_code": exit_code,
+        "scan_complete": complete,
+        "measurement_state": "complete" if complete else "partial" if evaluated else "not_scanned",
+        "requested_files": list(operands),
+        "evaluated_files": list(evaluated),
+        "refused_files": list(refused),
+        "counts": {
+            "requested": len(operands),
+            "evaluated": len(evaluated),
+            "refused": len(refused),
+            "findings": len(found),
+        },
+        "findings": [
+            {"code": code, "file": path, "line": line, "message": message,
+             "retryable": False, "next_action": "fix_input"}
+            for _, code, path, line, message in found
+        ],
+        "errors": [
+            {"code": code, "file": path, "line": line, "message": message,
+             "retryable": False, "next_action": ERROR_ACTIONS[code]}
+            for kind, code, path, line, message in events if kind == "error"
+        ],
+    }
+    print(json.dumps(report, ensure_ascii=True, allow_nan=False))
+
+
+def main(argv):
+    try:
+        json_mode, operands, error = parse_args(argv)
+    except ValueError:
+        # Parser boundary: refuse before any scan or report construction.
+        print(USAGE, file=sys.stderr)
+        return 2
+    if error == "help":
+        print(HELP)
+        return 0
+    if not operands:
+        if json_mode:
+            emit_json(operands, [], [], [("error", "NO_INPUT", None, 0, "no input files requested")], 2)
+        else:
+            print(USAGE, file=sys.stderr)
+        return 2
+    distribution, profile_error = load_profile()
+    if profile_error is not None:
+        if json_mode:
+            # Global failure: every requested occurrence is refused unscanned.
+            message = ("unreadable isolated profile" if profile_error == "PROFILE_READ_ERROR"
+                       else "invalid isolated profile")
+            emit_json(operands, [], operands, [("error", profile_error, str(PROFILE), 0, message)], 2)
+        else:
+            print("RULE GARM-USAGE profile:0 unreadable or invalid isolated profile", file=sys.stderr)
+        return 2
+    events, evaluated, refused = scan_operands(operands, distribution)
+    # Existing precedence: a rule failure (1) outranks a refusal (2).
+    exit_code = (1 if any(event[0] == "finding" for event in events)
+                 else 2 if events else 0)
+    if json_mode:
+        emit_json(operands, evaluated, refused, events, exit_code)
+        return exit_code
+    for kind, code, path, line, message in events:
+        if kind == "finding":
+            print(f"RULE {code} {path}:{line} {message}", file=sys.stderr)
+        else:
+            print(f"RULE GARM-USAGE {path}:0 {message}", file=sys.stderr)
+    return exit_code
 
 
 if __name__ == "__main__":

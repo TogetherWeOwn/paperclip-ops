@@ -360,5 +360,12 @@ class CliTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
 
 
+def load_tests(loader, standard_tests, pattern):
+    """Keep report acceptance reachable through the existing CI entry point."""
+    standard_tests.addTests(loader.loadTestsFromName(
+        "test_bridge_inventory_report_acceptance"))
+    return standard_tests
+
+
 if __name__ == "__main__":
     unittest.main()

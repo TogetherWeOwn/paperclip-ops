@@ -109,6 +109,7 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
         "migration_drift_gate.py",
         "test_migration_timeout_preamble.sh",
         "test_migration_squawk.sh",
+        "test_migration_squawk_json.sh",
         "test_migration_rehearsal.sh",
         "test_migration_drift_gate.py",
         "test_migration_evidence_ax.py",

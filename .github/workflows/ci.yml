@@ -5154,6 +5154,7 @@ jobs:
         run: |
           ./test_migration_timeout_preamble.sh
           ./test_migration_squawk.sh
+          ./test_migration_squawk_json.sh
           ./test_migration_rehearsal.sh
           python3 -m unittest -v test_migration_drift_gate
           python3 -m unittest -v test_migration_evidence_ax

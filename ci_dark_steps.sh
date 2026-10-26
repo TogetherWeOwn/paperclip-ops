@@ -48,6 +48,30 @@ set -uo pipefail
 # list at all it says so loudly rather than printing "0 dark steps", because a
 # check that did not happen must never read as a clean answer (case_70ae2474).
 #
+# THE MACHINE SURFACE (`report --job-json FILE --json`). The markdown above is
+# for the run summary; a triage agent should not have to scrape it. `--json`
+# prints exactly ONE JSON document on stdout — no markdown, no `::error`, no
+# step-summary write — and still exits 0 on every measured report and REFUSES
+# (exit 3, stdout empty) on the same unmeasured input as text:
+#
+#   { "schema_version": 1,
+#     "job": "Offline suites",
+#     "totals": { "total": 93, "ran": 13, "failed": 1, "dark": 78 },
+#     "culprit": { "number": 12, "name": "OmniRoute rehearsal package suite" },
+#     "dark_steps": [ { "number": 13, "name": "Install pinned tools" } ] }
+#
+# Synthetic example: a 5-step job where step 2 failed and steps 3-5 never ran
+# reads totals {total:5, ran:1, failed:1, dark:3}, culprit {number:2,
+# name:"Failing gate"}, dark_steps entries 3, 4 and 5. `culprit` is JSON null
+# (key present) when no step concluded `failure`. `totals.ran` counts
+# success-conclusion steps (the text tally's "passed"). `dark_steps` is
+# COMPLETE — the full computed list, ascending by step number, with no cap or
+# truncation; it is not a log tail, so no cap convention is needed. It carries
+# number+name only, under the same dark computation and the same reporter /
+# `Post ` exemption as text: JSON reports what text reports, never a different
+# count. No step logs, conclusions, timestamps or other job-payload fields are
+# echoed, so nothing secret-bearing can ride along.
+#
 # Reads: GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GITHUB_JOB,
 #        GITHUB_STEP_SUMMARY, GH_TOKEN (needs actions:read).
 # Requires curl and jq. No credential ever reaches argv (case_3d790dcb).
@@ -62,10 +86,21 @@ usage() {
   cat <<'USAGE'
   ./ci_dark_steps.sh report                 # annotate the running job (CI use)
   ./ci_dark_steps.sh report --job-json FILE # report from a saved job object
+  ./ci_dark_steps.sh report --job-json FILE --json
+                                            # same verdict, one JSON document
   ./ci_dark_steps.sh help
 
 Reports the steps a job registered but never executed, because a fail-fast
 abort skipped them.
+
+JSON (--json, with --job-json; flag order does not matter)
+  Exactly one JSON document on stdout (no markdown, no ::error), exit 0 on a
+  measured report, REFUSED exit 3 with stdout empty on unmeasured input:
+    { "schema_version": 1, "job": <name>,
+      "totals": { "total": N, "ran": N, "failed": N, "dark": N },
+      "culprit": { "number": N, "name": <step> } | null,
+      "dark_steps": [ { "number": N, "name": <step> } ] }
+  dark_steps is the complete list, ascending by number, number+name only.
 
 EXIT CODES
   0  reported (whether or not dark steps were found)
@@ -87,13 +122,17 @@ case "$CMD" in
 esac
 
 JOB_JSON=""
+REPORT_JSON=0
 API="${GITHUB_API_URL:-https://api.github.com}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --job-json) [[ $# -ge 2 ]] || die "--job-json needs a path"; JOB_JSON="$2"; shift 2 ;;
+    --json) REPORT_JSON=1; shift ;;
     *) die "unexpected argument: $1" ;;
   esac
 done
+# --json is the offline surface only; the live CI path keeps annotating.
+[[ "$REPORT_JSON" -eq 0 || -n "$JOB_JSON" ]] || die "--json requires --job-json FILE (offline mode)"
 
 for c in jq curl; do
   command -v "$c" >/dev/null 2>&1 || die "$c is required"
@@ -179,6 +218,25 @@ CULPRIT_NO="$(jq -r '[.steps[] | select(.conclusion=="failure")] | first | .numb
 
 jq -r '[.steps[] | select(.conclusion != "success" and .conclusion != "failure") | '"$DARK_EXEMPT"'][] | "  \(.number)\t\(.name)"' \
    "$TMP/job.json" > "$TMP/dark.txt"
+
+# --- report (json) --------------------------------------------------------------
+# The same verdict as the markdown below, as one JSON document and nothing
+# else: no annotation, no prose, no step-summary write. Totals come from the
+# variables the text tally prints, and the dark list re-runs the exact dark
+# selector + exemption above, so the two surfaces cannot report different
+# counts. Exits 0 like text; unmeasured input already REFUSED above.
+if [[ "$REPORT_JSON" -eq 1 ]]; then
+  jq --arg job "$JOB_NAME" \
+     --argjson total "$TOTAL" --argjson ran "$RAN" \
+     --argjson failed "$FAILED" --argjson dark "$DARK" \
+     '{schema_version: 1,
+       job: $job,
+       totals: {total: $total, ran: $ran, failed: $failed, dark: $dark},
+       culprit: ([.steps[] | select(.conclusion=="failure") | {number: .number, name: .name}] | .[0] // null),
+       dark_steps: ([.steps[] | select(.conclusion != "success" and .conclusion != "failure") | '"$DARK_EXEMPT"' | {number: .number, name: .name}] | sort_by(.number))}' \
+     "$TMP/job.json" || refuse "could not render the json verdict"
+  exit 0
+fi
 
 # --- report -------------------------------------------------------------------
 emit() { printf '%s\n' "$1"; [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] && printf '%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"; return 0; }

@@ -3086,6 +3086,15 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_ci_dark_steps.sh
 
+      # The machine-readable twin of the dark-step reporter: --json prints the
+      # same verdict (schema_version, job, totals, culprit, dark_steps) as one
+      # JSON document on stdout, so triage parses instead of scraping the
+      # step-summary markdown. Same recorded fixtures, same exemption, and the
+      # text bytes are unchanged with the flag on or off.
+      - name: dark-step reporter JSON suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_ci_dark_steps_json.sh
+
       # case_821f1653. The failure log-drain: on a red run each failed job's log is
       # trimmed and bundled with a one-line summary naming the job, the failed
       # step and the cause, so triage starts from the summary instead of from

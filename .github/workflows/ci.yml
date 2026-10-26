@@ -1387,6 +1387,9 @@ jobs:
       - name: test-missing gate suites
         run: python3 -m unittest -v test_blocker_test_checks test_test_missing_org_template
 
+      - name: AX metric contract suites
+        run: python3 -B -m unittest discover -s templates/org-github/tests -p 'test_ax_*py'
+
       - name: mutmut budget-kill fixture suite
         run: bash ./test_mutmut_changed.sh
 

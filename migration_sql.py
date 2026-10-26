@@ -4,9 +4,13 @@ import codecs
 import json
 import os
 import re
+import selectors
 import shutil
+import signal
+import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -156,6 +160,7 @@ def check(path):
 
 SQUAWK_SCHEMA_VERSION = 1
 DIAGNOSTIC_LIMIT = 2000
+SQUAWK_TIMEOUT_SECONDS = 60
 
 
 def emit_gate_json(files, error=None):
@@ -194,14 +199,36 @@ def squawk_step(argv):
     opaque diagnostic is represented by a fixed marker, not echoed as prose.
     """
     prefix = ""
+    timed_out = False
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
-    with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as proc:
-        while chunk := proc.stdout.read(8192):
-            text = decoder.decode(chunk)
-            if len(prefix) <= DIAGNOSTIC_LIMIT:
-                prefix += text[:DIAGNOSTIC_LIMIT + 1 - len(prefix)]
+    deadline = time.monotonic() + SQUAWK_TIMEOUT_SECONDS
+    with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          start_new_session=True) as proc, selectors.DefaultSelector() as selector:
+        selector.register(proc.stdout, selectors.EVENT_READ)
+        try:
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(argv, SQUAWK_TIMEOUT_SECONDS)
+                for key, _events in selector.select(remaining):
+                    chunk = os.read(key.fd, 8192)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    text = decoder.decode(chunk)
+                    if len(prefix) <= DIAGNOSTIC_LIMIT:
+                        prefix += text[:DIAGNOSTIC_LIMIT + 1 - len(prefix)]
+            rc = proc.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            # Descendants can inherit the output pipe after Squawk exits.
+            # Kill its private process group, then reap the direct child.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            rc = proc.wait()
         prefix += decoder.decode(b"", final=True)[:max(0, DIAGNOSTIC_LIMIT + 1 - len(prefix))]
-        rc = proc.wait()
     truncated = len(prefix) > DIAGNOSTIC_LIMIT
     bounded = prefix[:DIAGNOSTIC_LIMIT]
     bounded = re.sub(r"\x1b\[[0-9;]*m", "", bounded)
@@ -211,7 +238,9 @@ def squawk_step(argv):
         if match:
             tags.append(f"{match[1]}: {match[2] or match[3]}")
     diagnostics = "\n".join(tags) if tags else "[unstructured diagnostics omitted]" if prefix else ""
-    return {"status": "pass" if rc == 0 else "fail",
+    if timed_out:
+        diagnostics = "Squawk timed out." + ("\n" + diagnostics if diagnostics else "")
+    return {"status": "pass" if rc == 0 and not timed_out else "fail",
             "diagnostics": diagnostics[:DIAGNOSTIC_LIMIT], "truncated": truncated or len(diagnostics) > DIAGNOSTIC_LIMIT}
 
 
@@ -223,7 +252,13 @@ def gate_json(directory, strict, squawk_bin, squawk_config, paths):
         return emit_gate_json(files, (code, message))
 
     if not paths:
-        if not Path(directory).is_dir():
+        try:
+            directory_stat = Path(directory).stat()
+        except (FileNotFoundError, NotADirectoryError):
+            return refuse("migrations-dir-missing", "Migrations directory does not exist.")
+        except OSError:
+            return refuse("migrations-dir-unreadable", "Cannot inspect the migrations directory.")
+        if not stat.S_ISDIR(directory_stat.st_mode):
             return refuse("migrations-dir-missing", "Migrations directory does not exist.")
         try:
             paths = [os.path.join(directory, name) for name in sorted(os.listdir(directory)) if name.endswith(".sql")]

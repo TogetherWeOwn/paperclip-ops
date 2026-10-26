@@ -149,6 +149,12 @@ and failing steps retain this safe projection. Output is drained with bounded
 memory; only the first 2000 characters are considered. Do not place credentials
 in file paths or diagnostic rule tags: names/tags are evidence, not secret
 containers. SQL bodies and credential-bearing prose are never published.
+Each JSON-mode Squawk invocation has a 60-second deadline, including output
+collection and process exit. On expiry its process group is killed and the
+direct child is reaped. The step fails (exit 1) with the fixed `Squawk timed out.`
+diagnostic followed
+by any safe tags collected within the same 2000-character bound. Text-mode
+execution is unchanged.
 
 Without squawk, each step is `skip`: normal mode can pass, while `--strict`
 refuses with `error.code: squawk-missing`. Other refusal codes are

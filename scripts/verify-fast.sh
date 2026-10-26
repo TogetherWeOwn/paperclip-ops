@@ -330,7 +330,7 @@ PAPERCLIP_RUN_SCRATCH_DIR="${PAPERCLIP_RUN_SCRATCH_DIR:-${PAPERCLIP_SCRATCH_DIR:
 (cd ops/productivity && python3 -m unittest test_nongit_quarantine_custody) || fail "nongit quarantine custody suite failed"
 ./test_review_route.sh || fail "review-route suite failed"
 ./test_shell_subst_guard.sh || fail "shell-subst guard suite failed"
-PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest test_shell_substitution_json_acceptance || fail "shell-substitution JSON acceptance failed"
+python3 -B -m unittest test_shell_substitution_json_acceptance || fail "shell-substitution JSON acceptance failed"
 (cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_arm_import) || fail "arm-import suite failed"
 (cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_build_corpus_atomic) || fail "corpus atomic-write suite failed"
 (cd ops/case_1ccef1dc/reviewer-eval/v2 && python3 -m unittest test_merge_survival_atomic) || fail "merge-survival atomic-write suite failed"

@@ -149,7 +149,7 @@ class PendingTagsHarness(unittest.TestCase):
             except SystemExit as e:
                 exc = e
                 rc = e.code if e.code is not None else 0
-            except BaseException as e:  # noqa: BLE001 -- a crash is a failure
+            except BaseException as e:  # a crash is a failure
                 exc = e
                 rc = f"{e.__class__.__name__}: {e}"
         return rc, buf_out.getvalue(), buf_err.getvalue(), exc

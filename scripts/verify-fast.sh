@@ -224,6 +224,8 @@ done
 # No manifest-vendored file beyond the tracked allowlist may be committed
 # (fast hermetic git read; also runs inside sync-toolkit.sh for CI steps).
 bash scripts/check-toolkit-vendored-tracked.sh || fail "vendored-tracked gate failed"
+python3 -B -m unittest -v test_profile_role_lookup_acceptance \
+  || fail "profile role lookup acceptance suite failed"
 # Every tracked test suite must be wired into CI or exempted in
 # verification/orphan_suites_allowlist.json. Hermetic (git ls-files plus
 # workflow/script text reads), so it runs in the parse tier.

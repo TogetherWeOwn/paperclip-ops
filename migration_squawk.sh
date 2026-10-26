@@ -35,7 +35,9 @@
 #
 # Usage:
 #   migration_squawk.sh [--migrations-dir DIR] [--strict] [--squawk-bin PATH]
-#     [--squawk-config PATH] [file.sql ...]
+#     [--squawk-config PATH] [--format text|json] [file.sql ...]
+# --format json emits one schema_version=1 envelope (findings, squawk steps,
+# summary counts). Text is the default; see docs/migration-standard.md.
 # With explicit files, only those are checked. Otherwise every *.sql under
 # the migrations dir is checked. Default dir: ./migrations.
 # --squawk-config "" disables the canonical config (raw squawk defaults).
@@ -52,20 +54,47 @@ DIR="migrations"
 STRICT=0
 SQUAWK_BIN="${SQUAWK_BIN:-}"
 SQUAWK_CONFIG="__default__"
+FORMAT="text"
 
-die() { echo "REFUSED: $ME: $*" >&2; exit 2; }
+die() {
+  if [[ "$FORMAT" == json ]]; then
+    # Input values may contain credentials; JSON refusals use fixed messages.
+    python3 "$HERE/migration_sql.py" refuse-json
+  else
+    echo "REFUSED: $ME: $*" >&2
+  fi
+  exit 2
+}
 
 while [[ $# -gt 0 ]]; do
+  # Preserve legacy text parsing; JSON input refusals must still be envelopes.
+  if [[ "$FORMAT" == json && $# -lt 2 ]]; then
+    case "$1" in
+      --migrations-dir|--squawk-bin|--squawk-config) die "missing option value" ;;
+    esac
+  fi
   case "$1" in
     --migrations-dir) DIR="${2:-}"; shift 2 ;;
     --strict) STRICT=1; shift ;;
     --squawk-bin) SQUAWK_BIN="${2:-}"; shift 2 ;;
     --squawk-config) SQUAWK_CONFIG="${2:-}"; shift 2 ;;
+    --format)
+      [[ $# -ge 2 ]] || die "--format requires text or json"
+      case "$2" in
+        text|json) FORMAT="$2" ;;
+        *) die "--format requires text or json" ;;
+      esac
+      shift 2 ;;
     --) shift; break ;;
     -*) die "unknown flag: $1" ;;
     *) break ;;
   esac
 done
+
+if [[ "$FORMAT" == json ]]; then
+  exec python3 "$HERE/migration_sql.py" gate-json "$DIR" "$STRICT" \
+    "$SQUAWK_BIN" "$SQUAWK_CONFIG" "$@"
+fi
 
 FILES=()
 if [[ $# -gt 0 ]]; then

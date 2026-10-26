@@ -22,9 +22,10 @@
 // touched nothing, and repos in scanRepositories but absent from
 // enabledRepositories log would-act and change nothing. Rollback is the
 // flag: remove the repo. The repo ships readiness-policy.example.json (shape
-// reference) plus the live readiness-policy.json (flag-off until a reviewed
-// flag-on PR lists a repo); the workflow installs the live file 0600 into
-// job-private temp before invoking this script.
+// reference, always flag-off) plus the live readiness-policy.json (flag-on
+// for paperclip-ops only since the reviewed flag-on change; rollback is the
+// revert); the workflow installs the live file 0600 into job-private temp
+// before invoking this script.
 //
 // Credential (review R1): GitHub is reached ONLY through the absolute,
 // policy-pinned `ghExecutable` — never a PATH-resolved `gh` — with a

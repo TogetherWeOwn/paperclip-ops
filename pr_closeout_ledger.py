@@ -30,6 +30,19 @@ deadlines are not persisted; recommendations are diagnostic only):
 
    python3 pr_closeout_ledger.py --registry pr_closeout_registry.json --snapshot ledger_snapshot.json --dry-run --json
 
+Output paths must be distinct: --ledger-out and --plan-out must differ from
+each other and from --registry, --snapshot and --cards, by canonical path
+and by filesystem identity (symlinks, symlinked parents, ../ spellings and
+hard links all count as the same file). Aliases are refused BEFORE either
+output is opened, so a wrong argument cannot erase the supplied evidence or
+replace the ledger with its own proposal plan; refusals exit 2 with a stable
+output_path_conflict (or output_path_unverifiable when aliasing cannot be
+safely determined) code and leave every existing file byte-identical.
+--prior-ledger is exempt on purpose: it is fully loaded before any write, so
+in-place replacement of the prior ledger stays valid unless that same path is
+also a protected input. This is a pre-write check only -- it makes no atomic
+multi-file or hostile-concurrency guarantee.
+
 Exit codes: 0 healthy-or-terminal (no action due), 1 action due (proposals
 emitted), 2 usage/error, 5 COULD NOT MEASURE. Exit 5 is the load-bearing one:
 an empty registry, an empty snapshot, or an unreadable input must refuse to
@@ -43,6 +56,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -1326,6 +1340,83 @@ def load_inputs(
     return registry, snapshots, reviews, cards, prior_records
 
 
+# ---------------------------------------------------------------------------
+# Output-path alias guard
+# ---------------------------------------------------------------------------
+
+OUTPUT_PATH_CONFLICT = "output_path_conflict"
+OUTPUT_PATH_UNVERIFIABLE = "output_path_unverifiable"
+OUTPUT_PATH_NEXT_ACTION = (
+    "Choose distinct paths for --ledger-out and --plan-out that differ "
+    "from each other and from --registry, --snapshot and --cards."
+)
+
+
+def _path_identity(path: str) -> tuple[str, tuple[int, int] | None]:
+    """Canonical spelling plus filesystem identity for one path.
+
+    The canonical path resolves ``.``/``..``, relative spellings and every
+    symlink component that exists (including a symlinked parent and a
+    dangling final symlink, whose target is where a write would land). The
+    ``(st_dev, st_ino)`` pair additionally catches hard links, whose
+    canonical spellings legitimately differ. A simply-absent path has no
+    identity yet and is judged by canonical spelling alone; any other
+    determination failure raises so the caller can fail closed.
+    """
+    canonical = os.path.realpath(os.path.abspath(path))
+    try:
+        info = os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return canonical, None
+    return canonical, (info.st_dev, info.st_ino)
+
+
+def output_path_refusal(ledger_out: str, plan_out: str,
+                        protected_paths: list[str]) -> str | None:
+    """Stable refusal code if an output aliases another path, else None.
+
+    ``protected_paths`` are the evidence inputs (registry, snapshot, cards).
+    The prior ledger is deliberately not protected: it is fully loaded before
+    any write, so replacing it in place is the intended workflow -- but a
+    prior path that is also a protected input still refuses via that slot.
+    Determination errors fail closed as output_path_unverifiable rather than
+    risking an overwrite. This is a pre-write check, not an atomicity or
+    hostile-concurrency guarantee.
+    """
+    try:
+        outputs = [_path_identity(ledger_out), _path_identity(plan_out)]
+        protected = [_path_identity(path) for path in protected_paths]
+    except (OSError, RuntimeError):
+        return OUTPUT_PATH_UNVERIFIABLE
+
+    def aliases(left: tuple[str, tuple[int, int] | None],
+                right: tuple[str, tuple[int, int] | None]) -> bool:
+        if left[0] == right[0]:
+            return True
+        return left[1] is not None and left[1] == right[1]
+
+    if aliases(outputs[0], outputs[1]):
+        return OUTPUT_PATH_CONFLICT
+    for output in outputs:
+        for evidence in protected:
+            if aliases(output, evidence):
+                return OUTPUT_PATH_CONFLICT
+    return None
+
+
+def report_output_path_refusal(code: str, as_json: bool) -> int:
+    """Emit the refusal without echoing paths, contents or OSError text."""
+    if as_json:
+        print(json.dumps(
+            {"code": code, "retryable": False,
+             "next_action": OUTPUT_PATH_NEXT_ACTION},
+            indent=2, sort_keys=True))
+    else:
+        print(f"pr_closeout_ledger: {code}: {OUTPUT_PATH_NEXT_ACTION}",
+              file=sys.stderr)
+    return 2
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Durable admitted-PR closeout ledger with exact-head sweep gates (case_1926b5a1).")
@@ -1334,9 +1425,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--prior-ledger", default=None, help="prior ledger_state JSON for history")
     parser.add_argument("--cards", default=None, help="extra cards doc merged over snapshot cards")
     parser.add_argument("--ledger-out", default=None,
-                        help="where to write the canonical ledger state (required unless --dry-run)")
+                        help="where to write the canonical ledger state (required unless --dry-run); "
+                             "must be a distinct path from --plan-out, --registry, --snapshot and --cards")
     parser.add_argument("--plan-out", default=None,
-                        help="where to write the bounded proposal plan (required unless --dry-run)")
+                        help="where to write the bounded proposal plan (required unless --dry-run); "
+                             "must be a distinct path from --ledger-out, --registry, --snapshot and --cards")
     parser.add_argument("--dry-run", action="store_true",
                         help="preview only: compute proposals without writing output files; "
                              "preview history and deadlines are not persisted and "
@@ -1358,6 +1451,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
+    # Refuse aliasing outputs before any output is opened (and before any
+    # work that could be wasted on a doomed write). The prior ledger is not
+    # a protected input here: load_inputs reads it fully before the write
+    # below, so intentional in-place replacement stays valid.
+    protected = [args.registry, args.snapshot]
+    if args.cards:
+        protected.append(args.cards)
+    if not args.dry_run:
+        refusal = output_path_refusal(args.ledger_out, args.plan_out, protected)
+        if refusal is not None:
+            return report_output_path_refusal(refusal, args.json)
     now = utcnow()
     stamp = now.isoformat().replace("+00:00", "Z")
     try:

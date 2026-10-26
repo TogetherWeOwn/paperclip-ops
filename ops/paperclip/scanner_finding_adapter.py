@@ -560,7 +560,7 @@ def main(argv=None):
     else:
         try:
             outcome = _strict_loads(data.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
             outcome = {}
         result = adapt(outcome)
     # The refusal and payload shapes never echo unvalidated input, so it is

@@ -353,6 +353,11 @@ class CliTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
         self.assertNotIn(CANARY, proc.stdout.decode())
 
+    def test_cli_deeply_nested_input_refuses_not_crashes(self):
+        proc = self.run_cli("[" * 200000)
+        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(json.loads(proc.stdout)["status"], "refusal")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -66,9 +66,21 @@ slash, empty path segment, `.` or `..` segment, or NUL is allowed.
 - Review policy expansions/relaxations normally. This is a development-quality
   check, not a security boundary against PRs that replace the checker/workflow.
 
-The initial local policy covers this checker, its workflow and its policy, mapped
-to this page. It does not claim to cover all repository modules. Expand mappings
-only where a real source-to-doc contract exists; avoid broad unrelated-doc bypasses.
+The local policy has these exact-path contracts:
+
+| Rule ID | Source paths | Required documentation |
+|---|---|---|
+| `docs-drift` | `scripts/quality-gates/docs_drift.py`, `.github/workflows/docs-drift.yml`, `.docs-drift.json` | `docs/docs-drift.md` |
+| `capacity-evidence-contract` | `coolify_capacity_headroom.sh`, `coolify_capacity_headroom.py` | `docs/capacity-evidence.md` |
+| `trace-correlation-contract` | `ops/paperclip/trace_correlator.py` | `docs/trace-correlation.md` |
+
+Run the local check above with full target/head SHAs. New mappings enforce only
+after merge, when present in the supplied target's policy. Accompaniment is not
+semantic correctness, capacity admission, deployment authorization or evidence
+freshness. Checking the trace source's documentation does not make the correlator
+an execution/transport gate; its report and exit status must never admit or refuse
+work. This policy does not cover all repository modules. Expand mappings only
+where a real source-to-doc contract exists; avoid broad unrelated-doc bypasses.
 
 ## Reusable CI
 

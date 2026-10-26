@@ -55,8 +55,8 @@ slash, empty path segment, `.` or `..` segment, or NUL is allowed.
 Object keys must be unique in every object, at every nesting level. A
 duplicate key — even with an identical value, or spelled with equivalent
 JSON escapes (for example `"\u0076ersion"` for `version`) — is ambiguous
-evidence: parsing refuses
-it before schema interpretation and never keeps a first or last value. The
+evidence: parsing refuses it
+before schema interpretation and never keeps a first or last value. The
 result is `unmeasurable` with code `invalid_policy`, `check_complete: false`,
 `retryable: false` and exit 2, without echoing policy keys, values or parser
 errors. Repair it as the report directs: use the documented version-1 policy

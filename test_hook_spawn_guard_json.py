@@ -107,8 +107,12 @@ CANARY = "CANARY-HOOK-GUARD-NEVER-ECHO-7f2c9a41d0"
 IS_ROOT = os.geteuid() == 0 if hasattr(os, "geteuid") else False
 
 
-def _requires_non_root(reason):
-    return unittest.skipIf(IS_ROOT, reason + " (root bypasses permission bits)")
+def _require_permission_bits(test):
+    test.assertFalse(
+        IS_ROOT,
+        "permission-denial coverage must run as an unprivileged user; "
+        "root bypasses permission bits (rerun this fixture suite without root)",
+    )
 
 
 class GuardHarness(unittest.TestCase):
@@ -443,8 +447,8 @@ subprocess.Popen(["worker"])
         self.assertVerdictExit(proc, env)
         self.assertEqual(env["error"]["code"], "settings_unreadable")
 
-    @_requires_non_root("unreadable-settings refusal needs permission bits")
     def test_json_unreadable_settings_file_refused(self):
+        _require_permission_bits(self)
         p = self.write_settings([("UserPromptSubmit", "bash run.sh", 5)])
         p.chmod(0)
         try:
@@ -483,13 +487,13 @@ subprocess.Popen(["worker"])
         self.assertVerdictExit(proc, env)
         self.assertEqual(env["error"]["code"], "hooks_dir_unreadable")
 
-    @_requires_non_root("unreadable-hooks-dir refusal needs permission bits")
     def test_json_unreadable_hooks_dir_refused(self):
         """Unreadable hooks dir refuses even when findings exist (fail closed).
 
         A hooks dir the guard cannot read must never yield clean or a
         partial finding set: body findings would silently go missing.
         """
+        _require_permission_bits(self)
         settings = self.write_settings(
             [("UserPromptSubmit", "setsid bash worker.sh", 5)])
         self.hooks_dir.chmod(0)

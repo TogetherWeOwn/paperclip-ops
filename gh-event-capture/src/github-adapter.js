@@ -182,19 +182,39 @@ function normalizeCheck(node) {
 }
 
 // Readiness has no push-age decision. Repeated names are legitimate across
-// workflows/status sources, but none may hide a failure or an unfinished run.
+// workflows/status sources (duplicate triggers, re-runs, concurrency
+// cancellations), so the temporal last state wins per name: a later
+// completion supersedes an earlier one, including clearing an earlier
+// cancellation with a later success. Equal completion times keep the
+// conservative worst-wins tie-break, so no same-instant failure is hidden.
+// An unfinished duplicate stays visible next to a passing completion; next
+// to a failing completion the failure stays, as before.
 function readinessChecks(checks) {
   const rank = (check) => check.status !== 'completed' ? 1
     : ['success', 'neutral', 'skipped'].includes(check.conclusion) ? 0 : 2
+  const smallest = (entries) => entries.reduce((best, check) =>
+    JSON.stringify(check) < JSON.stringify(best) ? check : best)
   const byName = new Map()
   for (const check of checks) {
-    const prior = byName.get(check.name)
-    if (!prior || rank(check) > rank(prior) ||
-      (rank(check) === rank(prior) && JSON.stringify(check) < JSON.stringify(prior))) {
-      byName.set(check.name, check)
-    }
+    const entries = byName.get(check.name) ?? []
+    entries.push(check)
+    byName.set(check.name, entries)
   }
-  return [...byName.values()].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+  const aggregated = []
+  for (const entries of byName.values()) {
+    const completed = entries.filter((check) => check.status === 'completed')
+    const pending = entries.filter((check) => check.status !== 'completed')
+    if (completed.length === 0) {
+      aggregated.push(smallest(pending))
+      continue
+    }
+    const latestMs = Math.max(...completed.map((check) => check.completedMs))
+    const latest = completed.filter((check) => check.completedMs === latestMs)
+    const worst = Math.max(...latest.map(rank))
+    const winner = smallest(latest.filter((check) => rank(check) === worst))
+    aggregated.push(pending.length > 0 && rank(winner) === 0 ? smallest(pending) : winner)
+  }
+  return aggregated.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
 }
 
 function normalizeSnapshot(pr, repository, number, nowMs, readiness = false) {

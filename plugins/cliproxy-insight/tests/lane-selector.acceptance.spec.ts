@@ -502,9 +502,9 @@ describe("lane selector: rejected selectors (RED until implemented)", () => {
 });
 
 describe("lane selector: controls (GREEN on baseline — today's contract, unchanged)", () => {
-  it("adds no tool: the registry is exactly get_provider_usage", () => {
-    expect(Object.values(TOOL_NAMES)).toEqual(["get_provider_usage"]);
-    expect(manifest.tools?.map((t) => t.name)).toEqual(["get_provider_usage"]);
+  it("adds no tool: the registry is exactly get_provider_usage and get_collector_evidence", () => {
+    expect(Object.values(TOOL_NAMES)).toEqual(["get_provider_usage", "get_collector_evidence"]);
+    expect(manifest.tools?.map((t) => t.name)).toEqual(["get_collector_evidence", "get_provider_usage"]);
   });
 
   it("adds no route: the API surface is exactly usage-summary", () => {

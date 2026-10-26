@@ -1790,7 +1790,7 @@
     },
     {
       "name": "quality-gate helper suites",
-      "definition_sha256": "eff2ed20e1d4d438acec4567c8f59687ae4d72049050fa12122563c0a3021b65",
+      "definition_sha256": "3a2cdc4ae8769612e80bca6abfbb7c948a46c190e3494b53682c4dd6a567944e",
       "id": "quality-gate helper suites:1"
     },
     {

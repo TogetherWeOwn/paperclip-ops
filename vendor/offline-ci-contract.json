@@ -350,7 +350,8 @@
     "trace correlator suite:1",
     "Dispatch sweep failure visibility acceptance:1",
     "native runner coverage classifier suite:1",
-    "AX metric contract suites:1"
+    "AX metric contract suites:1",
+    "balancer silence guard text and JSON suites:1"
   ],
   "retained": [
     {
@@ -1982,6 +1983,11 @@
       "name": "AX metric contract suites",
       "definition_sha256": "ceff81cd977e688ef434a02945f04141390fe205df5b1f5b7df9e29a15826707",
       "id": "AX metric contract suites:1"
+    },
+    {
+      "name": "balancer silence guard text and JSON suites",
+      "definition_sha256": "ee2e439d88863e135dd8e52ebe0d00b3e209f6b3d5bd4033e015d7f3cfcd435d",
+      "id": "balancer silence guard text and JSON suites:1"
     }
   ],
   "removed": [

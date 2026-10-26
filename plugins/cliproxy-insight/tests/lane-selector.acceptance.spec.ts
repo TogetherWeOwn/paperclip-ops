@@ -385,7 +385,8 @@ describe("lane selector: selected reads (RED until implemented)", () => {
     expect(result.error).toBeUndefined();
     const data = result.data as UsageData;
     expect(data.lanes).toEqual([LANE_B]);
-    expect(data.laneSnapshots[LANE_B] ?? "present").toBeNull();
+    expect(Object.keys(data.laneSnapshots).sort()).toEqual([LANE_B]);
+    expect(data.laneSnapshots[LANE_B]).toBeNull();
     expect(data.accountsCooling).toBe(0);
   });
 

@@ -27,7 +27,8 @@ set -uo pipefail
 # never print "no failures found" (case_70ae2474).
 #
 # Reads: GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GH_TOKEN
-#        (needs actions:read; the workflow already grants it, read-only).
+#        (the API reads need actions:read; the drain job's token carries
+#        actions:write because upload-artifact needs it to finalise).
 # Requires curl and jq. The token travels in a header FILE, never in argv —
 # /proc/*/cmdline is world-readable and this host is shared (case_3d790dcb).
 # REDIRECT SCOPING: the log endpoint answers 302 to pre-signed storage and

@@ -7,7 +7,9 @@
 # warning in warn mode), 1 when it must not (fail closed, zero requests).
 # Also runs standalone as a dry-run: ./paperclip_api_allowlist.sh --check BASE.
 #
-# Semantics mirror lib/paperclip_api_allowlist.py exactly: operator-owned
+# Semantics mirror lib/paperclip_api_allowlist.py's contract (not every
+# verdict: a 4,608-case fuzz found 531 same-origin, fail-closed or
+# hatch-only verdict divergences and no bypass): operator-owned
 # host file (default /etc/paperclip/allowed-api-hosts, one https origin per
 # line, `#` comments), exact-origin match after normalization, marker-gated
 # run bridge, test-only hatch, warn-by-default shadow. See the Python module

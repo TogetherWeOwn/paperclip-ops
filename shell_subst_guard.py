@@ -519,11 +519,16 @@ def _arithmetic_end(text: str, i: int) -> int | None:
 
     Bash tries arithmetic first, but reparses as subshells if the expression
     has no matching `))`. Balance from the SECOND opener: its matching `)`
-    must be immediately followed by another `)`. Merely balancing both
+    must be followed by another `)` (line continuations aside, which Bash
+    deletes before parsing). Merely balancing both
     openers and checking the last two bytes is insufficient: `((echo);(yes))`
     ends in `))` but the first expression closes at `);`, so it is subshells.
     """
     end = _skip_balanced(text, i + 1, "(", ")")
+    # Bash deletes backslash-newline before parsing, so a line continuation
+    # between the two closers still leaves them adjacent for Bash.
+    while text[end:end + 2] == "\\\n":
+        end += 2
     if end < len(text) and text[end] == ")":
         return end + 1
     return None

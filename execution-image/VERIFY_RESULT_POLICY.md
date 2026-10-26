@@ -29,7 +29,7 @@ gh attestation verify oci://ghcr.io/paperclipai/paperclip@sha256:95cc19e5fdd7804
   --format json
 ```
 
-This matches `execution-image/README.md:134-139`, with `--predicate-type` added explicitly (it is the gh default, `verify.go:249`). Save stdout to a file and pass that file to the checker. The `--signer-workflow` value omits `@refs/heads/master`; see the ledger.
+This matches `execution-image/README.md:134-139` (the `gh attestation verify` command; `--signer-workflow` is at line 137), with `--predicate-type` added explicitly (it is the gh default, `verify.go:249`). Save stdout to a file and pass that file to the checker. The `--signer-workflow` value omits `@refs/heads/master`; see the ledger.
 
 ## Policy rules
 

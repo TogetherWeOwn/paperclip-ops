@@ -6,6 +6,11 @@ Source-only handoff for `ops/cliproxy-live/live_accounts.py`; this issue does **
 - Size: 42,536 bytes
 - The verified source contains `import urllib.request` and initializes `KEY = load_key()`; the patch uses those existing host symbols and adds no credential handling outside the already-reviewed optional bearer override.
 
+Oracle auth prerequisite: the patched code reads CLIProxy `GET /v1/models` with `Authorization: Bearer` using the host's existing `KEY` (loaded by `load_key()`), over loopback. No new credential is created. Optional environment overrides (read once at import; unset means the defaults):
+
+- `CLIPROXY_SERVED_MODELS_URL` — oracle URL; default `http://127.0.0.1:8317/v1/models`.
+- `CLIPROXY_SERVED_MODELS_KEY_FILE` — path to a key file whose first usable line (`KEY=value` or bare) replaces `KEY` as the bearer; unset/empty keeps `KEY`. A configured file with no usable line omits `servedModels` (fail-open) rather than failing the feed.
+
 ## Operator procedure (only when separately authorized)
 
 1. On the host, enter the directory containing `live_accounts.py` and verify the exact preimage before touching it. Every check below aborts the shell on failure (`set -eu`); run the whole block, not line by line:

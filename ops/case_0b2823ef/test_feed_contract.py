@@ -511,27 +511,60 @@ class InstallProcedureGuards(unittest.TestCase):
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "INSTALL.md")
         with open(path) as f:
             cls.text = f.read()
+        # The guards are executable shell blocks, not prose: extract the
+        # fenced sh blocks and join line continuations, then pin whole
+        # guard statements (statement plus its abort branch). A substring
+        # loose in prose, or a guard with its abort removed, fails.
+        blocks = re.findall(r"```sh\n(.*?)```", cls.text, re.DOTALL)
+        cls.sh = "\n".join(blocks).replace("\\\n", " ")
 
     def test_fails_closed(self):
-        self.assertIn("set -eu", self.text)
+        self.assertRegex(self.sh, r"(?m)^\s*set -eu$")
+        self.assertIn("sha256sum -c -", self.sh)
 
     def test_sha_precondition_gated(self):
-        self.assertIn("sha256sum -c -", self.text)
+        self.assertRegex(
+            self.sh,
+            r"test \"\$\(wc -c < live_accounts\.py\)\" -eq 42536"
+            r"[\s\S]*93a99797[0-9a-f]+  live_accounts\.py' \| sha256sum -c -",
+        )
 
     def test_idempotency_marker_stops_reapply(self):
-        self.assertIn("grep -q 'served_bearer' live_accounts.py", self.text)
+        self.assertRegex(
+            self.sh,
+            r"if grep -q 'served_bearer' live_accounts\.py; then"
+            r"[\s\S]*?exit 1[\s\S]*?fi",
+        )
 
     def test_dry_run_status_checked(self):
-        self.assertIn("patch --batch --forward --dry-run", self.text)
-        self.assertIn("Patch dry-run failed", self.text)
+        self.assertRegex(
+            self.sh,
+            r"if ! patch --batch --forward --dry-run -p0 < [^;]+; then"
+            r"[\s\S]*?Patch dry-run failed[\s\S]*?exit 1[\s\S]*?fi",
+        )
 
     def test_apply_failure_restores_backup(self):
-        self.assertIn("Patch apply failed; restoring the backup.", self.text)
-        self.assertIn('cp -a "$backup" live_accounts.py', self.text)
+        self.assertRegex(
+            self.sh,
+            r"if ! patch --batch --forward -p0 < [^;]+; then"
+            r"[\s\S]*?Patch apply failed; restoring the backup\."
+            r"[\s\S]*?cp -a \"\$backup\" live_accounts\.py"
+            r"[\s\S]*?exit 1[\s\S]*?fi",
+        )
 
     def test_reject_file_restores_backup(self):
-        self.assertIn("test -e live_accounts.py.rej", self.text)
-        self.assertIn("live_accounts.py.rej; restoring the backup.", self.text)
+        self.assertRegex(
+            self.sh,
+            r"if test -e live_accounts\.py\.rej; then"
+            r"[\s\S]*?live_accounts\.py\.rej; restoring the backup\."
+            r"[\s\S]*?cp -a \"\$backup\" live_accounts\.py"
+            r"[\s\S]*?exit 1[\s\S]*?fi",
+        )
+
+    def test_oracle_auth_and_env_overrides_documented(self):
+        self.assertIn("CLIPROXY_SERVED_MODELS_URL", self.text)
+        self.assertIn("CLIPROXY_SERVED_MODELS_KEY_FILE", self.text)
+        self.assertIn("Authorization: Bearer", self.text)
 
 
 if __name__ == "__main__":

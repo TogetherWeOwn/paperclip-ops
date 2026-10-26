@@ -53,15 +53,17 @@ SCOPE_B=(
   "$HERE/sibling_guard.sh"
   "$HERE/scripts/dispatch_deploy_monitor.sh"
   "$HERE/ops/case_4ea7d92e/lib/post_finding.sh"
+  "$HERE/ops/case_b1d141af/run-worktree-prune.sh"
 )
 missing=0
 for file in "${SCOPE_B[@]}"; do
   [[ -f "$file" ]] || { bad "scope lists a file that no longer exists" "$file"; missing=1; }
 done
 [[ "$missing" -eq 0 ]] && ok "all scoped sender/helper files exist"
-# Default-on shapes: a direct =1 assignment, a shell :-1} default, or a
-# mapping .get with a "1" default (literal or via the HATCH_VAR constant).
-# Plain `== "1"` comparisons never match these.
+# Default-on shapes: a direct =1 assignment, a shell :-1} default, a
+# mapping .get/.setdefault with a "1" default (literal or via the
+# HATCH_VAR constant), or any default for the host-delegated
+# CHECKED_BASE bypass (see below). Plain `== "1"` comparisons never match.
 # Capture first, then test the capture: piping a producer straight into an
 # early-exiting `grep -q` under pipefail lets SIGPIPE read a match as a
 # miss (case_c25c4d3f).
@@ -77,11 +79,22 @@ if grep -q . <<<"$hits_b_shell"; then
 else
   ok "no shell default-on in senders/helpers"
 fi
-hits_b_map="$(grep -rnE "\.get\(\s*(HATCH_VAR|[\"']$HATCH[\"'])\s*,\s*[\"']?1" "${SCOPE_B[@]}" 2>/dev/null)"
+hits_b_map="$(grep -rnE "\.(get|setdefault)\(\s*(HATCH_VAR|[\"']$HATCH[\"'])\s*,\s*[\"']?1" "${SCOPE_B[@]}" 2>/dev/null)"
 if grep -q . <<<"$hits_b_map"; then
   bad "no mapping default-on in senders/helpers" "$(head -n 5 <<<"$hits_b_map")"
 else
   ok "no mapping default-on in senders/helpers"
+fi
+# The host-delegated verdict (PAPERCLIP_API_ALLOWLIST_CHECKED_BASE) skips
+# the in-container file check on exact equality with the forwarded base.
+# It is set only by the wrapper after its host check; no scoped file may
+# give it a default, or a sender could self-delegate a verdict.
+CHECKED="PAPERCLIP_API_ALLOWLIST_CHECKED_BASE"
+hits_b_checked="$(grep -rnE "\.(get|setdefault)\(\s*([\"']$CHECKED[\"'])\s*,\s*([A-Za-z0-9_]|\"[^\"]|'[^'])|${CHECKED}:-[^}]" "${SCOPE_B[@]}" 2>/dev/null)"
+if grep -q . <<<"$hits_b_checked"; then
+  bad "no CHECKED_BASE default in senders/helpers" "$(head -n 5 <<<"$hits_b_checked")"
+else
+  ok "no CHECKED_BASE default in senders/helpers"
 fi
 
 hdr "positive controls (the greps detect real violations)"
@@ -101,8 +114,20 @@ grep -qE "$HATCH\"?\]?\s*=[^=]" "$WORK/assign.sh" \
   && ok "assignment grep catches =1" || bad "assignment grep catches =1"
 grep -qE "${HATCH}:-[^}]*1" "$WORK/default.sh" \
   && ok "default grep catches :-1}" || bad "default grep catches :-1}"
-grep -qE "\.get\(\s*(HATCH_VAR|[\"']$HATCH[\"'])\s*,\s*[\"']?1" "$WORK/getmap.py" "$WORK/getconst.py" \
-  && ok "mapping grep catches .get defaults" || bad "mapping grep catches .get defaults"
+printf 'x = env.setdefault("%s", "1")\n' "$HATCH" > "$WORK/setdefault.py"
+grep -qE "\.(get|setdefault)\(\s*(HATCH_VAR|[\"']$HATCH[\"'])\s*,\s*[\"']?1" "$WORK/getmap.py" "$WORK/getconst.py" "$WORK/setdefault.py" \
+  && ok "mapping grep catches .get/.setdefault defaults" || bad "mapping grep catches .get/.setdefault defaults"
+printf 'x = env.get("%s", base)\n' "$CHECKED" > "$WORK/checked_default.py"
+printf 'echo "${%s:-$PAPERCLIP_API_URL}"\n' "$CHECKED" > "$WORK/checked_default.sh"
+grep -qE "\.(get|setdefault)\(\s*([\"']$CHECKED[\"'])\s*,\s*([A-Za-z0-9_]|\"[^\"]|'[^'])|${CHECKED}:-[^}]" "$WORK/checked_default.py" "$WORK/checked_default.sh" \
+  && ok "CHECKED_BASE grep catches defaults" || bad "CHECKED_BASE grep catches defaults"
+printf 'x = env.get("%s", "")\n' "$CHECKED" > "$WORK/checked_legit.py"
+hits_checked_legit="$(grep -E "\.(get|setdefault)\(\s*([\"']$CHECKED[\"'])\s*,\s*([A-Za-z0-9_]|\"[^\"]|'[^'])|${CHECKED}:-[^}]" "$WORK/checked_legit.py")"
+if grep -q . <<<"$hits_checked_legit"; then
+  bad "empty CHECKED_BASE default does not trip the gate"
+else
+  ok "empty CHECKED_BASE default does not trip the gate"
+fi
 # The legitimate comparison shape must NOT trip the assignment grep.
 printf 'if [[ "${%s:-}" == "1" ]]; then\n' "$HATCH" > "$WORK/legit.sh"
 printf 'if env.get(HATCH_VAR, "") == "1":\n' > "$WORK/legit.py"

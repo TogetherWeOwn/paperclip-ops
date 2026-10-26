@@ -250,6 +250,19 @@ want_clean "genuine arithmetic then top-level bounded yes"
 run_cmd '((echo hi); yes)'
 want_clean "arithmetic-looking subshell outside substitution is out of scope"
 
+cat > "$WORK/arith-continuation.sh" <<'FIX'
+x=$(( (yes) )\
+)
+FIX
+run_file "$WORK/arith-continuation.sh"
+want_clean "line continuation between arithmetic closers"
+
+cat > "$WORK/arith-continuation-subshell.sh" <<'FIX'
+x=$((echo hi); (yes))
+FIX
+run_file "$WORK/arith-continuation-subshell.sh"
+want_finding "subshell after arithmetic-looking opener still refuses"
+
 cat > "$WORK/quoted-heredoc-arith-subshell.sh" <<'FIX'
 cat <<'EOF'
 $((yes);yes)

@@ -1,0 +1,14 @@
+{
+  "name": "@togetherweown/native-runner-coverage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Uninstalled report-only native metadata coverage classifier",
+  "paperclipPlugin": {
+    "manifest": "./manifest.mjs",
+    "worker": "./entrypoint.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

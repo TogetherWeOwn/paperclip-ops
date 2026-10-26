@@ -1,0 +1,22 @@
+--- a/ops/productivity/review_gate.py
++++ b/ops/productivity/review_gate.py
+@@ -20,2 +20,3 @@
+ import review_findings as findings  # noqa: E402  findings contract, deterministic side (Phase 1 item 1.2)
++import review_rebase_carry_flow as rebase_flow  # noqa: E402  review-only rebase carry call site (default off)
+ from finding_labels import finding_title  # noqa: E402
+@@ -302,2 +303,4 @@
+         "and g.shadow_label is null))") if r[1].isdigit()}
++    rebase_paths = rebase_flow.Paths(ROOT / 'ops/productivity')
++    rebase_mode = rebase_flow.control_mode(rebase_paths)  # absent/unreadable/malformed = off; shadow never skips
+     due = []
+@@ -336,2 +339,5 @@
+                 continue
++            if rebase_flow.gate_skips_review(sh, env, full, pr['number'], head, rebase_mode):
++                log(f'{full}#{pr["number"]}: verified rebase carry on {head[:12]}; review not requested')
++                continue  # carried check published by review_carry; CI above still gates this head
+             key = f"{full}#{pr['number']}@{head}"
+@@ -490,3 +496,3 @@
+             f"{len(prev.get('blocking') or [])} prior blocker(s)). "
+-            f"Delta {d['from'][:12]}...{d['to'][:12]}: {len(files)} file(s): {flist or 'unavailable'}. "
++            f"Delta {d['from'][:12]}...{d['to'][:12]} [{d.get('scope') or 'compare'}]: {len(files)} file(s): {flist or 'unavailable'}. "
+             f"Prior blockers: {blockers}. "

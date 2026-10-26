@@ -7,6 +7,7 @@ import { createGithubAdapter, writeFailureCode } from '../src/github-adapter.js'
 import { createPinnedRunner, prepareIsolatedGhConfigSync } from '../src/gh-pinned.js'
 import { createConsumer } from '../src/consumer.js'
 import { classifyCloseout, closeoutPolicy } from '../src/closeout.js'
+import { shouldConvertToDraft, shouldMarkReady } from '../src/readiness.js'
 
 const repository = 'TogetherWeOwn/kofra'
 const sha = 'a'.repeat(40)
@@ -384,6 +385,106 @@ test('readiness snapshot merges duplicate checks conservatively without push age
     // push time are both outside its strict contract.
     const strict = fake([snapEnvelope(payload)])
     await assert.rejects(strict.adapter.getCloseoutSnapshot(repository, 42, { nowMs: pushedMs + 1 }))
+  }
+})
+
+test('readiness snapshot supersedes a cancelled run only by a later same-producer pass', async () => {
+  const at = (sec) => new Date(pushedMs + sec * 1000).toISOString()
+  const producedRun = (name, conclusion, startedSec, completedSec,
+    { app = 'github-actions' } = {}) => ({
+    __typename: 'CheckRun', name, status: 'COMPLETED', conclusion,
+    startedAt: at(startedSec), completedAt: at(completedSec),
+    checkSuite: { app: { slug: app } },
+  })
+  const aggregated = async (nodes) => {
+    const { adapter, calls } = fake([snapEnvelope(rollupPr(nodes))])
+    const snapshot = await adapter.getReadinessSnapshot(repository, 42, { nowMs: pushedMs + 3_600_000 })
+    assert.equal(snapshot.checks.filter((c) => c.name === 'pr-lint').length, 1)
+    return { check: snapshot.checks.find((c) => c.name === 'pr-lint'), snapshot, calls }
+  }
+
+  // Same producer, cancelled attempt started before a passing attempt: the
+  // cancelled entry is a superseded rerun, not a permanent failure. Order
+  // of the rollup entries must not matter.
+  const cancelled = () => producedRun('pr-lint', 'CANCELLED', 60, 76)
+  const laterPass = () => producedRun('pr-lint', 'SUCCESS', 79, 102)
+  for (const nodes of [[cancelled(), laterPass()], [laterPass(), cancelled()]]) {
+    const { check } = await aggregated(nodes)
+    assert.equal(check.status, 'completed')
+    assert.equal(check.conclusion, 'success')
+    assert.equal(check.producer, 'checkrun:github-actions')
+    assert.equal(check.startedMs, pushedMs + 79_000)
+  }
+
+  // A cancelled attempt that is the LATEST attempt still blocks: the only
+  // pass started earlier, so no newer attempt has passed on this head.
+  {
+    const { check } = await aggregated([producedRun('pr-lint', 'SUCCESS', 10, 20),
+      producedRun('pr-lint', 'CANCELLED', 60, 61)])
+    assert.equal(check.conclusion, 'cancelled')
+  }
+
+  // A later pass from a DIFFERENT producer (another checks app, or a status
+  // context) never supersedes the cancelled entry: distinct sources may
+  // legitimately share a name and none may hide another's result.
+  {
+    const { check } = await aggregated([cancelled(),
+      producedRun('pr-lint', 'SUCCESS', 79, 102, { app: 'some-other-app' })])
+    assert.equal(check.conclusion, 'cancelled')
+  }
+  {
+    const status = { __typename: 'StatusContext', context: 'pr-lint', state: 'SUCCESS',
+      createdAt: at(200) }
+    const { check } = await aggregated([cancelled(), status])
+    assert.equal(check.conclusion, 'cancelled')
+  }
+
+  // A genuine failure is never superseded, even by a later same-producer
+  // pass: only the cancelled conclusion gets the superseded reading.
+  {
+    const { check } = await aggregated([producedRun('pr-lint', 'FAILURE', 60, 76), laterPass()])
+    assert.equal(check.conclusion, 'failure')
+  }
+
+  // Entries without provenance (older payloads) keep the conservative
+  // merge: a later pass does not supersede an unattributed cancellation.
+  {
+    const { check } = await aggregated([
+      checkRun('pr-lint', 'COMPLETED', 'CANCELLED', at(76)),
+      checkRun('pr-lint', 'COMPLETED', 'SUCCESS', at(102)),
+    ])
+    assert.equal(check.conclusion, 'cancelled')
+    assert.ok(!Object.hasOwn(check, 'producer'))
+  }
+
+  // An unfinished newer attempt is never hidden by the supersede rule:
+  // cancelled is dropped, but pending still outranks the pass.
+  {
+    const running = { __typename: 'CheckRun', name: 'pr-lint', status: 'IN_PROGRESS',
+      conclusion: null, startedAt: at(300), completedAt: null,
+      checkSuite: { app: { slug: 'github-actions' } } }
+    const { check } = await aggregated([cancelled(), laterPass(), running])
+    assert.equal(check.status, 'in_progress')
+  }
+
+  // The snapshot query must actually request the provenance the rule reads.
+  {
+    const { calls } = await aggregated([laterPass()])
+    const query = calls[0][1].find((arg) => typeof arg === 'string' && arg.startsWith('query='))
+    for (const field of ['startedAt', 'checkSuite', 'slug']) {
+      assert.ok(query.includes(field), `snapshot query is missing ${field}`)
+    }
+  }
+
+  // Gate consequences: the superseded snapshot can mark a draft ready and
+  // no longer converts a ready PR back, but a stale readiness block from
+  // an older head still converts — the supersede rule is not a bypass.
+  {
+    const { snapshot } = await aggregated([cancelled(), laterPass()])
+    const gate = { headSha, checks: snapshot.checks, requiredChecks: ['pr-lint'] }
+    assert.equal(shouldMarkReady({ ...gate, draft: true, blockHeadSha: headSha }), true)
+    assert.equal(shouldConvertToDraft({ ...gate, draft: false, blockHeadSha: headSha }), false)
+    assert.equal(shouldConvertToDraft({ ...gate, draft: false, blockHeadSha: 'e'.repeat(40) }), true)
   }
 })
 

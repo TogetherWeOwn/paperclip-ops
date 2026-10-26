@@ -55,7 +55,8 @@ const SNAPSHOT_QUERY = `query BridgeCloseoutSnapshot($owner: String!, $name: Str
           oid pushedDate
           statusCheckRollup { contexts(first: 100) {
             nodes { __typename
-              ... on CheckRun { name status conclusion completedAt }
+              ... on CheckRun { name status conclusion startedAt completedAt
+                checkSuite { app { slug } } }
               ... on StatusContext { context state createdAt } }
             pageInfo { hasNextPage } } } }
         }
@@ -195,6 +196,29 @@ function parseTime(value, message) {
   return ms
 }
 
+// Provenance is auxiliary: it only ever lets readinessChecks recognise a
+// superseded rerun. Anything missing or oddly shaped reads as "unknown
+// producer", which keeps the conservative merge, rather than failing a
+// read whose check results are otherwise trustworthy. A present but
+// unparseable start time stays strict, like every other timestamp here.
+// The producer is the check suite's app — the same identity branch
+// protection pins beside a required context name (context + app_id), and
+// the finest identity readable under the sweep job token's pinned
+// `checks: read` grant: the workflow run behind a suite needs an Actions
+// grant the token deliberately does not carry. Status contexts carry no
+// producer here: they never conclude `cancelled`, and an absent producer
+// can never supersede one.
+function provenanceOf(node) {
+  const out = {}
+  if (node.__typename !== 'CheckRun') return out
+  if (node.startedAt !== null && node.startedAt !== undefined) {
+    out.startedMs = parseTime(node.startedAt, 'check run start time is invalid')
+  }
+  const app = node.checkSuite?.app?.slug
+  if (typeof app === 'string' && app.length > 0) out.producer = `checkrun:${app}`
+  return out
+}
+
 function normalizeCheck(node) {
   requireValue(node && typeof node === 'object', 'GitHub check entry is malformed')
   if (node.__typename === 'CheckRun') {
@@ -204,28 +228,46 @@ function normalizeCheck(node) {
       // Forward-compat: conclusions pass through lowercased (TIMED_OUT ->
       // timed_out). Unknown ones are closeout's call, which reads them as
       // pending rather than guessing.
-      return { name: node.name, status: 'completed', conclusion: node.conclusion.toLowerCase(), completedMs: parseTime(node.completedAt, 'completed check run has no completion time') }
+      return { name: node.name, status: 'completed', conclusion: node.conclusion.toLowerCase(), completedMs: parseTime(node.completedAt, 'completed check run has no completion time'), ...provenanceOf(node) }
     }
     requireValue(node.status === 'IN_PROGRESS' || RUN_QUEUED.has(node.status), 'GitHub check run status is unknown')
-    return { name: node.name, status: node.status === 'IN_PROGRESS' ? 'in_progress' : 'queued' }
+    return { name: node.name, status: node.status === 'IN_PROGRESS' ? 'in_progress' : 'queued', ...provenanceOf(node) }
   }
   if (node.__typename === 'StatusContext') {
     requireValue(typeof node.context === 'string' && node.context.length > 0, 'GitHub status has no context name')
-    if (node.state === 'SUCCESS') return { name: node.context, status: 'completed', conclusion: 'success', completedMs: parseTime(node.createdAt, 'completed status has no creation time') }
-    if (node.state === 'ERROR' || node.state === 'FAILURE') return { name: node.context, status: 'completed', conclusion: 'failure', completedMs: parseTime(node.createdAt, 'completed status has no creation time') }
+    if (node.state === 'SUCCESS') return { name: node.context, status: 'completed', conclusion: 'success', completedMs: parseTime(node.createdAt, 'completed status has no creation time'), ...provenanceOf(node) }
+    if (node.state === 'ERROR' || node.state === 'FAILURE') return { name: node.context, status: 'completed', conclusion: 'failure', completedMs: parseTime(node.createdAt, 'completed status has no creation time'), ...provenanceOf(node) }
     requireValue(node.state === 'EXPECTED' || node.state === 'PENDING', 'GitHub status state is unknown')
-    return { name: node.context, status: node.state === 'PENDING' ? 'in_progress' : 'queued' }
+    return { name: node.context, status: node.state === 'PENDING' ? 'in_progress' : 'queued', ...provenanceOf(node) }
   }
   throw new Error('GitHub check entry type is unknown')
 }
 
 // Readiness has no push-age decision. Repeated names are legitimate across
 // workflows/status sources, but none may hide a failure or an unfinished run.
+// One narrow exception: a CANCELLED entry is a superseded rerun (e.g. a
+// concurrency cancel) when the SAME producer started a later attempt on this
+// head that completed passing. Only that evidence is dropped before the
+// conservative merge; genuine failures, the latest attempt's own
+// cancellation, unknown producers and distinct producers keep the merge
+// exactly as before. Attempt order is the start time, not completion: a
+// body-reading check that started earlier linted an older PR body even if
+// it happened to finish late.
+function supersededCancelled(check, checks) {
+  if (check.status !== 'completed' || check.conclusion !== 'cancelled') return false
+  if (typeof check.producer !== 'string' || !Number.isInteger(check.startedMs)) return false
+  return checks.some((other) => other !== check && other.name === check.name &&
+    other.producer === check.producer && other.status === 'completed' &&
+    ['success', 'neutral', 'skipped'].includes(other.conclusion) &&
+    Number.isInteger(other.startedMs) && other.startedMs > check.startedMs)
+}
+
 function readinessChecks(checks) {
+  const effective = checks.filter((check) => !supersededCancelled(check, checks))
   const rank = (check) => check.status !== 'completed' ? 1
     : ['success', 'neutral', 'skipped'].includes(check.conclusion) ? 0 : 2
   const byName = new Map()
-  for (const check of checks) {
+  for (const check of effective) {
     const prior = byName.get(check.name)
     if (!prior || rank(check) > rank(prior) ||
       (rank(check) === rank(prior) && JSON.stringify(check) < JSON.stringify(prior))) {

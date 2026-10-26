@@ -1840,6 +1840,15 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./verification/case_7edd6ab6-balancer-silence-mutation-gate.sh
 
+      # The guard's text and --json verdict suites: text output stays
+      # byte-identical, JSON carries the same verdicts, gaps and exit
+      # codes. Hermetic (stdlib only, disposable fixtures, pinned --now);
+      # root file changes wake core through the generic fallthrough in
+      # ci_changes.py, the same gate as the mutation step above.
+      - name: balancer silence guard text and JSON suites
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: python3 -m unittest -v test_balancer_silence_guard.py test_balancer_silence_json.py
+
       # case_026319fe. GARM VM create-to-ready recorder/checker plus provisional
       # seed baseline: strict Zulu timestamp pairs, nearest-rank p50/p95,
       # tri-state check, 33 hostile tests. Fully offline (stdlib only, temp

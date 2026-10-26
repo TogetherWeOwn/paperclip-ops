@@ -49,7 +49,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if os.path.exists("/usr/bin/git") and "GIT_BIN" not in os.environ:
     os.environ["GIT_BIN"] = "/usr/bin/git"
 sys.path.insert(0, HERE)
-import upstream_lint as ul  # noqa: E402
+import upstream_lint as ul
 
 REPO = "acme/widget"
 SHA = "f5bca33a44fb20d90972a0d15db880e0e3129440"

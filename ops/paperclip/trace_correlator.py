@@ -646,7 +646,14 @@ def _parse_args(argv):
                 value = arg.split("=", 1)[1]
             if not re.fullmatch(r"-?[0-9]+", value):
                 return explain, limit, "invalid_diagnostic_limit"
-            limit = int(value)
+            # Parse by significant digits: int() refuses strings beyond
+            # sys.get_int_max_str_digits(), which would crash instead of
+            # returning the JSON refusal; >4 significant digits is already
+            # out of range, and leading zeros stay valid.
+            digits = value.lstrip("-").lstrip("0") or "0"
+            if len(digits) > 4:
+                return explain, limit, "invalid_diagnostic_limit"
+            limit = -int(digits) if value.startswith("-") else int(digits)
             if not 1 <= limit <= MAX_DIAGNOSTIC_LIMIT:
                 return explain, limit, "invalid_diagnostic_limit"
         else:

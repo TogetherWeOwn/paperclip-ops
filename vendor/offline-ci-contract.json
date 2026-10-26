@@ -1755,7 +1755,7 @@
     },
     {
       "name": "migration safety gates suites",
-      "definition_sha256": "8d8bb4965903d1323d089f05c915279ebf0734329327f252ceb0e101e647f886",
+      "definition_sha256": "20907ee1d33060b41ec0dd444afd2c01dd291836edf2f93763b1ccd33b96c73b",
       "id": "migration safety gates suites:1"
     },
     {

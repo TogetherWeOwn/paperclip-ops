@@ -382,5 +382,119 @@ class LegacyControls(CheckerFixture):
         self.assertFalse(self.marker.exists())
 
 
+class OptionSpellingPrivacy(CheckerFixture):
+    """Parser-accepted spellings must never fall back to excerpt-bearing text."""
+
+    def test_json_prefixes_select_private_verdicts_or_private_argument_errors(self):
+        for option in ("--jso", "--js", "--j"):
+            for command, count in ((f"# {SENTINEL}", 0), (f"x=$(yes {SENTINEL})", 1)):
+                for args in (
+                    ("check", option, "--command", command),
+                    ("check", "--command", command, option),
+                ):
+                    with self.subTest(option=option, count=count, args=args):
+                        result = self.invoke(*args)
+                        # Preserving argparse prefixes is preferred, but an
+                        # explicit, private rejection is also a valid policy.
+                        if result.returncode == 2:
+                            self.input_error(result, None, "invalid-arguments", "correct_arguments")
+                        else:
+                            self.verdict(result, "command", count)
+
+    def test_json_prefix_argument_errors_do_not_echo_supplied_text(self):
+        for option in ("--jso", "--js", "--j"):
+            with self.subTest(option=option):
+                self.input_error(
+                    self.invoke("check", option, "--unknown-" + SENTINEL),
+                    None, "invalid-arguments", "correct_arguments",
+                )
+
+    def test_json_with_attached_value_is_a_private_argument_error(self):
+        for args in (
+            ("check", "--json=" + SENTINEL, "--command", "x"),
+            ("check", "--command", "x", "--json=" + SENTINEL),
+        ):
+            with self.subTest(args=args):
+                self.input_error(self.invoke(*args), None, "invalid-arguments", "correct_arguments")
+
+    def test_help_spellings_are_structured_or_privately_rejected(self):
+        for option in ("--h", "--he", "--hel", "-h", "-hx"):
+            for args in (("check", "--json", option), ("check", option, "--json")):
+                with self.subTest(args=args):
+                    result = self.invoke(*args)
+                    if result.returncode == 2:
+                        self.input_error(result, None, "invalid-arguments", "correct_arguments")
+                        continue
+                    value = self.private_json(result)
+                    self.assertEqual(result.returncode, 0)
+                    self.assertEqual(set(value), set(self.envelope(None)) | {"help"})
+                    help_value = value.pop("help")
+                    self.assertEqual(value, self.envelope(None))
+                    self.assertIsInstance(help_value, dict)
+                    self.assertEqual(set(help_value), {"usage", "examples"})
+                    self.assertIsInstance(help_value["usage"], str)
+                    self.assertIsInstance(help_value["examples"], list)
+                    self.assertTrue(help_value["examples"])
+                    for example in help_value["examples"]:
+                        self.assertIsInstance(example, str)
+                        self.assertTrue(example.strip())
+                    text = help_value["usage"] + "\n" + "\n".join(help_value["examples"])
+                    for name in ("check", "--json", "--command", "--file", "--stdin"):
+                        self.assertIn(name, text)
+                    self.assertTrue(any("--json" in example for example in help_value["examples"]))
+
+
+class ClosedStandardStreams(CheckerFixture):
+    def invoke_closed(self, fd, *args):
+        # Close only the child's fd, then exec a fresh Python interpreter so
+        # CPython initializes the corresponding sys.stdin/sys.stdout to None.
+        # No shell evaluates argv; the supplied command remains inert data.
+        launcher = (
+            "import os,sys; os.close(int(sys.argv[1])); "
+            "os.execv(sys.executable, [sys.executable, '-B', *sys.argv[2:]])"
+        )
+        result = subprocess.run(
+            [str(Path(sys.executable).resolve()), "-B", "-c", launcher, str(fd), str(GUARD), *args],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=self.work, env=self.env, timeout=TIMEOUT, check=False,
+        )
+        self.assertFalse(self.marker.exists(), "checker spawned a poisoned executor")
+        return result
+
+    def test_closed_stdin_returns_private_unreadable_stdin_error(self):
+        self.input_error(
+            self.invoke_closed(0, "check", "--json", "--stdin"),
+            "stdin", "input-unreadable", "provide_readable_input",
+        )
+
+    def test_closed_stdout_preserves_clean_and_finding_exit_codes(self):
+        for command, expected in ((f"# {SENTINEL}", 0), (f"x=$(yes {SENTINEL})", 3)):
+            with self.subTest(expected=expected):
+                result = self.invoke_closed(1, "check", "--json", "--command", command)
+                self.assertEqual(result.stderr, b"", "closed stdout must not cause a traceback")
+                self.assertEqual(result.stdout, b"", "no envelope can reach a closed stdout")
+                self.assertEqual(result.returncode, expected)
+
+    def test_closed_stdout_help_has_no_traceback(self):
+        for option, allowed in (("--help", (0,)), ("--hel", (0, 2)), ("-hx", (0, 2))):
+            with self.subTest(option=option):
+                result = self.invoke_closed(1, "check", "--json", option)
+                self.assertEqual(result.stderr, b"", "closed stdout must not cause a traceback")
+                self.assertEqual(result.stdout, b"")
+                self.assertIn(result.returncode, allowed)
+
+    def test_closed_stdout_argument_errors_remain_private_exit_two(self):
+        for args in (
+            ("check", "--json", "--command"),
+            ("check", "--json", "--unknown-" + SENTINEL),
+            ("check", "--json=" + SENTINEL, "--command", "x"),
+        ):
+            with self.subTest(args=args):
+                result = self.invoke_closed(1, *args)
+                self.assertEqual(result.stderr, b"", "argument errors must not leak to stderr")
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(result.returncode, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

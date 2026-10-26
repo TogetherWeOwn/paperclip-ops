@@ -626,10 +626,13 @@ if r.get("conclusion") != "success":
         r.get("status"), r.get("conclusion"), sha[:12])); sys.exit(0)
 output = r.get("output") or {}
 score = output.get("title")
-if score is None or score == "":
+if score is None or (isinstance(score, str) and score.strip() == ""):
     summary = output.get("summary")
-    score = summary.split("\n", 1)[0] if isinstance(summary, str) else None
-if not isinstance(score, str) or score.strip() != "5/5":
+    first = summary.split("\n", 1)[0] if isinstance(summary, str) else None
+    # CRLF summaries end the first line with \r; drop it so '5/5\r\n…'
+    # matches exactly like '5/5\n…' (mirrors github.js /\r?\n/ split).
+    score = first.removesuffix("\r") if isinstance(first, str) else None
+if not isinstance(score, str) or score != "5/5":
     print("FAIL\tour-review: success without a 5/5 score on %s" % sha[:12]); sys.exit(0)
 print("PASS\tour-review 5/5 on %s" % sha[:12])
 EOF

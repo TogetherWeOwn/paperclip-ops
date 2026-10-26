@@ -39,12 +39,13 @@ def resolve_ledger_path():
         raise LedgerUnavailable(f'cannot determine default ledger path: {exc}') from exc
 
 
-def read_ledger(path):
-    """Read aggregate JSON or JSONL ledger records."""
-    try:
-        text = path.read_text(encoding='utf-8')
-    except (OSError, UnicodeError) as exc:
-        raise LedgerUnavailable(f'cannot read {path}: {exc}') from exc
+def read_ledger(path, *, text=None):
+    """Read aggregate JSON or JSONL records, optionally from captured text."""
+    if text is None:
+        try:
+            text = path.read_text(encoding='utf-8')
+        except (OSError, UnicodeError) as exc:
+            raise LedgerUnavailable(f'cannot read {path}: {exc}') from exc
     if not text.strip():
         raise LedgerUnavailable(f'ledger is empty: {path}')
 
@@ -614,7 +615,7 @@ def _parse_compare_args(tokens):
         elif token in ('-h', '--help'):
             raise CompareHelpRequested()
         elif token.startswith('-') and token != '-':
-            raise CompareUsageError(f'unknown flag: {token}')
+            raise CompareUsageError('unknown compare flag')
         else:
             positionals.append(token)
         index += 1
@@ -647,10 +648,12 @@ def _read_snapshot(path, repo):
     name paths, raw values, or parser bodies.
     """
     try:
-        digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
-    except OSError as exc:
+        content = Path(path).read_bytes()
+        text = content.decode('utf-8')
+    except (OSError, UnicodeError, ValueError) as exc:
         raise LedgerUnavailable('snapshot cannot be read') from exc
-    repo_rows = validate_report_rows(read_ledger(Path(path)), repo)
+    digest = hashlib.sha256(content).hexdigest()
+    repo_rows = validate_report_rows(read_ledger(Path(path), text=text), repo)
     return digest, {(row['job'], row['test']): row for row in repo_rows}
 
 

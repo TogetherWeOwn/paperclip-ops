@@ -803,9 +803,13 @@ class DocsCanonicalTest(AxHarness):
         self.assertEqual(len(defs), 1,
                          f"exactly one canonical JSON_SCHEMA_VERSION = 1, found {len(defs)}")
         # No second definition elsewhere in repo-root python sources.
+        # test_dispatch_staged_lifecycle.py is allowlisted: it defines its
+        # own subsystem's dispatch-outcome schema version, not a copy of
+        # this gate's canonical constant.
         dupes = []
         for py in HERE.glob("*.py"):
-            if py.name in ("test_migration_evidence_ax.py",):
+            if py.name in ("test_migration_evidence_ax.py",
+                           "test_dispatch_staged_lifecycle.py"):
                 continue
             if py == SRC_PATH:
                 continue

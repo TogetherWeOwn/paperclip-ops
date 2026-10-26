@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "run_id": "fixture",
+  "status": "drained",
+  "jobs": [
+    {"id": 9002, "name": "broker-suite", "failed_step": "Broker suite", "cause": "  error: expected refusal, got issued token", "log_file": "broker-suite.log"},
+    {"id": 9003, "name": "capture-suite", "failed_step": "Capture acceptance", "cause": "::error::capture evidence bundle is missing the render step", "log_file": "capture-suite.log"}
+  ],
+  "summary": {"total_jobs": 3, "failed_jobs": 2, "drained_jobs": 2},
+  "error": {"code": "ok", "retryable": false, "next_action": "triage_failures", "unmeasured": null}
+}

@@ -23,6 +23,7 @@
     "Live public-fork disclosure audit": 15,
     "public-safety": 5,
     "docs-verdict": 5,
+    "docs-drift": 3,
     "probe": 15,
     "service-db": 15,
     "fresh-vm": 15,
@@ -35,6 +36,7 @@
     "migration squawk": 15,
     "prod-clone rehearsal": 45,
     "schema drift gate": 10,
-    "readiness-sweep": 5
+    "readiness-sweep": 5,
+    "quality-gates": 9
   }
 }

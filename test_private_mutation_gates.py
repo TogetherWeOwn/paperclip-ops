@@ -30,7 +30,10 @@ class PrivateMutationHarnessTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C"}
+        # The notifier mutant fixture uses a .invalid base; opt it in through
+        # the explicit test hatch rather than a fixture host file.
+        self.env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C",
+                    "PAPERCLIP_API_ALLOWLIST_TEST": "1"}
 
     def run_suite(self, body="exit 0"):
         suite = self.root / "stub-suite.sh"
@@ -104,6 +107,10 @@ exit "$rc"
         expressions = captured.stdout.decode().rstrip("\0").split("\0")
         notifier = self.root / "notify_paperclip_issue.sh"
         notifier.write_text((GATE.parent.parent / notifier.name).read_text())
+        helper = self.root / "lib" / "paperclip_api_allowlist.sh"
+        helper.parent.mkdir(exist_ok=True)
+        helper.write_text(
+            (GATE.parent.parent / "lib" / helper.name).read_text())
         for expression in expressions:
             subprocess.run(["sed", "-i", expression, str(notifier)], check=True)
         subprocess.run(["bash", "-n", str(notifier)], check=True)

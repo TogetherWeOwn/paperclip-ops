@@ -83,6 +83,11 @@ MAX_COMMENT_BYTES=32768
 # ever carries anything the requester did not itself submit.
 set -uo pipefail
 
+# shellcheck source=lib/paperclip_api_allowlist.sh
+_PC_ALLOWLIST_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/paperclip_api_allowlist.sh"
+[[ -r "$_PC_ALLOWLIST_LIB" ]] || { echo "refusing: API allowlist lib missing: $_PC_ALLOWLIST_LIB" >&2; exit 65; }
+source "$_PC_ALLOWLIST_LIB"
+
 PAYLOAD="$(cat)"
 [[ -n "$PAYLOAD" ]] || { echo "no payload on stdin" >&2; exit 64; }
 
@@ -117,6 +122,8 @@ elif [[ "$_base_host" == *:* ]]; then
     echo "refusing: PAPERCLIP_API_URL authority is not one bare host" >&2; exit 65
   fi
 fi
+
+paperclip_allowlist_check "$BASE" "notify_paperclip_issue" || exit 65
 
 RID="$(jq -r '.requestId'       <<<"$PAYLOAD")"
 STATUS="$(jq -r '.decision // .status // empty' <<<"$PAYLOAD")"

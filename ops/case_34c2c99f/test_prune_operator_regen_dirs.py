@@ -665,15 +665,56 @@ class RegenTest(unittest.TestCase):
     @unittest.skipIf(IS_ROOT, "chmod does not block root")
     def test_rm_failure_is_counted_and_cooled_before_the_next_firing(self):
         run, ws = self.make_run()
-        pkg = os.path.join(ws, "node_modules", "pkg")
+        cand = os.path.join(ws, "node_modules")
+        pkg = os.path.join(cand, "pkg")
         os.chmod(pkg, 0o500)
-        self.addCleanup(os.chmod, pkg, 0o700)
+
+        def restore_permissions():
+            if os.path.isdir(pkg):
+                os.chmod(pkg, 0o700)
+
+        self.addCleanup(restore_permissions)
+        preconditions = {"euid": os.geteuid(), "pkg_mode": oct(os.stat(pkg).st_mode & 0o777)}
+        commands = []
+        real_op = tool.op
+
+        def observed_op(*cmd, timeout=120):
+            # Preserve real guards and rm. An empty refusal map alone cannot
+            # distinguish a pre-rm safety keep from successful removal.
+            result = real_op(*cmd, timeout=timeout)
+            commands.append({"cmd": cmd, "rc": result.returncode,
+                             "stdout": result.stdout, "stderr": result.stderr})
+            return result
+
+        self.patch(tool, "op", side_effect=observed_op)
         rc, s = self.run_main("--apply")
-        self.assertEqual(s["refused_by_reason"], {"rm-failed": 1})
-        self.assertTrue(os.path.isfile(os.path.join(pkg, "index.js")))
+        evidence = json.dumps({"preconditions": preconditions, "rc": rc,
+                               "summary": s, "commands": commands}, sort_keys=True)
+        self.assertEqual(s["refused_by_reason"], {"rm-failed": 1}, evidence)
+        self.assertEqual((rc, s["idle_min"], s["planned"], s["removed"]), (0, 10, 2, 1), evidence)
+        self.assertEqual((s["kept_by_reason"], s["fail_closed"], s["ledger_error"]),
+                         ({}, None, None), evidence)
+        self.assertEqual((s["archive_verified_runs"], s["archive_pending_runs"]), (1, 0), evidence)
+        self.assertTrue(os.path.isfile(os.path.join(pkg, "index.js")), evidence)
+        self.assertFalse(os.path.exists(os.path.join(ws, "target")), evidence)
+        self.assertTrue(os.path.isfile(tool.FAILED_PATH), evidence)
+        with open(tool.FAILED_PATH) as fh:
+            failed = json.load(fh)
+        self.assertEqual(set(failed), {cand}, evidence)
+        self.assertIsInstance(failed[cand], (int, float), evidence)
+        self.assertGreater(failed[cand], 0, evidence)
+
         backdate(run)
+        commands.clear()
         rc, s = self.run_main("--apply")
-        self.assertEqual((s["planned"], s["kept_by_reason"]), (0, {"rm-failed-cooldown": 1}))
+        evidence = json.dumps({"preconditions": preconditions, "rc": rc,
+                               "summary": s, "commands": commands, "failed": failed}, sort_keys=True)
+        self.assertEqual((rc, s["planned"], s["removed"], s["kept_by_reason"]),
+                         (0, 0, 0, {"rm-failed-cooldown": 1}), evidence)
+        self.assertEqual((s["refused_by_reason"], s["fail_closed"]), ({}, None), evidence)
+        self.assertTrue(os.path.isfile(os.path.join(pkg, "index.js")), evidence)
+        with open(tool.FAILED_PATH) as fh:
+            self.assertEqual(json.load(fh), failed, evidence)
 
     @unittest.skipIf(IS_ROOT, "chmod does not block root")
     def test_unreadable_subtree_keeps_the_run(self):
@@ -846,17 +887,55 @@ class RegenTest(unittest.TestCase):
         self.assertEqual((s["idle_min"], s["planned"], s["kept_by_reason"]), (10, 0, {"recent-write": 1}))
 
     def test_write_to_the_folder_after_planning_is_refused(self):
-        _, ws = self.make_run()
+        run, ws = self.make_run()
+        late = os.path.join(ws, "late.txt")
+        preconditions = {"euid": os.geteuid(), "db_row": self.db[RID],
+                         "late_exists_before_plan": os.path.exists(late)}
+        commands = []
+        real_op = tool.op
+
+        def observed_op(*cmd, timeout=120):
+            # Trace every operator command so a plan-time keep (empty plan,
+            # empty refusals) stays distinguishable from a revalidation
+            # refusal: the find outputs show what each phase saw.
+            result = real_op(*cmd, timeout=timeout)
+            commands.append({"cmd": cmd, "rc": result.returncode,
+                             "stdout": result.stdout, "stderr": result.stderr})
+            return result
+
+        self.patch(tool, "op", side_effect=observed_op)
+        preconditions["idle_before_plan"] = tool.folder_idle_block(run, tool.IDLE_MINUTES)
+        commands.append({"event": "precheck-idle", "result": preconditions["idle_before_plan"]})
         original = tool.revalidate_run
+        calls = []
 
         def wrapper(rid, run_real, idle_min):
-            write(os.path.join(ws, "late.txt"))
+            # Revalidation runs only for planned runs: a plan-time keep means
+            # this never fires and late.txt never exists, which is exactly how
+            # an empty-plan outcome shows itself in the evidence below.
+            calls.append(rid)
+            commands.append({"event": "revalidate", "call": len(calls)})
+            write(late)
             return original(rid, run_real, idle_min)
 
         self.patch(tool, "revalidate_run", side_effect=wrapper)
         rc, s = self.run_main("--apply")
-        self.assertEqual((s["removed"], s["refused_by_reason"]), (0, {"recent-write": 2}))
-        self.assertTrue(os.path.isdir(os.path.join(ws, "node_modules")))
+        evidence = json.dumps({"preconditions": preconditions, "rc": rc,
+                               "summary": s, "commands": commands,
+                               "revalidate_calls": len(calls),
+                               "late_exists_after_apply": os.path.exists(late)}, sort_keys=True)
+        self.assertIsNone(preconditions["idle_before_plan"], evidence)
+        self.assertEqual((rc, s["idle_min"], s["planned"], s["removed"]), (0, 10, 2, 0), evidence)
+        self.assertEqual((s["kept_by_reason"], s["fail_closed"], s["ledger_error"]),
+                         ({}, None, None), evidence)
+        self.assertEqual(s["refused_by_reason"], {"recent-write": 2}, evidence)
+        self.assertEqual((s["archive_verified_runs"], s["archive_pending_runs"]), (0, 1), evidence)
+        self.assertEqual(len(calls), 1, evidence)
+        self.assertTrue(os.path.exists(late), evidence)
+        marker = next(i for i, e in enumerate(commands) if e.get("event") == "revalidate")
+        self.assertTrue(any(e.get("stdout", "").strip() for e in commands[marker:]
+                            if "-newermt" in e.get("cmd", ())), evidence)
+        self.assertTrue(os.path.isdir(os.path.join(ws, "node_modules")), evidence)
 
     def test_process_running_a_binary_from_the_folder_keeps_the_run(self):
         run, ws = self.make_run()

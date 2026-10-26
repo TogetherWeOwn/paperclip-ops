@@ -113,7 +113,7 @@ on:
     types: [opened, edited, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]
   # zizmor: ignore[dangerous-triggers] reason="wake-only trigger: base-tree checkout pin (never head_sha/head_branch) + fork read-only, both pinned by readiness-job-token.test.mjs"
   workflow_run:
-    workflows: [CI, docs-fast-path, PR lint, public-safety, test-guard]
+    workflows: [CI, Documentation accompaniment, Quality gates, docs-fast-path, PR lint, public-safety, test-guard]
     types: [completed]
   workflow_dispatch:
 

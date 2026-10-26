@@ -25,6 +25,7 @@ import subprocess
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 import process_lost_probe as mod
 
@@ -260,6 +261,25 @@ class SinceWindow(unittest.TestCase):
         since = since.replace("+00:00", "Z")
         result = mod.probe(rows, since=mod.parse_ts(since))
         self.assertEqual(result["verdict"], "SILENT")
+
+
+class AllowlistEnforceWiring(unittest.TestCase):
+    def test_enforce_refuses_before_any_transport(self):
+        # Wiring pin: deleting the check_api_base_allowed call in
+        # fetch_runs must fail this test (the probe would proceed to
+        # urlopen).
+        env = dict(os.environ)
+        env.pop("PAPERCLIP_API_ALLOWLIST_TEST", None)
+        env.pop("PAPERCLIP_API_BRIDGE_MODE", None)
+        env["PAPERCLIP_API_ALLOWLIST_MODE"] = "enforce"
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch("paperclip_api_allowlist.load_allowlist",
+                           return_value=set()), \
+                mock.patch("urllib.request.urlopen") as urlopen:
+            with self.assertRaises(ValueError) as raised:
+                mod.fetch_runs("https://evil.example.com", "KEY", "c", 5)
+        self.assertIn("mode=enforce", str(raised.exception))
+        urlopen.assert_not_called()
 
 
 if __name__ == "__main__":

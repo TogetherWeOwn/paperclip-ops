@@ -47,7 +47,7 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 /usr/bin/tar --extract --file "$BUNDLE" --directory "$WORK_DIR" --no-same-owner --no-same-permissions
 [[ "$(<"$WORK_DIR/REVISION")" == "$SOURCE_REF" ]] || refuse "bundle revision does not match --source-ref"
 (cd "$WORK_DIR" && /usr/bin/sha256sum --check --strict SHA256SUMS)
-for source in ops/case_b1d141af/run-worktree-prune.sh ops/case_b1d141af/terminal_worktree_prune.py ops/case_b5184419/terminal_worktree_cache_reclaim.py ops/lib/atomic_state.py systemd/install-worktree-prune.sh systemd/paperclip-worktree-prune.service systemd/paperclip-worktree-prune.timer systemd/worktree-prune.env.example; do
+for source in lib/paperclip_api_allowlist.py lib/paperclip_api_allowlist.sh ops/case_b1d141af/run-worktree-prune.sh ops/case_b1d141af/terminal_worktree_prune.py ops/case_b5184419/terminal_worktree_cache_reclaim.py ops/lib/atomic_state.py systemd/install-worktree-prune.sh systemd/paperclip-worktree-prune.service systemd/paperclip-worktree-prune.timer systemd/worktree-prune.env.example; do
   [[ -f "$WORK_DIR/$source" ]] || refuse "reviewed bundle is missing $source"
 done
 # Preflight the reviewed bytes before anything is installed.
@@ -73,8 +73,10 @@ fi
 RELEASE_DIR="$DEST/usr/local/libexec/paperclip-worktree-prune/$SOURCE_REF"
 [[ ! -e "$RELEASE_DIR" ]] || refuse "release directory already exists: $RELEASE_DIR"
 /usr/bin/install -d "${OWNER[@]}" -m 0755 \
-  "$RELEASE_DIR" "$RELEASE_DIR/ops" "$RELEASE_DIR/ops/lib" "$RELEASE_DIR/ops/case_b5184419" "$RELEASE_DIR/ops/case_b1d141af" \
+  "$RELEASE_DIR" "$RELEASE_DIR/lib" "$RELEASE_DIR/ops" "$RELEASE_DIR/ops/lib" "$RELEASE_DIR/ops/case_b5184419" "$RELEASE_DIR/ops/case_b1d141af" \
   "$DEST/etc/paperclip" "$DEST/etc/systemd/system"
+/usr/bin/install "${OWNER[@]}" -m 0444 "$WORK_DIR/lib/paperclip_api_allowlist.py" "$RELEASE_DIR/lib/"
+/usr/bin/install "${OWNER[@]}" -m 0444 "$WORK_DIR/lib/paperclip_api_allowlist.sh" "$RELEASE_DIR/lib/"
 /usr/bin/install "${OWNER[@]}" -m 0444 "$WORK_DIR/ops/lib/atomic_state.py" "$RELEASE_DIR/ops/lib/"
 /usr/bin/install "${OWNER[@]}" -m 0444 "$WORK_DIR/ops/case_b5184419/terminal_worktree_cache_reclaim.py" "$RELEASE_DIR/ops/case_b5184419/"
 /usr/bin/install "${OWNER[@]}" -m 0444 "$WORK_DIR/ops/case_b1d141af/terminal_worktree_prune.py" "$RELEASE_DIR/ops/case_b1d141af/"
@@ -84,7 +86,7 @@ RELEASE_DIR="$DEST/usr/local/libexec/paperclip-worktree-prune/$SOURCE_REF"
 # WORK_DIR above but never installed. Copying it into the release directory
 # would make the unit's ExecStartPre `sha256sum --check` fail on every start.
 # The release manifest covers exactly the installed byte set.
-(cd "$RELEASE_DIR" && /usr/bin/sha256sum ops/lib/atomic_state.py ops/case_b5184419/terminal_worktree_cache_reclaim.py ops/case_b1d141af/run-worktree-prune.sh ops/case_b1d141af/terminal_worktree_prune.py REVISION > "$WORK_DIR/SHA256SUMS.release")
+(cd "$RELEASE_DIR" && /usr/bin/sha256sum lib/paperclip_api_allowlist.py lib/paperclip_api_allowlist.sh ops/lib/atomic_state.py ops/case_b5184419/terminal_worktree_cache_reclaim.py ops/case_b1d141af/run-worktree-prune.sh ops/case_b1d141af/terminal_worktree_prune.py REVISION > "$WORK_DIR/SHA256SUMS.release")
 /usr/bin/install "${OWNER[@]}" -m 0444 "$WORK_DIR/SHA256SUMS.release" "$RELEASE_DIR/SHA256SUMS"
 # The unit runs this exact check before every start; prove it passes now.
 (cd "$RELEASE_DIR" && /usr/bin/sha256sum --check --strict SHA256SUMS)

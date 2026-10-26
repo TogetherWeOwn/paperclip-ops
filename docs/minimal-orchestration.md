@@ -56,6 +56,13 @@ A complete investigation may report adverse findings; `complete` means the
 work finished and is checkable, not that the answer is favourable. The
 owner verifies before combining or closing anything.
 
+Transient helpers return their result and evidence directly to the owner, who
+persists them on the owner's task; they do not need a native child task or
+permission to write one. Assigned native children persist results on their own
+tasks. Set `result_location` and `continuation` for the chosen topology: direct
+return for a transient helper, native completion or dependency events for a
+child task.
+
 Packet rules:
 
 - Include the necessary safe inline facts and every applicable STOP and

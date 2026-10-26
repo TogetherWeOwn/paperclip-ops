@@ -37,6 +37,6 @@
     "delegation_depth_max": 1,
     "note": "Budgets exclude full artifacts and inherited harness or system context. If the packet does not fit, narrow or split the scope; never silently truncate evidence or constraints."
   },
-  "result_location": "The recipient's own native task, as a work-result summary plus a referenced document or work product with a stable ID and revision",
-  "continuation": "The owner resumes from native completion or dependency events. No polling, no wake-only comments, and no redispatch of an unchanged objective and revision to get a preferred answer."
+  "result_location": "Transient helpers return the work-result summary and evidence to the owner for persistence on the owner's task. Assigned native children persist results on their own tasks. Reference full evidence by document or work-product ID and revision or SHA.",
+  "continuation": "The owner verifies a transient helper's returned result directly, or resumes durable child work from native completion or dependency events. No polling, no wake-only comments, and no redispatch of an unchanged objective and revision to get a preferred answer."
 }

@@ -1146,7 +1146,7 @@ jobs:
 
       - name: trace correlator suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_trace_correlator
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_trace_correlator test_trace_join_diagnostics_acceptance
 
       # Assignment host-source bundle: the builder, normalizer and detector
       # run as CLIs with the SQL under a SQLite translation — no database,

@@ -72,8 +72,9 @@ outcome. Fields (frozen meanings; consumers ignore unknown fields):
 - `counts`: `{requested, evaluated, refused, findings}` — nonnegative
   integers mirroring the lists (`evaluated + refused = requested`).
 - `findings`: `{code, file, line, message, retryable, next_action}` with an
-  existing `GARM-*` rule ID, 1-based line (`0` for a whole-file parse
-  refusal), `retryable: false`, `next_action: "fix_input"`. Order follows
+  existing `GARM-*` rule ID, 1-based line (`0` when there is no single source
+  location: a whole-file parse refusal, missing or repeated `FROM`, or missing
+  `USER`), `retryable: false`, `next_action: "fix_input"`. Order follows
   input occurrences, then `(line, code)` within each occurrence, independent
   of which output mode was selected.
 - `errors`: same shape with `line: 0`, `retryable: false`, and a stable

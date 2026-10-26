@@ -23,6 +23,7 @@ Skills: `agent-experience` for anything agents consume; `<REPO SKILLS>`.
 - Reassess remaining cost/benefit on changed evidence; ignore sunk cost and expose high-impact risks early.
 - Queue only concrete followups with a doer, exit evidence and reconsideration trigger; optional polish is not a blocker.
 - Use native task plans and dependencies, never host automation. Copy-ready planning fragment and adoption checks: [right-sized planning](https://github.com/TogetherWeOwn/paperclip-ops/blob/main/docs/right-sized-planning.md).
+- Hand work between agents one owner at a time with a short packet and result: [minimal native handoff convention](https://github.com/TogetherWeOwn/paperclip-ops/blob/main/docs/minimal-orchestration.md).
 
 ## Operator seeding note
 

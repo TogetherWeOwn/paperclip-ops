@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "objective": "One sentence: the separable output the recipient must produce. Replace every value in this example; the packet is fillable content for a task description or initial plan, not an API payload.",
+  "source": {
+    "task": "example-task-001",
+    "revision": "example-plan-revision-001",
+    "note": "Pin the exact task identity and document revision or commit SHA the recipient should work from, never an unqualified latest link."
+  },
+  "scope": {
+    "in": [
+      "The exact files, questions, or records in scope",
+      "The one output this packet asks for"
+    ],
+    "out": [
+      "Anything the recipient must not touch, decide, or re-investigate"
+    ]
+  },
+  "constraints": [
+    "Read-only, or the exact writes allowed and where they may land",
+    "Every applicable STOP: actions that must not be attempted, and what to do instead",
+    "No credentials, environment values, or copied thread history belong in a packet"
+  ],
+  "inputs": [
+    {
+      "ref": "docs/example-input.md",
+      "revision": "0123456789abcdef0123456789abcdef01234567",
+      "note": "Only reference inputs the recipient can actually read; inline the few safe facts that have no readable home"
+    }
+  ],
+  "acceptance": [
+    "Each criterion is checkable by the owner from the reported evidence",
+    "State the command, record, or inspection that proves each criterion"
+  ],
+  "limits": {
+    "packet_max_utf8_bytes": 8192,
+    "helpers_max": 2,
+    "delegation_depth_max": 1,
+    "note": "Budgets exclude full artifacts and inherited harness or system context. If the packet does not fit, narrow or split the scope; never silently truncate evidence or constraints."
+  },
+  "result_location": "The recipient's own native task, as a work-result summary plus a referenced document or work product with a stable ID and revision",
+  "continuation": "The owner resumes from native completion or dependency events. No polling, no wake-only comments, and no redispatch of an unchanged objective and revision to get a preferred answer."
+}

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "source": {
+    "task": "example-task-001",
+    "revision": "example-plan-revision-001",
+    "note": "Echo the exact packet revision worked from, so a stale or duplicate completion is recognisable"
+  },
+  "outcome": "complete",
+  "summary": [
+    "Finding 1: one short, checkable statement",
+    "Finding 2: at most five summary findings in total",
+    "A complete investigation may report adverse findings; complete means the work finished, not that the answer is favourable"
+  ],
+  "evidence": [
+    {
+      "ref": "example-document-001",
+      "revision": "example-document-revision-001",
+      "note": "Full evidence lives in the referenced native document or work product, not pasted into this result"
+    }
+  ],
+  "unknowns": [
+    "Anything not verified, not read, or not run, stated plainly; use outcome needs_input when an unknown blocks the objective"
+  ],
+  "changes": [
+    "Each file, record, or external change actually made, or an explicit none"
+  ],
+  "next_action": "The single next action and its owner, or none when the objective is complete. The owner verifies evidence and current state before combining or closing anything."
+}

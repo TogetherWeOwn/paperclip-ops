@@ -486,6 +486,12 @@ jobs:
       # slice 1), so the pin must be restored before the detect step runs.
       - name: Restore toolkit-vendored files
         run: bash scripts/sync-toolkit.sh
+      # docs/minimal-orchestration.md: the two handoff examples must stay
+      # parseable. Syntax only; this proves nothing about runtime behaviour.
+      - name: Orchestration examples parse as JSON
+        run: |
+          python3 -m json.tool templates/orchestration/task-packet.json >/dev/null
+          python3 -m json.tool templates/orchestration/work-result.json >/dev/null
       - id: detect
         run: |
           set -euo pipefail

@@ -2668,6 +2668,10 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 ./test_muse_countdown.py
 
+      - name: countdown report acceptance suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest -v test_countdown_report_acceptance
+
       # case_611525e4: bridge-model enabled lane-bound row inventory (mirror of
       # the Muse/Claude/Codex countdown readouts, for row PRESENCE not burn).
       # Read-only: per bridge model (muse-spark contributor, claude-sonnet-5-5,

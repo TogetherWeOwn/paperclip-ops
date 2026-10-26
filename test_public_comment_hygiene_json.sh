@@ -112,7 +112,7 @@ if not text.strip():
 dec = json.JSONDecoder()
 try:
     _, idx = dec.raw_decode(text.strip())
-except Exception as exc:  # noqa: BLE001 - diagnostic only
+except ValueError as exc:
     print(f"stdout is not valid JSON: {exc}")
     sys.exit(1)
 rest = text.strip()[idx:].strip()
@@ -478,7 +478,34 @@ check_envelope shimbranch-json "branch scanner error"
 json_ok "$WORK/shimbranch-json.stdout" '.verdict == "error" and .error.code != "ok"' \
   "branch scanner error verdict is error with a machine code"
 
-# --- 15. regression control: the text suite still passes -------------------------
+# --- 15. JSON encoder failure preserves escaped context and refuses --------------
+# Catch a fallback that emits malformed/partial JSON, drops context characters,
+# or reports success when jq fails. Only gate subprocesses see the failing jq;
+# envelope assertions below still use the real system encoder/parser.
+mkdir -p "$WORK/shim_jq"
+printf '#!/usr/bin/env bash\necho "simulated jq failure" >&2\nexit 2\n' > "$WORK/shim_jq/jq"
+chmod +x "$WORK/shim_jq/jq"
+JQ_FAILURE_CONTEXT=$'quote " backslash \\ tab\tnewline\ntrailing newline\n'
+capture_json_with_path jqfail-json "$WORK/shim_jq:$CLEAN_PATH" \
+  --visibility public --body-file "$WORK/scan-clean.txt" --context "$JQ_FAILURE_CONTEXT"
+if [[ "$CAPTURE_RC" -eq 2 ]]; then
+  ok "JSON encoder failure refuses (exit 2)"
+else
+  bad "JSON encoder failure refuses" "want exit 2, got $CAPTURE_RC"
+fi
+check_envelope jqfail-json "JSON encoder failure"
+json_ok "$WORK/jqfail-json.stdout" '.verdict == "error" and .error.code == "json_encoding_failed"' \
+  "JSON encoder failure reports its stable error code"
+json_ok "$WORK/jqfail-json.stdout" '.visibility == "public" and .findings == [] and .truncated == 0' \
+  "JSON encoder failure preserves visibility with no findings"
+if jq -e --arg expected "$JQ_FAILURE_CONTEXT" '.context == $expected' "$WORK/jqfail-json.stdout" >/dev/null 2>&1; then
+  ok "JSON encoder failure round-trips quote, backslash, tab and newlines in context"
+else
+  bad "JSON encoder failure round-trips quote, backslash, tab and newlines in context" \
+    "decoded context differs from the input (including its trailing newline)"
+fi
+
+# --- 16. regression control: the text suite still passes -------------------------
 if "$TEXT_SUITE" >"$WORK/regression.log" 2>&1; then
   ok "text suite runs green as regression control"
 else

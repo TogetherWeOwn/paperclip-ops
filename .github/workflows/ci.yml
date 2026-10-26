@@ -1195,6 +1195,12 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: node --test plugins/pr-tracker/test/collect-rest.test.mjs plugins/pr-tracker/test/poll-prs.test.mjs plugins/pr-tracker/test/setup.test.mjs plugins/pr-tracker/test/upstream-watcher.test.mjs plugins/pr-tracker/test/view-model.test.mjs
 
+      # Pure metadata classifier and native tool boundary; synthetic only.
+      # The unclaimed plugin path selects core + full, with no live stores.
+      - name: native runner coverage classifier suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: node --test plugins/native-runner-coverage/test/*.test.mjs
+
       # Settings-bind rehearsal: the file-bind source contract suite
       # (baseline, read-only bound-file, kill-switch and rollback phases)
       # with synthetic inputs and stub Docker — no live home, no network,

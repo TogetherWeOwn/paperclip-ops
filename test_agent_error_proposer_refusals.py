@@ -170,7 +170,7 @@ def run_proposer(agents, runs):
             runpy.run_path(str(PROPOSER), run_name="__main__")
         except SystemExit as done:
             return done.code, out.getvalue(), err.getvalue()
-        except Exception as escaped:  # noqa: BLE001 — the RED signal
+        except Exception as escaped:  # the RED signal
             raise AssertionError(
                 f"expected SystemExit(2) refusal, "
                 f"{type(escaped).__name__} escaped instead: {escaped}"

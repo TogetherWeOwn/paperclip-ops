@@ -2438,7 +2438,7 @@ jobs:
       # fixtures: no API, database, credential or timer.
       - name: admitted-PR closeout ledger suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: python3 -m unittest -v test_pr_closeout_ledger.py
+        run: python3 -B -m unittest -v test_pr_closeout_ledger test_pr_closeout_preview_acceptance
 
       - name: admitted-PR closeout gates are load-bearing
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'

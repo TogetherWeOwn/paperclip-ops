@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "docs-drift",
+      "sources": [
+        "scripts/quality-gates/docs_drift.py",
+        ".github/workflows/docs-drift.yml",
+        ".docs-drift.json"
+      ],
+      "docs": ["docs/docs-drift.md"]
+    }
+  ]
+}

@@ -109,6 +109,32 @@ measurement nobody made. An absent series reads as absent on a dashboard; a zero
 series reads as a healthy zero. Only one of those is honest, so the series is not
 written.
 
+## Company failure visibility
+
+A fatal company sweep failure does not prevent later companies from running, but
+it does fail the native job **after** all companies have been attempted. The final
+error is `dispatch-sweep-failed`; its `failedCompanies` count is diagnostic only.
+An empty company list, report-only firing, or unchanged company state still
+succeeds. Existing nonfatal per-issue exclusions and wake-refusal reporting are
+unchanged.
+
+Each failed company logs `code: dispatch-company-failed`, an operation `stage`,
+and allowlisted `family` / `errorCode` fields. Stages identify config/board reads,
+selection/summary, metrics, and state/activity operations; otherwise they fall
+back to `company-sweep`. Known SDK capability and scope denials are `policy`,
+known I/O codes are `environment` or `transport`, and unsupported evidence stays
+`unknown`. Exception text, stacks, arbitrary codes, and nested causes are not
+included in these company-failure diagnostics. An unknown exception is never
+labelled a reasoning failure.
+
+These fields do **not** authorize retry, credential fallback, or replay of a
+partially completed company. No retry loop or new schedule is added. Before
+rollout, verify that the deployed native scheduler records rejected callbacks as
+failed and advances the schedule pointer on failure; do not manually replay a
+firing that may already have issued wakes or written state. Roll back by reverting
+the reviewed worker change through the normal deployment path, without changing
+the manifest, schedule, or `wakeEnabled` gate.
+
 ## Known gap: the plugin cannot wake a routing owner
 
 case_68ec5539 Q2 says the plugin "reports the routing gap and wakes a principal holding
@@ -173,6 +199,16 @@ requires `database.namespace.migrate` (`plugin-capability-validator.js`,
 to do a `SELECT`. `getOrchestration` reaches the same rows through the same JSON
 filter with a read-only capability, at the cost of one host call per assigned
 issue. That is the better trade and the test suite asserts it stays that way.
+
+## Offline CI
+
+The dispatch area in `.github/workflows/ci.yml` restores the pinned toolkit
+inputs, installs the pinned development dependencies, then runs
+`node --test test/dispatch.test.mjs` from `plugins/dispatch`. The explicit file
+keeps the tracked suite discoverable by the orphan-suite check on a fresh
+checkout, before the ignored `package.json` is restored. It also avoids Node 24's
+directory-target resolution trap. No live host or credentials are used by the
+suite; dependency installation is a separate setup step.
 
 ## Install
 

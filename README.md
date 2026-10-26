@@ -64,6 +64,23 @@ For the external, alert-only workspace sync-back size observer, see the
 [byte measurement and alert contract](docs/workspace-sync-back-signal.md).
 It does not instrument transport or authorize host installation.
 
+For the offline card/run/PR/head/deploy trace correlator, see the
+[evidence, join and SLO contract](docs/trace-correlation.md).
+It reads caller-assembled evidence only and authorizes no host action.
+
+For source-to-documentation accompaniment in pull requests, see the portable
+[documentation drift gate](docs/docs-drift.md), including its JSON contract,
+base-policy trust model and reusable CI interface.
+
+For native skill versions, reusable examples and isolated pinned-version tests,
+see the [versioned skill fixture procedure](docs/versioned-skill-fixtures.md).
+It adds no runtime registry, host automation or skill-assignment authority.
+
+For one policy across plan, build, and review phases, see the
+[role, provider, and rubric coherence procedure](docs/role-provider-rubric-coherence.md).
+It scopes guidance to role and phase, keeps task policy provider-independent,
+and cites a single pinned rubric in every phase.
+
 | Tool |
 | --- |
 | `public_snapshot_test_support.py` (test-only private-artifact boundary; not a runtime policy or operator command) |
@@ -143,12 +160,34 @@ It does not instrument transport or authorize host installation.
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
 
+## Planning depth
+
+Use [right-sized planning](docs/right-sized-planning.md) to bound a reviewable
+slice, choose preparation by risk/coupling, and record prototypes, investment
+reviews and followups in native task fields. It supplements existing acceptance
+criteria and anti-goals; publishing the guide is not company instruction rollout.
+
+## Native delivery workflow
+
+Use the [single-doer delivery contract](docs/single-doer-delivery.md) for reusable
+planner/builder fields, deterministic defect-routing decisions, and a
+revision-linked multi-repository manifest. These are native task/document
+conventions, not an automatic dispatcher or a production ownership catalog.
+
 ## Productivity reconcilers
 
 For confirmed mutation counts, safe CLI modes, versioned JSON summaries and an
 offline verification command, see [Reconciler outcomes](docs/reconciler-outcomes.md).
 The source contract does not imply runtime installation; flow guard's existing
 no-flag invocation is mutating.
+
+## Task authoring
+
+Use the [acceptance criteria and anti-goals contract](docs/task-scope.md) for
+implementation task descriptions. It includes a copy-ready template, verifiable
+milestones for oversized work, and an adoption fragment for an existing company
+adapter. These are native-field authoring guidelines, not an installed skill or
+a new admission gate; source publication does not establish live adoption.
 
 ## Verification
 

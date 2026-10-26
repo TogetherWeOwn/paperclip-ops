@@ -1,0 +1,91 @@
+name: Disclosure Audit
+
+# Scheduled live fork-disclosure audit: runs
+# verification/case_092cd51d-public-fork-disclosure-audit.sh from this repo's
+# reviewed main, against the org's live public forks.
+#
+# WHY HERE, NOT ci.yml. ci.yml carries only the offline self-test half of the
+# audit script (author classifier, token placement, POSTHOC pin shape). The
+# live half needs outbound network to api.github.com, and a check that goes
+# green when it measured nothing is worse than no check (rule 8 in the script
+# header). This workflow is that live half: scheduled, on a hosted runner with
+# real egress, where exits 1 (undeclared publication) and 2 (cannot evaluate)
+# stay visible as red runs.
+#
+# CREDENTIAL ROUTE. The job's only credential is the ephemeral per-job
+# github.token. The script hands it to curl only through a 0600 config file
+# (never argv; asserted by the self-test below), reads a listing of PUBLIC
+# repos and their fork parents, and makes every "is this public?" ref read on
+# a credential-free anonymous path. No stored secret, no new permission.
+#
+# KNOWN-PRIVATE PROBE -- READ THIS BEFORE ENABLING LIVE. Before reporting,
+# the script anonymous-reads a repo it treats as known-private; if refs come
+# back it cannot trust its own verdicts and exits 2. The script's built-in
+# default for that probe is THIS repository, which is public -- so the default
+# is a probe that can never fire, the silent fail-open the probe exists to
+# prevent. The live job therefore sets DISCLOSURE_AUDIT_PRIVATE_PROBE from a
+# repository variable naming a genuinely private org repo; an empty value
+# keeps the public default and must never be treated as a passing audit.
+#
+# EXACT SOURCE PIN. The script runs from the default-branch checkout of this
+# repository (blob ef371f958ec9893d91511d10021215a1ba0610f8 at the commit that
+# introduced this workflow). Its content can only change through the normal
+# CI + review gates on main, and the offline self-test runs before every live
+# run. DECLARED/POSTHOC pins, strict-UNRESOLVED failure, and the
+# POSTHOC-vs-DECLARED separation are all inside the script, untouched here.
+#
+# EXPECTED SIGNAL. A red run with exit 1 is the audit working: refs it now
+# examines are expected to surface as UNDECLARED until each is adjudicated.
+# Exit 2 means "cannot evaluate" (API, rate limit, broken probe). Neither is
+# infrastructure failure; both are the report.
+#
+# DELIVERY. The completed run record on this workflow's Actions page is the
+# receipt, and the counts line is copied to the run summary. There is no
+# post-back into any external tracker: that would require an inbound
+# credential this job must not hold. A manual dispatch is never scheduled
+# evidence -- only `event: schedule` runs count.
+#
+# ROLLBACK. Unset the DISCLOSURE_AUDIT_LIVE repository variable: the live step
+# is skipped and only the offline self-test runs (the harm-free state this
+# workflow lands in). Revert this file to remove the consumer entirely. The
+# prior state is exactly "no scheduled consumer in this repository".
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: disclosure-audit
+  cancel-in-progress: false
+
+jobs:
+  disclosure-audit:
+    name: disclosure-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DISCLOSURE_AUDIT_PRIVATE_PROBE: ${{ vars.DISCLOSURE_AUDIT_PRIVATE_PROBE }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Offline self-test (classifier, token placement, pins)
+        run: ./verification/case_092cd51d-public-fork-disclosure-audit.sh --self-test
+
+      - name: Live disclosure audit
+        if: vars.DISCLOSURE_AUDIT_LIVE == '1'
+        run: |
+          set -uo pipefail
+          ./verification/case_092cd51d-public-fork-disclosure-audit.sh 2>&1 | tee "$RUNNER_TEMP/live-audit.log"
+          rc=${PIPESTATUS[0]}
+          {
+            echo "## Disclosure audit (exit $rc)"
+            grep -E '^== .* declared/clean' "$RUNNER_TEMP/live-audit.log" || echo 'no counts line -- audit could not evaluate (exit 2) or did not complete'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"

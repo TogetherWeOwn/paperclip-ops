@@ -37,6 +37,7 @@
     "prod-clone rehearsal": 45,
     "schema drift gate": 10,
     "readiness-sweep": 5,
-    "quality-gates": 9
+    "quality-gates": 9,
+    "acceptance": 5
   }
 }

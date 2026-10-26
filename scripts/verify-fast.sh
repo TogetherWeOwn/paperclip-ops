@@ -16,7 +16,7 @@
 #   readiness block reports these from CI.
 #
 # Usage:
-#   scripts/verify-fast.sh [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--no-prepare] [--help]
+#   scripts/verify-fast.sh [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--suite ID ...] [--no-prepare] [--help]
 #   make verify-fast | make verify-fast-parse | make verify-fast-plan
 #
 # Worktree setup: scratch worktrees have no node_modules. The translator
@@ -43,14 +43,35 @@ WANT_LIST=0
 WANT_JSON=0
 WANT_NO_PREPARE=0
 WANT_HELP=0
+SUITE_ARGS=()
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+INVENTORY_FILE="$REPO_ROOT/scripts/verify-fast-inventory.json"
+PLAN_HELPER="$REPO_ROOT/scripts/verify-fast-plan.py"
+
+# Machine refusals must not depend on where --json appears in argv.
+for arg in "$@"; do
+  case "$arg" in --json) WANT_JSON=1 ;; esac
+done
+
+usage_error() {
+  local code="$1" message="$2" next_action="$3"
+  if (( WANT_JSON )); then
+    python3 "$PLAN_HELPER" --error-json "$code" "$message" "$next_action"
+  else
+    echo "verify-fast: $message" >&2
+    usage
+  fi
+  exit 2
+}
 
 usage() {
-  echo "usage: $0 [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--no-prepare] [--help]" >&2
+  echo "usage: $0 [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--suite ID ...] [--no-prepare] [--help]" >&2
 }
 
 print_help() {
   cat <<'HELP'
-usage: verify-fast.sh [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--no-prepare] [--help]
+usage: verify-fast.sh [--parse-only] [--plan|--dry-run [--json]] [--list [--json]] [--suite ID ...] [--no-prepare] [--help]
 
 Fast verification tier. The default run executes the parse gate plus the fast
 suites; --parse-only executes the parse gate only.
@@ -63,6 +84,8 @@ Modes (plan and list modes are read-only; execution modes are not):
   --no-prepare         run without preparing; refuse (exit 3) if prerequisites are missing
 
 Options:
+  --suite ID           select an existing inventory ID (repeatable, read-only modes only)
+                       deduplicated in inventory order, then intersected with --parse-only
   --json               machine-readable output for --plan, --dry-run or --list
   -h, --help           print this help
 
@@ -70,6 +93,8 @@ Examples:
   ./scripts/verify-fast.sh --plan --json
   ./scripts/verify-fast.sh --dry-run
   ./scripts/verify-fast.sh --list
+  ./scripts/verify-fast.sh --plan --json --suite parse-bash --suite verify-fast-plan
+  ./scripts/verify-fast.sh --list --parse-only --suite translator-fixture
   ./scripts/verify-fast.sh --no-prepare
   ./scripts/verify-fast.sh --parse-only
   make verify-fast-plan
@@ -89,28 +114,34 @@ while (($# > 0)); do
     --json) WANT_JSON=1 ;;
     --no-prepare) WANT_NO_PREPARE=1 ;;
     --help|-h) WANT_HELP=1 ;;
+    --suite)
+      if (( $# == 0 )) || [[ -z "${1//[[:space:]]/}" || "$1" == -* ]]; then
+        usage_error missing_suite_id "--suite requires a nonempty inventory ID" \
+          "Use --list to find suite IDs; pass one ID after each --suite."
+      fi
+      SUITE_ARGS+=(--suite "$1"); shift
+      ;;
     *)
-      echo "verify-fast: unknown flag: $arg" >&2
-      usage
-      exit 2
+      usage_error unknown_flag "unknown flag: $arg" "Correct the flags; see --help."
       ;;
   esac
 done
 
+if (( ${#SUITE_ARGS[@]} )) && (( ! WANT_PLAN && ! WANT_LIST )); then
+  usage_error suite_requires_read_only "--suite requires --plan, --dry-run or --list" \
+    "Add a read-only mode, or remove --suite to run the ordinary verification tier."
+fi
 if (( WANT_JSON )) && (( ! WANT_PLAN )) && (( ! WANT_LIST )); then
-  echo "verify-fast: --json requires --plan, --dry-run or --list" >&2
-  usage
-  exit 2
+  usage_error json_requires_read_only "--json requires --plan, --dry-run or --list" \
+    "Add --plan, --dry-run or --list."
 fi
 if (( WANT_PLAN )) && (( WANT_LIST )); then
-  echo "verify-fast: cannot combine --plan/--dry-run with --list (pick one output)" >&2
-  usage
-  exit 2
+  usage_error conflicting_modes "cannot combine --plan/--dry-run with --list (pick one output)" \
+    "Choose --plan/--dry-run or --list, not both."
 fi
 if (( WANT_NO_PREPARE )) && (( WANT_PLAN || WANT_LIST )); then
-  echo "verify-fast: cannot combine --no-prepare with --plan/--dry-run/--list (plan and list modes never prepare)" >&2
-  usage
-  exit 2
+  usage_error conflicting_modes "cannot combine --no-prepare with --plan/--dry-run/--list (plan and list modes never prepare)" \
+    "Remove --no-prepare when inspecting a read-only plan or list."
 fi
 
 if (( WANT_HELP )); then
@@ -121,11 +152,8 @@ if (( WANT_PARSE )); then
   MODE="parse"
 fi
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-INVENTORY_FILE="$REPO_ROOT/scripts/verify-fast-inventory.json"
-PLAN_HELPER="$REPO_ROOT/scripts/verify-fast-plan.py"
 TIER_ARGS=()
 if (( WANT_PARSE )); then
   TIER_ARGS=(--tier parse)
@@ -134,18 +162,18 @@ fi
 # "--list" prints one stable suite id per line from the shared inventory.
 if (( WANT_LIST )); then
   if (( WANT_JSON )); then
-    python3 "$PLAN_HELPER" --inventory "$INVENTORY_FILE" --emit-list-json "${TIER_ARGS[@]}"
+    python3 "$PLAN_HELPER" --inventory "$INVENTORY_FILE" --emit-list-json "${TIER_ARGS[@]}" "${SUITE_ARGS[@]}"
   else
-    python3 "$PLAN_HELPER" --inventory "$INVENTORY_FILE" --emit-list "${TIER_ARGS[@]}"
+    python3 "$PLAN_HELPER" --inventory "$INVENTORY_FILE" --emit-list "${TIER_ARGS[@]}" "${SUITE_ARGS[@]}"
   fi
   exit 0
 fi
 
 if (( WANT_PLAN )); then
   if (( WANT_JSON )); then
-    python3 "$PLAN_HELPER" --inventory "$INVENTORY_FILE" --emit-json "${TIER_ARGS[@]}"
+    python3 "$PLAN_HELPER" --inventory "$INVENTORY_FILE" --emit-json "${TIER_ARGS[@]}" "${SUITE_ARGS[@]}"
   else
-    python3 "$PLAN_HELPER" --inventory "$INVENTORY_FILE" --emit-text "${TIER_ARGS[@]}"
+    python3 "$PLAN_HELPER" --inventory "$INVENTORY_FILE" --emit-text "${TIER_ARGS[@]}" "${SUITE_ARGS[@]}"
   fi
   exit 0
 fi
@@ -361,7 +389,7 @@ python3 -m unittest test_migration_drift_gate || fail "migration drift-gate suit
 python3 -m unittest test_migration_evidence_ax || fail "migration evidence-AX suite failed"
 # Plan/list/no-prepare contract plus the strict inventory-to-execution drift
 # check and the PREPARE-guard check. Offline: stdlib unittest, synthetic stubs.
-python3 -B -m unittest test_verify_fast_plan test_verify_fast_plan_gates test_typescript_readiness_acceptance || fail "verify-fast plan suites failed"
+python3 -B -m unittest test_verify_fast_plan test_verify_fast_plan_gates test_typescript_readiness_acceptance test_verify_fast_suite_selection || fail "verify-fast plan suites failed"
 
 if [[ "$rc" -ne 0 ]]; then
   echo "verify-fast: FAILED"

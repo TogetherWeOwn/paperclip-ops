@@ -196,6 +196,35 @@ parse gate only). To inspect suite scope and prerequisites without running or
 preparing anything, use `make verify-fast-plan` (offline, read-only;
 `scripts/verify-fast.sh --plan --json`).
 
+Select existing inventory IDs with repeatable `--suite ID`, only in `--plan`,
+`--dry-run` or `--list` modes (text or `--json`):
+
+```sh
+./scripts/verify-fast.sh --list
+./scripts/verify-fast.sh --plan --json --suite parse-bash --suite verify-fast-plan
+./scripts/verify-fast.sh --dry-run --suite parse-python
+./scripts/verify-fast.sh --list --json --parse-only --suite translator-fixture
+python3 -B -m unittest test_verify_fast_suite_selection test_verify_fast_plan test_verify_fast_plan_gates
+```
+
+Selection is deduplicated in inventory order **before prerequisite probes**;
+unselected suites are neither probed nor executed. `--parse-only` intersects the
+validated selection: the last example succeeds with `[]`, since that valid ID
+belongs to the fast tier. Empty plans say `0 suites`; empty text lists emit no
+lines. Without `--suite`, existing output and ordinary execution are unchanged.
+
+Unknown/empty/missing IDs, malformed flags, conflicting output modes, and
+selectors in execution modes refuse the whole request with exit 2 before any
+probe or preparation. With `--json` anywhere in argv, refusals emit
+`{"schema_version":1,"error":{"code":"…","message":"…","retryable":false,"next_action":"…"}}`.
+Codes include `unknown_suite_id`, `missing_suite_id`, `unknown_flag`,
+`suite_requires_read_only`, `json_requires_read_only` and `conflicting_modes`.
+A selected missing prerequisite stays in a successful plan with `ready: false`
+and preparation actions; it is never installed. These modes perform no suite
+execution, downloads, network/credential calls, cache cleanup or checkout writes.
+`--no-prepare` remains an execution option, with exit 3 for missing prerequisites;
+selective execution is not supported.
+
 The code-nav suite needs PyYAML. On a clean Linux x86_64 installation, prepare
 an isolated Python 3.12 environment outside the checkout, then run the fast tier
 with that interpreter on `PATH`:

@@ -1121,7 +1121,7 @@ jobs:
         run: |
           # The copied inventory probes PyYAML through child python3 processes.
           export PATH="$(dirname "$STATIC_LABEL_PYTHON"):$PATH"
-          python3 -B -m unittest -v test_verify_fast_plan test_verify_fast_plan_gates test_typescript_readiness_acceptance
+          python3 -B -m unittest -v test_verify_fast_plan test_verify_fast_plan_gates test_typescript_readiness_acceptance test_verify_fast_suite_selection
 
       - name: Syntax check every script
         run: ./scripts/verify-fast.sh --parse-only

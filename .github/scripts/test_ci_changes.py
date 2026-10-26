@@ -441,6 +441,31 @@ class Classify(unittest.TestCase):
                 self.assertFalse(r["full"])
                 self.assertEqual({a for a in cc.AREAS if r[a]}, {"core"})
 
+    def test_ax_template_staged_inputs_wake_core(self):
+        # AX acceptance suites read staged template Markdown as executable
+        # input, so a Markdown-only edit under templates/org-github/ must
+        # wake core instead of skipping as prose. Non-Markdown helpers and
+        # suites latch full (fail-closed, unchanged from base) so no heavy
+        # suite is skipped on a path the classifier never learned.
+        for path in (
+            "templates/org-github/README.md",
+            "templates/org-github/repo-template/AGENTS.md",
+            "templates/org-github/review/AX-DIMENSION.md",
+            "templates/org-github/pull-request-template/AX-BLOCK.md",
+        ):
+            with self.subTest(path=path):
+                r = self.result(path)
+                self.assertFalse(r["full"])
+                self.assertEqual({a for a in cc.AREAS if r[a]}, {"core"})
+        for path in (
+            "templates/org-github/ax-lint/ax_lint.py",
+            "templates/org-github/tests/test_ax_org_template.py",
+        ):
+            with self.subTest(path=path):
+                r = self.result(path)
+                self.assertTrue(r["core"])
+                self.assertTrue(r["full"])
+
     def test_plugin_sources_beyond_the_manifest_stay_out_of_offline(self):
         for path in ("plugins/dispatch/src/worker.ts",
                      "gh-event-capture/src/app.js"):

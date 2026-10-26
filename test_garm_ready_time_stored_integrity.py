@@ -76,7 +76,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from garm_ready_time_baseline import (  # noqa: E402
+from garm_ready_time_baseline import (
     BASELINE_SCHEMA,
     InvalidInput,
     MAX_DURATION_MS,

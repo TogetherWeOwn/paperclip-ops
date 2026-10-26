@@ -32,7 +32,7 @@ clock (`sort_keys`, finite JSON only).
 | --- | --- |
 | `schema_id` | Always `countdown-report.v1`. |
 | `provider` | `claude`, `codex` or `muse`; `readout` is `<provider>_countdown`. |
-| `as_of` | The actual evaluation instant (explicit valid `--now`, kept verbatim including fractional seconds, or the real UTC clock). `null` only when no clock could be established (invalid `--now`, or a usage failure before a clock). Never the fixture's `observedAt`. |
+| `as_of` | The actual evaluation instant (explicit valid `--now`, normalized to UTC as `YYYY-MM-DDTHH:MM:SS[.ffffff]Z` with trailing fractional zeros removed, or the real UTC clock). `null` only when no clock could be established (invalid `--now`, or a usage failure before a clock). Never the fixture's `observedAt`. |
 | `outcome` | `complete`, `incomplete` or `unmeasurable` (below). |
 | `check_complete` | True iff `complete`. |
 | `counts.input` / `evaluated` / `invalid` | Source records, records checked, and **distinct invalid records** (not diagnostic count — one record can carry a field diagnostic plus `duplicate_lane`). All three are `null` when parsing or usage prevents evaluation; a known-empty fixture is `0/0/0`. |

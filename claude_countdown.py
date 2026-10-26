@@ -309,7 +309,7 @@ def _load_report_fixture(path):
 
     try:
         doc = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
-    except (json.JSONDecodeError, ValueError):
+    except (ValueError, RecursionError):
         return "fixture_json", None
     if not isinstance(doc, dict) or not isinstance(doc.get("lanes"), list):
         return "fixture_shape", None

@@ -82,6 +82,10 @@ base-policy trust model and reusable CI interface.
 For offline CI-wiring checks, see the [orphan-suite CLI contract](docs/orphan-suites.md),
 including opt-in JSON outcomes, incomplete-check diagnostics and exit boundaries.
 
+For the required-check producer audit, see the
+[required-check audit outcomes](docs/ci-required-checks.md), including the
+versioned JSON envelope for unmeasurable offline inputs and exit boundaries.
+
 For native skill versions, reusable examples and isolated pinned-version tests,
 see the [versioned skill fixture procedure](docs/versioned-skill-fixtures.md).
 It adds no runtime registry, host automation or skill-assignment authority.

@@ -390,7 +390,7 @@
     },
     {
       "name": "required checks all have a producing job",
-      "definition_sha256": "8bd1a7d11d818588f4405eab15260f3b256d1bdcdb8701448336e4b8ec1ceeba",
+      "definition_sha256": "8b118550323c3fef14d7c64e4853f17c79482575c1790a26ed849e7e1454c3c4",
       "id": "required checks all have a producing job:1"
     },
     {

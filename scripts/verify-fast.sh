@@ -305,7 +305,7 @@ python3 -m unittest test_case_da79e241_fleet_run_stall || fail "fleet-run-stall 
 python3 -m unittest test_case_dcf07273_assignment_bundle || fail "assignment host-source suite failed"
 python3 -m unittest test_orphan_suites || fail "orphan-suite ratchet fixtures failed"
 python3 -m unittest test_pr3_stop_guard_landing || fail "stop-guard landing suite failed"
-python3 -m unittest test_warn_first_inventory || fail "warn-first inventory suite failed"
+python3 -m unittest test_warn_first_inventory test_warn_inventory_decoding_acceptance || fail "warn-first inventory suite failed"
 ./ops/case_34c2c99f/test_regen_dry_run_receipt.sh || fail "regen dry-run receipt suite failed"
 node --test plugins/pr-tracker/test/collect-rest.test.mjs plugins/pr-tracker/test/poll-prs.test.mjs plugins/pr-tracker/test/setup.test.mjs plugins/pr-tracker/test/upstream-watcher.test.mjs plugins/pr-tracker/test/view-model.test.mjs \
   || fail "pr-tracker suite failed"

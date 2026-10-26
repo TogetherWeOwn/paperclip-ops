@@ -1173,7 +1173,7 @@ jobs:
       # in the core area next to the other contract gates.
       - name: warn-first inventory suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: python3 -m unittest -v test_warn_first_inventory
+        run: python3 -m unittest -v test_warn_first_inventory test_warn_inventory_decoding_acceptance
 
       # Regen dry-run receipt: offline tests for the receipt writer that
       # fail the three defects of the refused queued wrapper (missing

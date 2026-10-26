@@ -35,6 +35,19 @@ tree, skipping `.git` and hidden dirs. Unreadable paths are listed as
 skipped and suppress all flip recommendations; the CLI exits nonzero for
 an incomplete scan.
 
+Encoding / incomplete-scan contract: Python, shell and workflow source
+is decoded as strict UTF-8 only. Encoding cookies do not opt into legacy
+or unknown codecs, and there is no guessing, replacement or ignore
+fallback; valid Unicode, including a literal U+FFFD, is ordinary source.
+A binary, unreadable or undecodable in-scope file is skipped whole (it
+contributes only its sorted skipped path, never hits), so counts from
+decoded siblings are partial evidence: flip recommendations are empty
+and the CLI exits 2 in both text and JSON modes. Skipped diagnostics
+carry fixed text and paths only — never rejected bytes, source snippets
+or arbitrary exception text. The agent-runnable check is
+`python3 -B -m unittest -v test_warn_first_inventory
+test_warn_inventory_decoding_acceptance`.
+
 Test exclusion matches the gates: basenames starting with `test_` or
 ending with `_test.py`, or any path part named `test`/`tests`.
 
@@ -297,9 +310,11 @@ def list_files(root, include_hidden=False, skipped=None):
             text=True,
             timeout=120,
         )
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, subprocess.SubprocessError):
         proc = None
-        git_error = str(exc)
+        # Fixed text, never str(exc): skipped diagnostics must not carry
+        # arbitrary exception text into the report.
+        git_error = "git unavailable"
     else:
         git_error = f"git ls-files exited {proc.returncode}"
 
@@ -331,7 +346,7 @@ def list_files(root, include_hidden=False, skipped=None):
     def record_walk_error(error):
         if skipped is not None:
             path = getattr(error, "filename", None) or str(root)
-            skipped.append(f"{path} ({error.strerror or 'walk failed'})")
+            skipped.append(f"{path} (walk failed)")
 
     for dirpath, dirnames, filenames in os.walk(
         root, onerror=record_walk_error
@@ -350,10 +365,22 @@ def list_files(root, include_hidden=False, skipped=None):
 
 
 def read_text(root, rel):
+    """Return `rel` decoded as strict UTF-8, or None when it cannot be.
+
+    None means the caller records `rel` as skipped (incomplete evidence):
+    binary (NUL-probed) and undecodable source take that path, so no
+    lossy decoding ever fabricates or hides rule tokens. `OSError` from
+    the read propagates for the caller's same skipped handling. The
+    decode error is deliberately discarded: its text can echo rejected
+    bytes, and skipped entries carry paths only.
+    """
     raw = (Path(root) / rel).read_bytes()
     if b"\x00" in raw[:8192]:
         return None
-    return raw.decode("utf-8", errors="replace")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def balanced_call(text, start):
@@ -915,7 +942,7 @@ def scan_tree(root, include_hidden=False):
             continue
         try:
             text = read_text(root, rel)
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             text = None
         if text is None:
             counts.skipped.append(rel)

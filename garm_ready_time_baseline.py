@@ -89,6 +89,7 @@ from datetime import datetime, timezone
 
 SAMPLES_SCHEMA = "garm-ready-time-samples.v1"
 BASELINE_SCHEMA = "garm-ready-time-baseline.v1"
+DEADLINE_SUMMARY_SCHEMA = "garm-ready-deadline.v1"
 MAX_BYTES = 1024 * 1024
 OPERATION = "startup"
 MIN_SAMPLES = 10
@@ -400,6 +401,39 @@ def cmd_record(args):
     return 0
 
 
+def _deadline_summary(verdict, base, parsed):
+    """Completed-sample deadline diagnostic for an opted-in `check`.
+
+    Counts only; never a gate. `evaluated` exactly when `check` reached
+    an ok/breach verdict on the fresh samples; every unknown verdict is
+    `not_evaluated` with unavailable (null) measurements, never a quiet
+    zero. `base` is shape-valid here (evaluate validated it) or None
+    when no readable baseline was loaded.
+    """
+    if verdict == "unknown":
+        return {
+            "schema": DEADLINE_SUMMARY_SCHEMA,
+            "evaluation_state": "not_evaluated",
+            "ready_timeout_ms": (
+                base["thresholds"]["ready_timeout_ms"]
+                if base is not None else None),
+            "evaluated_sample_count": 0,
+            "exceedance_count": None,
+            "max_excess_ms": None,
+        }
+    timeout = base["thresholds"]["ready_timeout_ms"]
+    excesses = [duration - timeout for _, duration in parsed
+                if duration > timeout]
+    return {
+        "schema": DEADLINE_SUMMARY_SCHEMA,
+        "evaluation_state": "evaluated",
+        "ready_timeout_ms": timeout,
+        "evaluated_sample_count": len(parsed),
+        "exceedance_count": len(excesses),
+        "max_excess_ms": max(excesses) if excesses else 0,
+    }
+
+
 def cmd_check(args):
     samples_doc = _read_json(args.samples, "samples")
     parsed = parse_samples(samples_doc)
@@ -408,11 +442,17 @@ def cmd_check(args):
             raw = handle.read(MAX_BYTES + 1)
         base = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeDecodeError, ValueError):
-        print(json.dumps({"verdict": "unknown",
-                          "reason": "baseline unreadable"}))
+        payload = {"verdict": "unknown", "reason": "baseline unreadable"}
+        if getattr(args, "deadline_summary", False):
+            payload["deadline_summary"] = _deadline_summary(
+                "unknown", None, parsed)
+        print(json.dumps(payload))
         return 3
     verdict, detail = evaluate(base, parsed)
-    print(json.dumps({"verdict": verdict, "detail": detail}, sort_keys=True))
+    payload = {"verdict": verdict, "detail": detail}
+    if getattr(args, "deadline_summary", False):
+        payload["deadline_summary"] = _deadline_summary(verdict, base, parsed)
+    print(json.dumps(payload, sort_keys=True))
     if verdict == "breach":
         return 2
     if verdict == "unknown":
@@ -441,6 +481,13 @@ def build_parser():
     check_p = sub.add_parser("check", help="evaluate samples vs baseline")
     check_p.add_argument("--samples", required=True)
     check_p.add_argument("--baseline", required=True)
+    check_p.add_argument(
+        "--deadline-summary", action="store_true",
+        help="also emit a deadline_summary (schema garm-ready-deadline.v1) "
+             "counting completed fresh samples strictly greater than the "
+             "baseline ready_timeout_ms; diagnostic only, never changes "
+             "the verdict or exit code, does not detect unfinished "
+             "instances, prove live health or authorize rollout")
     check_p.set_defaults(func=cmd_check)
     return parser
 

@@ -27,9 +27,9 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: pr-lint-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+# Run every event independently: bot body edits must not cancel required checks
+# on the same head. Even cancel-in-progress: false replaces older pending runs.
+# Keep edited events so title/body changes are still linted.
 
 env:
   REQUIRE_CARD_REF: "true"

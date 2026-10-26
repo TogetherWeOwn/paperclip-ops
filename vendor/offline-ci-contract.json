@@ -1860,7 +1860,7 @@
     },
     {
       "name": "explicit workflow job permissions gate",
-      "definition_sha256": "8ad71aa74af77d948d6751d109f0c4dc02ad835b4987f40d4f4dd10403212240",
+      "definition_sha256": "3fea71af7b79b15081a92e39f01eff6c316c90ad1999664903a27e76dc891242",
       "id": "explicit workflow job permissions gate:1"
     },
     {

@@ -1362,8 +1362,14 @@ def _path_identity(path: str) -> tuple[str, tuple[int, int] | None]:
     canonical spellings legitimately differ. A simply-absent path has no
     identity yet and is judged by canonical spelling alone; any other
     determination failure raises so the caller can fail closed.
+
+    ``realpath`` must see the original spelling: pre-collapsing it with
+    ``abspath``/``normpath`` would resolve ``..`` lexically before any
+    symlink component, so ``linkdir/../new.json`` would be judged as
+    sitting beside ``linkdir`` when a write actually lands in the link
+    target's parent.
     """
-    canonical = os.path.realpath(os.path.abspath(path))
+    canonical = os.path.realpath(path)
     try:
         info = os.stat(path)
     except (FileNotFoundError, NotADirectoryError):

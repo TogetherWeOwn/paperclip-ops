@@ -653,7 +653,10 @@ def _read_snapshot(path, repo):
     except (OSError, UnicodeError, ValueError) as exc:
         raise LedgerUnavailable('snapshot cannot be read') from exc
     digest = hashlib.sha256(content).hexdigest()
-    repo_rows = validate_report_rows(read_ledger(Path(path), text=text), repo)
+    try:
+        repo_rows = validate_report_rows(read_ledger(Path(path), text=text), repo)
+    except (ValueError, RecursionError) as exc:
+        raise LedgerUnavailable('snapshot cannot be parsed') from exc
     return digest, {(row['job'], row['test']): row for row in repo_rows}
 
 

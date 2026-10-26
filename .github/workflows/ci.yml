@@ -1065,6 +1065,15 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_shell_subst_guard.sh
 
+      # Shell-substitution JSON acceptance: private structured verdicts for
+      # check --json (schema shell-substitution.v1, deterministic envelope,
+      # no supplied-text leakage, input_error codes, JSON help). Hermetic
+      # stdlib unittest, same gating as the detector suite so a machine-mode
+      # regression would merge green without it.
+      - name: shell-substitution JSON acceptance
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest -v test_shell_substitution_json_acceptance
+
       - name: deploy-window wrapper and pin mutation suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: |

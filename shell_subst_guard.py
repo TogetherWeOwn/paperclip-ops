@@ -138,17 +138,20 @@ Offline: reads one string or file. No network, no credential, no execution of
 the scanned command. Exit 0 clean - 2 usage error - 3 finding refused.
 
 MACHINE MODE. `check --json` with one of `--command`/`--file`/`--stdin`
-emits exactly one deterministic JSON object on stdout with empty stderr,
-on every exit (0/2/3). Schema `shell-substitution.v1`:
+emits exactly one deterministic JSON object on available stdout with empty
+stderr, on every exit (0/2/3). With stdout closed, only the exit status is
+available; closed stdin is an `input-unreadable` error. Schema
+`shell-substitution.v1`:
 `{schema, outcome: clean|findings|input_error, input_kind:
 command|file|stdin|null, finding_count, findings: [{code}], error}`.
 Findings carry only the stable rule code (ordered, deduplicated like the
 text mode); no excerpts, offsets, command text, argv or file bytes appear
 in either stream. Errors are generic `{code, message, retryable: false,
 next_action}` with `invalid-arguments`/`input-unreadable`/`invalid-utf8`.
-`--json --help` adds `{usage, examples}` to a clean envelope. Legacy text
-keeps its diagnostic excerpts by design; machine mode is private checker
-output, not a general redactor or credential boundary.
+`--json --help` adds `{usage, examples}` to a clean envelope. Argparse's
+unambiguous option abbreviations retain the same output mode, including on
+errors and help. Legacy text keeps its diagnostic excerpts by design; machine
+mode is private checker output, not a general redactor or credential boundary.
 """
 
 from __future__ import annotations
@@ -196,8 +199,9 @@ def _json_envelope(input_kind: str | None, findings: list[dict],
 
 
 def _emit_json(obj: dict) -> None:
-    sys.stdout.write(json.dumps(obj, sort_keys=True,
-                                separators=(",", ":")) + "\n")
+    if sys.stdout is not None:
+        sys.stdout.write(json.dumps(obj, sort_keys=True,
+                                    separators=(",", ":")) + "\n")
 
 
 def _json_input_error(input_kind: str | None, code: str, message: str,
@@ -211,6 +215,15 @@ class _GuardParser(argparse.ArgumentParser):
         super().__init__(*args, **kwargs)
         self._json_mode = json_mode
 
+    def print_help(self, file=None) -> None:
+        if self._json_mode:
+            obj = _json_envelope(None, [], None)
+            obj["help"] = {"usage": _JSON_USAGE,
+                           "examples": list(_JSON_EXAMPLES)}
+            _emit_json(obj)
+            return
+        super().print_help(file)
+
     def error(self, message: str) -> None:
         if self._json_mode:
             _emit_json(_json_input_error(None, "invalid-arguments",
@@ -221,6 +234,8 @@ class _GuardParser(argparse.ArgumentParser):
 
 
 def _read_stdin_text() -> str:
+    if sys.stdin is None:
+        raise OSError("Input stream is unavailable")
     buf = getattr(sys.stdin, "buffer", None)
     if buf is not None:
         data = buf.read()
@@ -1425,18 +1440,15 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns 0 when clean, 2 on usage errors (including unreadable or
     undecodable input), and 3 when a finding refuses the command.
-    With --json, stdout holds exactly one deterministic JSON object and
-    stderr stays empty on every exit; errors use generic codes without
-    echoing supplied text, argv or paths.
+    With --json, available stdout holds exactly one deterministic JSON object
+    and stderr stays empty on every exit; errors use generic codes without
+    echoing supplied text, argv or paths. Closed stdout preserves the exit code.
     """
     raw = list(sys.argv[1:] if argv is None else argv)
-    json_mode = "--json" in raw
-    if json_mode and ("--help" in raw or "-h" in raw):
-        obj = _json_envelope(None, [], None)
-        obj["help"] = {"usage": _JSON_USAGE,
-                       "examples": list(_JSON_EXAMPLES)}
-        _emit_json(obj)
-        return EXIT_OK
+    # Match argparse's unambiguous --json prefixes, including invalid explicit
+    # values, so parse failures cannot fall back to excerpt-bearing text.
+    json_mode = any(arg.partition("=")[0] in ("--j", "--js", "--jso", "--json")
+                    for arg in raw)
     parser = _GuardParser(
         prog="shell_subst_guard.py",
         description="Refuse an unbounded `yes` in shell command substitution.",

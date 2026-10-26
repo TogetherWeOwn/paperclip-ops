@@ -349,7 +349,10 @@
     "workspace sync-back signal regression suite:1",
     "trace correlator suite:1",
     "Dispatch sweep failure visibility acceptance:1",
-    "native runner coverage classifier suite:1"
+    "native runner coverage classifier suite:1",
+    "AX acceptance - test_ax_lint_branches.py:1",
+    "AX acceptance - test_ax_lint_evidence.py:1",
+    "AX acceptance - test_ax_org_template.py:1"
   ],
   "retained": [
     {
@@ -1976,6 +1979,21 @@
       "name": "native runner coverage classifier suite",
       "definition_sha256": "c688f1fbbcb023b3afd8dd80c8821306741f9060c3b1185833d6b0dcf68d142b",
       "id": "native runner coverage classifier suite:1"
+    },
+    {
+      "name": "AX acceptance - test_ax_lint_branches.py",
+      "definition_sha256": "2748f2cd234dddb851f21eb3ba6cedf4b1cb3b7fc397d5ebb7238c118380a5ce",
+      "id": "AX acceptance - test_ax_lint_branches.py:1"
+    },
+    {
+      "name": "AX acceptance - test_ax_lint_evidence.py",
+      "definition_sha256": "494f95e2457198e361ebda38b19c88431cdd80b976cec9a22900fafb66dec79a",
+      "id": "AX acceptance - test_ax_lint_evidence.py:1"
+    },
+    {
+      "name": "AX acceptance - test_ax_org_template.py",
+      "definition_sha256": "8b21a5118ce1c340e4a39b7cdc57d9d62296540ec3668dc510f937061ac1b571",
+      "id": "AX acceptance - test_ax_org_template.py:1"
     }
   ],
   "removed": [

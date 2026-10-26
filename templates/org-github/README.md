@@ -76,6 +76,46 @@ No host automation or skill-assignment change is part of adoption.
 > payloads are never copied as files; a human org admin applies them with
 > the runbook (ruleset writes are 403 for the GitHub App).
 
+## AX acceptance CI and recovery
+
+This repository's GitHub-hosted `suites` job runs these existing suites as
+separate `AX acceptance - <filename>` steps, gated on `full` or `core` changes:
+
+- `templates/org-github/tests/test_ax_lint_branches.py`
+- `templates/org-github/tests/test_ax_lint_evidence.py`
+- `templates/org-github/tests/test_ax_org_template.py`
+
+Template/helper changes select `core`; workflow changes select `full`. The
+steps reuse the hash-pinned PyYAML installation from
+`scripts/static-label-guard-requirements.txt`. No credentials or live service
+calls are needed (HTTP behavior is exercised only against a disposable loopback
+fixture). No consumer installation, lint enforcement change, scheduled job or
+new branch-protection check is implied.
+
+To reproduce a failing step non-interactively from the repository root, use
+Python 3.12 on Linux x86_64 (the requirements file pins that wheel). Prepare
+the same dependency and run its exact suite command (or all three below):
+
+```bash
+set -euo pipefail
+work="$(mktemp -d)"
+python3.12 -m venv "$work/venv"
+export PATH="$work/venv/bin:$PATH"
+python3 -m pip install --disable-pip-version-check \
+  --only-binary=:all: --no-deps --require-hashes \
+  --target "$work/deps" -r scripts/static-label-guard-requirements.txt
+export PYTHONPATH="$work/deps"
+python3 -B -m unittest discover -v -s templates/org-github/tests -p 'test_ax_lint_branches.py'
+python3 -B -m unittest discover -v -s templates/org-github/tests -p 'test_ax_lint_evidence.py'
+python3 -B -m unittest discover -v -s templates/org-github/tests -p 'test_ax_org_template.py'
+```
+
+Each command preserves unittest's non-TTY output and exit status (0 passes;
+nonzero fails), and its filename identifies the failed CI step. Fix the
+implementation or configuration, not the immutable acceptance tests; rerun the
+same command. The Paperclip-window suite and unrelated template suites remain
+outside this lane.
+
 ## Security-rule fixture verification
 
 `tests/test_security_rules.sh` runs the staged rules with Semgrep (verified

@@ -914,6 +914,38 @@ jobs:
           PYTHONPATH: ${{ runner.temp }}/static-label-guard-deps
         run: bash ./test_ci_no_new_static_labels.sh
 
+      # AX/template acceptance stays offline and uses the hash-pinned PyYAML
+      # installed above. Separate steps preserve the exact failing suite ID.
+      - name: AX acceptance - test_ax_lint_branches.py
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        env:
+          STATIC_LABEL_PYTHON: ${{ steps.static-label-python.outputs.python-path || '/usr/bin/python3' }}
+          PYTHONPATH: ${{ runner.temp }}/static-label-guard-deps
+        run: |
+          PATH="$(dirname "$STATIC_LABEL_PYTHON"):$PATH"
+          export PATH
+          python3 -B -m unittest discover -v -s templates/org-github/tests -p 'test_ax_lint_branches.py'
+
+      - name: AX acceptance - test_ax_lint_evidence.py
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        env:
+          STATIC_LABEL_PYTHON: ${{ steps.static-label-python.outputs.python-path || '/usr/bin/python3' }}
+          PYTHONPATH: ${{ runner.temp }}/static-label-guard-deps
+        run: |
+          PATH="$(dirname "$STATIC_LABEL_PYTHON"):$PATH"
+          export PATH
+          python3 -B -m unittest discover -v -s templates/org-github/tests -p 'test_ax_lint_evidence.py'
+
+      - name: AX acceptance - test_ax_org_template.py
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        env:
+          STATIC_LABEL_PYTHON: ${{ steps.static-label-python.outputs.python-path || '/usr/bin/python3' }}
+          PYTHONPATH: ${{ runner.temp }}/static-label-guard-deps
+        run: |
+          PATH="$(dirname "$STATIC_LABEL_PYTHON"):$PATH"
+          export PATH
+          python3 -B -m unittest discover -v -s templates/org-github/tests -p 'test_ax_org_template.py'
+
       # case_d8c3515a. Fail fast on a full host instead of dying mid-suite. On
       # 2026-09-17 (case_231b8224) the runner host disk filled and jobs died with
       # `No space left on device` deep inside the longest suites — the

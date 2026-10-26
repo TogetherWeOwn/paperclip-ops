@@ -184,12 +184,18 @@ _MSG_BAD_UTF8 = "Input is not valid UTF-8. Provide UTF-8 encoded input."
 
 
 def _json_error(code: str, message: str, next_action: str) -> dict:
+    """One generic machine-mode error: a stable code, a message that never
+    quotes supplied input, and the corrective action. Never retryable: the
+    same input would fail the same way."""
     return {"code": code, "message": message, "retryable": False,
             "next_action": next_action}
 
 
 def _json_envelope(input_kind: str | None, findings: list[dict],
                    error: dict | None) -> dict:
+    """The single `shell-substitution.v1` verdict object: outcome is
+    `input_error` when `error` is set, else `findings` or `clean` by count.
+    Findings carry rule codes only — never excerpts, paths or offsets."""
     count = len(findings)
     return {"schema": SCHEMA_ID,
             "outcome": "input_error" if error
@@ -199,6 +205,9 @@ def _json_envelope(input_kind: str | None, findings: list[dict],
 
 
 def _emit_json(obj: dict) -> None:
+    """Write the envelope as one deterministic compact line on stdout.
+    An unavailable stdout (closed before startup) emits nothing instead of
+    raising, so the caller can still return the verdict exit code."""
     if sys.stdout is not None:
         sys.stdout.write(json.dumps(obj, sort_keys=True,
                                     separators=(",", ":")) + "\n")
@@ -206,16 +215,24 @@ def _emit_json(obj: dict) -> None:
 
 def _json_input_error(input_kind: str | None, code: str, message: str,
                       next_action: str) -> dict:
+    """An `input_error` envelope with no findings for one input failure."""
     return _json_envelope(input_kind, [],
                           _json_error(code, message, next_action))
 
 
 class _GuardParser(argparse.ArgumentParser):
+    """ArgumentParser whose help and error exits stay in machine mode when
+    JSON was requested, so argparse never prints usage prose echoing argv.
+    Text mode keeps the stock argparse behaviour byte-for-byte."""
+
     def __init__(self, *args, json_mode: bool = False, **kwargs) -> None:
+        """Record whether this parse must answer with JSON envelopes."""
         super().__init__(*args, **kwargs)
         self._json_mode = json_mode
 
     def print_help(self, file=None) -> None:
+        """JSON mode: a clean envelope carrying usage and examples.
+        Text mode: the standard argparse help text."""
         if self._json_mode:
             obj = _json_envelope(None, [], None)
             obj["help"] = {"usage": _JSON_USAGE,
@@ -225,6 +242,9 @@ class _GuardParser(argparse.ArgumentParser):
         super().print_help(file)
 
     def error(self, message: str) -> None:
+        """JSON mode: emit a generic `invalid-arguments` envelope (argparse's
+        message quotes the offending argv, so it is discarded) and exit 2.
+        Text mode: the standard argparse error and usage exit."""
         if self._json_mode:
             _emit_json(_json_input_error(None, "invalid-arguments",
                                          _MSG_INVALID_ARGS,
@@ -234,6 +254,9 @@ class _GuardParser(argparse.ArgumentParser):
 
 
 def _read_stdin_text() -> str:
+    """Read stdin once and decode it as strict UTF-8. An unavailable stream
+    raises OSError and undecodable bytes raise UnicodeDecodeError, so the
+    caller can tell unreadable input from invalid UTF-8."""
     if sys.stdin is None:
         raise OSError("Input stream is unavailable")
     buf = getattr(sys.stdin, "buffer", None)

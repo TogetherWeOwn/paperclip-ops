@@ -90,6 +90,7 @@
     {"id": "staged-drift", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "test_staged_drift.py"]},
     {"id": "migration-timeout-preamble", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_timeout_preamble.sh"]},
     {"id": "migration-squawk", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_squawk.sh"]},
+    {"id": "migration-squawk-json", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_squawk_json.sh"]},
     {"id": "migration-rehearsal", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_rehearsal.sh"]},
     {"id": "migration-drift-gate", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_migration_drift_gate"]},
     {"id": "migration-evidence-ax", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_migration_evidence_ax"]},

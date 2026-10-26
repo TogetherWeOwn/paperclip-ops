@@ -38,6 +38,8 @@ const REASON_ACTION = {
   CONTENT_NOT_SCANNED: "PRESERVE_UNKNOWN_AND_REPORT",
   COVERAGE_INCOMPLETE: "USE_AUTHORIZED_NATIVE_SURFACE",
   INVALID_POLICY: "PRESERVE_UNKNOWN_AND_REPORT",
+  INVALID_INPUT: "CORRECT_SUPPLIED_METADATA",
+  INVALID_OBSERVATION: "CORRECT_SUPPLIED_METADATA",
   COMPANY_MISMATCH: "CORRECT_SUPPLIED_METADATA",
   AGENT_MISMATCH: "CORRECT_SUPPLIED_METADATA",
   ADAPTER_MISMATCH: "CORRECT_SUPPLIED_METADATA",
@@ -181,9 +183,16 @@ const CASES = [
   { name: "missing session join", mutate(x) { delete x.run.sessionId; }, expected: stopped("MISSING_SESSION_JOIN", "UNKNOWN") },
   { name: "missing receipt binding", mutate(x) { delete x.observation.binding; }, expected: stopped("MISSING_RECEIPT_BINDING", "UNKNOWN") },
   { name: "unsupported evidence basis", pureOnly: true, mutate(x) { x.observation.basis = "measured"; }, expected: stopped("UNSUPPORTED_EVIDENCE_BASIS", "UNKNOWN") },
+  { name: "invalid input: null", rawInput: null, expected: stopped("INVALID_INPUT") },
+  { name: "invalid input: string", rawInput: "not-an-object", expected: stopped("INVALID_INPUT") },
+  { name: "invalid input: array", rawInput: ["not", "an", "object"], expected: stopped("INVALID_INPUT") },
+  { name: "invalid observation: null", mutate(x) { x.observation = null; }, expected: stopped("INVALID_OBSERVATION", "UNKNOWN") },
+  { name: "invalid observation: string", mutate(x) { x.observation = "reported"; }, expected: stopped("INVALID_OBSERVATION", "UNKNOWN") },
+  { name: "invalid observation: array", mutate(x) { x.observation = ["reported"]; }, expected: stopped("INVALID_OBSERVATION", "UNKNOWN") },
 ];
 
 function inputFor(scenario) {
+  if (Object.hasOwn(scenario, "rawInput")) return structuredClone(scenario.rawInput);
   const input = fixture();
   scenario.mutate(input);
   return input;
@@ -336,6 +345,34 @@ for (const scenario of FAILURES) {
     contract(responseData(await handler(fixture(), scenario.runCtx)), scenario.expected.reasonCodes);
   });
 }
+
+test("versioned contract: classifier and worker refuse remaining non-object input shapes without echoing them", async (t) => {
+  const { handler } = await tool(t);
+  for (const raw of [undefined, 42, true, SENTINEL]) {
+    const pure = classifyCoverage(raw);
+    assert.deepEqual(legacy(pure), stopped("INVALID_INPUT"));
+    contract(pure, [...BASE_REASONS, "INVALID_INPUT"]);
+    const response = await handler(raw, { companyId: COMPANY });
+    assert.equal(JSON.stringify(response).includes(SENTINEL), false, "malformed input is never interpolated into advice");
+    const result = responseData(response);
+    assert.deepEqual(legacy(result), stopped("INVALID_INPUT"));
+    contract(result, [...BASE_REASONS, "INVALID_INPUT"]);
+  }
+});
+
+test("versioned contract: classifier and worker preserve UNKNOWN for remaining non-object observation shapes", async (t) => {
+  const { handler } = await tool(t);
+  for (const observation of [42, true]) {
+    const input = fixture();
+    input.observation = observation;
+    const pure = classifyCoverage(input);
+    assert.deepEqual(legacy(pure), stopped("INVALID_OBSERVATION", "UNKNOWN"));
+    contract(pure, [...BASE_REASONS, "INVALID_OBSERVATION"]);
+    const result = responseData(await handler(input, { companyId: COMPANY }));
+    assert.deepEqual(legacy(result), stopped("INVALID_OBSERVATION", "UNKNOWN"));
+    contract(result, [...BASE_REASONS, "INVALID_OBSERVATION"]);
+  }
+});
 
 test("published schema mechanically describes the exact result shape and all reason/action enums", async () => {
   const { RESULT_SCHEMA, REMEDIATION_CATALOGUE } = await publishedContract();

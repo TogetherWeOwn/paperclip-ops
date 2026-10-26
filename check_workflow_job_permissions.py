@@ -240,32 +240,35 @@ def _report(verdict, checked, unmeasurable, findings, errors):
 
 
 def _parse_args(args):
-    """(paths, json_mode, unsupported): separate known flags from file paths.
+    """(paths, json_mode, unsupported, help_requested): split flags from paths.
 
     `--json` may appear anywhere; any other `-`-prefixed argument is a
-    rejected flag, never a path. `--` ends flag parsing.
+    rejected flag, never a path. `--` ends flag parsing, so a dash-named
+    file after it (including one named `--help`) is a path.
     """
-    paths, json_mode, unsupported = [], False, None
+    paths, json_mode, unsupported, help_requested = [], False, None, False
     flags_open = True
     for arg in args:
         text = os.fspath(arg)
         if flags_open and text == "--":
             flags_open = False
+        elif flags_open and text in ("-h", "--help"):
+            help_requested = True
         elif flags_open and text == "--json":
             json_mode = True
         elif flags_open and text.startswith("-") and text != "-":
             unsupported = unsupported or text
         else:
             paths.append(text)
-    return paths, json_mode, unsupported
+    return paths, json_mode, unsupported, help_requested
 
 
 def main(argv=None):
     args = list(argv[1:] if argv is not None else sys.argv[1:])
-    if "-h" in args or "--help" in args:
+    paths, json_mode, unsupported, help_requested = _parse_args(args)
+    if help_requested:
         print(USAGE, end="")
         return 0
-    paths, json_mode, unsupported = _parse_args(args)
 
     def emit(exit_code, report):
         if json_mode:

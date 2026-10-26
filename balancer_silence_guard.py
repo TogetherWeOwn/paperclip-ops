@@ -36,8 +36,10 @@ instead of the prose above; exit codes and stderr notes are unchanged,
 and text output without the flag is byte-identical. The closed envelope
 keys are: schema_version (int), tool, verdict
 (fresh|stale|retired|unmeasurable), producer, now (ISO instant, or null
-only when --now itself is unparseable), threshold_min, window_h, age_min
-(null when unmeasurable), last_row (null, or {at, model, reason}),
+only when --now itself is unparseable), threshold_min, window_h (each
+echoes its flag, or null when that value is non-finite, which JSON
+cannot represent), age_min (null when unmeasurable), last_row (null, or
+{at, model, reason}),
 state ({summary}, the same text the prose mode prints), gaps (bounded
 to GAP_CAP=10 in chronological order; each {start, end, duration_min,
 left {model, reason}, right {model, reason}}), gaps_truncated (count
@@ -67,6 +69,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -219,6 +222,14 @@ def _retirement_not_consulted():
             "detail": "not consulted (only checked when stale)"}
 
 
+def _finite_or_none(value):
+    # JSON has no NaN/Infinity: a non-finite flag echo becomes null so
+    # stdout stays one strict JSON document even for `nan`/`inf` input.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if math.isfinite(value) else None
+
+
 def _envelope(args, verdict, now, state_summary, age_min=None,
               last_row=None, gaps=(), retirement=None, error=None,
               skipped=0):
@@ -229,8 +240,8 @@ def _envelope(args, verdict, now, state_summary, age_min=None,
         "verdict": verdict,
         "producer": PRODUCER_ID,
         "now": now.isoformat() if now is not None else None,
-        "threshold_min": args.max_age_min,
-        "window_h": args.window_h,
+        "threshold_min": _finite_or_none(args.max_age_min),
+        "window_h": _finite_or_none(args.window_h),
         "age_min": age_min,
         "last_row": last_row,
         "state": {"summary": state_summary},
@@ -252,7 +263,9 @@ def _envelope(args, verdict, now, state_summary, age_min=None,
 def _emit_json(envelope, code):
     # Stdout is exactly one JSON document plus one trailing newline:
     # sorted keys and compact separators keep bytes deterministic.
-    print(json.dumps(envelope, sort_keys=True, separators=(",", ":")))
+    # allow_nan=False fails loud if a non-finite value ever leaks in.
+    print(json.dumps(envelope, sort_keys=True, separators=(",", ":"),
+                     allow_nan=False))
     return code
 
 
@@ -312,7 +325,9 @@ def parse_args(argv):
                "\"gaps\": [], \"gaps_truncated\": 0, \"retirement\": "
                "{\"consulted\": false, \"accepted\": false, \"detail\": "
                "\"not consulted (only checked when stale)\"}, \"error\": "
-               "null, \"skipped_lines\": 0}")
+               "null, \"skipped_lines\": 0}\n"
+               "threshold_min and window_h echo the flags, or are null "
+               "when a flag value is non-finite (JSON has no NaN/Infinity).")
     ap.add_argument("--log", default=LOG_DEFAULT)
     ap.add_argument("--state", default=STATE_DEFAULT)
     ap.add_argument("--max-age-min", type=float, default=MAX_AGE_MIN_DEFAULT)
@@ -366,7 +381,13 @@ def main(argv=None):
     if not args.json:
         print(state_summary)
     threshold_s = args.max_age_min * 60.0
-    window_start = now - timedelta(hours=args.window_h)
+    try:
+        window_start = now - timedelta(hours=args.window_h)
+    except OverflowError:
+        # A window too large to represent (inf, 1e308, ...) covers all
+        # history; clamping to the earliest instant keeps that meaning
+        # instead of crashing before any verdict is printed.
+        window_start = datetime.min.replace(tzinfo=timezone.utc)
     gaps = find_gaps(rows, threshold_s, window_start)
     if not args.json:
         for left, right, delta_s in gaps:

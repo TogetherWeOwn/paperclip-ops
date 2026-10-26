@@ -50,24 +50,51 @@
 #   3  not eligible (id unknown, wrong state, --all matched nothing)
 #   5  UNMEASURED: could not read the fixture or jq is absent. NOT green.
 #
-# MACHINE CONTRACT. Stdout is TSV and stable; tests pin it, stderr is human
-# prose and may drift (CONTRIBUTING.md: assert on status, not on message text).
+# MACHINE CONTRACT. Default stdout is stable TSV; stderr is human prose.
 #   list              id \t status \t attempts \t topic \t failed_at \t error
 #   redrive / purge   <new-status> \t id \t reason        (one line per entry)
 #   any refusal       refused \t <cause> \t <detail>
+# --json on list/redrive/purge emits exactly one JSON document, schema_version=1:
+#   list:     {schema_version, entries:[{id,status,attempts,topic,failed_at,error}]}
+#             Field values keep their JSON types; missing/null values become "".
+#   mutation: {schema_version, outcomes:[{status,id,reason,preview}]}
+#   refusal:  {schema_version, error:{cause,next_action}} (no fixture content).
+# Causes and exit codes are identical in both formats; next_action is fixed per
+# cause. JSON never includes payload or arbitrary extra fixture keys.
 # Mutations rewrite the fixture atomically (temp file + mv under flock) and
 # append one JSON record per entry to <fixture>.journal.jsonl — the audit
-# trail, not stdout.
+# trail, not stdout. --dry-run uses the same validation/selection but writes
+# NOTHING (including no lock/temp files); preview=true marks every outcome.
+# Without --json, previews add a leading `preview` TSV column; real TSV stays
+# unchanged. A preview reads a snapshot, not a reservation against later writes.
+# Synthetic: redrive --id m1 --reason transient_upstream --dry-run --json
+#   {"schema_version":1,"outcomes":[{"status":"redriven","id":"m1",
+#     "reason":"transient_upstream","preview":true}]}
 # ===========================================================================
 set -uo pipefail
 
 ME="$(basename "${BASH_SOURCE[0]}")"
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 EXIT_OK=0; EXIT_REFUSED=2; EXIT_NOT_ELIGIBLE=3; EXIT_UNMEASURED=5
 
 FIXTURE="${DLQ_FIXTURE:-./dlq.jsonl}"
 ACTOR="${DLQ_ACTOR:-operator}"
+JSON=0
+ENTRIES=()
+
+# Discover the output mode before parsing, so even an earlier invalid argument
+# gets a JSON refusal. Flag values named --json are data, not output switches.
+scan_output_mode() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) JSON=1; shift;;
+      --fixture|--status|--topic|--reason|--id|--before)
+        if [[ $# -ge 2 ]]; then shift 2; else shift; fi;;
+      *) shift;;
+    esac
+  done
+}
+scan_output_mode "$@"
 
 # --- reason registry ---------------------------------------------------------
 # Namespaced by action. There is deliberately no --reason-text flag: see rule 1.
@@ -91,20 +118,36 @@ reason_description() {
 # --- output ------------------------------------------------------------------
 human() { printf '%s: %s\n' "$ME" "$*" >&2; }
 
-# refuse <exit> <cause> <detail>: machine line on stdout, prose on stderr.
+# Fixed vocabulary only: JSON refusals never interpolate untrusted details.
+next_action() {
+  case "$1" in
+    bad_usage|invalid_status) printf 'check_usage';;
+    reason_required|reason_not_for_action|unknown_reason) printf 'choose_registered_reason';;
+    fixture_unreadable) printf 'provide_readable_fixture';;
+    malformed_fixture|duplicate_id) printf 'repair_fixture';;
+    already_purged|already_redriven|not_found|no_match) printf 'select_eligible_entries';;
+    jq_missing) printf 'install_jq';;
+  esac
+}
+
+# refuse <exit> <cause> <detail>: one machine verdict, prose on stderr.
 refuse() {
   local exit="$1" cause="$2" detail="${3:-}"
-  printf 'refused\t%s\t%s\n' "$cause" "$detail"
-  human "$cause${detail:+ — $detail}"
+  if [[ "$JSON" == "1" ]]; then
+    # No jq dependency here: even jq_missing must be a parseable envelope.
+    printf '{"schema_version":1,"error":{"cause":"%s","next_action":"%s"}}\n' \
+      "$cause" "$(next_action "$cause")"
+    human "$cause"
+  else
+    printf 'refused\t%s\t%s\n' "$cause" "$detail"
+    human "$cause${detail:+ — $detail}"
+  fi
   exit "$exit"
 }
 
 need_jq() {
-  command -v jq >/dev/null 2>&1 || {
-    printf 'refused\tjq_missing\tjq is required\n'
-    human "jq is required but not on PATH"
-    exit "$EXIT_UNMEASURED"
-  }
+  command -v jq >/dev/null 2>&1 || \
+    refuse "$EXIT_UNMEASURED" "jq_missing" "jq is required"
 }
 
 need_fixture() {
@@ -116,10 +159,19 @@ usage() {
   cat <<'EOF'
 dlq_redrive.sh — list, redrive and purge DLQ entries in a local JSONL fixture (case_c7b3c6ac)
 
-  list    [--fixture F] [--status S] [--topic T]
-  redrive (--id ID | --all [--topic T] [--before TS]) --reason CODE [--fixture F]
-  purge   (--id ID | --all [--topic T] [--before TS]) --reason CODE [--fixture F]
+  list    [--fixture F] [--status S] [--topic T] [--json]
+  redrive (--id ID | --all [--topic T] [--before TS]) --reason CODE [--fixture F] [--json] [--dry-run]
+  purge   (--id ID | --all [--topic T] [--before TS]) --reason CODE [--fixture F] [--json] [--dry-run]
   reasons
+
+--json: one schema_version=1 document, with entries (list), outcomes (mutations),
+        or error:{cause,next_action} (refusals). No payload fields are emitted.
+--dry-run: redrive/purge preview only; identical rules, no fixture/journal/lock/tmp
+           writes. JSON outcomes have preview=true; TSV adds a preview column.
+           A preview is a snapshot, not a reservation. Real TSV is unchanged.
+Example (synthetic id):
+  dlq_redrive.sh redrive --id m1 --reason transient_upstream --dry-run --json
+  {"schema_version":1,"outcomes":[{"status":"redriven","id":"m1","reason":"transient_upstream","preview":true}]}
 
 Redrive reasons: transient_upstream, consumer_bugfix_deployed, payload_corrected, redeliver_anyway
 Purge reasons:   poison_unrecoverable, duplicate, expired_stale, test_fixture
@@ -133,20 +185,16 @@ EOF
 }
 
 # --- fixture loading ---------------------------------------------------------
-# load_entries <outfile>: validates the whole fixture and writes compact-JSON
-# lines to <outfile>. Runs in the CALLER's shell (never inside <(...)): a
-# refusal must exit this process, and a process substitution would swallow it
-# into a subshell and let the caller read on past a malformed fixture at
-# exit 0 — a check that measured nothing reading green.
+# Validate the whole snapshot into memory, so previews create no files at all.
+# Runs in the CALLER's shell: a refusal must exit this process, not a subshell.
 load_entries() {
-  local outfile="$1"
-  : > "$outfile"
+  ENTRIES=()
   local lineno=0 line entry id status
   declare -A seen=()
   while IFS= read -r line || [[ -n "$line" ]]; do
     lineno=$((lineno + 1))
     [[ "$line" =~ ^[[:space:]]*$ ]] && continue
-    entry="$(jq -c -e '.' <<<"$line" 2>/dev/null)" || \
+    entry="$(jq -c -s -e 'if length == 1 and (.[0] | type == "object") then .[0] else error("invalid entry") end' <<<"$line" 2>/dev/null)" || \
       refuse "$EXIT_REFUSED" "malformed_fixture" "$FIXTURE line $lineno is not JSON"
     id="$(jq -r '.id // ""' <<<"$entry")"
     status="$(jq -r '.status // ""' <<<"$entry")"
@@ -160,7 +208,7 @@ load_entries() {
     [[ -z "${seen[$id]:-}" ]] || \
       refuse "$EXIT_REFUSED" "duplicate_id" "id '$id' appears more than once"
     seen[$id]="$lineno"
-    printf '%s\n' "$entry" >> "$outfile"
+    ENTRIES+=("$entry")
   done < "$FIXTURE"
 }
 
@@ -182,6 +230,7 @@ cmd_list() {
       --fixture) need_arg "$@"; FIXTURE="$2"; shift 2;;
       --status)  need_arg "$@"; status_filter="$2"; shift 2;;
       --topic)   need_arg "$@"; topic_filter="$2"; shift 2;;
+      --json)    shift;;
       -h|--help) usage; exit "$EXIT_OK";;
       *) refuse "$EXIT_REFUSED" "bad_usage" "list: unknown flag '$1'";;
     esac
@@ -194,11 +243,10 @@ cmd_list() {
            "status filter '$status_filter' is not dead|redriven|purged";;
     esac
   fi
-  local entries_file; entries_file="$(mktemp)"
-  trap 'rm -f "$entries_file"' RETURN
-  load_entries "$entries_file"
+  load_entries
   local entry id status attempts topic failed_at error
-  while IFS= read -r entry; do
+  local -a json_entries=()
+  for entry in "${ENTRIES[@]}"; do
     id="$(entry_field "$entry" '.id')"
     status="$(entry_field "$entry" '.status')"
     [[ -z "$status_filter" || "$status" == "$status_filter" ]] || continue
@@ -207,11 +255,18 @@ cmd_list() {
     attempts="$(entry_field "$entry" '.attempts')"
     failed_at="$(entry_field "$entry" '.failed_at')"
     error="$(entry_field "$entry" '.error')"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$id" "$status" "$attempts" "$topic" "$failed_at" "$error"
-  done < "$entries_file"
-  trap - RETURN
-  rm -f "$entries_file"
+    if [[ "$JSON" == "1" ]]; then
+      json_entries+=("$(jq -c '{id:(.id // ""),status:(.status // ""),
+        attempts:(.attempts // ""),topic:(.topic // ""),
+        failed_at:(.failed_at // ""),error:(.error // "")}' <<<"$entry")")
+    else
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$id" "$status" "$attempts" "$topic" "$failed_at" "$error"
+    fi
+  done
+  if [[ "$JSON" == "1" ]]; then
+    printf '%s\n' "${json_entries[@]}" | jq -cs '{schema_version:1,entries:.}'
+  fi
 }
 
 # --- reasons -----------------------------------------------------------------
@@ -242,7 +297,7 @@ check_reason() {
 # Selector: either "--id ID" or "--all [--topic T] [--before TS]".
 mutate() {
   local action="$1"; shift
-  local reason="" sel_id="" sel_all=0 topic_filter="" before=""
+  local reason="" sel_id="" sel_all=0 topic_filter="" before="" dry_run=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --reason)  need_arg "$@"; reason="$2"; shift 2;;
@@ -251,6 +306,9 @@ mutate() {
       --topic)   need_arg "$@"; topic_filter="$2"; shift 2;;
       --before)  need_arg "$@"; before="$2"; shift 2;;
       --fixture) need_arg "$@"; FIXTURE="$2"; shift 2;;
+      --json)    shift;;
+      --dry-run) dry_run=1; shift;;
+      -h|--help) usage; exit "$EXIT_OK";;
       *) refuse "$EXIT_REFUSED" "bad_usage" "$action: unknown flag '$1'";;
     esac
   done
@@ -271,29 +329,22 @@ mutate() {
   else new_status="purged"; reason_key="purge_reason"; fi
   local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-  local lock="$FIXTURE.lock" tmp journal entries_file
+  local lock="$FIXTURE.lock" tmp="" journal
   journal="$FIXTURE.journal.jsonl"
-  tmp="$(mktemp "$(dirname "$FIXTURE")/.dlq_mutate.XXXXXX")"
-  entries_file="$(mktemp "$(dirname "$FIXTURE")/.dlq_entries.XXXXXX")"
-
-  exec 9>"$lock"
-  flock 9
-
-  # load_entries validates BEFORE any byte of the fixture is rewritten; a
-  # malformed line refuses at exit 2 with the fixture untouched. It runs in
-  # this shell (see its header), so the refusal lands here, not in a subshell.
-  # Every refusal path below must remove both temps: `exit` does NOT fire a
-  # RETURN trap, and a stale .dlq_mutate file next to the fixture would be
-  # mistaken for a crashed write. An EXIT trap covers the load_entries refusal
-  # path (which exits without calling cleanup explicitly); explicit cleanup
-  # calls below cover the rest, and the trap is released on success.
-  cleanup() { rm -f "$tmp" "$entries_file"; }
-  trap cleanup EXIT
-  load_entries "$entries_file"
+  # Real writes retain the same lock/atomic-replace contract. Previews never
+  # open a lock or create a temp; cleanup is a no-op and validation is in memory.
+  cleanup() { if [[ -n "$tmp" ]]; then rm -f "$tmp"; fi; }
+  if [[ "$dry_run" == "0" ]]; then
+    tmp="$(mktemp "$(dirname "$FIXTURE")/.dlq_mutate.XXXXXX")"
+    trap cleanup EXIT
+    exec 9>"$lock"
+    flock 9
+  fi
+  load_entries
 
   local entry id status topic failed_at matched=0
-  local -a matched_ids=()
-  while IFS= read -r entry; do
+  local -a matched_ids=() outcomes=()
+  for entry in "${ENTRIES[@]}"; do
     id="$(entry_field "$entry" '.id')"
     status="$(entry_field "$entry" '.status')"
     local take=0
@@ -329,15 +380,16 @@ mutate() {
           esac
         fi
       fi
-      entry="$(jq -c --arg st "$new_status" --arg rk "$reason_key" --arg rs "$reason" \
-        --arg ts "$ts" --arg actor "$ACTOR" \
-        '.status=$st | .[$rk]=$rs | .decided_at=$ts | .decided_by=$actor' <<<"$entry")"
+      if [[ "$dry_run" == "0" ]]; then
+        entry="$(jq -c --arg st "$new_status" --arg rk "$reason_key" --arg rs "$reason" \
+          --arg ts "$ts" --arg actor "$ACTOR" \
+          '.status=$st | .[$rk]=$rs | .decided_at=$ts | .decided_by=$actor' <<<"$entry")"
+      fi
       matched_ids+=("$id")
       matched=$((matched + 1))
     fi
-    printf '%s\n' "$entry" >> "$tmp"
-  done < "$entries_file"
-  rm -f "$entries_file"
+    if [[ "$dry_run" == "0" ]]; then printf '%s\n' "$entry" >> "$tmp"; fi
+  done
 
   if [[ -n "$sel_id" && "$matched" == "0" ]]; then
     cleanup
@@ -348,17 +400,32 @@ mutate() {
     refuse "$EXIT_NOT_ELIGIBLE" "no_match" "no dead entries matched the filter"
   fi
 
-  mv "$tmp" "$FIXTURE"
-  trap - EXIT
-  local mid
+  if [[ "$dry_run" == "0" ]]; then
+    mv "$tmp" "$FIXTURE"
+    trap - EXIT
+  fi
+  local mid preview=false
+  [[ "$dry_run" == "1" ]] && preview=true
   for mid in "${matched_ids[@]}"; do
-    jq -c -n --arg ts "$ts" --arg actor "$ACTOR" --arg act "$action" \
-      --arg id "$mid" --arg rs "$reason" \
-      '{ts:$ts,actor:$actor,action:$act,id:$id,reason:$rs}' >> "$journal"
-    printf '%s\t%s\t%s\n' "$new_status" "$mid" "$reason"
+    if [[ "$dry_run" == "0" ]]; then
+      jq -c -n --arg ts "$ts" --arg actor "$ACTOR" --arg act "$action" \
+        --arg id "$mid" --arg rs "$reason" \
+        '{ts:$ts,actor:$actor,action:$act,id:$id,reason:$rs}' >> "$journal"
+    fi
+    if [[ "$JSON" == "1" ]]; then
+      outcomes+=("$(jq -cn --arg st "$new_status" --arg id "$mid" \
+        --arg rs "$reason" --argjson preview "$preview" \
+        '{status:$st,id:$id,reason:$rs,preview:$preview}')")
+    else
+      [[ "$dry_run" == "1" ]] && printf 'preview\t'
+      printf '%s\t%s\t%s\n' "$new_status" "$mid" "$reason"
+    fi
   done
-  human "$action: $matched entr$( [[ "$matched" == "1" ]] && printf 'y' || printf 'ies' ) ($reason)"
-  exec 9>&-
+  if [[ "$JSON" == "1" ]]; then
+    printf '%s\n' "${outcomes[@]}" | jq -cs '{schema_version:1,outcomes:.}'
+  fi
+  human "$action: $matched entr$( [[ "$matched" == "1" ]] && printf 'y' || printf 'ies' ) ($reason), preview=$preview"
+  if [[ "$dry_run" == "0" ]]; then exec 9>&-; fi
 }
 
 case "${1:-}" in
@@ -367,8 +434,6 @@ case "${1:-}" in
   purge)   shift; mutate purge "$@";;
   reasons) shift; cmd_reasons "$@";;
   -h|--help|help|'') usage; exit "$EXIT_OK";;
-  *) printf 'refused\tbad_usage\tunknown subcommand\n'
-     human "unknown subcommand '$1'"
-     usage >&2
-     exit "$EXIT_REFUSED";;
+  *) usage >&2
+     refuse "$EXIT_REFUSED" "bad_usage" "unknown subcommand";;
 esac

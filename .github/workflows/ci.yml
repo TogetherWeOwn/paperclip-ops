@@ -5161,7 +5161,9 @@ jobs:
       # == area: runbook (was runbook-gates; runs only when runbook or full changed) ==
       - name: DLQ redrive CLI standalone suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: ./test_dlq_redrive.sh
+        run: |
+          ./test_dlq_redrive.sh
+          ./test_dlq_redrive_json_dryrun.sh
 
       # case_50dca137. THE ONLY STEP IN THIS JOB THAT IS ALLOWED AN `if:`, AND THE
       # REASON IS THE WHOLE POINT OF THE CARD.

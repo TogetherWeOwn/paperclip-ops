@@ -1325,7 +1325,7 @@
     },
     {
       "name": "DLQ redrive CLI standalone suite",
-      "definition_sha256": "88ee9831ea83b1142308cb6172ba45372d6076986cd06d26c2240faf3fe74455",
+      "definition_sha256": "ed3d4456c436e0f6e968d4534fef23c6f438d6365ba9e7976c3969d7ff916e70",
       "id": "DLQ redrive CLI standalone suite:1"
     },
     {

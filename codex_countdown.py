@@ -41,6 +41,8 @@
 # EXIT CODES (cli)
 #   0  readout printed
 #   2  usage / validation: bad fixture, bad --now, or a refused lane row
+# With --report-json: 0 only for a complete report, otherwise 2;
+# the one diagnostic object is printed instead of the readout.
 #
 # Read-only. Opens one JSON fixture, prints to stdout. No network, no
 # credential, no roster read, no file written.
@@ -48,7 +50,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
+import io
 import json
 import math
 import os
@@ -159,13 +163,244 @@ def load_fixture(path):
     return doc
 
 
-def main(argv=None):
+_REPORT_PROVIDER = "codex"
+_REPORT_SCHEMA_ID = "countdown-report.v1"
+_REPORT_DISCLAIMER = (
+    "Diagnostic observations only; not admission or readiness authorization."
+)
+
+# code -> (retryable, next_action). The same table is mirrored in the other
+# countdown readouts; the acceptance suite pins the correspondence.
+_DIAGNOSTIC_ACTIONS = {
+    "invalid_lane_record": (False, "provide_lane_object"),
+    "invalid_lane_identity": (False, "provide_lane_identity"),
+    "duplicate_lane": (False, "disambiguate_lane_identity"),
+    "invalid_utilization": (False, "provide_finite_utilization"),
+    "invalid_reset": (False, "provide_valid_reset"),
+    "expired_reset": (True, "provide_current_window"),
+    "empty_input": (False, "provide_lane_records"),
+    "invalid_now": (False, "provide_valid_utc_now"),
+    "usage_error": (False, "correct_arguments"),
+    "fixture_unreadable": (True, "provide_readable_fixture"),
+    "fixture_encoding": (False, "provide_utf8_fixture"),
+    "fixture_json": (False, "provide_valid_json"),
+    "fixture_shape": (False, "provide_lane_list"),
+}
+
+
+class _UsageError(Exception):
+    """Argparse refused report-mode arguments. Carries no raw input."""
+
+
+class _ReportArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser that refuses through _UsageError, never stderr."""
+
+    def error(self, message=None):
+        raise _UsageError()
+
+    def exit(self, status=0, message=None):
+        raise _UsageError()
+
+
+def _format_as_of(now):
+    """UTC instant in the fixture timestamp form, keeping fractions."""
+    if now.microsecond:
+        return now.strftime("%Y-%m-%dT%H:%M:%S.%f").rstrip("0") + "Z"
+    return now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _diagnostic(code, lane, source_index):
+    retryable, next_action = _DIAGNOSTIC_ACTIONS[code]
+    return {
+        "code": code,
+        "lane": lane,
+        "source_index": source_index,
+        "retryable": retryable,
+        "next_action": next_action,
+    }
+
+
+def _make_report(as_of, outcome, counts, observations, diagnostics):
+    return {
+        "schema_id": _REPORT_SCHEMA_ID,
+        "provider": _REPORT_PROVIDER,
+        "readout": _REPORT_PROVIDER + "_countdown",
+        "as_of": _format_as_of(as_of) if as_of is not None else None,
+        "outcome": outcome,
+        "check_complete": outcome == "complete",
+        "counts": counts,
+        "observations_partial": outcome == "incomplete",
+        "observations": observations,
+        "diagnostics": diagnostics,
+        "disclaimer": _REPORT_DISCLAIMER,
+    }
+
+
+def _unmeasurable_report(code, as_of):
+    """No lane could be evaluated: aggregate counts stay unknown (null)."""
+    return _make_report(
+        as_of, "unmeasurable",
+        {"input": None, "evaluated": None, "invalid": None},
+        [], [_diagnostic(code, None, None)])
+
+
+def _emit_report(report):
+    print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
+    return 0 if report["check_complete"] else 2
+
+
+def _report_clock_from_argv(raw_argv):
+    """Last explicitly valid --now in raw arguments, or None.
+
+    Usage refusals use this so a valid explicit clock is retained as
+    as_of and no clock is invented when none was validly supplied.
+    """
+    candidate = None
+    index = 0
+    while index < len(raw_argv):
+        token = raw_argv[index]
+        if token == "--now" and index + 1 < len(raw_argv):
+            parsed = parse_ts(raw_argv[index + 1])
+            if parsed is not None:
+                candidate = parsed
+            index += 2
+            continue
+        if isinstance(token, str) and token.startswith("--now="):
+            parsed = parse_ts(token[len("--now="):])
+            if parsed is not None:
+                candidate = parsed
+        index += 1
+    return candidate
+
+
+def _load_report_fixture(path):
+    """Report-mode fixture read: (error_code, lanes).
+
+    Exactly one of the pair is None. Error codes carry no path or raw
+    input; the legacy load_fixture path below is unchanged.
+    """
+    try:
+        with open(path, "rb") as fh:
+            payload = fh.read()
+    except OSError:
+        return "fixture_unreadable", None
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return "fixture_encoding", None
+    def _reject_duplicate_keys(pairs):
+        seen = set()
+        doc = {}
+        for key, value in pairs:
+            if key in seen:
+                raise ValueError("duplicate key")
+            seen.add(key)
+            doc[key] = value
+        return doc
+
+    try:
+        doc = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+    except (json.JSONDecodeError, ValueError):
+        return "fixture_json", None
+    if not isinstance(doc, dict) or not isinstance(doc.get("lanes"), list):
+        return "fixture_shape", None
+    return None, doc["lanes"]
+
+
+def _classify_lanes(lanes, now):
+    """Report-mode evaluation: every record is checked, nothing aborts.
+
+    Mirrors the strict validators above field by field (same parse_ts,
+    same utilization range, same row math as assemble_rows), but each
+    defect becomes a diagnostic instead of the first one refusing the
+    whole readout. Duplicate identities invalidate every member.
+    Returns (observations, diagnostics, invalid_record_count).
+    """
+    identity_counts = {}
+    for entry in lanes:
+        if isinstance(entry, dict):
+            name = entry.get("lane")
+            if isinstance(name, str) and name:
+                identity_counts[name] = identity_counts.get(name, 0) + 1
+    duplicate_names = {name for name, count in identity_counts.items()
+                       if count > 1}
+    observations = []
+    diagnostics = []
+    invalid_indices = set()
+    for index, entry in enumerate(lanes):
+        if not isinstance(entry, dict):
+            diagnostics.append(
+                _diagnostic("invalid_lane_record", None, index))
+            invalid_indices.add(index)
+            continue
+        name = entry.get("lane")
+        identity_valid = isinstance(name, str) and bool(name)
+        lane = name if identity_valid else None
+        record_diagnostics = []
+        if not identity_valid:
+            record_diagnostics.append(
+                _diagnostic("invalid_lane_identity", None, index))
+        elif name in duplicate_names:
+            record_diagnostics.append(
+                _diagnostic("duplicate_lane", name, index))
+        utilization = None
+        raw_utilization = entry.get("weekly_utilization")
+        if isinstance(raw_utilization, bool) \
+                or not isinstance(raw_utilization, (int, float)) \
+                or (isinstance(raw_utilization, float)
+                    and not math.isfinite(raw_utilization)) \
+                or raw_utilization < 0 or raw_utilization > 1:
+            record_diagnostics.append(
+                _diagnostic("invalid_utilization", lane, index))
+        else:
+            utilization = float(raw_utilization)
+        reset = None
+        raw_reset = entry.get("weekly_reset_utc")
+        parsed_reset = parse_ts(raw_reset)
+        if parsed_reset is None:
+            record_diagnostics.append(
+                _diagnostic("invalid_reset", lane, index))
+        elif parsed_reset <= now:
+            record_diagnostics.append(
+                _diagnostic("expired_reset", lane, index))
+        else:
+            reset = parsed_reset
+        diagnostics.extend(record_diagnostics)
+        if record_diagnostics:
+            invalid_indices.add(index)
+            continue
+        observations.append({
+            "lane": name,
+            "weeklyUtilization": utilization,
+            "headroomPct": (1.0 - utilization) * 100.0,
+            "hoursToReset": (reset - now).total_seconds() / 3600.0,
+            "resetsAt": raw_reset,
+        })
+    return observations, diagnostics, len(invalid_indices)
+
+
+def _build_report(lanes, now):
+    if not lanes:
+        # Known-empty input is unmeasurable, with known zero counts.
+        return _make_report(
+            now, "unmeasurable",
+            {"input": 0, "evaluated": 0, "invalid": 0},
+            [], [_diagnostic("empty_input", None, None)])
+    observations, diagnostics, invalid = _classify_lanes(lanes, now)
+    outcome = "incomplete" if invalid else "complete"
+    counts = {"input": len(lanes), "evaluated": len(lanes),
+              "invalid": invalid}
+    return _make_report(now, outcome, counts, observations, diagnostics)
+
+
+def _build_parser(parser_cls=argparse.ArgumentParser, add_help=True):
     default_fixture = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "tests", "fixtures", "case_b4d05cc9", "codex-weekly-lanes.json")
-    p = argparse.ArgumentParser(
+    p = parser_cls(
         description="Codex-lane use-before-expiry countdown readout "
-                    "(read-only).")
+                    "(read-only).",
+        add_help=add_help)
     p.add_argument("--fixture", default=default_fixture)
     p.add_argument("--now",
                    help="override current UTC time (testing), e.g. "
@@ -173,7 +408,51 @@ def main(argv=None):
     p.add_argument("--json", action="store_true",
                    help="emit the assembled rows as JSON instead of the "
                         "human table")
-    a = p.parse_args(argv)
+    p.add_argument("--report-json", action="store_true",
+                   help="emit one countdown-report.v1 diagnostic object "
+                        "covering every lane record instead of the "
+                        "strict readout; mutually exclusive with --json")
+    return p
+
+
+def _report_main(raw_argv):
+    """Opt-in diagnostic report: one safe JSON object, exit 0 iff the
+    evaluation is complete, otherwise 2. Errors live in the report,
+    never on stderr, and raw input values are never echoed."""
+    p = _build_parser(parser_cls=_ReportArgumentParser, add_help=False)
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            a = p.parse_args(raw_argv)
+    except _UsageError:
+        return _emit_report(_unmeasurable_report(
+            "usage_error", _report_clock_from_argv(raw_argv)))
+    if a.json or not a.report_json:
+        clock = parse_ts(a.now) if a.now is not None else None
+        return _emit_report(_unmeasurable_report("usage_error", clock))
+    if a.now is not None:
+        now = parse_ts(a.now)
+        if now is None:
+            return _emit_report(_unmeasurable_report("invalid_now", None))
+    else:
+        now = datetime.datetime.now(UTC).replace(microsecond=0)
+    code, lanes = _load_report_fixture(a.fixture)
+    if code is not None:
+        return _emit_report(_unmeasurable_report(code, now))
+    return _emit_report(_build_report(lanes, now))
+
+
+def main(argv=None):
+    raw_argv = list(sys.argv[1:]) if argv is None else list(argv)
+    if any(token == "--report-json"
+           or (isinstance(token, str)
+               and token.startswith("--report-json="))
+           for token in raw_argv):
+        return _report_main(raw_argv)
+    p = _build_parser()
+    a = p.parse_args(raw_argv)
+    if a.report_json:
+        # Reached only through an argparse long-option abbreviation.
+        return _report_main(raw_argv)
 
     if a.now is not None:
         now = parse_ts(a.now)

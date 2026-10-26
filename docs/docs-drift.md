@@ -73,6 +73,7 @@ The local policy has these exact-path contracts:
 | `docs-drift` | `scripts/quality-gates/docs_drift.py`, `.github/workflows/docs-drift.yml`, `.docs-drift.json` | `docs/docs-drift.md` |
 | `capacity-evidence-contract` | `coolify_capacity_headroom.sh`, `coolify_capacity_headroom.py` | `docs/capacity-evidence.md` |
 | `trace-correlation-contract` | `ops/paperclip/trace_correlator.py` | `docs/trace-correlation.md` |
+| `countdown-report-contract` | `claude_countdown.py`, `codex_countdown.py`, `muse_countdown.py` | `docs/countdown-report.md` |
 
 Run the local check above with full target/head SHAs. New mappings enforce only
 after merge, when present in the supplied target's policy. Accompaniment is not

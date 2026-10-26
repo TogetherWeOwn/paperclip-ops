@@ -88,6 +88,12 @@ For one policy across plan, build, and review phases, see the
 It scopes guidance to role and phase, keeps task policy provider-independent,
 and cites a single pinned rubric in every phase.
 
+For the three countdown readouts' opt-in `--report-json` diagnostic mode —
+one offline report explaining every lane defect while the strict readouts
+stay all-or-nothing — see the
+[countdown diagnostic report contract](docs/countdown-report.md).
+It probes no account and authorizes no admission or readiness.
+
 | Tool |
 | --- |
 | `public_snapshot_test_support.py` (test-only private-artifact boundary; not a runtime policy or operator command) |

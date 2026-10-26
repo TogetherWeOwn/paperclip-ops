@@ -22,6 +22,15 @@
       "id": "trace-correlation-contract",
       "sources": ["ops/paperclip/trace_correlator.py"],
       "docs": ["docs/trace-correlation.md"]
+    },
+    {
+      "id": "countdown-report-contract",
+      "sources": [
+        "claude_countdown.py",
+        "codex_countdown.py",
+        "muse_countdown.py"
+      ],
+      "docs": ["docs/countdown-report.md"]
     }
   ]
 }

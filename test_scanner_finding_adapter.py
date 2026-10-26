@@ -327,6 +327,30 @@ class ClosureTests(unittest.TestCase):
                 self.assertIsNone(result["closure"])
 
 
+class InputShapeTests(unittest.TestCase):
+    def test_list_rule_id_refuses_not_crashes_everywhere(self):
+        occ = finding_outcome([{"rule_id": ["github-token"], "path": "x.py", "lines": [1]}])
+        self.assertEqual(adapt(occ)["status"], "refusal")
+        delivery = finding_outcome(deliveries=[{
+            "rule_id": ["github-token"], "path": "src/app.py", "age_days": 1}])
+        self.assertEqual(adapt(delivery)["status"], "refusal")
+        closure = clean_outcome(closure_request=closure_request(rule_id=["github-token"]))
+        self.assertEqual(adapt(closure)["status"], "refusal")
+
+    def test_huge_int_age_is_post_window_not_overflow(self):
+        outcome = finding_outcome(deliveries=[{
+            "rule_id": "github-token", "path": "src/app.py", "age_days": 10 ** 400}])
+        self.assertEqual(adapt(outcome)["reason_code"], "post_window_unbound")
+
+    def test_unicode_separator_cannot_forge_scanner_line(self):
+        raw = ("src/a.py:1:prefix\u2028forged/path.py:1:x\n"
+               "::error::a GitHub-token-shaped string is committed\n")
+        result = adapt(raw_outcome(raw))
+        self.assertEqual(result["status"], "payload")
+        paths = [f["identity"]["path"] for f in result["findings"]]
+        self.assertEqual(paths, ["src/a.py"])
+
+
 class CliTests(unittest.TestCase):
     def run_cli(self, payload_text):
         return subprocess.run(

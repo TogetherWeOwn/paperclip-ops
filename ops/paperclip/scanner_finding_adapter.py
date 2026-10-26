@@ -174,7 +174,7 @@ def _validate_path(value):
 
 
 def _validate_rule(value):
-    if value not in RULE_IDS:
+    if not isinstance(value, str) or value not in RULE_IDS:
         _refuse("identity_invalid")
     return value
 
@@ -219,7 +219,14 @@ def _parse_raw(raw):
     grouped = {}
     buffered = []
     clean_seen = False
-    for line in raw.splitlines():
+    # Split ONLY on LF: str.splitlines() also breaks on U+2028 etc., which
+    # would let matched content forge a scanner line (and leak into a path).
+    raw_lines = raw.split("\n")
+    if raw_lines and raw_lines[-1] == "":
+        raw_lines.pop()
+    for line in raw_lines:
+        if line.endswith("\r"):
+            line = line[:-1]
         if line == CLEAN_LINE:
             clean_seen = True
             continue
@@ -341,7 +348,7 @@ def _parse_deliveries(raw, repo_slug):
         if age is None:
             _refuse("unknown_delivery_age")
         if isinstance(age, bool) or not isinstance(age, (int, float)) \
-                or not math.isfinite(age) or age < 0:
+                or (isinstance(age, float) and not math.isfinite(age)) or age < 0:
             _refuse("delivery_invalid")
         ids = item.get("existing_issue_ids", [])
         if not isinstance(ids, list) or any(not _valid_opaque(i) for i in ids) \

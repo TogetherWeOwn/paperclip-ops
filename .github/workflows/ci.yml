@@ -6498,11 +6498,10 @@ jobs:
   # and never on a superseded run (cancelled needs do not satisfy failure()).
   # It never fails the build for its own findings; the run is already red.
   #
-  # Permissions are scoped to this job, not the workflow: `actions: write` is
-  # the documented minimum for actions/upload-artifact@v4 (read cannot
-  # finalise an artifact), and the workflow stays at read-only. The drain
-  # script itself only READS via the jobs/logs API, same as the case_50dca137
-  # dark-step reporter. The check-run name is new and deliberately NOT a
+  # The job's GITHUB_TOKEN only reads the jobs/logs API (`actions: read`),
+  # same as the case_50dca137 dark-step reporter. Artifact upload uses the
+  # action's separate ACTIONS_RUNTIME_TOKEN, not GITHUB_TOKEN write access.
+  # The check-run name is new and deliberately NOT a
   # required check: it describes red runs and must never gate green ones.
   # ci-ok: exempt -- if-failure drain describes red runs, never gates green ones
   failure-log-drain:
@@ -6521,7 +6520,7 @@ jobs:
     if: failure()
     permissions:
       contents: read
-      actions: write
+      actions: read
     steps:
       - name: Prove the private runner selected this job
         shell: bash

@@ -90,7 +90,7 @@ fi
 # It is set only by the wrapper after its host check; no scoped file may
 # give it a default, or a sender could self-delegate a verdict.
 CHECKED="PAPERCLIP_API_ALLOWLIST_CHECKED_BASE"
-hits_b_checked="$(grep -rnE "\.(get|setdefault)\(\s*([\"']$CHECKED[\"'])\s*,\s*([A-Za-z0-9_]|\"[^\"]|'[^'])|${CHECKED}:-[^}]" "${SCOPE_B[@]}" 2>/dev/null)"
+hits_b_checked="$(grep -rnE "\.(get|setdefault)\(\s*([\"']$CHECKED[\"'])\s*,\s*([A-Za-z0-9_]|\"[^\"]|'[^'])|${CHECKED}:?-[^}]" "${SCOPE_B[@]}" 2>/dev/null)"
 if grep -q . <<<"$hits_b_checked"; then
   bad "no CHECKED_BASE default in senders/helpers" "$(head -n 5 <<<"$hits_b_checked")"
 else
@@ -115,14 +115,21 @@ grep -qE "$HATCH\"?\]?\s*=[^=]" "$WORK/assign.sh" \
 grep -qE "${HATCH}:-[^}]*1" "$WORK/default.sh" \
   && ok "default grep catches :-1}" || bad "default grep catches :-1}"
 printf 'x = env.setdefault("%s", "1")\n' "$HATCH" > "$WORK/setdefault.py"
-grep -qE "\.(get|setdefault)\(\s*(HATCH_VAR|[\"']$HATCH[\"'])\s*,\s*[\"']?1" "$WORK/getmap.py" "$WORK/getconst.py" "$WORK/setdefault.py" \
-  && ok "mapping grep catches .get/.setdefault defaults" || bad "mapping grep catches .get/.setdefault defaults"
+for fixture in "$WORK/getmap.py" "$WORK/getconst.py" "$WORK/setdefault.py"; do
+  grep -qE "\.(get|setdefault)\(\s*(HATCH_VAR|[\"']$HATCH[\"'])\s*,\s*[\"']?1" "$fixture" \
+    && ok "mapping grep catches default in ${fixture##*/}" \
+    || bad "mapping grep catches default in ${fixture##*/}"
+done
 printf 'x = env.get("%s", base)\n' "$CHECKED" > "$WORK/checked_default.py"
 printf 'echo "${%s:-$PAPERCLIP_API_URL}"\n' "$CHECKED" > "$WORK/checked_default.sh"
-grep -qE "\.(get|setdefault)\(\s*([\"']$CHECKED[\"'])\s*,\s*([A-Za-z0-9_]|\"[^\"]|'[^'])|${CHECKED}:-[^}]" "$WORK/checked_default.py" "$WORK/checked_default.sh" \
-  && ok "CHECKED_BASE grep catches defaults" || bad "CHECKED_BASE grep catches defaults"
+printf 'echo "${%s-$PAPERCLIP_API_URL}"\n' "$CHECKED" > "$WORK/checked_default_unset.sh"
+for fixture in "$WORK/checked_default.py" "$WORK/checked_default.sh" "$WORK/checked_default_unset.sh"; do
+  grep -qE "\.(get|setdefault)\(\s*([\"']$CHECKED[\"'])\s*,\s*([A-Za-z0-9_]|\"[^\"]|'[^'])|${CHECKED}:?-[^}]" "$fixture" \
+    && ok "CHECKED_BASE grep catches default in ${fixture##*/}" \
+    || bad "CHECKED_BASE grep catches default in ${fixture##*/}"
+done
 printf 'x = env.get("%s", "")\n' "$CHECKED" > "$WORK/checked_legit.py"
-hits_checked_legit="$(grep -E "\.(get|setdefault)\(\s*([\"']$CHECKED[\"'])\s*,\s*([A-Za-z0-9_]|\"[^\"]|'[^'])|${CHECKED}:-[^}]" "$WORK/checked_legit.py")"
+hits_checked_legit="$(grep -E "\.(get|setdefault)\(\s*([\"']$CHECKED[\"'])\s*,\s*([A-Za-z0-9_]|\"[^\"]|'[^'])|${CHECKED}:?-[^}]" "$WORK/checked_legit.py")"
 if grep -q . <<<"$hits_checked_legit"; then
   bad "empty CHECKED_BASE default does not trip the gate"
 else

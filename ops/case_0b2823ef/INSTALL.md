@@ -6,9 +6,11 @@ Source-only handoff for `ops/cliproxy-live/live_accounts.py`; this issue does **
 - Size: 42,536 bytes
 - The verified source contains `import urllib.request` and initializes `KEY = load_key()`; the patch uses those existing host symbols and adds no credential handling outside the already-reviewed optional bearer override.
 
-Oracle auth prerequisite: the patched code reads CLIProxy `GET /v1/models` with `Authorization: Bearer` using the host's existing `KEY` (loaded by `load_key()`), over loopback. No new credential is created. Optional environment overrides (read once at import; unset means the defaults):
+Oracle auth prerequisite: the patched code reads CLIProxy `GET /v1/models` with `Authorization: Bearer` using the host's existing `KEY` (loaded by `load_key()`). No new credential is created. Only a literal-loopback HTTP(S) oracle endpoint that does not redirect is supported. This is an operator prerequisite, **not enforced by the carrier**: it accepts the URL override verbatim and urllib follows redirects with the bearer. Do not configure a remote endpoint or one that redirects; stop installation if these conditions cannot be established. This source-only handoff does not authorize a credentialed network probe or installation.
 
-- `CLIPROXY_SERVED_MODELS_URL` — oracle URL; default `http://127.0.0.1:8317/v1/models`.
+Optional environment overrides (read once at import; unset means the defaults):
+
+- `CLIPROXY_SERVED_MODELS_URL` — oracle URL; default `http://127.0.0.1:8317/v1/models`. Keep the default unless a separately authorized literal-loopback, non-redirecting oracle is required. A remote override or redirect can disclose the bearer; the current carrier does not reject either.
 - `CLIPROXY_SERVED_MODELS_KEY_FILE` — path to a key file whose first usable line (`KEY=value` or bare) replaces `KEY` as the bearer; unset/empty keeps `KEY`. A configured file with no usable line omits `servedModels` (fail-open) rather than failing the feed.
 
 ## Operator procedure (only when separately authorized)

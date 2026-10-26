@@ -511,60 +511,63 @@ class InstallProcedureGuards(unittest.TestCase):
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "INSTALL.md")
         with open(path) as f:
             cls.text = f.read()
-        # The guards are executable shell blocks, not prose: extract the
-        # fenced sh blocks and join line continuations, then pin whole
-        # guard statements (statement plus its abort branch). A substring
-        # loose in prose, or a guard with its abort removed, fails.
+        # Pin each guard and abort/restore in its own fenced shell block.
+        # Explicit statement sequences cannot borrow an exit or restore
+        # from a later conditional when the intended branch is broken.
         blocks = re.findall(r"```sh\n(.*?)```", cls.text, re.DOTALL)
-        cls.sh = "\n".join(blocks).replace("\\\n", " ")
+        cls.preflight, cls.apply = [b.replace("\\\n", " ") for b in blocks[:2]]
 
     def test_fails_closed(self):
-        self.assertRegex(self.sh, r"(?m)^\s*set -eu$")
-        self.assertIn("sha256sum -c -", self.sh)
+        for block in (self.preflight, self.apply):
+            with self.subTest(block=block):
+                self.assertRegex(block, r"(?m)^\s*set -eu$")
+        self.assertIn("sha256sum -c -", self.preflight)
 
     def test_sha_precondition_gated(self):
         self.assertRegex(
-            self.sh,
-            r"test \"\$\(wc -c < live_accounts\.py\)\" -eq 42536"
-            r"[\s\S]*93a99797[0-9a-f]+  live_accounts\.py' \| sha256sum -c -",
+            self.preflight,
+            r"test \"\$\(wc -c < live_accounts\.py\)\" -eq 42536\s+"
+            r"echo '93a99797[0-9a-f]+  live_accounts\.py' \| sha256sum -c -",
         )
 
     def test_idempotency_marker_stops_reapply(self):
         self.assertRegex(
-            self.sh,
-            r"if grep -q 'served_bearer' live_accounts\.py; then"
-            r"[\s\S]*?exit 1[\s\S]*?fi",
+            self.preflight,
+            r"if grep -q 'served_bearer' live_accounts\.py; then\s+"
+            r"printf 'servedModels carrier already applied; stop\.\\n' >&2\s+"
+            r"exit 1\s+fi",
         )
 
     def test_dry_run_status_checked(self):
         self.assertRegex(
-            self.sh,
-            r"if ! patch --batch --forward --dry-run -p0 < [^;]+; then"
-            r"[\s\S]*?Patch dry-run failed[\s\S]*?exit 1[\s\S]*?fi",
+            self.apply,
+            r"if ! patch --batch --forward --dry-run -p0 < [^;\n]+; then\s+"
+            r"printf 'Patch dry-run failed; stop without applying\.\\n' >&2\s+"
+            r"exit 1\s+fi",
         )
 
     def test_apply_failure_restores_backup(self):
         self.assertRegex(
-            self.sh,
-            r"if ! patch --batch --forward -p0 < [^;]+; then"
-            r"[\s\S]*?Patch apply failed; restoring the backup\."
-            r"[\s\S]*?cp -a \"\$backup\" live_accounts\.py"
-            r"[\s\S]*?exit 1[\s\S]*?fi",
+            self.apply,
+            r"if ! patch --batch --forward -p0 < [^;\n]+; then\s+"
+            r"printf 'Patch apply failed; restoring the backup\.\\n' >&2\s+"
+            r"cp -a \"\$backup\" live_accounts\.py\s+exit 1\s+fi",
         )
 
     def test_reject_file_restores_backup(self):
         self.assertRegex(
-            self.sh,
-            r"if test -e live_accounts\.py\.rej; then"
-            r"[\s\S]*?live_accounts\.py\.rej; restoring the backup\."
-            r"[\s\S]*?cp -a \"\$backup\" live_accounts\.py"
-            r"[\s\S]*?exit 1[\s\S]*?fi",
+            self.apply,
+            r"if test -e live_accounts\.py\.rej; then\s+"
+            r"printf 'Patch created live_accounts\.py\.rej; restoring the backup\.\\n' >&2\s+"
+            r"cp -a \"\$backup\" live_accounts\.py\s+exit 1\s+fi",
         )
 
     def test_oracle_auth_and_env_overrides_documented(self):
         self.assertIn("CLIPROXY_SERVED_MODELS_URL", self.text)
         self.assertIn("CLIPROXY_SERVED_MODELS_KEY_FILE", self.text)
         self.assertIn("Authorization: Bearer", self.text)
+        self.assertIn("not enforced by the carrier", self.text)
+        self.assertIn("urllib follows redirects with the bearer", self.text)
 
 
 if __name__ == "__main__":

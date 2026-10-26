@@ -31,8 +31,10 @@
 #   assembly's enabled-outside-lanes guard refuses it there.
 #
 # WHAT THIS REFUSES, AND WHY (same contract family as the countdowns):
-#   * A bridge model with zero enabled lane-bound rows is an InventoryError
-#     naming the model — never a quiet "0" row. Zero coverage is the finding
+#   * In legacy output, a bridge model with zero enabled lane-bound rows is
+#     an InventoryError naming the model — never a quiet "0" row. The opt-in
+#     --report-json retains those rows as structured findings (still exit 2).
+#     Zero coverage is the finding
 #     this readout exists to surface (the `[[ "" -eq 0 ]]` bash trap's
 #     roster-row costume: an absent row scored as present).
 #   * Duplicate rows for one model id are refused: two rows for one id would
@@ -169,18 +171,117 @@ def load_fixture(path):
     return doc
 
 
+def inventory_report(rows=None, *, error_code=None):
+    """One wire representation; unevaluated evidence never claims coverage."""
+    diagnostics = []
+    counts = None
+    if rows is None:
+        outcome = "unmeasurable"
+        diagnostics.append({"code": error_code})
+        next_action = {
+            "fixture_read_error": "Make the selected fixture readable, then retry.",
+            "fixture_decode_error": "Supply a valid UTF-8 JSON fixture.",
+            "fixture_schema_error": "Correct the fixture model and lane schema.",
+            "usage_error": "Use --help and choose only one output mode.",
+        }[error_code]
+    else:
+        diagnostics = [{"code": "zero_coverage", "model_id": row["model"]}
+                       for row in rows if row["enabledLaneBoundCount"] < 1]
+        counts = {"evaluated": len(rows), "zero": len(diagnostics),
+                  "present": len(rows) - len(diagnostics)}
+        outcome = "findings" if diagnostics else "complete"
+        next_action = ("Inspect the identified zero-coverage models in the source evidence."
+                       if diagnostics else
+                       "No coverage correction needed; live serving readiness is not measured.")
+    return {
+        "schema_id": "bridge-inventory-report.v1",
+        "outcome": outcome,
+        "check_complete": rows is not None,
+        "rows": rows if rows is not None else [],
+        "counts": counts,
+        "diagnostics": diagnostics,
+        "retryable": error_code == "fixture_read_error",
+        "next_action": next_action,
+    }
+
+
+def report_fixture(path):
+    """Read once and reuse the legacy analyzer and gate, never their prose."""
+    try:
+        doc = load_fixture(path)
+    except OSError:
+        return inventory_report(error_code="fixture_read_error")
+    except InventoryError:
+        return inventory_report(error_code="fixture_schema_error")
+    except (ValueError, RecursionError):
+        # Includes JSONDecodeError, UnicodeDecodeError and decoder limits.
+        return inventory_report(error_code="fixture_decode_error")
+    try:
+        rows = assemble_rows(doc)
+    except InventoryError:
+        return inventory_report(error_code="fixture_schema_error")
+    try:
+        require_nonzero(rows)
+    except InventoryError:
+        # Zero is a completed finding; keep all rows and identify it from
+        # structured counts, not from exception text (which may contain input).
+        pass
+    return inventory_report(rows)
+
+
+def print_report(report):
+    print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
+    return 0 if report["outcome"] == "complete" else 2
+
+
+class ReportUsageError(ValueError):
+    """Report-mode argument failure, without raw arguments in the output."""
+
+
+class ReportArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise ReportUsageError()
+
+
 def main(argv=None):
     default_fixture = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "tests", "fixtures", "case_381fc549", "bridge-assembled-rows.json")
-    p = argparse.ArgumentParser(
+    args = list(sys.argv[1:] if argv is None else argv)
+    # Match argparse's unique long-option abbreviations too, so an error
+    # before or after the report flag has the same machine-readable contract.
+    report_mode = any(arg.startswith("--") and arg != "--"
+                      and "--report-json".startswith(arg.partition("=")[0])
+                      for arg in args)
+    parser = ReportArgumentParser if report_mode else argparse.ArgumentParser
+    p = parser(
         description="Bridge-model enabled lane-bound row inventory "
-                    "(read-only).")
+                    "(read-only).",
+        epilog="--report-json emits bridge-inventory-report.v1: outcome "
+               "complete/findings/unmeasurable, check_complete, rows, counts, "
+               "diagnostics, retryable and next_action. Codes: zero_coverage, "
+               "fixture_read_error, fixture_decode_error, fixture_schema_error, "
+               "usage_error. Exit 0: all present; exit 2: zeros or unusable input. "
+               "Report errors are JSON on stdout, with empty stderr; --help is "
+               "human help (exit 0). Conflicting output flags refuse before reads. "
+               "Coverage is not live serving readiness. Synthetic example: "
+               "python3 -B bridge_row_inventory.py --report-json --fixture "
+               "tests/fixtures/case_381fc549/bridge-assembled-rows.json")
     p.add_argument("--fixture", default=default_fixture)
-    p.add_argument("--json", action="store_true",
-                   help="emit the inventory rows as JSON instead of the "
-                        "human table")
-    a = p.parse_args(argv)
+    modes = p.add_mutually_exclusive_group()
+    modes.add_argument("--json", action="store_true",
+                       help="emit the legacy inventory rows as a JSON array "
+                            "instead of the human table")
+    modes.add_argument("--report-json", action="store_true",
+                       help="emit one structured report, retaining zero rows; "
+                            "read-only and inherently a dry-run")
+    try:
+        a = p.parse_args(args)
+    except ReportUsageError:
+        return print_report(inventory_report(error_code="usage_error"))
+
+    if a.report_json:
+        return print_report(report_fixture(a.fixture))
 
     try:
         doc = load_fixture(a.fixture)

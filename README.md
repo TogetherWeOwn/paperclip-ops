@@ -89,7 +89,7 @@ and cites a single pinned rubric in every phase.
 | `approval_timeout_probe.sh` |
 | `balancer_silence_guard.py` |
 | `blocker_test_checks.py` |
-| `bridge_row_inventory.py` |
+| `bridge_row_inventory.py` ([offline structured report, diagnostics and focused check](docs/bridge-inventory-report.md)) |
 | `capture_host_evidence.sh` |
 | `capture_host_render.sh` |
 | `check_workflow_job_permissions.py` |

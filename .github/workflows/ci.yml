@@ -1051,6 +1051,7 @@ jobs:
         run: |
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_review_report_input_integrity
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_review_report_empty_ledger
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_review_repository_breakdown_acceptance
 
       # Shell-substitution guard contract: the offline gate that refuses an
       # unbounded `yes` inside `$(...)`/backticks before execution (the

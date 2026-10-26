@@ -32,3 +32,41 @@ findings keep the documented conservative fallback. `--json` emits
 versioned schema 1 with provenance and recovery fields; `--dry-run` is
 an offline read-only replay alias. Offline check:
 `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_review_report_input_integrity`.
+
+## Repository breakdown (opt-in)
+
+`--by-repo` is valid only with `--json` (any other combination is a
+controlled nonzero usage error with a `next_action`); without it the
+default text and JSON outputs are unchanged. Example:
+`review_routing_weekly.py --ledger LEDGER.jsonl --findings FINDINGS.jsonl --json --by-repo`.
+
+The opt-in adds one versioned section, `repository_breakdown`
+(`schema_version: 1`), projected from the same validated records — no
+second parser or evidence source. Its `repositories` rows are the sorted
+union of repositories from validated decisions and validated findings, so a
+findings-only repository appears with zero routed PRs and null shares
+instead of a fabricated decision. Each row carries `counts`
+(`routed_prs`, `expensive_reviews`, `matched_findings`,
+`unmatched_findings`), `metrics` (`expensive_review_share` and
+`findings_per_expensive_review` recomputed from that repository's own
+denominators, null when a denominator is zero, plus
+`audit_sample_defects`), and a sorted bucket histogram. Semantics are the
+existing global ones per repository: decisions deduplicate by `(repo, pr)`
+with any expensive decision winning, findings are not deduplicated, a
+finding matches only an expensive-routed PR in the same repository, and a
+missing bucket means `other`. Additive row counts, audit catches and bucket
+histograms therefore reconcile exactly with the global totals; shares are
+never summed or averaged.
+
+Invalid or excluded rows are never attributed to a repository, even when a
+malformed row carries a plausible `repo` field: they appear only in the
+section's global `unattributed_counts`. The section inherits the global
+state — `ok`/`measured` for a clean cohort, `partial`/`partial` when any
+row was excluded (no slice claims completeness), and `not_evaluated` with
+no repository rows for the empty-ledger early return, missing inputs and
+usage errors, preserving the existing global counts and exits. The section
+contains only validated repository identities, bucket IDs and aggregates:
+never raw findings, notes, row bodies or rejected identities. It changes
+nothing about routing, promotion candidates, promotion windows or review
+gates. Offline check:
+`python3 -B -m unittest -v test_review_report_input_integrity test_review_report_empty_ledger test_review_repository_breakdown_acceptance`.

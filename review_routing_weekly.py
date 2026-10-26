@@ -48,7 +48,10 @@ mutation is ever invoked, including for invalid flags or --dry-run.
 Usage:
   review_routing_weekly.py --ledger LEDGER.jsonl [--findings FINDINGS.jsonl]
                            [--promotion-days 90] [--now 2026-10-09T00:00:00Z]
-                           [--json] [--dry-run]
+                           [--json] [--dry-run] [--by-repo]
+  --by-repo is valid only with --json and adds a versioned
+  repository_breakdown projection over the same validated records; the
+  default text/JSON output is unchanged without it.
 Offline check:
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_review_report_input_integrity
   bash test_review_route.sh
@@ -267,6 +270,79 @@ def collapse_findings(objects, path, reason_counts, errors_detail):
     return valid, invalid
 
 
+def repository_breakdown(status, counts_state, invalid_decisions,
+                           invalid_findings, excluded_rows, repositories):
+    """Versioned additive per-repository projection (schema 1)."""
+    return {
+        "schema_version": 1,
+        "status": status,
+        "counts_state": counts_state,
+        "unattributed_counts": {
+            "invalid_decisions": invalid_decisions,
+            "invalid_findings": invalid_findings,
+            "excluded_rows": excluded_rows,
+        },
+        "repositories": repositories,
+    }
+
+
+def not_evaluated_breakdown(counts_state="unknown", invalid_decisions=0,
+                              invalid_findings=0, excluded_rows=0):
+    """Breakdown unavailable: no invented repository rows."""
+    return repository_breakdown(
+        "not_evaluated", counts_state, invalid_decisions, invalid_findings,
+        excluded_rows, [])
+
+
+def aggregate_repositories(prs, expensive, findings_valid):
+    """One deterministic row per repo in validated decisions/findings.
+
+    Reuses the global semantics exactly: prs is already deduped by
+    (repo, pr) with any-expensive-wins, findings are not deduped, and a
+    finding matches only when its (repo, pr) is expensive-routed. Shares
+    are recomputed from each repository's own denominators (null at zero).
+    """
+    routed = collections.Counter(repo for repo, _pr in prs)
+    expensive_reviews = collections.Counter(repo for repo, _pr in expensive)
+    matched = collections.Counter()
+    unmatched = collections.Counter()
+    audit_defects = collections.Counter()
+    buckets = collections.defaultdict(collections.Counter)
+    for f in findings_valid:
+        repo = f["key"][0]
+        buckets[repo][f["bucket"]] += 1
+        if f["key"] in expensive:
+            matched[repo] += 1
+            if f["audit_only"] is True:
+                audit_defects[repo] += 1
+        else:
+            unmatched[repo] += 1
+    repos = sorted(set(routed) | set(buckets))
+    rows = []
+    for repo in repos:
+        rows.append({
+            "repo": repo,
+            "counts": {
+                "routed_prs": routed[repo],
+                "expensive_reviews": expensive_reviews[repo],
+                "matched_findings": matched[repo],
+                "unmatched_findings": unmatched[repo],
+            },
+            "metrics": {
+                "expensive_review_share": (
+                    (expensive_reviews[repo] / routed[repo])
+                    if routed[repo] else None),
+                "findings_per_expensive_review": (
+                    (matched[repo] / expensive_reviews[repo])
+                    if expensive_reviews[repo] else None),
+                "audit_sample_defects": audit_defects[repo],
+            },
+            "buckets": [{"id": b, "count": c}
+                        for b, c in sorted(buckets[repo].items())],
+        })
+    return rows
+
+
 class JsonErrorParser(argparse.ArgumentParser):
     """ArgumentParser that emits versioned JSON for usage errors when --json."""
 
@@ -305,12 +381,14 @@ class JsonErrorParser(argparse.ArgumentParser):
                 "retryable": False,
                 "next_action": "Fix arguments and re-run; see errors.",
             }
+            if "--by-repo" in sys.argv:
+                data["repository_breakdown"] = not_evaluated_breakdown()
             print(json.dumps(data, sort_keys=True))
             self.exit(2)
         super().error(message)
 
 
-def json_usage_error(message, ledger=None, findings=None):
+def json_usage_error(message, ledger=None, findings=None, by_repo=False):
     data = {
         "schema_version": SCHEMA_VERSION,
         "status": "invalid",
@@ -344,11 +422,13 @@ def json_usage_error(message, ledger=None, findings=None):
         "retryable": False,
         "next_action": "Fix arguments and re-run; see errors.",
     }
+    if by_repo:
+        data["repository_breakdown"] = not_evaluated_breakdown()
     print(json.dumps(data, sort_keys=True))
     return 2
 
 
-def json_missing_input(ledger, findings, detail):
+def json_missing_input(ledger, findings, detail, by_repo=False):
     data = {
         "schema_version": SCHEMA_VERSION,
         "status": "invalid",
@@ -382,6 +462,8 @@ def json_missing_input(ledger, findings, detail):
         "retryable": False,
         "next_action": "Supply the missing JSONL file and re-run.",
     }
+    if by_repo:
+        data["repository_breakdown"] = not_evaluated_breakdown()
     print(json.dumps(data, sort_keys=True))
     return 1
 
@@ -400,7 +482,9 @@ def build_parser():
             "and never promotes a rule automatically. --json emits versioned "
             "schema_version 1 with status/counts_state/counts/metrics/source/window/"
             "prs/buckets/promotion_candidates/reason_counts/errors/retryable/"
-            "next_action. --dry-run is an offline read-only replay alias."
+            "next_action. --dry-run is an offline read-only replay alias. "
+            "Example: review_routing_weekly.py --ledger LEDGER.jsonl "
+            "--findings FINDINGS.jsonl --json --by-repo"
         ),
     )
     ap.add_argument("--ledger", required=True, help="Decision JSONL path (required)")
@@ -413,6 +497,9 @@ def build_parser():
                     help="Emit versioned JSON v1 (stable IDs, provenance, errors)")
     ap.add_argument("--dry-run", action="store_true",
                     help="Offline read-only replay alias (identical output, zero writes)")
+    ap.add_argument("--by-repo", action="store_true",
+                    help="With --json only: add versioned repository_breakdown "
+                         "per-repository totals reconciling with global counts")
     return ap
 
 
@@ -423,16 +510,22 @@ def main():
     # Prompt argument validation, before any file reads. Invalid flags or
     # values never invoke a router, rule writer, network, credential or
     # board mutation (this report performs none).
+    if args.by_repo and not args.json:
+        print("error: --by-repo requires --json (repository breakdown is "
+              "JSON-only)", file=sys.stderr)
+        print("next_action: Re-run with --json --by-repo; see --help.",
+              file=sys.stderr)
+        return 2
     if not isinstance(args.promotion_days, int) or isinstance(args.promotion_days, bool):
         msg = "--promotion-days must be an int in 1..36500"
         if args.json:
-            return json_usage_error(msg, args.ledger, args.findings)
+            return json_usage_error(msg, args.ledger, args.findings, by_repo=args.by_repo)
         ap.error(msg)
     if args.promotion_days < 1 or args.promotion_days > MAX_PROMOTION_DAYS:
         msg = (f"--promotion-days (promotion window) must be 1..{MAX_PROMOTION_DAYS}, "
                f"got {args.promotion_days}")
         if args.json:
-            return json_usage_error(msg, args.ledger, args.findings)
+            return json_usage_error(msg, args.ledger, args.findings, by_repo=args.by_repo)
         ap.error(msg)
 
     if args.now is not None:
@@ -440,7 +533,7 @@ def main():
         if now is None:
             msg = f"--now is not an ISO-8601 timestamp: {args.now}"
             if args.json:
-                return json_usage_error(msg, args.ledger, args.findings)
+                return json_usage_error(msg, args.ledger, args.findings, by_repo=args.by_repo)
             ap.error(msg)
     else:
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -449,7 +542,7 @@ def main():
     except (OverflowError, ValueError, OSError) as exc:
         msg = f"--now/--promotion-days cutoff is unrepresentable ({exc})"
         if args.json:
-            return json_usage_error(msg, args.ledger, args.findings)
+            return json_usage_error(msg, args.ledger, args.findings, by_repo=args.by_repo)
         ap.error(msg)
 
     reason_counts = collections.Counter()
@@ -463,7 +556,7 @@ def main():
         detail = f"cannot read --ledger {args.ledger}: {exc}"
         print(f"error: invalid input: {detail}", file=sys.stderr)
         if args.json:
-            return json_missing_input(args.ledger, args.findings, detail)
+            return json_missing_input(args.ledger, args.findings, detail, by_repo=args.by_repo)
         print("status: invalid (missing input; partial report unavailable)")
         print(f"excluded_rows: 0")
         return 1
@@ -482,7 +575,7 @@ def main():
             detail = f"cannot read --findings {args.findings}: {exc}"
             print(f"error: invalid input: {detail}", file=sys.stderr)
             if args.json:
-                return json_missing_input(args.ledger, args.findings, detail)
+                return json_missing_input(args.ledger, args.findings, detail, by_repo=args.by_repo)
             print("status: invalid (missing input; partial report unavailable)")
             print("excluded_rows: 0")
             return 1
@@ -549,6 +642,11 @@ def main():
                 if code not in [e["code"] for e in data["errors"]]:
                     data["errors"].append({"code": code, "count": reason_counts[code]})
             data["errors"] = sorted(data["errors"], key=lambda e: e["code"])
+            if args.by_repo:
+                data["repository_breakdown"] = not_evaluated_breakdown(
+                    counts_state="unknown", invalid_decisions=0,
+                    invalid_findings=invalid_findings,
+                    excluded_rows=invalid_findings)
             print(json.dumps(data, sort_keys=True))
             return 1
         print("routed_prs: 0")
@@ -653,6 +751,15 @@ def main():
                      "valid-row metrics are explicitly partial."
             ),
         }
+        if args.by_repo:
+            section_status = {"ok": "ok", "partial": "partial"}.get(
+                status, "not_evaluated")
+            repositories = (
+                aggregate_repositories(prs, expensive, findings_valid)
+                if section_status != "not_evaluated" else [])
+            data["repository_breakdown"] = repository_breakdown(
+                section_status, counts_state, invalid_decisions,
+                invalid_findings, excluded, repositories)
         print(json.dumps(data, sort_keys=True))
         return 0 if status == "ok" else 1
 

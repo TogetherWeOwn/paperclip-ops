@@ -616,10 +616,19 @@ test('convert-to-draft resolves the node id then mutates, confirming draft', asy
     { data: { repository: { nameWithOwner: repository, pullRequest: { id: nodeId } } } },
     { data: { convertPullRequestToDraft: { pullRequest: { isDraft: false } } } },
   ])
-  await assert.rejects(unconfirmed.adapter.convertToDraft(repository, 42), /did not confirm/)
-  // A missing node id fails closed before any mutation runs.
+  await assert.rejects(unconfirmed.adapter.convertToDraft(repository, 42), (error) => {
+    assert.match(error.message, /did not confirm/)
+    assert.equal(writeFailureCode(error), 'unconfirmed')
+    return true
+  })
+  // A missing node id fails closed before any mutation runs, carrying the
+  // same node-id-incomplete class the mark-ready writer raises.
   const noId = fake([{ data: { repository: { nameWithOwner: repository, pullRequest: { id: null } } } }])
-  await assert.rejects(noId.adapter.convertToDraft(repository, 42), /node id/)
+  await assert.rejects(noId.adapter.convertToDraft(repository, 42), (error) => {
+    assert.match(error.message, /node id/)
+    assert.equal(writeFailureCode(error), 'node-id-incomplete')
+    return true
+  })
   assert.equal(noId.calls.length, 1)
 })
 

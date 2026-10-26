@@ -625,8 +625,9 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
       })
       const idResult = JSON.parse(idOut.stdout)
       const nodeId = idResult?.data?.repository?.pullRequest?.id
-      requireValue(typeof nodeId === 'string' && /^[A-Za-z0-9+/=_-]+$/.test(nodeId) && nodeId.length <= 256,
-        'GitHub PR node id is incomplete')
+      if (!(typeof nodeId === 'string' && /^[A-Za-z0-9+/=_-]+$/.test(nodeId) && nodeId.length <= 256)) {
+        throw new WriteFailureError('GitHub PR node id is incomplete', 'node-id-incomplete')
+      }
       const mutateOut = await run('gh', ['api', '--hostname', 'github.com', 'graphql',
         '-f', `query=${mutation}`, '-f', `pullRequestId=${nodeId}`], {
         encoding: 'utf8', shell: false, timeout: 30000, maxBuffer: 1024 * 1024,
@@ -636,7 +637,6 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
         throw new WriteFailureError('GitHub convert-to-draft did not confirm a draft', 'unconfirmed')
       }
     } catch (error) {
-      if (String(error?.message ?? error).startsWith('GitHub PR node id')) throw error
       if (error instanceof WriteFailureError) throw error
       throw new WriteFailureError('GitHub convert-to-draft failed: transport, timeout, output limit or invalid JSON', writeStatusFromChild(error))
     }

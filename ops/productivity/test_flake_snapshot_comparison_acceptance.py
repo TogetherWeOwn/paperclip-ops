@@ -669,7 +669,7 @@ class CompareValidity(CompareCase):
         malformed_contents = [
             '{not-json}\n',
             b'\xff\xfe\x00 binary not utf-8\n',
-            jsonl_content(ledger_row(flips=9, observations=10)),
+            jsonl_content(ledger_row(flips=11, observations=10)),
             jsonl_content(ledger_row(flips=-1, observations=10)),
             jsonl_content(ledger_row(flips='2', observations=10)),
             jsonl_content(ledger_row(flips=True, observations=10)),

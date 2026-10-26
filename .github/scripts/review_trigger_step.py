@@ -84,6 +84,65 @@ def notice(msg):
     print("review-trigger: %s" % msg)
 
 
+def ready_pr(pr, head_sha):
+    """Require affirmative current PR facts, not merely an earlier association."""
+    return (pr.get("state") == "open" and pr.get("draft") is False
+            and (pr.get("head") or {}).get("sha") == head_sha)
+
+
+def ci_ok_green(runs, head_sha):
+    """Require the newest ci-ok attempt per app; ambiguous history fails closed."""
+    latest = {}
+    for run in runs:
+        if run.get("name") != CI_OK_CHECK:
+            continue
+        if run.get("head_sha") != head_sha:
+            return False
+        app_id = (run.get("app") or {}).get("id")
+        previous = latest.get(app_id)
+        if previous is not None:
+            # GitHub check-run IDs increase across reruns. Do not guess from
+            # response order or timestamps when multiple attempts lack IDs.
+            ids = (previous.get("id"), run.get("id"))
+            if any(type(i) is not int for i in ids) or ids[0] == ids[1]:
+                return False
+            if ids[0] > ids[1]:
+                continue
+        latest[app_id] = run
+    return bool(latest) and all(
+        r.get("status") == "completed" and r.get("conclusion") == "success"
+        for r in latest.values())
+
+
+def changed_paths(number):
+    """Read current paths, conservatively routing truncated lists to review."""
+    files = api("/pulls/%d/files?per_page=100" % number) or []
+    changed = [f.get("filename", "") for f in files]
+    if len(files) >= 100:
+        # A risky path may be past page 1; preserve conservative routing.
+        changed.append(".github/workflows/TRUNCATED-FILE-LIST-unknown")
+    return changed
+
+
+def head_decision(full, head_sha, check_runs, changed):
+    """Re-evaluate readiness from the supplied PR and check snapshots."""
+    if not ready_pr(full, head_sha):
+        return "skip", "PR is no longer open, non-draft and on the requested head"
+    return review_trigger.decide({
+        "is_draft": full["draft"],
+        "ci_ok_green": ci_ok_green(check_runs, head_sha),
+        "head_sha": head_sha,
+        "head_ref": (full.get("head") or {}).get("ref", ""),
+        "author": ((full.get("user") or {}).get("login") or ""),
+        "body": full.get("body") or "",
+        "changed_files": changed,
+        "labels": [l.get("name", "") for l in (full.get("labels") or [])],
+        "additions": full.get("additions", 0),
+        "deletions": full.get("deletions", 0),
+        "check_runs": check_runs,
+    })
+
+
 def main():
     head_sha = os.environ.get("HEAD_SHA", "")
     if not head_sha or not os.environ.get("REPO") or not os.environ.get("GH_TOKEN"):
@@ -99,48 +158,19 @@ def main():
     number = pr["number"]
 
     full = api("/pulls/%d" % number)
-    if full.get("draft"):
-        notice("PR #%d is a draft; drafts are never reviewed" % number)
+    if not ready_pr(full, head_sha):
+        notice("PR #%d is not open and non-draft on the requested head" % number)
         return 0
 
-    check_runs = [
-        {
-            "name": r.get("name"),
-            "status": r.get("status"),
-            "conclusion": r.get("conclusion"),
-            "head_sha": head_sha,
-        }
-        for r in paginate("/commits/%s/check-runs" % head_sha, key="check_runs")
-    ]
-    ci_ok = [r for r in check_runs
-             if r["name"] == CI_OK_CHECK and r["status"] == "completed"]
-    if not any(r["conclusion"] == "success" for r in ci_ok):
+    check_runs = paginate("/commits/%s/check-runs?filter=latest" % head_sha,
+                          key="check_runs")
+    if not ci_ok_green(check_runs, head_sha):
         notice("ci-ok is not green on head %s; waiting for CI" % head_sha[:12])
         return 0
 
-    files = api("/pulls/%d/files?per_page=100" % number) or []
-    changed = [f.get("filename", "") for f in files]
-    truncated = len(files) >= 100
-    if truncated:
-        # Fail toward one extra review, not toward skipping a risky path we
-        # could not see: append a path that matches RISKY_PATH_PATTERNS so
-        # is_risky() routes to review even when the risky file is past page 1.
-        changed.append(".github/workflows/TRUNCATED-FILE-LIST-unknown")
+    changed = changed_paths(number)
 
-    payload = {
-        "is_draft": bool(full.get("draft")),
-        "ci_ok_green": True,
-        "head_sha": head_sha,
-        "head_ref": (full.get("head") or {}).get("ref", ""),
-        "author": ((full.get("user") or {}).get("login") or ""),
-        "body": full.get("body") or "",
-        "changed_files": changed,
-        "labels": [l.get("name", "") for l in (full.get("labels") or [])],
-        "additions": full.get("additions", 0),
-        "deletions": full.get("deletions", 0),
-        "check_runs": check_runs,
-    }
-    action, reason = review_trigger.decide(payload)
+    action, reason = head_decision(full, head_sha, check_runs, changed)
     if action != "request":
         notice("decision=skip (%s)" % reason)
         return 0
@@ -160,14 +190,40 @@ def main():
     # but a review requested through another path (manual mention, gate
     # listing, an overlapping delivery) shows as a live run with no verdict
     # and no marker comment yet; posting on top of it opens a second
-    # same-head review row. Error outcomes stay retryable: the reconciler owns
-    # the wake path for those heads (one wake per head via its state key;
-    # repeated errors still wake).
-    fresh_runs = paginate("/commits/%s/check-runs" % head_sha, key="check_runs")
+    # same-head review row. Read all attempts for the shared error budget;
+    # the latest run alone can hide spent retries or older verdicts.
+    fresh_runs = paginate("/commits/%s/check-runs?filter=all" % head_sha, key="check_runs")
     if any(review_dedup.check_run_suppresses(r.get("name"), r.get("status"), r.get("conclusion"))
            for r in fresh_runs):
         notice("a Paperclip Review run already covers head %s; one review per head"
                % head_sha[:12])
+        return 0
+
+    # One error retry max, shared across every trigger path (this workflow,
+    # the reconciler, manual mentions): each completed non-verdict Paperclip
+    # Review run on this head is one spent error attempt, and the shared
+    # guard decides whether any retry is left. The live/verdict guard above
+    # already handled live and verdict runs, so the non-verdict completed
+    # runs counted here are exactly the error attempts.
+    error_attempts = sum(
+        1 for r in fresh_runs
+        if r.get("name") == REVIEW_CHECK
+        and r.get("status") == "completed"
+        and r.get("conclusion") not in ("success", "failure"))
+    budget_action, budget_why = review_dedup.head_decision(["error"] * error_attempts)
+    if budget_action != "request":
+        notice("head %s already used its error retry budget (%s); no new trigger"
+               % (head_sha[:12], budget_why))
+        return 0
+
+    # Use the same final check snapshot for CI readiness and retry history.
+    # ci_ok_green selects the newest CI attempts without discarding reviews.
+    # Retargeting can change paths without changing the head SHA.
+    changed = changed_paths(number)
+    current = api("/pulls/%d" % number)
+    action, reason = head_decision(current, head_sha, fresh_runs, changed)
+    if action != "request":
+        notice("readiness changed before publication (%s)" % reason)
         return 0
 
     # Label first, then comment: the reviewer invocation evaluates the

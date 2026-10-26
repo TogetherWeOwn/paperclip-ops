@@ -418,12 +418,17 @@ test('the wake-list derivation scans both .yml and .yaml (the two extensions Git
   assert.deepEqual(deriveExpectedWakeList(dir), ['A Gate', 'B Gate'])
 })
 
-test('the header discloses both pre-enablement gaps and claims no exact coverage', () => {
-  // Neither the heavy-CI handoff nor the post-review arm wake is proven on
-  // this route; the disclosure must survive edits — deleting a gap paragraph
+test('the header discloses the demonstrated fail-closed posture and claims no exact coverage', () => {
+  // Both pre-enablement gaps were demonstrated fail-closed in the flag-on
+  // change; the disclosure must survive edits — deleting a posture paragraph
   // fails here instead of shipping a silently incomplete contract.
-  assert.ok(workflow.includes('heavy-CI'), 'heavy-CI handoff gap disclosed')
-  assert.ok(workflow.includes('post-review auto-merge arm has NO wake'), 'arm-wake gap disclosed')
+  assert.ok(workflow.includes('heavy-CI'), 'heavy-CI handoff posture disclosed')
+  assert.ok(workflow.includes('post-review auto-merge arm has NO wake'), 'arm-wake posture disclosed')
+  assert.ok(!workflow.includes('UNPROVEN'), 'no gap is left unproven at flag-on')
+  assert.ok(!workflow.includes('before any repo is enabled'), 'no deferred pre-enablement demand remains')
+  assert.ok(workflow.includes('readiness-flag-on.test.mjs'), 'proof suite named')
+  assert.ok(workflow.includes('minimal'), 'grants disclosed as minimal-expressible, not exact-capability')
+  assert.ok(workflow.includes('delays but never corrupts'), 'lazy convergence disclosed')
   assert.ok(!workflow.includes('fire exactly on state changes'), 'no exact-coverage claim')
 })
 

@@ -48,6 +48,9 @@ jobs:
     # Keep the existing required check name.
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Checkout plus local lint scripts; no API use, so contents:read.
+    permissions:
+      contents: read
     steps:
       - name: Require a GitHub-hosted runner
         shell: bash
@@ -77,7 +80,7 @@ jobs:
           python3 -m unittest discover -s .github/scripts -p 'test_action_pins.py'
           python3 -m unittest discover -s .github/scripts -p 'test_public_ci.py'
           python3 -m unittest discover -s .github/scripts -p 'test_docs_*.py'
-          python3 -m unittest discover -s .github/scripts -p 'test_review_trigger*.py'
+          python3 -B -m unittest discover -s .github/scripts -p 'test_review*.py'
 
       - name: Check title, body and commits
         env:

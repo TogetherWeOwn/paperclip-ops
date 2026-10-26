@@ -31,6 +31,12 @@ REVIEW_RULES_GUARD = (
 REVIEW_RULES_PACKS = frozenset({"rust", "ts", "python-shell-ci", "php", "security"})
 # Input keys accepted by the pinned review-rules reusable at REVIEW_RULES_GUARD.
 REVIEW_RULES_INPUTS = frozenset({"packs", "mode", "runs-on-json"})
+# Exact job-level permission maps a test-guard caller may carry (absent also
+# passes): the read-only workflow floor, or the explicit audited pair.
+TEST_GUARD_CALLER_PERMISSIONS = (
+    {"contents": "read"},
+    {"contents": "read", "pull-requests": "read"},
+)
 
 
 class PublicCI(unittest.TestCase):
@@ -72,14 +78,16 @@ class PublicCI(unittest.TestCase):
                                          {"contents": "read"}, label)
                         self.assert_review_rules_inputs(inputs, label)
                     else:
-                        # Test-guard callers carry no job permissions today
-                        # (workflow-level only); pin that to absent-or-read so
-                        # a later `permissions: write-all` edit fails closed.
-                        # The callee caps its own permissions, so impact is low,
-                        # but the guard should prove the bound it claims.
+                        # Test-guard callers may omit job permissions
+                        # (inherit the read-only workflow floor), or carry
+                        # exactly contents:read, or exactly the audited
+                        # explicit pair contents:read + pull-requests:read
+                        # (the marker-label audit scope the callee needs).
+                        # Anything else, including write scopes and extra
+                        # read-only scopes, fails closed.
                         perms = job.get("permissions")
                         self.assertTrue(
-                            perms is None or perms == {"contents": "read"},
+                            perms is None or perms in TEST_GUARD_CALLER_PERMISSIONS,
                             label)
                         try:
                             route = json.loads(inputs.get("runs-on-json", "null"))
@@ -125,6 +133,12 @@ class PublicCI(unittest.TestCase):
                 "on: pull_request\njobs:\n  direct:\n    runs-on: ubuntu-latest\n")
             (directory / "reusable.yml").write_text(
                 "on: pull_request\njobs:\n  guard:\n    uses: " + HOSTED_TEST_GUARD
+                + "\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n")
+            (directory / "guard-contents.yml").write_text(
+                "on: pull_request\njobs:\n  guard:\n    permissions:\n      contents: read\n    uses: " + HOSTED_TEST_GUARD
+                + "\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n")
+            (directory / "guard-pair.yml").write_text(
+                "on: pull_request\njobs:\n  guard:\n    permissions:\n      contents: read\n      pull-requests: read\n    uses: " + HOSTED_TEST_GUARD
                 + "\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n")
             (directory / "review.yml").write_text(
                 "on: pull_request\njobs:\n  review-rules:\n    name: review-rules\n    permissions:\n      contents: read\n    uses: " + REVIEW_RULES_GUARD
@@ -180,6 +194,14 @@ class PublicCI(unittest.TestCase):
                 + "\n    permissions: write-all\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
             "test-guard-permissions-contents-write": "    uses: " + HOSTED_TEST_GUARD
                 + "\n    permissions:\n      contents: write\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-permissions-pull-requests-write": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    permissions:\n      contents: read\n      pull-requests: write\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-permissions-pull-requests-only": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    permissions:\n      pull-requests: read\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-permissions-extra-read": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    permissions:\n      contents: read\n      pull-requests: read\n      issues: read\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "test-guard-permissions-contents-extra-read": "    uses: " + HOSTED_TEST_GUARD
+                + "\n    permissions:\n      contents: read\n      actions: read\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
         }
         for name, job in bad_jobs.items():
             for suffix in (".yml", ".yaml"):
@@ -816,14 +838,23 @@ class PublicCI(unittest.TestCase):
         self.assertIn(dispatch, original)
         # Only definitions and the offline POSTHOC self-test; never the audit's API path.
         script = original.split(dispatch, 1)[0] + "\nposthoc_test\n"
-        for case in ("public-redacted", "nonpublic-redacted", "unknown-alias"):
+        cases = ("public-redacted", "nonpublic-redacted", "unknown-alias",
+                 "near-match-suffix", "near-match-prefix")
+        for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 (root / "verification").mkdir()
                 text = script
                 if case == "unknown-alias":
                     self.assertIn("|case_fcdcc723|", text)
+                    self.assertIn("|case_aee42a7a|", text)
                     text = text.replace("|case_fcdcc723|", "|unknown-alias|")
+                    text = text.replace("|case_aee42a7a|", "|unknown-alias|")
+                elif case in ("near-match-suffix", "near-match-prefix"):
+                    self.assertIn("|case_aee42a7a|", text)
+                    near = ("case_aee42a7a-extra" if case == "near-match-suffix"
+                            else "xcase_aee42a7a")
+                    text = text.replace("|case_aee42a7a|", f"|{near}|")
                 (root / script_name).write_text(text)
                 (root / "public_snapshot_test_support.py").write_bytes((ROOT / "public_snapshot_test_support.py").read_bytes())
                 (root / "README.md").write_text("private source\n" if case == "nonpublic-redacted"
@@ -835,11 +866,93 @@ class PublicCI(unittest.TestCase):
                 output = result.stdout + result.stderr
                 self.assertEqual(result.returncode, 0 if case == "public-redacted" else 1, output)
                 if case == "public-redacted":
-                    self.assertIn("SKIP: 11 private historical card identities", output)
-                    self.assertIn("111/111 POSTHOC checks correct", output)
+                    self.assertIn("SKIP: 13 private historical card identities", output)
+                    self.assertIn("129/129 POSTHOC checks correct", output)
+                elif case in ("near-match-suffix", "near-match-prefix"):
+                    # The 9 case_fcdcc723 rows still skip; the 4 near-match rows
+                    # must fail card validation. A prefix-wildcard exemption
+                    # (case_aee42a7a*) would skip all 13 and exit 0 instead.
+                    self.assertIn("SKIP: 9 private historical card identities", output)
+                    self.assertIn("bad card:", output)
+                    self.assertIn(near, output)
                 else:
                     self.assertNotIn("SKIP:", output)
                     self.assertIn("bad card:", output)
+
+    def test_posthoc_adjudicated_tuples_pinned_independently(self):
+        script_name = "verification/case_092cd51d-public-fork-disclosure-audit.sh"
+        original = (ROOT / script_name).read_text()
+        dispatch = "\nif [ \"${1:-}\" = '--provenance-diagnostics' ]; then"
+        self.assertIn(dispatch, original)
+        # Independently specified adjudication table: the audit's POSTHOC list
+        # is the implementation under test, never the expectation source. A
+        # reverted SHA or rebound repository must fail without touching this.
+        expected = (
+            ("paperclip", "refs/heads/release/tog.5-build-preparation",
+             "78db40a12beb826ad52dba2662b3840a1045a137"),
+            ("paperclip", "refs/heads/ci/pr-trusted-affected-work-draft",
+             "300dd3b66ed38feb3e404377af923dd513e7e52d"),
+            ("CLIProxyAPI", "refs/heads/fix/mcp-alias-unique-suffix",
+             "159e43cea3c56aeaf51313651cce425a06256939"),
+            ("CLIProxyAPI", "refs/heads/dev",
+             "e9af1ba330858c09a3d6aace3669ba087455928c"),
+        )
+        negatives = (
+            ("paperclip", "refs/heads/release/tog.5-build-preparation",
+             "6aefa649f4815ad6784a4e68a3482456bc41db6b",
+             "superseded build-preparation pin"),
+            ("CLIProxyAPI", "refs/heads/fix/mcp-alias-unique-suffix",
+             "8e44e70969664d27776b0a20034a01f094302c9a",
+             "superseded mcp-alias pin"),
+            ("CLIProxyAPI", "refs/heads/ci/pr-trusted-affected-work-draft",
+             "300dd3b66ed38feb3e404377af923dd513e7e52d",
+             "wrong repository for CI pin"),
+            ("paperclip", "refs/heads/release/tog.5-build-preparation",
+             "78db40a12beb826ad52dba2662b3840a1045a130",
+             "moved SHA"),
+        )
+        # Only definitions plus a driver over the real verdict function; never
+        # the audit's API path.
+        lines = [original.split(dispatch, 1)[0]]
+        lines += [
+            "fail=0",
+            "expect_posthoc() {",
+            "  local out",
+            "  if out=$(ours_verdict \"$1\" \"$2\" \"$3\"); then",
+            "    case \"$out\" in",
+            "      *\"PUBLIC, POST-HOC adjudicated (case_aee42a7a)\"*) ;;",
+            "      *) echo \"FAIL: wrong verdict for $1 $2: $out\"; fail=1;;",
+            "    esac",
+            "    case \"$out\" in",
+            "      *\", declared (\"*) echo \"FAIL: printed as declared: $out\"; fail=1;;",
+            "    esac",
+            "  else",
+            "    echo \"FAIL: expected POSTHOC but undeclared: $1 $2 $3\"; fail=1",
+            "  fi",
+            "}",
+            "expect_undeclared() {",
+            "  local out",
+            "  if out=$(ours_verdict \"$1\" \"$2\" \"$3\"); then",
+            "    echo \"FAIL: expected undeclared but got: $out ($4)\"; fail=1",
+            "  else",
+            "    echo \"OK undeclared: $4\"",
+            "  fi",
+            "}",
+        ]
+        for repo, ref, sha in expected:
+            lines.append(f"expect_posthoc {repo} {ref} {sha}")
+        for repo, ref, sha, label in negatives:
+            lines.append(f"expect_undeclared {repo} {ref} {sha} \"{label}\"")
+        lines.append("exit $fail")
+        with tempfile.TemporaryDirectory() as tmp:
+            driver = Path(tmp) / "posthoc_tuple_driver.sh"
+            driver.write_text("\n".join(lines) + "\n")
+            result = subprocess.run(["bash", str(driver)], env={"PATH": os.environ["PATH"]},
+                                    capture_output=True, text=True, timeout=20)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        for _, _, _, label in negatives:
+            self.assertIn(f"OK undeclared: {label}", output)
 
     def test_withdrawal_fixture_boundary_and_digest_fail_closed(self):
         for case in ("public-absent", "nonpublic-absent", "partial-classification",

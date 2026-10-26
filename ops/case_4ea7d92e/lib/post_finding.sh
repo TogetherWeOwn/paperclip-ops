@@ -36,6 +36,11 @@
 # ===========================================================================
 set -Eeuo pipefail
 
+# shellcheck source=lib/paperclip_api_allowlist.sh
+_PF_ALLOWLIST_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../lib/paperclip_api_allowlist.sh"
+_PF_ALLOWLIST_LIB_OK=""
+if [[ -r "$_PF_ALLOWLIST_LIB" ]]; then source "$_PF_ALLOWLIST_LIB"; _PF_ALLOWLIST_LIB_OK=1; fi
+
 : "${PAPERCLIP_API_URL:?PAPERCLIP_API_URL must be set (EnvironmentFile)}"
 : "${PAPERCLIP_AGENT_API_KEY:?PAPERCLIP_AGENT_API_KEY must be set (EnvironmentFile) -- see ops/case_4ea7d92e/INSTALL.md}"
 : "${PAPERCLIP_COMPANY_ID:?PAPERCLIP_COMPANY_ID must be set (EnvironmentFile)}"
@@ -76,6 +81,10 @@ _pf_api() {
       echo "post_finding: refusing: PAPERCLIP_API_URL authority is not one bare host" >&2; return 1
     fi
   fi
+  if [[ -z "${_PF_ALLOWLIST_LIB_OK:-}" ]]; then
+    echo "post_finding: refusing: API allowlist lib missing" >&2; return 1
+  fi
+  paperclip_allowlist_check "$_base" "post_finding" || return 1
   local args=(-sS --connect-timeout 10 --max-time 30 -X "$method" -H "Content-Type: application/json" -w $'\n%{http_code}')
   [[ -n "$body" ]] && args+=(--data-binary @-)
   local raw rc=0

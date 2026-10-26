@@ -27,6 +27,8 @@ export const SEED_PROVIDER_ORDER = [
 export const TOOL_NAMES = {
   /** Read-only: current usage/cooldown state for one or all providers. */
   getProviderUsage: "get_provider_usage",
+  /** Counts-only evidence; never returns provider or lane records. */
+  getCollectorEvidence: "get_collector_evidence",
 } as const;
 
 // Route keys are validated against a lowercase-only regex by

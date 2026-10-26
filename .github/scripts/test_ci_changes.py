@@ -254,6 +254,30 @@ class Classify(unittest.TestCase):
             if a != "dispatch":
                 self.assertFalse(r[a], a)
 
+    def test_dispatch_failure_visibility_suite_wakes_only_dispatch(self):
+        r = self.result("test_dispatch_sweep_failure_visibility.py")
+        self.assertFalse(r["full"])
+        self.assertEqual({a for a in cc.AREAS if r[a]}, {"dispatch"})
+
+    def test_dispatch_failure_visibility_runs_after_restoration_and_install(self):
+        with open(WORKFLOW) as fh:
+            text = fh.read()
+        start = text.index("      # == area: dispatch", text.index("# covers the wiring."))
+        end = text.index("  # cliproxy-insight", start)
+        steps = text[start:end].split("      - name: ")[1:]
+        command = "run: python3 -B -m unittest -v test_dispatch_sweep_failure_visibility"
+        selected = [i for i, step in enumerate(steps) if command in step]
+        self.assertEqual(len(selected), 1)
+        index = selected[0]
+        self.assertIn("working-directory: .\n", steps[index])
+        self.assertIn("if: needs.changes.outputs.full == 'true' || "
+                      "needs.changes.outputs.dispatch == 'true'", steps[index])
+        for prerequisite in ("run: bash scripts/sync-toolkit.sh",
+                             "run: npm ci --include=dev --ignore-scripts",
+                             "install ok: plugin-sdk present"):
+            self.assertTrue(any(prerequisite in step for step in steps[:index]), prerequisite)
+        self.assertNotIn("continue-on-error:", steps[index])
+
     def test_moved_plugin_path_fails_closed(self):
         # C6 cutover: no area claims plugins/model-selection/ anymore. A touch
         # there latches full (and core) so nothing is skipped; the
@@ -473,6 +497,7 @@ class Classify(unittest.TestCase):
             "test_garm_provider_latency_baseline.py",
             "kofra_preview_parity.py",
             "test_kofra_preview_parity.py",
+            "test_kofra_preview_parity_json.py",
             "upstream_draft_pin_audit.sh",
             "test_upstream_draft_pin_audit.sh",
             "ops/case_80989a33/cliproxy_config_gate.py",

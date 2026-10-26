@@ -215,6 +215,15 @@ function firstNumber(record2, fields) {
 function toolRejection(error, extra = {}) {
   return { ok: false, error, ...extra };
 }
+function unknownLaneResult() {
+  return {
+    error: "unknown_lane",
+    data: toolRejection("unknown_lane", {
+      retryable: false,
+      next_action: "use a lane id from the persisted lane index"
+    })
+  };
+}
 function resolveConfig(raw) {
   const r = asRecord(raw);
   return {
@@ -345,9 +354,11 @@ function isStale(observedAt, staleAfterSeconds, nowMs) {
   if (!Number.isFinite(observedMs)) return true;
   return nowMs - observedMs > staleAfterSeconds * 1e3;
 }
-async function laneSummary(read, config, nowMs) {
+async function readLaneIndex(read) {
   const storedIndex = await read(STATE_KEYS.laneIndex);
-  const lanes = Array.isArray(storedIndex) ? storedIndex.filter((l) => typeof l === "string") : [];
+  return Array.isArray(storedIndex) ? storedIndex.filter((l) => typeof l === "string") : [];
+}
+async function laneSummary(read, config, nowMs, lanes) {
   const laneSnapshots = {};
   let accountsCooling = 0;
   for (const laneFile of lanes) {
@@ -670,8 +681,22 @@ function createPlugin() {
         TOOL_NAMES.getProviderUsage,
         {
           displayName: "Get provider usage",
-          description: "Read the most recently persisted CLIProxy usage/cooldown state. Read-only; consults stored history, never calls CLIProxy.",
-          parametersSchema: { type: "object", required: ["companyId"] }
+          description: "Read the most recently persisted CLIProxy usage state: per-provider success/failed counters, cooldown history, and per-model capacity windows, each flagged stale when older than the freshness budget. Optionally select one persisted lane to return only that lane's stored history; provider snapshots and modelUsage keep their existing scope. Stored history only \u2014 not serving readiness or an admission decision. Read-only; consults stored history, never calls CLIProxy.",
+          parametersSchema: {
+            type: "object",
+            required: ["companyId"],
+            properties: {
+              companyId: { type: "string", description: "Company whose CLIProxy history applies" },
+              provider: {
+                type: "string",
+                description: "Optional. One provider key as published by the lane (e.g. claude, codex, codex-spark, kimi, opencode-go). Omit to return every provider observed so far."
+              },
+              lane: {
+                type: "string",
+                description: "Optional. One exact lane id from the persisted lane index \u2014 an entry in `lanes` from an unfiltered call (e.g. claude.json). Omit to return every persisted lane. Unknown ids are rejected as unknown_lane; a provider name is not a lane id."
+              }
+            }
+          }
         },
         async (params) => {
           const input = asRecord(params);
@@ -680,10 +705,27 @@ function createPlugin() {
             return { error: "companyId is required", data: toolRejection("companyId is required") };
           if (!isConfiguredCompany(companyId))
             return { error: "company is not configured", data: toolRejection("company is not configured") };
+          const selectedLane = input.lane;
+          if (selectedLane !== void 0 && (typeof selectedLane !== "string" || selectedLane.trim().length === 0)) {
+            return unknownLaneResult();
+          }
           const config = resolveConfig(await ctx.config.get(companyId));
           if (!isConfiguredCompany(companyId))
             return { error: "company is not configured", data: toolRejection("company is not configured") };
           const nowMs = Date.now();
+          const readState = (stateKey) => ctx.state.get(key(companyId, stateKey));
+          const indexedLanes = await readLaneIndex(readState);
+          if (!isConfiguredCompany(companyId))
+            return { error: "company is not configured", data: toolRejection("company is not configured") };
+          if (typeof selectedLane === "string" && !indexedLanes.includes(selectedLane)) {
+            return unknownLaneResult();
+          }
+          const lane = await laneSummary(
+            readState,
+            config,
+            nowMs,
+            typeof selectedLane === "string" ? [selectedLane] : indexedLanes
+          );
           const requested = typeof input.provider === "string" ? input.provider : null;
           const providers = requested ? [requested] : await readProviderIndex(companyId);
           const snapshots = {};
@@ -695,11 +737,6 @@ function createPlugin() {
           }
           const modelUsage = asRecord(await ctx.state.get(key(companyId, STATE_KEYS.modelUsage)));
           const hasModelUsage = Object.keys(modelUsage).length > 0;
-          const lane = await laneSummary(
-            (stateKey) => ctx.state.get(key(companyId, stateKey)),
-            config,
-            nowMs
-          );
           return {
             data: {
               version: PLUGIN_VERSION,
@@ -823,10 +860,12 @@ function createPlugin() {
       }
       const modelUsage = asRecord(await context.state.get(scope(STATE_KEYS.modelUsage)));
       const hasModelUsage = Object.keys(modelUsage).length > 0;
+      const readRouteState = (stateKey) => context.state.get(scope(stateKey));
       const lane = await laneSummary(
-        (stateKey) => context.state.get(scope(stateKey)),
+        readRouteState,
         config,
-        nowMs
+        nowMs,
+        await readLaneIndex(readRouteState)
       );
       return {
         status: 200,

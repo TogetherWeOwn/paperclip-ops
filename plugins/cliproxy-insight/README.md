@@ -10,7 +10,7 @@ Built per case_22968ca3 against dispatch (`wakeEnabled`) and model-selection
 |---|---|
 | Version | **0.3.1** — bounded single-company scheduled polling; retains per-lane cooldown state |
 | Code | manifest, config schema, secret-ref guard, worker (poll job, two agent tools including the unreleased counts-only tool, one API route) |
-| Tests | 194 vitest (101 existing + 93 aggregate-evidence cases; `it.each` rows count separately). Separate rebuilt-worker and stock-runtime harnesses cover the company-scope contract; see [contract evidence](deploy/COMPANY-SCOPE-CONTRACT.md) for their recorded execution, not a current live claim. No live DB, credentials or lane requests. |
+| Tests | 231 vitest (101 existing + 93 aggregate-evidence cases + 37 lane-selector acceptance cases; `it.each` rows count separately). Separate rebuilt-worker and stock-runtime harnesses cover the company-scope contract; see [contract evidence](deploy/COMPANY-SCOPE-CONTRACT.md) for their recorded execution, not a current live claim. No live DB, credentials or lane requests. |
 | Manifest | validated against the **host's own** `pluginManifestV1Schema` — PASS, `pluginId: "togetherweown.cliproxy-insight"`. `validateManifestCapabilities` could not be run standalone here — it lives at `/app/server/dist/services/plugin-capability-validator.js` and resolves internal `@paperclipai/shared` source paths that only exist inside the live server process. Every declared feature was hand-checked against the capabilities list instead, and that check caught one real gap (`activity.log.write`) |
 | Installed | **0.3.1: no**. Operator installed 0.3.0 on 2026-09-23, then disabled it after the scheduled scope failure. Keep it disabled pending reviewed replacement through case_22d743e1. |
 | Polling | **off** by default; installing is not enabling |
@@ -53,6 +53,32 @@ Independent synthetic acceptance covers the aggregate contract and invoking-comp
 boundary (93 cases; 194 tests including existing regressions). Release versioning,
 immutable artifact preparation and supported deployment remain separate work; this
 unreleased source is not a new installable release, and no live success is claimed.
+
+## Selecting one persisted lane
+
+`get_provider_usage` accepts an optional `lane` selector: one exact lane id
+from the persisted lane index (an entry in `lanes` from an unfiltered call,
+e.g. `claude.json`). A selected call returns only that lane in
+`lanes`/`laneSnapshots`, counts `accountsCooling` for that subset, and reads
+the lane index plus the selected lane only — never another lane's state.
+Omitting `lane` returns every persisted lane, unchanged. Provider snapshots
+and `modelUsage` keep their existing scope either way; a provider name is not
+a lane id and is never inferred to be one. This is stored history,
+not serving readiness and not an admission decision.
+
+Any present-but-invalid selector (unknown, empty, or non-string) is rejected
+with a fixed shape and no lane data, and the supplied value is never echoed:
+
+```json
+{ "ok": false, "error": "unknown_lane", "retryable": false, "next_action": "use a lane id from the persisted lane index" }
+```
+
+Synthetic example (ids illustrative only): with the lane index
+`["claude.json", "zai.json"]`, the call
+`{ "companyId": "<configured-company-id>", "lane": "zai.json" }` returns
+`lanes: ["zai.json"]` with only that lane's snapshot, while the same call
+without `lane` returns both lanes. Calls stay read-only and idempotent: no
+polling job, network call, quota/reset, config change, or secret access.
 
 ## What changed in 0.3.1
 

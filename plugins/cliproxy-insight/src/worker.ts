@@ -76,6 +76,22 @@ function toolRejection(error: string, extra: Record<string, unknown> = {}): Reco
   return { ok: false, error, ...extra };
 }
 
+/**
+ * The stable rejection for a present-but-invalid `lane` selector. Fixed
+ * strings only: the supplied value is never echoed and no lane data — not
+ * even the index — rides along, so a rejected call cannot leak lane records.
+ * Callers learn valid ids from an unfiltered call's `lanes` array.
+ */
+function unknownLaneResult(): { error: string; data: Record<string, unknown> } {
+  return {
+    error: "unknown_lane",
+    data: toolRejection("unknown_lane", {
+      retryable: false,
+      next_action: "use a lane id from the persisted lane index",
+    }),
+  };
+}
+
 function resolveConfig(raw: unknown): ResolvedConfig {
   const r = asRecord(raw);
   return {
@@ -382,6 +398,19 @@ export function isStale(observedAt: unknown, staleAfterSeconds: number, nowMs: n
 }
 
 /**
+ * The persisted lane index — the only source of valid lane ids. A `lane`
+ * selector is checked for exact membership here before any lane snapshot is
+ * read, so a state key is never constructed from unvalidated input and a
+ * selected call never reads another lane's state.
+ */
+async function readLaneIndex(read: (stateKey: string) => Promise<unknown>): Promise<string[]> {
+  const storedIndex = await read(STATE_KEYS.laneIndex);
+  return Array.isArray(storedIndex)
+    ? storedIndex.filter((l): l is string => typeof l === "string")
+    : [];
+}
+
+/**
  * The lane half of both read surfaces (agent tool and `usage-summary` route),
  * written once so the two cannot drift — a consumer that sees a cooldown on one
  * surface and not the other is worse than one that sees it on neither.
@@ -389,17 +418,16 @@ export function isStale(observedAt: unknown, staleAfterSeconds: number, nowMs: n
  * Cooldown is evaluated at READ time, not carried from the poll: a snapshot
  * persisted while an account was cooling must stop reporting a cooldown once
  * that instant passes, even if no poll has run since.
+ *
+ * Reads exactly `lanes` — the caller passes the full index, or the single
+ * index-validated selection — and counts `accountsCooling` over that subset.
  */
 async function laneSummary(
   read: (stateKey: string) => Promise<unknown>,
   config: ResolvedConfig,
   nowMs: number,
+  lanes: string[],
 ): Promise<{ lanes: string[]; laneSnapshots: Record<string, unknown>; accountsCooling: number }> {
-  const storedIndex = await read(STATE_KEYS.laneIndex);
-  const lanes = Array.isArray(storedIndex)
-    ? storedIndex.filter((l): l is string => typeof l === "string")
-    : [];
-
   const laneSnapshots: Record<string, unknown> = {};
   let accountsCooling = 0;
 
@@ -813,8 +841,24 @@ export function createPlugin() {
         {
           displayName: "Get provider usage",
           description:
-            "Read the most recently persisted CLIProxy usage/cooldown state. Read-only; consults stored history, never calls CLIProxy.",
-          parametersSchema: { type: "object", required: ["companyId"] },
+            "Read the most recently persisted CLIProxy usage state: per-provider success/failed counters, cooldown history, and per-model capacity windows, each flagged stale when older than the freshness budget. Optionally select one persisted lane to return only that lane's stored history; provider snapshots and modelUsage keep their existing scope. Stored history only — not serving readiness or an admission decision. Read-only; consults stored history, never calls CLIProxy.",
+          parametersSchema: {
+            type: "object",
+            required: ["companyId"],
+            properties: {
+              companyId: { type: "string", description: "Company whose CLIProxy history applies" },
+              provider: {
+                type: "string",
+                description:
+                  "Optional. One provider key as published by the lane (e.g. claude, codex, codex-spark, kimi, opencode-go). Omit to return every provider observed so far.",
+              },
+              lane: {
+                type: "string",
+                description:
+                  "Optional. One exact lane id from the persisted lane index — an entry in `lanes` from an unfiltered call (e.g. claude.json). Omit to return every persisted lane. Unknown ids are rejected as unknown_lane; a provider name is not a lane id.",
+              },
+            },
+          },
         },
         async (params) => {
           const input = asRecord(params);
@@ -824,10 +868,41 @@ export function createPlugin() {
           if (!isConfiguredCompany(companyId))
             return { error: "company is not configured", data: toolRejection("company is not configured") };
 
+          // Selector shape is validated after the company fence and before
+          // any state read. Only exact membership in the persisted lane
+          // index (checked below) can turn the value into a selection —
+          // a provider name is never inferred to be a lane id. An omitted
+          // or `undefined` selector keeps the unfiltered contract.
+          const selectedLane = input.lane;
+          if (
+            selectedLane !== undefined &&
+            (typeof selectedLane !== "string" || selectedLane.trim().length === 0)
+          ) {
+            return unknownLaneResult();
+          }
+
           const config = resolveConfig(await ctx.config.get(companyId));
           if (!isConfiguredCompany(companyId))
             return { error: "company is not configured", data: toolRejection("company is not configured") };
           const nowMs = Date.now();
+          const readState = (stateKey: string) => ctx.state.get(key(companyId, stateKey));
+
+          // Resolve the lane half before provider/model reads, so a rejected
+          // selector reads the index only — never another lane's snapshot,
+          // and no key is ever derived from the rejected input.
+          const indexedLanes = await readLaneIndex(readState);
+          if (!isConfiguredCompany(companyId))
+            return { error: "company is not configured", data: toolRejection("company is not configured") };
+          if (typeof selectedLane === "string" && !indexedLanes.includes(selectedLane)) {
+            return unknownLaneResult();
+          }
+          const lane = await laneSummary(
+            readState,
+            config,
+            nowMs,
+            typeof selectedLane === "string" ? [selectedLane] : indexedLanes,
+          );
+
           const requested = typeof input.provider === "string" ? input.provider : null;
           const providers = requested ? [requested] : await readProviderIndex(companyId);
 
@@ -843,11 +918,6 @@ export function createPlugin() {
 
           const modelUsage = asRecord(await ctx.state.get(key(companyId, STATE_KEYS.modelUsage)));
           const hasModelUsage = Object.keys(modelUsage).length > 0;
-          const lane = await laneSummary(
-            (stateKey) => ctx.state.get(key(companyId, stateKey)),
-            config,
-            nowMs,
-          );
 
           return {
             data: {
@@ -1005,10 +1075,12 @@ export function createPlugin() {
 
       const modelUsage = asRecord(await context.state.get(scope(STATE_KEYS.modelUsage)));
       const hasModelUsage = Object.keys(modelUsage).length > 0;
+      const readRouteState = (stateKey: string) => context!.state.get(scope(stateKey));
       const lane = await laneSummary(
-        (stateKey) => context!.state.get(scope(stateKey)),
+        readRouteState,
         config,
         nowMs,
+        await readLaneIndex(readRouteState),
       );
 
       return {

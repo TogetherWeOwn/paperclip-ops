@@ -12,17 +12,23 @@ silently change what CI executes. Every `uses:` must be one of:
 Anything else (tag ref, branch, short SHA, empty value) is a finding naming
 `file:line`.
 
-Usage: action_pins.py [workflow-file ...] (default: .github/workflows/*.yml,
-*.yaml plus .github/actions/**/action.yml|action.yaml).
-Runs inside the existing required `pr-lint` job, so adopting it adds no new
-required check and needs no ruleset change. Stdlib only.
+Usage: action_pins.py [--json] [workflow-file ...] (default:
+.github/workflows/*.yml, *.yaml plus .github/actions/**/action.yml|action.yaml).
+With `--json` a check run prints exactly one `action-pins.v1` object to stdout
+(see docs/action-pins.md). Every run is offline and read-only: it is its own
+dry-run. Runs inside the existing required `pr-lint` job, so adopting it adds
+no new required check and needs no ruleset change. Stdlib only.
 """
+import argparse
 import glob
+import json
 import os
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+SCHEMA = "action-pins.v1"
 
 # `uses` as a YAML mapping key: at line start (after `-`/indent), or after
 # `{`/`,` in a flow mapping. Covers `- uses:`, `uses:`, `- uses :`,
@@ -119,46 +125,188 @@ def default_files():
     return sorted(set(found))
 
 
-def main(argv=None):
-    explicit = list(argv[1:] if argv is not None else sys.argv[1:])
-    if explicit:
-        files = sorted(set(explicit))
-        missing = [p for p in files if not os.path.exists(p)]
-        for p in missing:
-            print(f"::error file={p},line=1::{_escape(f'missing file {p}')}")
-        findings = []
-        for path in files:
-            if not os.path.exists(path):
-                continue
-            try:
-                findings.extend(lint_file(path))
-            except (OSError, UnicodeDecodeError) as exc:
-                msg = f"{path}:1: unreadable file ({exc})"
-                print(f"::error file={path},line=1::{_escape(msg)}")
-                findings.append(Finding(str(path), 1, "(unreadable)"))
-        for f in findings:
-            print(f"::error file={f.file},line={f.line}::{_escape(f.message)}")
-        if missing or findings:
-            return 1
-        print(f"Action pins OK ({len(files)} workflow(s) checked)")
-        return 0
-    files = default_files()
-    if not files:
-        print(
-            "::error ::no workflow files found "
-            "(expected .github/workflows/*.yml|*.yaml or "
-            ".github/actions/**/action.y*ml)"
-        )
-        return 1
+@dataclass
+class InputError:
+    code: str
+    path: object  # str, or None for the scan-level no-inputs error
+    message: str
+    next_action: str
+    retryable: bool = False
+
+
+_ERROR_ACTIONS = {
+    "input-missing": "fix_input_path",
+    "input-unreadable": "fix_input_permissions",
+    "input-invalid-encoding": "fix_input_encoding",
+    "no-inputs-discovered": "provide_input_files",
+}
+
+_NO_INPUTS_MESSAGE = (
+    "no workflow files found "
+    "(expected .github/workflows/*.yml|*.yaml or "
+    ".github/actions/**/action.y*ml)"
+)
+
+
+def _input_error(code, path, message):
+    return InputError(code, path, message, _ERROR_ACTIONS[code])
+
+
+def scan_files(files):
+    """Check each file; return (findings, input_errors, checked_count).
+
+    A file that cannot be read is refused (one InputError) and never counted
+    as checked, so missing evidence cannot read as a clean scan. Findings
+    from files that were read survive other files' failures.
+    """
     findings = []
+    errors = []
+    checked = 0
     for path in files:
-        findings.extend(lint_file(path))
-    for f in findings:
-        print(f"::error file={f.file},line={f.line}::{_escape(f.message)}")
-    if findings:
-        return 1
-    print(f"Action pins OK ({len(files)} workflow(s) checked)")
-    return 0
+        try:
+            found = lint_file(path)
+        except FileNotFoundError:
+            errors.append(
+                _input_error("input-missing", str(path), f"missing file {path}"))
+        except UnicodeDecodeError as exc:
+            errors.append(_input_error(
+                "input-invalid-encoding", str(path),
+                f"{path}:1: invalid encoding ({exc})"))
+        except (OSError, ValueError) as exc:
+            errors.append(_input_error(
+                "input-unreadable", str(path),
+                f"{path}:1: unreadable file ({exc})"))
+        else:
+            checked += 1
+            findings.extend(found)
+    return findings, errors, checked
+
+
+def _finding_entry(finding):
+    # Finding stores "(missing value)" for prose; the JSON value is the
+    # actual (empty) `uses:` value.
+    value = "" if finding.value == "(missing value)" else finding.value
+    return {
+        "code": "unpinned-action",
+        "path": finding.file,
+        "line": finding.line,
+        "value": value,
+        "message": finding.message,
+        "retryable": False,
+        "next_action": "pin_to_full_sha_or_digest",
+    }
+
+
+def _error_entry(error):
+    return {
+        "code": error.code,
+        "path": error.path,
+        "message": error.message,
+        "retryable": error.retryable,
+        "next_action": error.next_action,
+    }
+
+
+def build_report(requested, findings, errors, checked, refused):
+    finding_entries = sorted(
+        (_finding_entry(f) for f in findings),
+        key=lambda e: (e["path"], e["line"], e["code"], e["value"]),
+    )
+    error_entries = sorted(
+        (_error_entry(e) for e in errors),
+        key=lambda e: (e["path"] or "", e["code"]),
+    )
+    scan_complete = requested > 0 and checked == requested
+    ok = scan_complete and not finding_entries and not error_entries
+    if ok:
+        next_action = "none"
+    elif error_entries:
+        next_action = error_entries[0]["next_action"]
+    else:
+        next_action = finding_entries[0]["next_action"]
+    return {
+        "schema": SCHEMA,
+        "ok": ok,
+        "scan_complete": scan_complete,
+        "requested": requested,
+        "checked": checked,
+        "refused": refused,
+        "findings": finding_entries,
+        "errors": error_entries,
+        "retryable": False,
+        "next_action": next_action,
+    }
+
+
+def _print_text(report, errors):
+    for error in errors:
+        if error.path is None:
+            print(f"::error ::{error.message}")
+        else:
+            print(f"::error file={error.path},line=1::{_escape(error.message)}")
+    for entry in report["findings"]:
+        print(
+            f"::error file={entry['path']},line={entry['line']}::"
+            f"{_escape(entry['message'])}"
+        )
+    if report["ok"]:
+        print(f"Action pins OK ({report['checked']} workflow(s) checked)")
+
+
+def _parser(prog):
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description=(
+            "Check that every `uses:` in workflows and local actions is "
+            "SHA-pinned (`owner/repo@<40-hex>`, `./...` local actions, or "
+            "`docker://...@sha256:<64-hex>`). Offline and read-only."
+        ),
+        epilog=(
+            "With --json a check run prints exactly one action-pins.v1 JSON "
+            "object to stdout. Check exits: 0 clean, 1 findings or refused "
+            "input. Usage errors exit 2 with text on stderr and are never "
+            "JSON; --help prints this text and exits 0 even with --json."
+        ),
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="print one action-pins.v1 JSON verdict object to stdout",
+    )
+    parser.add_argument(
+        "paths", nargs="*", metavar="PATH",
+        help=(
+            "workflow/action files to check (default: "
+            ".github/workflows/*.yml|*.yaml and "
+            ".github/actions/**/action.yml|action.yaml)"
+        ),
+    )
+    return parser
+
+
+def main(argv=None):
+    argv = list(sys.argv if argv is None else argv)
+    prog = os.path.basename(argv[0]) if argv else "action_pins.py"
+    args = _parser(prog).parse_args(argv[1:])
+    if args.paths:
+        files = sorted(set(args.paths))
+        findings, errors, checked = scan_files(files)
+        requested, refused = len(files), len(errors)
+    else:
+        files = default_files()
+        requested = len(files)
+        if files:
+            findings, errors, checked = scan_files(files)
+            refused = len(errors)
+        else:
+            findings, checked, refused = [], 0, 0
+            errors = [_input_error(
+                "no-inputs-discovered", None, _NO_INPUTS_MESSAGE)]
+    report = build_report(requested, findings, errors, checked, refused)
+    if args.json:
+        print(json.dumps(report, sort_keys=True))
+    else:
+        _print_text(report, errors)
+    return 0 if report["ok"] else 1
 
 
 if __name__ == "__main__":

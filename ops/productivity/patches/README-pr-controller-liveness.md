@@ -17,6 +17,12 @@ its inventory, classification, review, merge, capacity, hold, or live-run rules.
   without `Z`); an unparseable value is preserved and never crashes a pass.
 - `pr-controller-wakes.patch`: wires request/claim acknowledgement into the
   initial-event and stale-reminder paths. All existing admission/hold guards stay.
+- `pr-controller-shadow.patch`: adds `shadow_label is null` to the
+  `latest_reviews()` selection so shadow-only assessments never become the
+  newest review row for a head. Filtering happens before the `distinct on`
+  newest-row pick, so a later shadow row cannot hide an older real review.
+  `classify()` is unchanged: a shadow-only head now yields no map entry and
+  classifies `green`, and the review gate re-requests it.
 - `pr-controller-ci.patch`: routes the `ci_red` wake decision through the
   rerun-once / 3-round-cap policy before the normal wake post, and skips
   stale reminders while a PR is capped. Requires the wakes packet (it anchors
@@ -44,8 +50,34 @@ its inventory, classification, review, merge, capacity, hold, or live-run rules.
 - `../fixtures/pr_controller_ci_before.py`: anchor regions transcribed from
   the reviewed wakes post-image, used only for offline patch testing. It is
   not a runtime controller.
+- `pr-controller-notify-guard.patch`: wires the notification-only author-wake
+  gate into the live wake path. Four hunks: the `notify_author_wake` entry
+  point beside the classification seam, a `required` hoist feeding
+  `classify()`, a verdict-record block immediately after `state[key] = rec`,
+  and a `ci_red` suppress gate in `main()` right after the wake key.
+  Suppress fires only for `ci_red` with no author-actionable failure (empty
+  red list, or only known shared-base checks red while the required set is
+  known). The verdict is recorded alongside every state/head update, before
+  any exit that can save, and cleared when the state leaves `ci_red` — so a
+  saved same-head suppress verdict always describes the checks of the pass
+  that saved it, and a later genuine failure on the same head re-records a
+  fresh verdict. The gate reads the recorded verdict and skips render and
+  post without consuming the wake cap or marking the transition delivered.
+  Verdicts, eligibility, checks and gates are unchanged. Unknown required
+  sets fail closed to `wake`.
+- `../pr_controller_wake_guard.py`: the pure-stdlib decision module behind
+  that gate (`actionable_red`, `author_wake`, `KNOWN_BASE_EXECUTED`).
+  Deterministic, no I/O, no host imports.
 - `../fixtures/pr_controller_backstop_before.py`: exact pre-fix function, used
   only for offline patch testing. It is not a runtime controller.
+- `../fixtures/pr_controller_notify_before.py`: exact pre-fix
+  `latest_check_contexts`/`classify`/`wake_text` seam (lines 1-99,
+  byte-identical to the original evidence) plus live lines 335 through EOF
+  appended verbatim for the wiring hunks. Evidence only; not a runtime
+  controller.
+- `../fixtures/pr_controller_shadow_before.py`: exact pre-fix
+  `latest_reviews()`, used only for offline patch testing. It is not a
+  runtime controller.
 
 A comment's HTTP success records a pending request, not delivery. Subsequent
 inventory passes observe a queued/deferred request without posting duplicates.
@@ -69,7 +101,8 @@ This is not a general repair for parked recovery actions or blocked cards.
 
 ```sh
 (cd ops/productivity && python3 -B -m unittest -v \
-  test_pr_controller_backstop test_pr_controller_wakes)
+  test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow \
+  test_pr_controller_notify_guard test_pr_controller_notify_wiring)
 ```
 
 The ci-policy suites (acceptance contract, ops surface, host glue, patch
@@ -81,12 +114,12 @@ packet, ledger recording) run the same way:
   test_pr_controller_ci_patch test_flake_ledger)
 ```
 
-The backstop suite applies the patch with `--fuzz=0` to its fixture, and the
-ci-patch suite does the same for the ci packet. Hunk-shape rule for future
-packets: GNU `patch --fuzz=0` rejects a hunk whose leading context outnumbers
-its trailing context (change must sit at or before the hunk middle), so keep
-leading context minimal and anchor on unique lines. To test a full
-staged controller without importing its host dependencies:
+The backstop, shadow, notify-guard, and ci-patch suites each apply their
+patch with `--fuzz=0` to their fixture. Hunk-shape rule for future packets:
+GNU `patch --fuzz=0` rejects a hunk whose leading context outnumbers its
+trailing context (change must sit at or before the hunk middle), so keep
+leading context minimal and anchor on unique lines. To test a full staged
+controller without importing its host dependencies:
 
 ```sh
 PR_CONTROLLER_SOURCE=/path/to/staged/pr_controller.py \
@@ -104,22 +137,49 @@ required CI and Paperclip Review 5/5. Never install this entire public snapshot.
 
 1. Preserve the existing controller, helper if present, state, metadata and hashes.
 2. In a separate staging directory containing `ops/productivity/pr_controller.py`,
-   apply the backstop patch followed by the wake patch with `patch --batch
-   --fuzz=0 -p1`. A mismatch is a stop, not permission to force or fuzzy-apply it.
-3. Stage `pr_controller_wakes.py` beside the candidate. Run the offline suites on
-   the candidate and the existing host controller tests. Compare the complete
-   candidate diff: unrelated classification, hold, review and merge code must be
-   unchanged. Compile the candidate without executing its `main`.
-4. Atomically install the helper first, then the candidate, preserving host file
-   ownership/mode. Use the existing scheduled invocation; this packet requires no
-   Paperclip, database, or model-proxy restart, agent config change, or gate change.
-5. Record exact public head, before/after hashes, commands and verification receipt.
+   apply the backstop patch, the wake patch, the shadow patch, then the
+   notify-guard patch with `patch --batch --fuzz=0 -p1`. A mismatch is a
+   stop, not permission to force or fuzzy-apply it.
+3. Stage `pr_controller_wakes.py` and `pr_controller_wake_guard.py` beside the
+   candidate. Run the offline suites on the candidate and the existing host
+   controller tests. Compare the complete candidate diff: unrelated
+   classification, hold, review and merge code must be unchanged. Compile the
+   candidate without executing its `main`.
+4. Apply and verify the pump skip before installing the controller (the pump
+   file itself is host-only and is not part of this packet). In `pr_pump.py`
+   `main()`, inside the
+   `for key, rec in act:` loop, immediately after the per-(card, PR, state,
+   head) signature-dedup `continue` and before the `full, num` split, insert:
+   ```python
+   if rec.get('state') == 'ci_red':
+       nv = rec.get('notify_verdict') or {}
+       if (nv.get('verdict') == 'suppress' and rec.get('head')
+               and nv.get('head') == rec.get('head')):
+           continue
+   ```
+   The controller records the verdict in the same pass as the state/head it
+   describes, before every exit that can save, and clears it whenever the
+   state leaves `ci_red`; a saved same-head suppress verdict therefore
+   always describes the checks of the pass that saved it. The skip requires
+   all three equalities (stored `ci_red`, same head, recorded `suppress`),
+   so a missing verdict, a head change, or a refreshed `wake` verdict fails
+   closed to the legacy pump. Preserve the pump file and its hash before editing; compile
+   it; dry-run the pump (no `--apply`) and confirm a suppressed record no
+   longer appears as `would pump` while a genuinely actionable `ci_red`
+   still does.
+5. Only after the pump skip is verified, atomically install the helper first,
+   then the candidate, preserving host file ownership/mode. Use the existing
+   scheduled invocation; this packet requires no Paperclip, database, or
+   model-proxy restart, agent config change, or gate change.
+6. Record exact public head, before/after hashes, commands and verification receipt.
    Observe a real backstop trigger with no intervening re-arm and a skipped event
    followed by a claimed run. Offline green alone does not satisfy live acceptance.
 
 Rollback: atomically restore the preserved controller and any previous helper.
 Retain state and pending acknowledgements; never roll back or edit database rows,
 remove holds, alter wake configuration, cancel runs, or force a review/merge.
+If step 4 was applied, remove the inserted pump block and restore the preserved
+pump file the same way.
 
 ## CI-policy packet installation (rerun-once / 3-round cap)
 

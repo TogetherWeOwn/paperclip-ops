@@ -50,6 +50,10 @@ import websearch_lane_probe as probe  # noqa: E402
 CANARY = "pc_CANARY_base_validation_key"
 COMPANY = "co-stub"
 GOOD = "https://paperclip.invalid/api"
+# The allowlist test hatch: well-formed GOOD bases (.invalid) opt in
+# explicitly so the allowlist layer lets the structural layer's
+# still-reads assertions through without a host file.
+_HATCH_ENV = {"PAPERCLIP_API_ALLOWLIST_TEST": "1"}
 
 # Kept identical to MALFORMED in test_paperclip_api_base_validation.sh:
 # both gates refuse the same set.
@@ -101,7 +105,8 @@ class ProposerBase(unittest.TestCase):
                 self.assertEqual(urlopen.call_count, 0)
 
     def test_well_formed_base_still_reads(self):
-        with mock.patch("urllib.request.urlopen") as urlopen:
+        with mock.patch.dict(os.environ, _HATCH_ENV), \
+                mock.patch("urllib.request.urlopen") as urlopen:
             urlopen.return_value = canned_json(b"[]")
             rows = proposer.api_get(GOOD, CANARY, "/api/companies/co/agents")
         self.assertEqual(rows, [])
@@ -118,7 +123,8 @@ class RecoveryWriterBase(unittest.TestCase):
                     rw.PaperclipClient(base, CANARY)
 
     def test_well_formed_base_still_reads(self):
-        with mock.patch("urllib.request.urlopen") as urlopen:
+        with mock.patch.dict(os.environ, _HATCH_ENV), \
+                mock.patch("urllib.request.urlopen") as urlopen:
             urlopen.return_value = canned_json(b'{"id":"issue-stub"}')
             client = rw.PaperclipClient(GOOD, CANARY)
             issue = client.get("/api/issues/issue-stub")
@@ -161,7 +167,8 @@ class WebsearchProbeBase(unittest.TestCase):
     def test_well_formed_base_still_fetches(self):
         with mock.patch("urllib.request.urlopen") as urlopen:
             urlopen.return_value = canned_json(b'{"value":"fetched-key"}')
-            value = probe.fetch_run_secret("k", self.env(GOOD))
+            value = probe.fetch_run_secret(
+                "k", self.env(GOOD, PAPERCLIP_API_ALLOWLIST_TEST="1"))
         self.assertEqual(value, "fetched-key")
         self.assertEqual(urlopen.call_count, 1)
         self.assertTrue(
@@ -176,7 +183,8 @@ class ModelPinCleanupBase(unittest.TestCase):
                     model_pin.PaperclipClient(base, CANARY, COMPANY)
 
     def test_well_formed_base_still_reads(self):
-        with mock.patch("urllib.request.urlopen") as urlopen:
+        with mock.patch.dict(os.environ, _HATCH_ENV), \
+                mock.patch("urllib.request.urlopen") as urlopen:
             urlopen.return_value = canned_json(b"{}")
             client = model_pin.PaperclipClient(GOOD, CANARY, COMPANY)
             self.assertEqual(client.get("/api/issues/i"), {})
@@ -195,7 +203,8 @@ class ProcessLostProbeBase(unittest.TestCase):
                 self.assertEqual(urlopen.call_count, 0)
 
     def test_well_formed_base_still_reads(self):
-        with mock.patch("urllib.request.urlopen") as urlopen:
+        with mock.patch.dict(os.environ, _HATCH_ENV), \
+                mock.patch("urllib.request.urlopen") as urlopen:
             urlopen.return_value = canned_json(b"[]")
             self.assertEqual(
                 lost_probe.fetch_runs(GOOD, CANARY, COMPANY, 10), [])
@@ -214,7 +223,8 @@ class ReclaimClientBase(unittest.TestCase):
     def test_well_formed_base_still_reads(self):
         # ApiClient._get feeds the urlopen return straight to json.load
         # (no context manager), so the mock answers read() directly.
-        with mock.patch("urllib.request.urlopen") as urlopen:
+        with mock.patch.dict(os.environ, _HATCH_ENV), \
+                mock.patch("urllib.request.urlopen") as urlopen:
             urlopen.return_value.read.return_value = "[]"
             client = reclaim.ApiClient(GOOD, COMPANY, CANARY)
             self.assertEqual(client.heartbeat_runs(), [])
@@ -259,7 +269,8 @@ class ReconcilerBase(unittest.TestCase):
                     reconciler.PaperclipClient(base, CANARY, COMPANY)
 
     def test_well_formed_base_still_reads(self):
-        with mock.patch("urllib.request.urlopen") as urlopen:
+        with mock.patch.dict(os.environ, _HATCH_ENV), \
+                mock.patch("urllib.request.urlopen") as urlopen:
             urlopen.return_value = canned_json(b"{}")
             client = reconciler.PaperclipClient(GOOD, CANARY, COMPANY)
             self.assertEqual(client.get("/api/issues/i"), {})

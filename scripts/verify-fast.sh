@@ -167,6 +167,20 @@ fi
 rc=0
 fail() { echo "::error::$1"; rc=1; }
 
+# Backup observation contract (immutable acceptance + pinned regressions).
+# Runs under a run-owned TMPDIR so fixture debris can never escape into the
+# caller's temp space; the directory is removed on both pass and fail. Kept
+# as a function with a single `<call> || fail` execution line so the
+# verify-fast plan gates (inventory drift + neutralized --no-prepare run)
+# see exactly one fast-tier command for this suite.
+run_backup_observation_contract() {
+  local work suite_rc=0
+  work="$(mktemp -d "${TMPDIR:-/tmp}/backup-observation.XXXXXXXX")" || return 1
+  TMPDIR="$work" PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_backup_observation_contract test_backup_observation_regressions || suite_rc=$?
+  rm -rf -- "$work" || true
+  return "$suite_rc"
+}
+
 echo "=== verify-fast: parse gate (bash/node/python/esm) ==="
 # Slice-1 cutover deleted whole globs (e.g. scripts/*.js); a non-matching glob
 # must expand to nothing, not to its own literal text.
@@ -192,7 +206,8 @@ for f in ops/productivity/*.sh; do
   bash -n "$f" || fail "bash parse error: $f"
 done
 python3 -c 'import ast, sys; [ast.parse(open(p, "rb").read(), p) for p in sys.argv[1:]]' \
-  ops/productivity/*.py ops/lib/*.py ops/paperclip/*.py || fail "python parse error in ops/productivity, ops/lib or ops/paperclip"
+  ops/productivity/*.py ops/lib/*.py ops/paperclip/*.py ops/sdlc/*.py ops/agent-tooling/serena-pilot-b/*.py || fail "python parse error in ops/productivity, ops/lib, ops/paperclip, ops/sdlc or ops/agent-tooling/serena-pilot-b"
+sh -n ops/agent-tooling/serena-pilot-b/code-nav || fail "sh parse error: ops/agent-tooling/serena-pilot-b/code-nav"
 python3 -c 'import ast, sys; [ast.parse(open(path, "rb").read(), path) for path in sys.argv[1:]]' \
   ops/pr-hygiene/sweep.py ops/pr-hygiene/owner_match.py ops/lib/live_run_guard.py \
   ops/case_af881f62/operator_workspace_reconciler.py ops/case_af881f62/test_operator_workspace_reconciler.py \
@@ -233,6 +248,7 @@ if (( PREPARE )) && ! python3 verification/offline_ci_contract.py --check-restor
 fi
 
 echo "=== verify-fast: fast unit/contract gates ==="
+run_backup_observation_contract || fail "backup observation contract failed"
 node --test test/external-disclosure.test.mjs || fail "external-disclosure suite failed"
 node --test hooks/muse-stop-guard/muse-stop-guard.test.mjs || fail "muse-stop-guard suite failed"
 node --test hooks/disposition-stop-guard/disposition-stop-guard.test.mjs hooks/disposition-stop-guard/measure/census.test.mjs \
@@ -245,6 +261,11 @@ python3 -m unittest test_reharden_relative_targets || fail "reharden relative-ta
 python3 -m unittest test_deploy_window_manifest || fail "deploy-window manifest gate suite failed"
 ./test_credential_chain_lockdown.sh || fail "credential-chain lockdown fixture suite failed"
 python3 -m unittest test_ci_required_checks_audit || fail "required-checks audit failed"
+# case_6f2e8a41. Deterministic test-missing gate: unit contract plus
+# staged-copy/CLI regression. Hermetic stdlib unittest, no network, no
+# clock, temp fixtures only.
+python3 -m unittest test_blocker_test_checks test_test_missing_org_template \
+  || fail "test-missing gate suites failed"
 python3 -B test_beszel_adapter.py || fail "beszel adapter suite failed"
 python3 -B test_beszel_discord_forwarder.py || fail "beszel discord forwarder suite failed"
 bash test_fetch_beszel_normalized.sh || fail "beszel fetch wrapper suite failed"
@@ -253,6 +274,10 @@ python3 -m unittest test_quality_gates test_floor_guard test_no_pull_request_tar
   || fail "quality-gate helper suites failed"
 ./test_mutmut_changed.sh || fail "mutmut budget-kill fixture suite failed"
 ./test_ci_gating.sh || fail "change-gating contract failed"
+# Explicit workflow job permissions gate: same two commands as the
+# contract-pinned CI step, so the fast tier still executes the gate locally.
+python3 check_workflow_job_permissions.py || fail "workflow job permissions gate failed"
+python3 -m unittest test_check_workflow_job_permissions || fail "workflow job permissions acceptance suite failed"
 ./test_readme_script_index.sh || fail "readme script-index gate failed"
 ./test_public_comment_hygiene_gate.sh || fail "public-comment hygiene gate suite failed"
 ./test_acceptance_transport.sh || fail "acceptance-transport reply suite failed"
@@ -285,10 +310,14 @@ python3 -m unittest test_warn_first_inventory || fail "warn-first inventory suit
 node --test plugins/pr-tracker/test/collect-rest.test.mjs plugins/pr-tracker/test/poll-prs.test.mjs plugins/pr-tracker/test/setup.test.mjs plugins/pr-tracker/test/upstream-watcher.test.mjs plugins/pr-tracker/test/view-model.test.mjs \
   || fail "pr-tracker suite failed"
 node --test paperclip-upgrade/settings-bind-rehearsal.test.mjs || fail "settings-bind rehearsal suite failed"
-(cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_host_ok test_orphan_prs test_resolve_outdated_threads test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_flake_ledger test_pr_controller_backstop test_pr_controller_wakes) \
+(cd ops/productivity && python3 -B -m unittest test_review_error_rerequest test_review_dedup test_backlog_promoter test_board_jobs_bounds test_pr_supply test_flow_guard test_confirmed_mutation_outcomes test_host_ok test_orphan_prs test_resolve_outdated_threads test_resolve_outdated_incomplete_evidence test_stuck_run_reaper test_subprocess_bounds test_connection_intent_sweeper test_hide_noop_reconcile test_two_web_promote test_flake_ledger test_flake_ledger_report test_review_rebase_carry test_review_rebase_carry_flow test_review_rebase_carry_base_binding test_pr_controller_backstop test_pr_controller_wakes test_pr_controller_shadow test_pr_controller_notify_guard test_pr_controller_notify_wiring test_pipeline_stall_watch) \
   || fail "review-error, review-dedup, PR-supply, flow-guard, flake-ledger and pr-controller suites failed"
+PAPERCLIP_RUN_SCRATCH_DIR="${PAPERCLIP_RUN_SCRATCH_DIR:-${PAPERCLIP_SCRATCH_DIR:-${TMPDIR:-/tmp}}}" \
+  python3 -B verification/review_gate_acceptance/run.py --source-dir ops/review_gate --legacy || fail "paginated review-gate acceptance suite failed"
 (cd ops/paperclip && python3 -B -m unittest test_focus_gate_bounds) || fail "focus-gate bounds suite failed"
+(cd ops/sdlc && python3 -B -m unittest test_review_carry) || fail "review-carry suite failed"
 (cd ops/lib && python3 -m unittest test_atomic_state) || fail "atomic state suite failed"
+(cd ops/agent-tooling/serena-pilot-b && python3 -B -m unittest test_code_nav) || fail "code-nav suite failed"
 (cd ops/productivity && python3 -m unittest test_stuck_run_state) || fail "stuck-run state suite failed"
 (cd ops/productivity && python3 -B -m unittest test_idle_waiters_state test_idle_waiter_live_path test_idle_waiters_cli) || fail "idle-waiter state/live-path/cli suites failed"
 (cd ops/owner-guard && python3 -m unittest test_owner_guard_state) || fail "owner-guard state suite failed"

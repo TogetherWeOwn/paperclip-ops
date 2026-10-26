@@ -4,7 +4,7 @@
 # rule, (2) that the bundle builder, the installer and the release manifest
 # agree on one byte set (the case_b4863264 shape), and (3) the mechanism itself:
 # a real bundle built from a real git commit is installed by the real installer
-# into a temp root, and the installed wrapper resolves all three reviewed modules
+# into a temp root, and the installed wrapper resolves all four reviewed modules
 # from the installed layout.
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ INSTALLER = ROOT / "systemd" / "install-worktree-prune.sh"
 WRAPPER = ROOT / "ops" / "case_b1d141af" / "run-worktree-prune.sh"
 
 PAYLOAD = [
+    "lib/paperclip_api_allowlist.py",
+    "lib/paperclip_api_allowlist.sh",
     "ops/case_b1d141af/run-worktree-prune.sh",
     "ops/case_b1d141af/terminal_worktree_prune.py",
     "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
@@ -40,6 +42,8 @@ PAYLOAD = [
 # What the installer puts in the release directory (bundle-scope systemd/* is
 # verified but never installed).
 INSTALLED = [
+    "lib/paperclip_api_allowlist.py",
+    "lib/paperclip_api_allowlist.sh",
     "ops/lib/atomic_state.py",
     "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
     "ops/case_b1d141af/run-worktree-prune.sh",
@@ -393,9 +397,9 @@ class InstallMechanism(unittest.TestCase):
         self.assertIn("never merged by review", r.stderr)
         self.assertFalse((self.td / "stray.tar").exists())
 
-    def test_installed_wrapper_finds_all_three_modules_from_the_installed_layout(self):
+    def test_installed_wrapper_finds_all_four_modules_from_the_installed_layout(self):
         # Run the INSTALLED wrapper (not the repo copy) with a fake engine that
-        # captures the tar it is streamed: all three reviewed modules, nothing else.
+        # captures the tar it is streamed: all four reviewed modules, nothing else.
         root = self.fresh_root()
         self.assertEqual(self.install(root).returncode, 0)
         wrapper = self.release(root) / "ops/case_b1d141af/run-worktree-prune.sh"
@@ -407,12 +411,16 @@ class InstallMechanism(unittest.TestCase):
                "PAPERCLIP_WORKTREE_PRUNE_ENGINE": str(engine),
                "PAPERCLIP_WORKTREE_PRUNE_CONTAINER": "paperclip",
                "PAPERCLIP_API_URL": "http://x.invalid", "PAPERCLIP_API_KEY": "k",
-               "PAPERCLIP_COMPANY_ID": "c"}
+               "PAPERCLIP_COMPANY_ID": "c",
+               # The installed wrapper renders the host verdict for real; the
+               # fixture base is .invalid, so opt into the hatch explicitly.
+               "PAPERCLIP_API_ALLOWLIST_TEST": "1"}
         r = subprocess.run([str(wrapper)], env=env, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         with tarfile.open(capture) as tar:
             self.assertEqual(sorted(tar.getnames()),
-                             ["ops/case_b1d141af/terminal_worktree_prune.py",
+                             ["lib/paperclip_api_allowlist.py",
+                              "ops/case_b1d141af/terminal_worktree_prune.py",
                               "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
                               "ops/lib/atomic_state.py"])
 

@@ -1,0 +1,11 @@
+#!/bin/sh
+# code-nav: Serena-backed symbolic code navigation (Pilot B).
+# The agent runs this from its own worktree; it starts a Serena MCP server as
+# a child in that cwd, makes one tool call over stdio, prints the result and
+# exits. No connection, grant or binding is needed.
+# Installed to /paperclip/.local/bin/code-nav; see OPERATOR_SPEC.md.
+set -eu
+OPT=${SERENA_OPT_DIR:-/paperclip/.local/opt/serena-2.0.0}
+export SERENA_USAGE_REPORTING=false
+export SERENA_HOME=${SERENA_HOME:-/tmp/serena-home}
+exec "$OPT/venv/bin/python" "$OPT/code_nav.py" "$@"

@@ -10,13 +10,14 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["file", "line", "severity", "title", "rationale"],
+        "required": ["file", "line", "severity", "title", "rationale", "evidence"],
         "properties": {
           "file": {"type": "string"},
           "line": {"type": "integer"},
           "severity": {"type": "string", "enum": ["critical", "major", "minor"]},
           "title": {"type": "string"},
-          "rationale": {"type": "string"}
+          "rationale": {"type": "string"},
+          "evidence": {"type": "string", "minLength": 1}
         }
       }
     },

@@ -60,6 +60,27 @@ For `host_db_backup.sh`, see the [publication receipt contract](docs/host-db-bac
 for offline discovery, no-write planning, machine outcomes and fixture checks.
 This documentation does not authorize running a backup or changing a host.
 
+For the external, alert-only workspace sync-back size observer, see the
+[byte measurement and alert contract](docs/workspace-sync-back-signal.md).
+It does not instrument transport or authorize host installation.
+
+For the offline card/run/PR/head/deploy trace correlator, see the
+[evidence, join and SLO contract](docs/trace-correlation.md).
+It reads caller-assembled evidence only and authorizes no host action.
+
+For source-to-documentation accompaniment in pull requests, see the portable
+[documentation drift gate](docs/docs-drift.md), including its JSON contract,
+base-policy trust model and reusable CI interface.
+
+For native skill versions, reusable examples and isolated pinned-version tests,
+see the [versioned skill fixture procedure](docs/versioned-skill-fixtures.md).
+It adds no runtime registry, host automation or skill-assignment authority.
+
+For one policy across plan, build, and review phases, see the
+[role, provider, and rubric coherence procedure](docs/role-provider-rubric-coherence.md).
+It scopes guidance to role and phase, keeps task policy provider-independent,
+and cites a single pinned rubric in every phase.
+
 | Tool |
 | --- |
 | `public_snapshot_test_support.py` (test-only private-artifact boundary; not a runtime policy or operator command) |
@@ -67,9 +88,11 @@ This documentation does not authorize running a backup or changing a host.
 | `agent_error_proposer.py` |
 | `approval_timeout_probe.sh` |
 | `balancer_silence_guard.py` |
+| `blocker_test_checks.py` |
 | `bridge_row_inventory.py` |
 | `capture_host_evidence.sh` |
 | `capture_host_render.sh` |
+| `check_workflow_job_permissions.py` |
 | `case_8abb7523-measure.mjs` |
 | `ci_dark_steps.sh` |
 | `ci_failure_drain.sh` |
@@ -78,7 +101,7 @@ This documentation does not authorize running a backup or changing a host.
 | `ci_required_checks_ownership.py` |
 | `claude_countdown.py` |
 | `codex_countdown.py` |
-| `coolify_capacity_headroom.sh` |
+| `coolify_capacity_headroom.sh` and `coolify_capacity_headroom.py` ([offline evidence contract](docs/capacity-evidence.md); keep these siblings together) |
 | `credential_chain_audit.sh` |
 | `credential_chain_lockdown.sh` |
 | `db_backup_stall.sh` |
@@ -104,7 +127,7 @@ This documentation does not authorize running a backup or changing a host.
 | `migration_squawk.sh` |
 | `migration_timeout_preamble.sh` |
 | `muse_countdown.py` |
-| `native_ssh_citation_gate.py` |
+| `native_ssh_citation_gate.py` (historical fork audit; [official-stable retirement scope](docs/official-stable-fork-controls.md)) |
 | `notify_paperclip_issue.sh` |
 | `omniroute_combo_cli.sh` |
 | `op_queue_reject.sh` |
@@ -137,12 +160,58 @@ This documentation does not authorize running a backup or changing a host.
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
 
+## Planning depth
+
+Use [right-sized planning](docs/right-sized-planning.md) to bound a reviewable
+slice, choose preparation by risk/coupling, and record prototypes, investment
+reviews and followups in native task fields. It supplements existing acceptance
+criteria and anti-goals; publishing the guide is not company instruction rollout.
+
+## Native delivery workflow
+
+Use the [single-doer delivery contract](docs/single-doer-delivery.md) for reusable
+planner/builder fields, deterministic defect-routing decisions, and a
+revision-linked multi-repository manifest. These are native task/document
+conventions, not an automatic dispatcher or a production ownership catalog.
+
+## Productivity reconcilers
+
+For confirmed mutation counts, safe CLI modes, versioned JSON summaries and an
+offline verification command, see [Reconciler outcomes](docs/reconciler-outcomes.md).
+The source contract does not imply runtime installation; flow guard's existing
+no-flag invocation is mutating.
+
+## Task authoring
+
+Use the [acceptance criteria and anti-goals contract](docs/task-scope.md) for
+implementation task descriptions. It includes a copy-ready template, verifiable
+milestones for oversized work, and an adoption fragment for an existing company
+adapter. These are native-field authoring guidelines, not an installed skill or
+a new admission gate; source publication does not establish live adoption.
+
 ## Verification
 
 Run the fast tier with `make verify-fast` (`make verify-fast-parse` for the
 parse gate only). To inspect suite scope and prerequisites without running or
 preparing anything, use `make verify-fast-plan` (offline, read-only;
 `scripts/verify-fast.sh --plan --json`).
+
+The code-nav suite needs PyYAML. On a clean Linux x86_64 installation, prepare
+an isolated Python 3.12 environment outside the checkout, then run the fast tier
+with that interpreter on `PATH`:
+
+```sh
+python3.12 -m venv "$HOME/.cache/paperclip-ops/verify-fast-venv"
+. "$HOME/.cache/paperclip-ops/verify-fast-venv/bin/activate"
+python3 -m pip install --only-binary=:all: --no-deps --require-hashes \
+  -r scripts/static-label-guard-requirements.txt
+make verify-fast
+```
+
+This reuses CI's hash-pinned PyYAML 6.0.3 requirement; it does not install into
+system Python. An already-provisioned interpreter with PyYAML 6.0.3 also works.
+`--plan --json` reports parser readiness, and `--no-prepare` refuses when it is
+missing. Normal execution does not automatically prepare this Python environment.
 
 ## Contributing
 

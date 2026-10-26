@@ -102,6 +102,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 import terminal_worktree_cache_reclaim as reclaim  # noqa: E402
 from atomic_state import write_json_atomic  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "..", "lib"))
+from paperclip_api_allowlist import (
+    AllowlistRefused, check_api_base_allowed)
 
 # Host parity: the installed host script strips exactly these five names.
 REGEN_NAMES = ("node_modules", "target", ".next", ".turbo", ".pnpm-store")
@@ -999,6 +1003,16 @@ def main(argv=None, api=None, env=None):
         if not _valid_api_base(base.rstrip("/")):
             raise PruneError(
                 "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
+        # Quiet pre-check: ApiClient below owns the log + counter, so a
+        # shadow mismatch warns once per send, not twice.
+        try:
+            check_api_base_allowed(base.rstrip("/"),
+                                   sender="project_worktree_regen_prune",
+                                   quiet=True)
+        except AllowlistRefused as exc:
+            if opts.apply:
+                raise SafetyRefusal(str(exc)) from exc
+            raise PruneError(str(exc)) from exc
         api = reclaim.ApiClient(base, company, key)
     try:
         summary = run_tool(opts, api, env)

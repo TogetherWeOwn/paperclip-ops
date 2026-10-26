@@ -437,6 +437,7 @@ STUB10CURL
   rm -rf "$TOOLTMP10"; mkdir -p "$TOOLTMP10"
   OUT10="$(env -i PATH="$STUB10/bin:/usr/bin:/bin" TMPDIR="$TOOLTMP10" \
     PAPERCLIP_API_URL="https://health-stub.invalid" PAPERCLIP_API_KEY="$CANARY" \
+    PAPERCLIP_API_ALLOWLIST_TEST="1" \
     STUB10_CMDLOG="$CMD10" STUB10_CFGLOG="$CFG10" \
     "$TOOL" --log "$WORK/healthy.log" --backup-dir "$WORK/good" --json 2>"$STUB10/tool.err")"
   RC10=$?
@@ -475,6 +476,7 @@ STUB10CURL
   rm -rf "$TOOLTMP10"; mkdir -p "$TOOLTMP10"
   OUT10U="$(env -i PATH="$STUB10/bin:/usr/bin:/bin" TMPDIR="$TOOLTMP10" \
     PAPERCLIP_API_URL="https://health-stub.invalid" \
+    PAPERCLIP_API_ALLOWLIST_TEST="1" \
     STUB10_CMDLOG="$CMD10" STUB10_CFGLOG="$CFG10" \
     "$TOOL" --log "$WORK/healthy.log" --backup-dir "$WORK/good" --json 2>"$STUB10/tool-u.err")"
   RC10U=$?
@@ -488,6 +490,35 @@ STUB10CURL
     ok "unauthenticated: healthStatus ok with a null latest, exactly as before"
   else
     bad "unauthenticated: health verdict fields wrong: $OUT10U"
+  fi
+
+  # Allowlist enforce wiring pin: deleting the paperclip_allowlist_check
+  # call must fail the zero-transport assertion (the tool would curl the
+  # evil base for corroboration instead of skipping it).
+  hdr "Allowlist enforce skips corroboration with zero transport"
+  : > "$CMD10"; : > "$CFG10"
+  rm -rf "$TOOLTMP10"; mkdir -p "$TOOLTMP10"
+  OUT10E="$(env -i PATH="$STUB10/bin:/usr/bin:/bin" TMPDIR="$TOOLTMP10" \
+    PAPERCLIP_API_URL="https://evil.example.invalid" PAPERCLIP_API_KEY="$CANARY" \
+    PAPERCLIP_API_ALLOWLIST_MODE=enforce \
+    STUB10_CMDLOG="$CMD10" STUB10_CFGLOG="$CFG10" \
+    "$TOOL" --log "$WORK/healthy.log" --backup-dir "$WORK/good" --json 2>"$STUB10/tool-e.err")"
+  RC10E=$?
+  (( RC10E == 0 )) && ok "enforce refusal still exits 0 on the healthy fixture (corroboration skipped, not fatal)" || bad "expected exit 0, got $RC10E ($(cat "$STUB10/tool-e.err"))"
+  if grep -q "skipping health corroboration" "$STUB10/tool-e.err"; then
+    ok "refusal skips corroboration loudly"
+  else
+    bad "no skip warning on stderr: $(cat "$STUB10/tool-e.err")"
+  fi
+  if grep -q . "$CMD10"; then
+    bad "refused base got transport calls: $(cat "$CMD10")"
+  else
+    ok "refused base gets zero transport calls"
+  fi
+  if python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["healthStatus"]=="not_checked"' <<<"$OUT10E" 2>/dev/null; then
+    ok "skipped corroboration reads as not_checked, never attempted"
+  else
+    bad "health verdict fields wrong: $OUT10E"
   fi
 
   # Source guard: no live bearer may be placed on a curl command line in this

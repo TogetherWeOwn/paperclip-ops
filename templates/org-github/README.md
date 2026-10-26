@@ -31,6 +31,7 @@ Operator applies these files there after this PR merges.
 | `workflow-templates/changes.yml` | `.github/workflows/changes.yml` (reusable `workflow_call`) |
 | `workflow-templates/starter-ci.yml` | `workflow-templates/starter-ci.yml` (new-repo choice) |
 | `workflow-templates/starter-ci.properties.json` | `workflow-templates/starter-ci.properties.json` (required name/description metadata) |
+| `test-missing/blocker_test_checks.py` | `.github/scripts/blocker_test_checks.py` (verbatim copy of the repo-root source; fix upstream, then re-copy) |
 | `scripts/detect_changes.py` | reference only (stays here; the workflow embeds the same rules) |
 | `tests/test_detect_changes.sh` | reference only (stays here) |
 | `tests/test_detect_workflow.py` | reference only (executes the actual workflow step in disposable local repos) |
@@ -47,6 +48,14 @@ Operator applies these files there after this PR merges.
 | `review/AX-DIMENSION.md` | reference only (stays here; exact AX dimension text for the host-side review owner to install) |
 | `tests/test_ax_org_template.py` | reference only (stays here; structural contract for everything above) |
 | `tests/test_ax_lint_evidence.py` | reference only (stays here; immutable acceptance contract for located evidence + conservative CLI matching) |
+
+The agent seed's planning rules reference the public
+[right-sized planning guide](../../docs/right-sized-planning.md). Merge that guide
+before distributing a seed that links to it. The seed is new-repository source,
+not an update to effective company agent instructions or existing repositories.
+An authorized instruction maintainer adopts it through the existing reviewed
+path and verifies effective instructions/new tasks before claiming rollout.
+No host automation or skill-assignment change is part of adoption.
 
 > `scripts/ci_policy.py` + `tests/test_ci_policy.py` are a verbatim copy of
 > `paperclip-ops@4fb40122` (PR #656, warn mode). Do not edit the copy:

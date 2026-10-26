@@ -11,6 +11,9 @@ from pathlib import Path
 
 POLICY = ".docs-drift.json"
 SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
+# One stable, content-free error for every invalid base policy: parser details
+# and raw policy keys/values never appear in machine output.
+INVALID_POLICY_ACTION = "Use the documented version-1 policy schema; fix the base policy in a reviewed PR."
 
 
 class Unmeasurable(Exception):
@@ -37,17 +40,29 @@ def git(repo, *args):
     return result.stdout
 
 
+def unique_object(pairs):
+    # Refuse ambiguous evidence instead of picking a first or last value.
+    # JSON decoding has already resolved escapes, so escaped spellings of a
+    # key collide here too. Applies to every nested object during parsing.
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate key")
+        value[key] = item
+    return value
+
+
 def policy_at(repo, base):
     entry = git(repo, "ls-tree", "-z", base, "--", POLICY)
     if not entry:
         return None
     if not entry.startswith(b"100644 blob "):
-        raise Unmeasurable("invalid_policy", "Commit a regular, non-executable .docs-drift.json file.")
+        raise Unmeasurable("invalid_policy", INVALID_POLICY_ACTION)
     raw = git(repo, "show", base + ":" + POLICY)
     if len(raw) > 65536:
-        raise Unmeasurable("invalid_policy", "Limit .docs-drift.json to 64 KiB.")
+        raise Unmeasurable("invalid_policy", INVALID_POLICY_ACTION)
     try:
-        value = json.loads(raw)
+        value = json.loads(raw, object_pairs_hook=unique_object)
         if not isinstance(value, dict) or set(value) != {"version", "rules"} or type(value["version"]) is not int or value["version"] != 1:
             raise ValueError("schema")
         rules = value["rules"]
@@ -69,7 +84,7 @@ def policy_at(repo, base):
                     if not isinstance(pattern, str) or not pattern or len(pattern) > 256 or pattern.startswith("/") or any(p in ("", ".", "..") for p in pattern.split("/")) or "\x00" in pattern:
                         raise ValueError("pattern")
     except (ValueError, TypeError, UnicodeError, RecursionError) as exc:
-        raise Unmeasurable("invalid_policy", "Use the documented version-1 policy schema; fix the base policy in a reviewed PR.") from exc
+        raise Unmeasurable("invalid_policy", INVALID_POLICY_ACTION) from exc
     return rules
 
 
@@ -145,6 +160,7 @@ def main(argv=None):
         report = check(args.repo, args.base, args.head)
     except Unmeasurable as exc:
         print(json.dumps({"schema": "docs-drift.v1", "status": "unmeasurable", "code": exc.code,
+                          "check_complete": False,
                           "retryable": exc.retryable, "next_action": exc.next_action}, sort_keys=True))
         return 2
     print(json.dumps(report, sort_keys=True))

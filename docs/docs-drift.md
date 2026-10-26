@@ -20,7 +20,8 @@ object (`schema: docs-drift.v1`). Exit 0 is `clean` or explicitly
 `not_configured`, exit 1 is `finding`, and exit 2 is `unmeasurable`.
 Argument syntax errors use argparse's stderr/exit 2. Findings include a stable
 `code`, rule ID, affected source paths, expected doc globs, `retryable: false`
-and `next_action`. Unmeasurable Git timeouts are retryable; other errors require
+and `next_action`. Unmeasurable reports carry `check_complete: false`;
+unmeasurable Git timeouts are retryable; other errors require
 the reported remediation. Git failures do not dump command output or credentials.
 Git environment overrides and system/global configuration are ignored so they
 cannot redirect `--repo` to a different repository.
@@ -51,6 +52,17 @@ rules, 50 nonempty patterns per list, 256 characters per pattern and 64 KiB per
 policy. Patterns are repository-relative and use Python `fnmatchcase`: matching
 is case-sensitive, `*` includes slashes, and `**` has no extra meaning. No leading
 slash, empty path segment, `.` or `..` segment, or NUL is allowed.
+Object keys must be unique in every object, at every nesting level. A
+duplicate key — even with an identical value, or spelled with equivalent
+JSON escapes (for example `"\u0076ersion"` for `version`) — is ambiguous
+evidence: parsing refuses
+it before schema interpretation and never keeps a first or last value. The
+result is `unmeasurable` with code `invalid_policy`, `check_complete: false`,
+`retryable: false` and exit 2, without echoing policy keys, values or parser
+errors. Repair it as the report directs: use the documented version-1 policy
+schema; fix the base policy in a reviewed PR. A head commit that repairs or
+deletes a duplicate-key base policy does not rescue the check, because the
+target/base policy remains the sole authority.
 
 - Load policy from the **supplied target commit**, not PR files. A policy removed
   or weakened by a PR cannot exempt that same PR. A newly introduced policy only

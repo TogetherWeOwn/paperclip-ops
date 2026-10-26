@@ -347,7 +347,9 @@
     "capacity evidence and CLI refusal contract:1",
     "workspace sync-back signal acceptance suite:1",
     "workspace sync-back signal regression suite:1",
-    "Dispatch sweep failure visibility acceptance:1"
+    "trace correlator suite:1",
+    "Dispatch sweep failure visibility acceptance:1",
+    "native runner coverage classifier suite:1"
   ],
   "retained": [
     {
@@ -542,7 +544,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "28a647c5d010f9181946c361a7ccc840295d1b6a6b580178f5dce7b69c9b1e38",
+      "definition_sha256": "e2b6a42d8e1ed099307c9e7bf0ca6c745f25cb9a025a187f3ef103599497ebf6",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -1137,7 +1139,7 @@
     },
     {
       "name": "upstream gate suite",
-      "definition_sha256": "ae3f835b5784ed15538f80799239607aeb04408bef5be0bac64b07cfd69b00e2",
+      "definition_sha256": "5983572846e08fb27c4edd216a7e186e8d9afbbe35ec10553d45aab96711e2b1",
       "id": "upstream gate suite:1"
     },
     {
@@ -1377,7 +1379,7 @@
     },
     {
       "name": "Dispatch suite",
-      "definition_sha256": "f77c0e5e2065e28f94fb2fcc5438dde44750922692c94da53f87a2073bc3ec3a",
+      "definition_sha256": "89e920ad54e6c6de01e5ff1a139c708ef1a61635aed4217411308242f6b77d97",
       "id": "Dispatch suite:1"
     },
     {
@@ -1922,7 +1924,7 @@
     },
     {
       "name": "sdlc review-carry suite",
-      "definition_sha256": "4cc0a1b7421746981ba556684ba8d20bc0d9d06de46e69d5c78b33a48b763100",
+      "definition_sha256": "70f94e0b4d568835cb2600270017d3e7d380d97f3465e7ffa9983f9fa0407a3e",
       "id": "sdlc review-carry suite:1"
     },
     {
@@ -1961,9 +1963,19 @@
       "id": "workspace sync-back signal regression suite:1"
     },
     {
+      "name": "trace correlator suite",
+      "definition_sha256": "970ea2be13fd1d0c9b2503d02aa6725f3f9ac47d4b883cf246d600c17cc4dd9f",
+      "id": "trace correlator suite:1"
+    },
+    {
       "name": "Dispatch sweep failure visibility acceptance",
       "definition_sha256": "2e075d5605362d844521a3a225c3fe04047c80fcf2aa0917997553221ccdfa29",
       "id": "Dispatch sweep failure visibility acceptance:1"
+    },
+    {
+      "name": "native runner coverage classifier suite",
+      "definition_sha256": "c688f1fbbcb023b3afd8dd80c8821306741f9060c3b1185833d6b0dcf68d142b",
+      "id": "native runner coverage classifier suite:1"
     }
   ],
   "removed": [

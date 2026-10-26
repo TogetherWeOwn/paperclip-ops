@@ -45,7 +45,8 @@ def run(repo, cases, models, effort, rep, key_env, out, concurrency, timeout, ru
         except Exception as exc:  # a crash is a failed review, not a vanished one
             res = {"case_id": case_id, "model": model, "effort": effort, "latency_s": 0.0,
                    "exit_code": None, "timed_out": False, "usage": {}, "errors": [str(exc)[:300]],
-                   "prompt_chars": 0, "review": None, "parse_error": "harness error", "raw_final": None}
+                   "prompt_chars": 0, "review": None, "parse_error": "harness error",
+                   "evidence_gate": None, "raw_final": None}
         res["rep"] = rep
         with open(result_path(out, case_id, model, effort, rep), "w", encoding="utf-8") as fh:
             json.dump(res, fh, indent=2)

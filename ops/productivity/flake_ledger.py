@@ -2,6 +2,7 @@
 """Query aggregated nextest flake evidence before deciding whether to rerun."""
 
 import datetime
+import hashlib
 import json
 import os
 import sys
@@ -12,6 +13,11 @@ FLIP_RATE_THRESHOLD = 0.2
 REPORT_SCHEMA_VERSION = 1
 REPORT_DEFAULT_TOP = 10
 REPORT_MAX_TOP = 100
+COMPARE_SCHEMA = 'flake-snapshot-comparison.v1'
+COMPARE_DEFAULT_LIMIT = 100
+COMPARE_MAX_LIMIT = 1000
+COMPARE_CATEGORIES = ('compared', 'reset_suspected', 'added_evidence',
+                      'missing_evidence')
 
 
 class LedgerUnavailable(Exception):
@@ -279,6 +285,7 @@ def quarantine_card(*, find_card, post, company_id, payload):
 
 FULL_USAGE = """usage: flake_ledger.py is_flaky <repo> <job-or-test>
        flake_ledger.py report <repo> [--top N] [--min-observations M] [--json] [--dry-run]
+       flake_ledger.py compare <repo> --before FILE --after FILE [--limit N] [--dry-run]
 
 Rank ledger rows for <repo> by flip rate (flips/observations), highest first.
 Ties break by observations (highest first), then job and test names (A-Z).
@@ -292,7 +299,21 @@ report options:
   -h, --help            print this usage
 
 The report is read-only: it never writes the ledger, reruns tests, or files
-cards. Duplicate or ambiguous rows make the whole report unavailable."""
+cards. Duplicate or ambiguous rows make the whole report unavailable.
+
+compare options:
+  --before FILE         explicit earlier ledger snapshot file (required)
+  --after FILE          explicit later ledger snapshot file (required)
+  --limit N             return at most N comparison rows (integer 1-1000,
+                        default 100); counts cover the full set
+  --dry-run             no-op alias: compare is always read-only
+  -h, --help            print this usage
+
+Compare prints one flake-snapshot-comparison.v1 JSON object describing how
+the supplied snapshots differ for <repo>. It reads only the two explicit
+files (never HOME, FLAKE_LEDGER_PATH, or the ledger writer) and never
+writes anything. Example:
+  flake_ledger.py compare my-repo --before before.jsonl --after after.jsonl --limit 50"""
 
 
 class ReportUsageError(Exception):
@@ -528,6 +549,233 @@ def cmd_report(tokens):
     return 0
 
 
+class CompareUsageError(Exception):
+    """A compare invocation refused with usage (exit 2, nothing on stdout)."""
+
+
+class CompareHelpRequested(Exception):
+    """Internal signal: print usage on stdout and exit 0."""
+
+
+def _parse_limit(value):
+    try:
+        limit = int(value, 10)
+    except (TypeError, ValueError):
+        raise CompareUsageError(
+            f'invalid --limit: must be an integer 1-{COMPARE_MAX_LIMIT}'
+        ) from None
+    if not 1 <= limit <= COMPARE_MAX_LIMIT:
+        raise CompareUsageError(
+            f'invalid --limit: must be an integer 1-{COMPARE_MAX_LIMIT}')
+    return limit
+
+
+def _parse_compare_args(tokens):
+    """Parse compare args into (repo, before, after, limit).
+
+    ``--before`` and ``--after`` are mandatory explicit local files; there
+    is deliberately no fallback to HOME or FLAKE_LEDGER_PATH. ``--dry-run``
+    is accepted and ignored: compare never writes, so the flag is a
+    documented no-op alias. Raises CompareUsageError (exit 2) or
+    CompareHelpRequested (exit 0).
+    """
+    before = None
+    after = None
+    limit = COMPARE_DEFAULT_LIMIT
+    seen_limit = False
+    positionals = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        name, separator, inline = token.partition('=')
+        if name in ('--before', '--after', '--limit'):
+            if separator:
+                value = inline
+            else:
+                index += 1
+                if index >= len(tokens):
+                    raise CompareUsageError(f'{name} requires a value')
+                value = tokens[index]
+            if name == '--before':
+                if before is not None:
+                    raise CompareUsageError('duplicate --before')
+                before = value
+            elif name == '--after':
+                if after is not None:
+                    raise CompareUsageError('duplicate --after')
+                after = value
+            else:
+                if seen_limit:
+                    raise CompareUsageError('duplicate --limit')
+                seen_limit = True
+                limit = _parse_limit(value)
+        elif token == '--dry-run':
+            pass
+        elif token in ('-h', '--help'):
+            raise CompareHelpRequested()
+        elif token.startswith('-') and token != '-':
+            raise CompareUsageError(f'unknown flag: {token}')
+        else:
+            positionals.append(token)
+        index += 1
+    if len(positionals) != 1 or not positionals[0].strip():
+        raise CompareUsageError('compare requires exactly one repo')
+    if before is None or not before.strip():
+        raise CompareUsageError('compare requires --before FILE')
+    if after is None or not after.strip():
+        raise CompareUsageError('compare requires --after FILE')
+    return positionals[0], before, after, limit
+
+
+def _compare_side(row):
+    if row is None:
+        return None
+    observations = row['observations']
+    return {
+        'flips': row['flips'],
+        'observations': observations,
+        'rate': row['flips'] / observations if observations else None,
+    }
+
+
+def _read_snapshot(path, repo):
+    """Return (sha256 hex of exact bytes, {(job, test): row}) for one file.
+
+    Reuses the existing ledger validation: every row must be well-formed
+    and the requested repo's rows must be duplicate- and ambiguity-free.
+    Raises LedgerUnavailable; callers must not echo its detail, which can
+    name paths, raw values, or parser bodies.
+    """
+    try:
+        digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError as exc:
+        raise LedgerUnavailable('snapshot cannot be read') from exc
+    repo_rows = validate_report_rows(read_ledger(Path(path)), repo)
+    return digest, {(row['job'], row['test']): row for row in repo_rows}
+
+
+def compare_snapshots(repo, before_rows, after_rows):
+    """Build the full, untruncated comparison rows for one repo.
+
+    Rows sort by exact (job, test) ascending. A counter decrease makes the
+    tuple reset-suspected and incomparable: its deltas stay null rather
+    than becoming a negative count or an improvement claim. Tuples present
+    on one side only are described as added/missing evidence, never as a
+    newly introduced or fixed test.
+    """
+    rows = []
+    for job, test in sorted(set(before_rows) | set(after_rows)):
+        before = _compare_side(before_rows.get((job, test)))
+        after = _compare_side(after_rows.get((job, test)))
+        change = {'flips': None, 'observations': None, 'rate': None}
+        if before is None:
+            category = 'added_evidence'
+        elif after is None:
+            category = 'missing_evidence'
+        elif (after['flips'] < before['flips'] or
+                after['observations'] < before['observations']):
+            category = 'reset_suspected'
+        else:
+            category = 'compared'
+            change = {
+                'flips': after['flips'] - before['flips'],
+                'observations': after['observations'] - before['observations'],
+                'rate': (after['rate'] - before['rate']
+                         if before['rate'] is not None
+                         and after['rate'] is not None else None),
+            }
+        rows.append({
+            'id': report_row_id(repo, job, test),
+            'job': job,
+            'test': test,
+            'category': category,
+            'before': before,
+            'after': after,
+            'change': change,
+        })
+    return rows
+
+
+def _compare_document(*, status, code, next_action, repo, limit, rows,
+                      category_counts, sources=None):
+    document = {
+        'schema': COMPARE_SCHEMA,
+        'status': status,
+        'code': code,
+        'retryable': False,
+        'next_action': next_action,
+        'repo': repo,
+        'limit': limit,
+        'window_verified': False,
+        'continuity_verified': False,
+    }
+    if sources is not None:
+        document['sources'] = sources
+    document.update({
+        'total': sum(category_counts.values()),
+        'returned': len(rows),
+        'truncated': sum(category_counts.values()) - len(rows),
+        'category_counts': category_counts,
+        'rows': rows,
+    })
+    return document
+
+
+def cmd_compare(tokens):
+    """Run the read-only snapshot comparison; return the exit code.
+
+    Exit 0 is a fully described comparison, exit 1 is partial (at least
+    one reset-suspected tuple, judged before truncation), and exit 2 is a
+    usage error (stderr only) or unavailable evidence (one JSON object on
+    stdout without sources, raw rows, parser bodies, or file paths).
+    """
+    try:
+        repo, before_path, after_path, limit = _parse_compare_args(tokens)
+    except CompareHelpRequested:
+        print(FULL_USAGE)
+        return 0
+    except CompareUsageError as exc:
+        print(f'{exc}', file=sys.stderr)
+        print(FULL_USAGE, file=sys.stderr)
+        return 2
+    try:
+        before_digest, before_rows = _read_snapshot(before_path, repo)
+        after_digest, after_rows = _read_snapshot(after_path, repo)
+    except LedgerUnavailable:
+        print(json.dumps(_compare_document(
+            status='unavailable', code='unavailable',
+            next_action='supply or repair the snapshot evidence: pass two '
+                        'explicit, valid ledger files that both contain '
+                        'evidence for the repo, then re-run compare',
+            repo=repo, limit=limit, rows=[],
+            category_counts={name: 0 for name in COMPARE_CATEGORIES}),
+            indent=2))
+        return 2
+    rows = compare_snapshots(repo, before_rows, after_rows)
+    category_counts = {name: 0 for name in COMPARE_CATEGORIES}
+    for row in rows:
+        category_counts[row['category']] += 1
+    sources = {'before': {'sha256': before_digest},
+               'after': {'sha256': after_digest}}
+    if category_counts['reset_suspected']:
+        status, code, exit_code = 'partial', 'partial_reset_suspected', 1
+        next_action = ('one or more counters decreased, which suggests a '
+                       'reset; treat those rows as incomparable and supply '
+                       'snapshots from one continuous ledger before drawing '
+                       'conclusions')
+    else:
+        status, code, exit_code = 'complete', 'compared', 0
+        next_action = ('use these descriptive counter differences for '
+                       'triage only; the observation window and sample '
+                       'continuity are unverified, so do not infer an '
+                       'interval rate, causation, or a fix')
+    print(json.dumps(_compare_document(
+        status=status, code=code, next_action=next_action, repo=repo,
+        limit=limit, rows=rows[:limit], category_counts=category_counts,
+        sources=sources), indent=2))
+    return exit_code
+
+
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
     if args and args[0] == 'is_flaky':
@@ -544,6 +792,8 @@ def main(argv=None):
         return 0
     if args and args[0] == 'report':
         return cmd_report(args[1:])
+    if args and args[0] == 'compare':
+        return cmd_compare(args[1:])
     if args and args[0] in ('-h', '--help'):
         print(FULL_USAGE)
         return 0

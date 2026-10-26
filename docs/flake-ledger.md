@@ -90,6 +90,64 @@ output. Unknown flags, a missing or blank repo, and extra positionals refuse
 with usage + exit 2; unavailable evidence exits non-zero with an explicit
 reason. `report --help` prints the full usage.
 
+## Snapshot comparison
+
+Compare two saved ledger snapshots to see which supplied evidence changed,
+without rerunning anything:
+
+```sh
+python3 ops/productivity/flake_ledger.py compare <repo> --before FILE --after FILE [--limit N] [--dry-run]
+```
+
+`--before` and `--after` are both mandatory explicit local files (the same
+file may be supplied twice). Compare never falls back to `HOME`,
+`FLAKE_LEDGER_PATH`, live collection, or the ledger writer, and it never
+writes its inputs or any sidecar. `--dry-run` is a no-op alias with
+byte-identical output. `--limit` defaults to 100 and accepts integers
+1-1000 only.
+
+The output is exactly one `flake-snapshot-comparison.v1` JSON object:
+`schema`, `status`, `code`, `retryable` (always false), `next_action`,
+`repo`, `limit`, `window_verified`, `continuity_verified`, `sources`,
+`total`, `returned`, `truncated`, `category_counts`, and `rows`.
+`sources` carries the SHA-256 of the exact supplied `--before`/`--after`
+bytes and no file paths. Rows are the union of the exact repo's
+`(job, test)` tuples from both snapshots, sorted by job then test; `--limit`
+truncates that sorted list, while `total`, `category_counts`, and status are
+computed over the full set before truncation. Each row carries only `id`
+(the same `%`/`/` escaping as the report), `job`, `test`, `category`, the
+`before`/`after` cumulative `flips`/`observations`/`rate` (rate is null for
+zero observations; an absent side is null), and a descriptive `change`.
+
+Each tuple falls in exactly one category:
+
+- `compared`: present in both snapshots and neither counter decreased;
+  `change` holds the non-negative counter differences, plus the rate
+  difference when both cumulative rates exist.
+- `reset_suspected`: present in both, but flips or observations decreased.
+  The tuple is incomparable: every `change` value is null, never a negative
+  count or an improvement claim.
+- `added_evidence` / `missing_evidence`: present only in the after / before
+  snapshot. These never mean a test was newly introduced or fixed.
+
+`window_verified` and `continuity_verified` are always false: even monotone
+counters do not prove the same cohort or window, an interval rate,
+causation, or a live trend. Read the comparison as descriptive triage only.
+
+Exit codes separate the states. A fully described comparison exits 0
+(`complete`/`compared`). Any `reset_suspected` row makes the result
+`partial`/`partial_reset_suspected` with exit 1. Usage errors (missing or
+duplicate flags, a blank repo or file value, an invalid `--limit`, or any
+other flag) refuse with exit 2 and usage on stderr only. Unusable evidence
+(a missing, unreadable, empty, malformed, duplicate, or ambiguous snapshot,
+or no rows for the repo in either snapshot) also refuses with exit 2, as one
+`unavailable` JSON object with zero counts and no `sources`; a repo absent
+from a snapshot is unavailable evidence, never a verified zero. Errors never
+echo raw rows, parser exception bodies, or absolute paths. Both snapshots
+must pass the same strict row validation as the report, including other
+repos' rows, and ambiguous rows are never combined. `compare --help` prints
+the full usage with an example.
+
 ## Residual `unavailable` fallback
 
 `unavailable` never authorizes a rerun by itself. The literal-`yes` rule above

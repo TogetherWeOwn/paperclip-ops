@@ -54,7 +54,7 @@ const SNAPSHOT_QUERY = `query BridgeCloseoutSnapshot($owner: String!, $name: Str
           oid pushedDate
           statusCheckRollup { contexts(first: 100) {
             nodes { __typename
-              ... on CheckRun { name status conclusion completedAt }
+              ... on CheckRun { name status conclusion startedAt completedAt checkSuite { app { slug } workflowRun { event workflow { databaseId } } } }
               ... on StatusContext { context state createdAt } }
             pageInfo { hasNextPage } } } }
         }
@@ -157,7 +157,37 @@ function parseTime(value, message) {
   return ms
 }
 
-function normalizeCheck(node) {
+// Optional supersession metadata, kept off the emitted check objects: the
+// public check shape is pinned, and provenance text from GitHub must never
+// reach a snapshot, a PR body or a log line. Each reader below returns null
+// for anything absent or malformed, so a missing field only disables the one
+// narrow supersession in readinessChecks — it never errors a read.
+function optionalTimeMs(value) {
+  if (typeof value !== 'string') return null
+  const ms = Date.parse(value)
+  return Number.isInteger(ms) && ms >= 0 && ms <= MS_LIMIT ? ms : null
+}
+
+// Same-source identity for one check run, as a comparable key. App slug alone
+// proves provenance only when workflowRun is explicitly null (a non-Actions
+// app); an absent workflowRun field proves nothing, and an object
+// workflowRun must carry a valid event and workflow databaseId.
+function checkRunProvenance(node) {
+  const suite = node.checkSuite
+  if (!suite || typeof suite !== 'object') return null
+  const slug = suite.app?.slug
+  if (typeof slug !== 'string' || slug.length === 0) return null
+  if (suite.workflowRun === null) return JSON.stringify([slug, null, null])
+  if (!Object.hasOwn(suite, 'workflowRun') ||
+    typeof suite.workflowRun !== 'object') return null
+  const event = suite.workflowRun.event
+  if (typeof event !== 'string' || event.length === 0) return null
+  const workflowId = suite.workflowRun.workflow?.databaseId
+  if (!Number.isInteger(workflowId) || workflowId <= 0) return null
+  return JSON.stringify([slug, event, workflowId])
+}
+
+function normalizeCheck(node, provenanceByCheck) {
   requireValue(node && typeof node === 'object', 'GitHub check entry is malformed')
   if (node.__typename === 'CheckRun') {
     requireValue(typeof node.name === 'string' && node.name.length > 0, 'GitHub check run has no name')
@@ -166,7 +196,9 @@ function normalizeCheck(node) {
       // Forward-compat: conclusions pass through lowercased (TIMED_OUT ->
       // timed_out). Unknown ones are closeout's call, which reads them as
       // pending rather than guessing.
-      return { name: node.name, status: 'completed', conclusion: node.conclusion.toLowerCase(), completedMs: parseTime(node.completedAt, 'completed check run has no completion time') }
+      const check = { name: node.name, status: 'completed', conclusion: node.conclusion.toLowerCase(), completedMs: parseTime(node.completedAt, 'completed check run has no completion time') }
+      provenanceByCheck?.set(check, { startedMs: optionalTimeMs(node.startedAt), provenance: checkRunProvenance(node) })
+      return check
     }
     requireValue(node.status === 'IN_PROGRESS' || RUN_QUEUED.has(node.status), 'GitHub check run status is unknown')
     return { name: node.name, status: node.status === 'IN_PROGRESS' ? 'in_progress' : 'queued' }
@@ -183,11 +215,31 @@ function normalizeCheck(node) {
 
 // Readiness has no push-age decision. Repeated names are legitimate across
 // workflows/status sources, but none may hide a failure or an unfinished run.
-function readinessChecks(checks) {
+// One narrow exception, for a cancelled attempt later re-run to green by the
+// same source: a completed cancelled run is dropped before the collapse when
+// a same-name completed success with the same provenance started strictly
+// after the cancelled run completed. Strictly-after matters: an overlapping
+// successor may have raced the cancellation instead of replacing it. Any
+// missing or different provenance or chronology keeps the cancelled run, so
+// everything else still meets the worst-rank collapse below.
+function dropSupersededCancelled(checks, provenanceByCheck) {
+  return checks.filter((check) => {
+    if (check.status !== 'completed' || check.conclusion !== 'cancelled') return true
+    const own = provenanceByCheck.get(check)
+    if (!own?.provenance) return true
+    return !checks.some((other) => other !== check && other.name === check.name &&
+      other.status === 'completed' && other.conclusion === 'success' &&
+      provenanceByCheck.get(other)?.provenance === own.provenance &&
+      provenanceByCheck.get(other).startedMs !== null &&
+      provenanceByCheck.get(other).startedMs > check.completedMs)
+  })
+}
+
+function readinessChecks(checks, provenanceByCheck) {
   const rank = (check) => check.status !== 'completed' ? 1
     : ['success', 'neutral', 'skipped'].includes(check.conclusion) ? 0 : 2
   const byName = new Map()
-  for (const check of checks) {
+  for (const check of dropSupersededCancelled(checks, provenanceByCheck)) {
     const prior = byName.get(check.name)
     if (!prior || rank(check) > rank(prior) ||
       (rank(check) === rank(prior) && JSON.stringify(check) < JSON.stringify(prior))) {
@@ -232,10 +284,13 @@ function normalizeSnapshot(pr, repository, number, nowMs, readiness = false) {
   'GitHub check rollup is incomplete or truncated', 'check-rollup-incomplete')
   const checks = []
   const counts = new Map()
+  // Supersession metadata rides beside the public checks, keyed by object
+  // identity, so it can never leak into the emitted snapshot shape.
+  const provenanceByCheck = readiness ? new Map() : null
   for (const node of rollup?.contexts?.nodes ?? []) {
     let check
     try {
-      check = normalizeCheck(node)
+      check = normalizeCheck(node, provenanceByCheck)
     } catch (error) {
       if (!readiness) throw error
       throw new SnapshotReadError('GitHub check entry is malformed', 'check-malformed')
@@ -261,7 +316,7 @@ function normalizeSnapshot(pr, repository, number, nowMs, readiness = false) {
     labels: pr.labels.nodes.map((l) => l.name),
     mergeableState: pr.mergeStateStatus.toLowerCase(),
     reviewDecision: pr.reviewDecision, headPushedMs, nowMs,
-    checks: readiness ? readinessChecks(checks) : checks,
+    checks: readiness ? readinessChecks(checks, provenanceByCheck) : checks,
     ...(readiness ? { snapshotFacts: {
       headPushTime: headPushedMs === null ? 'null' : 'present',
       repeatedNames: [...counts.values()].filter((count) => count > 1).length,

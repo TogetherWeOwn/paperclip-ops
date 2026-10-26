@@ -1134,7 +1134,7 @@ jobs:
       # catch would merge green.
       - name: orphan-suite ratchet fixtures suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: python3 -m unittest -v test_orphan_suites
+        run: python3 -B -m unittest -v test_orphan_suites test_orphan_suite_json_acceptance
 
       - name: workspace sync-back signal acceptance suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'

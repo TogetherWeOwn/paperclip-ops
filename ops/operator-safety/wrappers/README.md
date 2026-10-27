@@ -2,7 +2,7 @@
 
 Versioned production source for the host wrapper installed at
 `/usr/local/sbin/op-request` (approval-queue publication, Part B groundwork B3).
-Deployment-specific paths (audit log location, queue directory) are supplied privately at install; never commit host-specific paths to this repository.
+The source carries generic example paths (`LOG`, `QUEUE`) and is installed byte-for-byte against a pinned digest. Never commit host-specific paths to this repository, and never edit the source or its pin on a host. A host whose real audit-log or queue location differs from the source stops at the preflight below until a reviewed source revision for that layout exists.
 
 ## Provenance
 
@@ -135,6 +135,8 @@ writer may change the target, its directories, or the backup during the window.
 Use a fresh Bash process with `BASH_ENV` unset, not a sourced or conditional
 shell fragment. The target parent and `/root` must be real, root-owned,
 non-group/world-writable directories with trusted ancestors.
+
+Preflight before install: confirm the `LOG=` and `QUEUE=` lines in the reviewed source match the target host and that the `LOG` directory is writable by the wrapper. If either differs, stop. Do not edit the source and do not re-pin. A wrong `LOG` path makes publication succeed while the wrapper reports a failed audit append (the header documents that a failed append does not undo publication).
 
 For install, run the **entire** block with `ACTION=install` and set `SOURCE` to
 the clean, reviewed merge-commit clone. For rollback, run the **same entire

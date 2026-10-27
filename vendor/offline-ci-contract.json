@@ -351,7 +351,8 @@
     "Dispatch sweep failure visibility acceptance:1",
     "native runner coverage classifier suite:1",
     "AX metric contract suites:1",
-    "shell-substitution JSON acceptance:1"
+    "shell-substitution JSON acceptance:1",
+    "worktree cache reclaim host wrapper contract suite:1"
   ],
   "retained": [
     {
@@ -1988,6 +1989,11 @@
       "name": "shell-substitution JSON acceptance",
       "definition_sha256": "335f88370d859cfd2908fe5ea77a41d6a03b8cc8ca84ccbcabeca304a04042d8",
       "id": "shell-substitution JSON acceptance:1"
+    },
+    {
+      "name": "worktree cache reclaim host wrapper contract suite",
+      "definition_sha256": "9be560caa4e2cc4f6d282cc73851d622284afd42f19aa7e729d2bc3edfed18eb",
+      "id": "worktree cache reclaim host wrapper contract suite:1"
     }
   ],
   "removed": [

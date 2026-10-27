@@ -32,6 +32,7 @@ PAYLOAD = [
     "lib/paperclip_api_allowlist.sh",
     "ops/case_b1d141af/run-worktree-prune.sh",
     "ops/case_b1d141af/terminal_worktree_prune.py",
+    "ops/case_b5184419/run-worktree-cache-reclaim.sh",
     "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
     "ops/lib/atomic_state.py",
     "systemd/install-worktree-prune.sh",
@@ -46,6 +47,7 @@ INSTALLED = [
     "lib/paperclip_api_allowlist.sh",
     "ops/lib/atomic_state.py",
     "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
+    "ops/case_b5184419/run-worktree-cache-reclaim.sh",
     "ops/case_b1d141af/run-worktree-prune.sh",
     "ops/case_b1d141af/terminal_worktree_prune.py",
     "REVISION",
@@ -423,6 +425,35 @@ class InstallMechanism(unittest.TestCase):
                               "ops/case_b1d141af/terminal_worktree_prune.py",
                               "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
                               "ops/lib/atomic_state.py"])
+
+    def test_installed_reclaim_wrapper_streams_its_reviewed_members_from_the_installed_layout(self):
+        # Same shape for the sibling reclaim wrapper: the installed copy (not the
+        # repo one) streams the core, its two libs and the operator registry.
+        root = self.fresh_root()
+        self.assertEqual(self.install(root).returncode, 0)
+        wrapper = self.release(root) / "ops/case_b5184419/run-worktree-cache-reclaim.sh"
+        self.assertTrue(os.access(wrapper, os.X_OK))
+        engine = self.td / "engine-reclaim.py"
+        capture = self.td / "captured-reclaim.tar"
+        engine.write_text(f"#!/usr/bin/env python3\nimport sys\nopen({str(capture)!r}, 'wb').write(sys.stdin.buffer.read())\n")
+        engine.chmod(0o755)
+        registry = self.td / "host-timer-registry.json"
+        registry.write_text('{"entries": []}\n')
+        env = {"PATH": os.environ["PATH"], "HOME": str(self.td),
+               "PAPERCLIP_WORKTREE_PRUNE_ENGINE": str(engine),
+               "PAPERCLIP_WORKTREE_PRUNE_CONTAINER": "paperclip",
+               "PAPERCLIP_WORKTREE_CACHE_RECLAIM_REGISTRY": str(registry),
+               "PAPERCLIP_API_URL": "http://x.invalid", "PAPERCLIP_API_KEY": "k",
+               "PAPERCLIP_COMPANY_ID": "c",
+               "PAPERCLIP_API_ALLOWLIST_TEST": "1"}
+        r = subprocess.run([str(wrapper)], env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        with tarfile.open(capture) as tar:
+            self.assertEqual(sorted(tar.getnames()),
+                             ["lib/paperclip_api_allowlist.py",
+                              "ops/case_b5184419/terminal_worktree_cache_reclaim.py",
+                              "ops/lib/atomic_state.py",
+                              "registry/host-timer-registry.json"])
 
 
 if __name__ == "__main__":

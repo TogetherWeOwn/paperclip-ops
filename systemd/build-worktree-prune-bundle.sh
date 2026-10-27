@@ -40,6 +40,7 @@ files=(
   lib/paperclip_api_allowlist.sh
   ops/case_b1d141af/run-worktree-prune.sh
   ops/case_b1d141af/terminal_worktree_prune.py
+  ops/case_b5184419/run-worktree-cache-reclaim.sh
   ops/case_b5184419/terminal_worktree_cache_reclaim.py
   ops/lib/atomic_state.py
   systemd/install-worktree-prune.sh

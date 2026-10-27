@@ -2789,6 +2789,10 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: bash ops/case_b1d141af/test_run_worktree_prune.sh
 
+      - name: worktree cache reclaim host wrapper contract suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: bash ops/case_b5184419/test_run_worktree_cache_reclaim.sh
+
       - name: worktree prune deployment contract suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: python3 ops/case_b1d141af/test_worktree_prune_deployment.py

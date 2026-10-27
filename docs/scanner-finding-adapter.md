@@ -53,7 +53,10 @@ filename and matched content with the same shape cannot be distinguished. This
 conservative refusal applies to creates and updates as well as closures.
 Rule ids are the
 pinned scanner's five rules: `github-token`, `private-key`,
-`discord-webhook`, `stripe-live-key`, `gitignore-coverage`.
+`discord-webhook`, `stripe-live-key`, `gitignore-coverage`. Coverage annotations
+accept only the pinned suffixes `*.env`, `*.pem`, `*.key`, `*.jsonl`,
+`__pycache__/` and `*.pyc`; an unknown or filename-shaped suffix refuses
+instead of being attributed to `.gitignore`.
 
 ## UNKNOWN means refusal
 

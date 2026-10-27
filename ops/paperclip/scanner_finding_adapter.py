@@ -75,6 +75,8 @@ ERROR_RULES = {
     "a Stripe-live-key-shaped string is committed": "stripe-live-key",
 }
 GITIGNORE_ERROR_PREFIX = ".gitignore no longer covers "
+# Exact suffixes emitted by the pinned scanner's coverage loop.
+GITIGNORE_PATTERNS = frozenset({"*.env", "*.pem", "*.key", "*.jsonl", "__pycache__/", "*.pyc"})
 GITIGNORE_RULE = "gitignore-coverage"
 GITIGNORE_PATH = ".gitignore"
 CLEAN_LINE = "secret scan: clean"
@@ -262,7 +264,8 @@ def _parse_raw(raw):
                 for path, lineno in buffered:
                     _add_lines(grouped, rule_id, path, [lineno])
                 buffered = []
-            elif message.startswith(GITIGNORE_ERROR_PREFIX) and message != GITIGNORE_ERROR_PREFIX:
+            elif message.startswith(GITIGNORE_ERROR_PREFIX) \
+                    and message[len(GITIGNORE_ERROR_PREFIX):] in GITIGNORE_PATTERNS:
                 _add_lines(grouped, GITIGNORE_RULE, GITIGNORE_PATH, [])
             else:
                 _refuse("scan_output_unrecognized")

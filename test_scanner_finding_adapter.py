@@ -528,6 +528,46 @@ class BoundaryRegressionTests(unittest.TestCase):
                     independent_acceptance_ref=url)))
                 self.assertEqual(closure["closure"]["issue_update"]["status"], "done")
 
+    def test_annotation_shaped_filename_refuses_without_misattribution(self):
+        for suffix in ("x", "*.env", "*.pem", "*.key", "*.jsonl", "__pycache__/", "*.pyc"):
+            raw = (f"::error::.gitignore no longer covers {suffix}:1:{CANARY}\n"
+                   "::error::a GitHub-token-shaped string is committed\n")
+            with self.subTest(suffix=suffix):
+                self.assert_refusal(raw_outcome(raw), "scan_output_unrecognized")
+                self.assert_refusal(raw_outcome(raw, closure_request=closure_request()),
+                                    "scan_output_unrecognized")
+        for suffix in ("", "x", "*.env.extra", "*.pem "):
+            raw = f"::error::.gitignore no longer covers {suffix}\n"
+            with self.subTest(unknown_suffix=suffix):
+                self.assert_refusal(raw_outcome(raw), "scan_output_unrecognized")
+
+    def test_all_pinned_coverage_annotations_remain_findings(self):
+        for suffix in ("*.env", "*.pem", "*.key", "*.jsonl", "__pycache__/", "*.pyc"):
+            with self.subTest(suffix=suffix):
+                result = adapt(raw_outcome(f"::error::.gitignore no longer covers {suffix}\n"))
+                self.assertEqual(result["status"], "payload")
+                self.assertEqual(len(result["findings"]), 1)
+                finding = result["findings"][0]
+                self.assertEqual(finding["identity"]["rule_id"], "gitignore-coverage")
+                self.assertEqual(finding["identity"]["path"], ".gitignore")
+                self.assertEqual(finding["occurrence_count"], 1)
+
+    def test_total_hostname_length_boundary_in_both_reference_callers(self):
+        for length in (253, 254, 255):
+            host = ".".join(["a" * 63] * 3 + ["b" * (length - 192)])
+            self.assertEqual(len(host), length)
+            url = f"https://{host}/e"
+            with self.subTest(length=length):
+                finding = finding_outcome(evidence_links=[url])
+                closure = clean_outcome(closure_request=closure_request(
+                    independent_acceptance_ref=url))
+                if length == 253:
+                    self.assertEqual(adapt(finding)["status"], "payload")
+                    self.assertEqual(adapt(closure)["closure"]["issue_update"]["status"], "done")
+                else:
+                    self.assert_refusal(finding, "evidence_invalid")
+                    self.assert_refusal(closure, "closure_acceptance_missing")
+
     def test_invalid_https_hosts_refuse_evidence_and_acceptance(self):
         for url in ("https://:", "https://:443/", "https://host:bad/", "https://[broken/",
                     "https://a..b/", "https://-host/"):

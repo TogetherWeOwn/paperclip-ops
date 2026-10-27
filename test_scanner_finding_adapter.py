@@ -351,6 +351,83 @@ class InputShapeTests(unittest.TestCase):
         self.assertEqual(paths, ["src/a.py"])
 
 
+class GuardPinTests(unittest.TestCase):
+    """Each test pins one refusal guard so removing it fails the suite."""
+
+    def assert_refusal(self, outcome, code):
+        result = adapt(copy.deepcopy(outcome))
+        self.assertEqual(result["status"], "refusal")
+        self.assertEqual(result["reason_code"], code)
+
+    def test_raw_exit_zero_without_clean_line_refuses(self):
+        self.assert_refusal(raw_outcome("", exit_code=0), "scan_exit_inconsistent")
+
+    def test_bounds_refuse(self):
+        too_many = finding_outcome([
+            {"rule_id": "github-token", "path": f"f{i}.py", "lines": [1]}
+            for i in range(adapter.MAX_FINDINGS + 1)])
+        self.assert_refusal(too_many, "too_many_findings")
+        self.assert_refusal(raw_outcome("x" * (adapter.MAX_INPUT_BYTES + 1)), "input_too_large")
+        self.assert_refusal(
+            finding_outcome(evidence_links=["https://example.invalid/e"]
+                            * (adapter.MAX_EVIDENCE_LINKS + 1)), "evidence_invalid")
+        self.assert_refusal(
+            finding_outcome([{"rule_id": "github-token",
+                              "path": "p" * (adapter.MAX_PATH_CHARS + 1), "lines": [1]}]),
+            "identity_invalid")
+        for lineno in (0, adapter.MAX_LINE_NUMBER + 1):
+            raw = (f"src/a.py:{lineno}:x\n"
+                   "::error::a GitHub-token-shaped string is committed\n")
+            with self.subTest(lineno=lineno):
+                self.assert_refusal(raw_outcome(raw), "scan_output_unrecognized")
+
+    def test_evidence_must_be_https(self):
+        self.assert_refusal(
+            finding_outcome(evidence_links=["http://example.invalid/e"]), "evidence_invalid")
+
+    def test_bare_https_scheme_is_not_a_reference(self):
+        self.assert_refusal(finding_outcome(evidence_links=["https://"]), "evidence_invalid")
+        self.assert_refusal(
+            clean_outcome(closure_request=closure_request(independent_acceptance_ref="https://")),
+            "closure_acceptance_missing")
+
+    def test_strict_json_rejects_duplicate_keys_and_nonfinite(self):
+        with self.assertRaises(ValueError):
+            adapter._strict_loads('{"scan": 1, "scan": 2}')
+        with self.assertRaises(ValueError):
+            adapter._strict_loads('{"age_days": NaN}')
+        with self.assertRaises(ValueError):
+            adapter._strict_loads('{"age_days": Infinity}')
+
+    def test_replay_guards(self):
+        entry = {"rule_id": "github-token", "path": "src/app.py", "age_days": 30,
+                 "existing_issue_ids": ["issue-1"]}
+        second = dict(entry, age_days=1, existing_issue_ids=[])
+        self.assert_refusal(finding_outcome(deliveries=[entry, second]), "ambiguous_delivery")
+        self.assert_refusal(
+            finding_outcome(deliveries=[dict(entry, age_days=-30, existing_issue_ids=[])]),
+            "delivery_invalid")
+        self.assert_refusal(finding_outcome(responder=None), "responder_missing")
+
+    def test_closure_cross_repo_and_colon_path_refuse(self):
+        self.assert_refusal(
+            clean_outcome(closure_request=closure_request(repo_slug="other/repo")),
+            "identity_invalid")
+        self.assert_refusal(
+            clean_outcome(closure_request=closure_request(path="a:5:b.txt")),
+            "closure_path_ambiguous")
+
+    def test_colon_path_cannot_yield_false_closure(self):
+        # git grep -n prints "a:5:b.txt:2:<content>" for a file named
+        # "a:5:b.txt"; the parser reads path "a", so a closure for the real
+        # name must refuse rather than report zero occurrences.
+        raw = (f"a:5:b.txt:2:x = '{CANARY}'\n"
+               "::error::a GitHub-token-shaped string is committed\n")
+        self.assert_refusal(
+            raw_outcome(raw, closure_request=closure_request(path="a:5:b.txt")),
+            "closure_path_ambiguous")
+
+
 class CliTests(unittest.TestCase):
     def run_cli(self, payload_text):
         return subprocess.run(
@@ -376,6 +453,13 @@ class CliTests(unittest.TestCase):
         proc = self.run_cli("{broken " + CANARY)
         self.assertEqual(proc.returncode, 2)
         self.assertNotIn(CANARY, proc.stdout.decode())
+
+    def test_cli_duplicate_keys_refuse(self):
+        text = json.dumps(finding_outcome()).replace(
+            '"scan":', '"scan": {"exit_code": 0}, "scan":', 1)
+        proc = self.run_cli(text)
+        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(json.loads(proc.stdout)["status"], "refusal")
 
     def test_cli_deeply_nested_input_refuses_not_crashes(self):
         proc = self.run_cli("[" * 200000)

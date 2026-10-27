@@ -91,13 +91,15 @@ not an atomic claim.
 
 ## Closure
 
-A clean scan never closes anything. A closure payload requires an
+A clean scan alone never closes anything. A closure payload requires an
 explicit `closure_request`: exactly one existing finding id, a
 `fix_head` equal to this scan's `source_head`, zero occurrences for the
 identity in this scan, the same pinned scanner blob as the original
 detection (`original_scanner_script_blob`; a different blob is
 unorderable offline and its output contract is unreviewed, so it
-refuses), and a non-empty `independent_acceptance_ref` https link. The
+refuses), and a non-empty `independent_acceptance_ref` https link with a host. A closure path
+containing `:` refuses (`closure_path_ambiguous`): `git grep -n` output
+cannot attribute such a path unambiguously, so zero occurrences is unprovable. The
 adapter checks presence and shape only; the genuineness of the
 acceptance is the submitter's and the accepting reviewer's to verify.
 Accepted-risk and false-positive outcomes are separate decisions and

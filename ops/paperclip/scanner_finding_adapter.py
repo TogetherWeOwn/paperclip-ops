@@ -107,6 +107,7 @@ REASONS = {
     "closure_binding": "closure needs exactly one existing finding id",
     "closure_head_mismatch": "closure fix head does not equal this scan's source head",
     "closure_scanner_version": "closure retest did not use the pinned scanner of the original detection",
+    "closure_path_ambiguous": "closure path contains a colon, which the scanner's path:line: output cannot attribute unambiguously",
     "closure_still_present": "closure identity still has occurrences in this scan",
     "closure_acceptance_missing": "closure needs an independent-acceptance reference",
     "too_many_findings": "scan produced more logical findings than the adapter bound",
@@ -179,6 +180,11 @@ def _validate_rule(value):
     return value
 
 
+def _is_https_ref(value):
+    # A bare "https://" has no host, so it is not a reference.
+    return isinstance(value, str) and re.match(r"https://[^\s/?#]+", value) is not None
+
+
 def _validate_evidence(value):
     if value is None:
         return []
@@ -187,7 +193,7 @@ def _validate_evidence(value):
     for link in value:
         if (
             not isinstance(link, str)
-            or not link.startswith("https://")
+            or not _is_https_ref(link)
             or not _valid_opaque(link, max_chars=500)
         ):
             _refuse("evidence_invalid")
@@ -372,6 +378,11 @@ def _closure_payload(request, repo_slug, grouped, source_head):
         _refuse("identity_invalid")
     rule_id = _validate_rule(request["rule_id"])
     path = _validate_path(request["path"])
+    if ":" in path:
+        # ``git grep -n`` prints ``path:line:content``; a path holding
+        # ``:<digits>:`` is read as a shorter path, so "zero occurrences"
+        # for it cannot be proven from this output. Never close on it.
+        _refuse("closure_path_ambiguous")
     ids = request["existing_issue_ids"]
     if not isinstance(ids, list) or len(ids) != 1 or not _valid_opaque(ids[0]):
         _refuse("closure_binding")
@@ -382,8 +393,7 @@ def _closure_payload(request, repo_slug, grouped, source_head):
         # and its output contract is unreviewed, so it cannot close.
         _refuse("closure_scanner_version")
     acceptance = request["independent_acceptance_ref"]
-    if not isinstance(acceptance, str) or not acceptance.startswith("https://") \
-            or not _valid_opaque(acceptance, max_chars=500):
+    if not _is_https_ref(acceptance) or not _valid_opaque(acceptance, max_chars=500):
         _refuse("closure_acceptance_missing")
     if (rule_id, path) in grouped:
         _refuse("closure_still_present")

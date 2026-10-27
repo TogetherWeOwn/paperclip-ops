@@ -1370,21 +1370,27 @@ def main(argv: list[str] | None = None) -> int:
                 entry, snapshots.get(key), reviews.get(key), prior_records.get(key), now)
         proposals = plan_proposals(records, cards, now)
     except LedgerError as error:
-        if args.dry_run and args.json:
-            # Safe preview failure: stable codes only, never raw input or
-            # exception text (a malformed evidence file can hold anything).
-            print(json.dumps({
-                "generatedAt": stamp,
-                "dry_run": True,
-                "persisted": False,
-                "error": {
-                    "code": "unmeasurable_evidence",
-                    "message": "evidence could not be measured; refusing to report a clean board",
-                    "retryable": False,
-                    "next_action": "fix the caller-supplied registry/snapshot/cards/"
-                                   "prior-ledger evidence and re-run the preview",
-                },
-            }, indent=2, sort_keys=True))
+        if args.dry_run:
+            # Safe preview failure (JSON and text alike): stable codes only,
+            # never raw input or exception text (a malformed evidence file
+            # can hold anything).
+            safe_error = {
+                "code": "unmeasurable_evidence",
+                "message": "evidence could not be measured; refusing to report a clean board",
+                "retryable": False,
+                "next_action": "fix the caller-supplied registry/snapshot/cards/"
+                               "prior-ledger evidence and re-run the preview",
+            }
+            if args.json:
+                print(json.dumps({
+                    "generatedAt": stamp,
+                    "dry_run": True,
+                    "persisted": False,
+                    "error": safe_error,
+                }, indent=2, sort_keys=True))
+            else:
+                print(f"pr_closeout_ledger: {safe_error['code']}: {safe_error['message']}; "
+                      f"next: {safe_error['next_action']}", file=sys.stderr)
             return 5
         print(f"pr_closeout_ledger: {error}", file=sys.stderr)
         return 5

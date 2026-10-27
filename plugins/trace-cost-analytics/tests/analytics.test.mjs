@@ -236,6 +236,17 @@ test('even one missing exposure flag makes bypass risk unknown', () => {
   assert.equal(result.trace.bypassPerExposure, null);
 });
 
+test('an evidenced useful step without a gateExposure flag makes bypass risk unknown', () => {
+  const result = analyze(snapshot({ steps: [
+    step('step-1', { actionKey: 'a', classification: 'bypass', evidenceRef: 'evidence:bypass', gateExposure: true }),
+    step('step-2', { actionKey: 'b', classification: 'useful', evidenceRef: 'evidence:useful' }),
+  ] }));
+  assert.equal(result.trace.unclassified, 0);
+  assert.equal(result.trace.bypasses, 1);
+  assert.equal(result.trace.gateExposures, 1);
+  assert.equal(result.trace.bypassPerExposure, null);
+});
+
 test('an exposed unclassified step makes bypass risk unknown even with an exposed evidenced bypass', () => {
   const result = analyze(snapshot({ steps: [
     step('step-1', { actionKey: 'a', classification: 'bypass', evidenceRef: 'evidence:bypass', gateExposure: true }),

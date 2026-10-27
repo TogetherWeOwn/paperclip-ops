@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { manifest } from '../src/manifest.mjs';
 import { registerOutcomeCostTool } from '../src/worker.mjs';
@@ -132,4 +133,11 @@ test('analysis through the tool is passive and does not mutate the supplied snap
   const before = structuredClone(input);
   await handler()({ snapshot: input }, { companyId: COMPANY });
   assert.deepEqual(input, before);
+});
+
+test('manifest worker entrypoint resolves to a module that runs the plugin worker', () => {
+  assert.equal(typeof manifest.entrypoints?.worker, 'string');
+  const source = readFileSync(new URL(`../${manifest.entrypoints.worker}`, import.meta.url), 'utf8');
+  assert.match(source, /runWorker\s*\(/);
+  assert.match(source, /export\s+default\b/);
 });

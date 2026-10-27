@@ -168,6 +168,48 @@ test('delivery with no recorded attempt timing has unknown latency', () => {
   assertMetrics(result.totals, { outcomes: 1, outcomeLatencyMs: null });
 });
 
+test('delivery with no recorded attempts is never a free outcome', () => {
+  const result = analyze(snapshot({ runs: [] }));
+  assertMetrics(result.totals, { outcomes: 1, knownCostUsd: '0.000000000', unknownCostRuns: 0, costPerOutcomeUsd: null });
+  assert.equal(result.cohorts.length, 1);
+  assertMetrics(result.cohorts[0], { model: 'unknown', outcomes: 1, costPerOutcomeUsd: null });
+});
+
+test('one delivered issue without attempts suppresses the total ratio but not a fully attempted cohort', () => {
+  const result = analyze(snapshot({
+    issues: [issue(), issue('issue-b')],
+    runs: [run()],
+  }));
+  assertMetrics(result.totals, { outcomes: 2, knownCostUsd: '1.000000000', costPerOutcomeUsd: null });
+  assert.equal(result.cohorts.find((c) => c.model === 'model-a').costPerOutcomeUsd, '1.000000000');
+  assert.equal(result.cohorts.find((c) => c.model === 'unknown').costPerOutcomeUsd, null);
+});
+
+test('an undelivered issue without attempts still suppresses the total ratio', () => {
+  const undelivered = { id: 'issue-b', status: 'todo' };
+  const result = analyze(snapshot({ issues: [issue(), undelivered], runs: [run()] }));
+  assertMetrics(result.totals, { issues: 2, outcomes: 1, costPerOutcomeUsd: null });
+});
+
+// Each delivery conjunct must be sufficient to withhold an outcome on its own.
+for (const [name, overrides] of [
+  ['cancelled with full evidence', { status: 'cancelled' }],
+  ['in review with full evidence', { status: 'in_review' }],
+  ['blocked with full evidence', { status: 'blocked' }],
+  ['done without deliveredAt', { deliveredAt: undefined }],
+  ['done with null deliveredAt', { deliveredAt: null }],
+  ['done without evidenceRef', { evidenceRef: undefined }],
+  ['done with null evidenceRef', { evidenceRef: null }],
+  ['done without evidenceKind', { evidenceKind: undefined }],
+  ['done with null evidenceKind', { evidenceKind: null }],
+]) {
+  test(`${name} is not a delivered outcome`, () => {
+    const result = analyze(snapshot({ issues: [issue('issue-a', overrides)], runs: [run()] }));
+    assertMetrics(result.totals, { outcomes: 0, knownCostUsd: '1.000000000', costPerOutcomeUsd: null, outcomeLatencyMs: null });
+    assert.equal(result.cohorts[0].outcomes, 0);
+  });
+}
+
 test('repeated actions are counted within a run and are not automatically waste', () => {
   const result = analyze(snapshot({ runs: [run(), run('run-b')], steps: [
     step('step-1'), step('step-2'), step('step-3'),
@@ -192,6 +234,22 @@ test('even one missing exposure flag makes bypass risk unknown', () => {
   ] }));
   assert.equal(result.trace.bypasses, 1);
   assert.equal(result.trace.bypassPerExposure, null);
+});
+
+test('an exposed unclassified step makes bypass risk unknown even with an exposed evidenced bypass', () => {
+  const result = analyze(snapshot({ steps: [
+    step('step-1', { actionKey: 'a', classification: 'bypass', evidenceRef: 'evidence:bypass', gateExposure: true }),
+    step('step-2', { actionKey: 'b', classification: 'unknown', gateExposure: true }),
+  ] }));
+  assertMetrics(result.trace, { steps: 2, bypasses: 1, unclassified: 1, gateExposures: 2, bypassPerExposure: null });
+});
+
+test('an unexposed unclassified step still makes bypass risk unknown', () => {
+  const result = analyze(snapshot({ steps: [
+    step('step-1', { actionKey: 'a', classification: 'bypass', evidenceRef: 'evidence:bypass', gateExposure: true }),
+    step('step-2', { actionKey: 'b', classification: 'unknown', gateExposure: false }),
+  ] }));
+  assertMetrics(result.trace, { bypasses: 1, unclassified: 1, gateExposures: 1, bypassPerExposure: null });
 });
 
 test('incomplete traces do not publish a bypass ratio even with explicit exposures', () => {
@@ -274,6 +332,18 @@ const invalidCases = [
   ['delivery after capture', (s) => { s.issues[0].deliveredAt = '2026-01-03T00:00:00.000Z'; }],
   ['finish before start', (s) => { s.runs[0].finishedAt = at(-1); }],
   ['delivery before attempt', (s) => { s.issues[0].deliveredAt = at(-1); }],
+  ['attempt straddling delivery', (s) => { s.runs[0].startedAt = at(30); s.runs[0].finishedAt = at(90); s.issues[0].deliveredAt = at(60); }],
+  ['attempt finishing one millisecond after delivery', (s) => { s.runs[0].startedAt = at(0); s.runs[0].finishedAt = new Date(Date.parse(at(60)) + 1).toISOString(); s.issues[0].deliveredAt = at(60); }],
+  ['unfinished attempt on a delivered issue', (s) => { s.runs[0].status = 'running'; s.runs[0].finishedAt = null; s.runs[0].accountingReady = false; s.runs[0].costUsdExact = null; }],
+  ['running attempt started after capture', (s) => { s.issues[0] = issue('issue-a', { status: 'in_progress', deliveredAt: undefined, evidenceRef: undefined, evidenceKind: undefined }); s.runs[0] = run('run-a', { status: 'running', startedAt: '2026-01-03T00:00:00.000Z', finishedAt: null, costUsdExact: null, accountingReady: false }); }],
+  ['queued attempt started after capture', (s) => { s.runs[0] = run('run-a', { status: 'queued', startedAt: '2026-01-03T00:00:00.000Z', finishedAt: null, costUsdExact: null, accountingReady: false }); s.issues[0] = { id: 'issue-a', status: 'todo' }; }],
+  ['terminal attempt started after capture', (s) => { s.runs[0].startedAt = '2026-01-03T00:00:00.000Z'; s.runs[0].finishedAt = '2026-01-03T00:00:30.000Z'; s.issues[0] = { id: 'issue-a', status: 'in_progress' }; }],
+  ['running attempt with finishedAt', (s) => { s.runs[0].status = 'running'; s.issues[0] = { id: 'issue-a', status: 'in_progress' }; }],
+  ['queued attempt with finishedAt', (s) => { s.runs[0].status = 'queued'; s.issues[0] = { id: 'issue-a', status: 'in_progress' }; }],
+  ['terminal attempt with undefined finishedAt', (s) => { delete s.runs[0].finishedAt; }],
+  ['terminal attempt without finish on an undelivered issue', (s) => { s.runs[0].finishedAt = null; s.issues[0] = { id: 'issue-a', status: 'in_progress' }; }],
+  ['attempt finishing after capture on an undelivered issue', (s) => { s.runs[0].finishedAt = '2026-01-03T00:00:00.000Z'; s.issues[0] = { id: 'issue-a', status: 'in_progress' }; }],
+  ['numeric finishedAt', (s) => { s.runs[0].finishedAt = 30; }],
   ['unknown evidence kind', (s) => { s.issues[0].evidenceKind = 'self-reported'; }],
   ['nonboolean accounting', (s) => { s.runs[0].accountingReady = 'true'; }],
   ['numeric USD', (s) => { s.runs[0].costUsdExact = 0.1; }],

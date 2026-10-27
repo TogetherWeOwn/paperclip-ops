@@ -35,8 +35,12 @@ Environment contract:
   CI_POLICY_MODE        "warn" | "error" (default warn)
   HEAVY_TIMEOUT_MINUTES heavy threshold in minutes (default 10)
 
-Usage: ci_policy.py [workflow-file ...] (default: .github/workflows/*.yml).
-Runs inside the existing required `pr-lint` job, so adopting it in warn mode
+Usage: ci_policy.py [--json] [workflow-file ...] (default: .github/workflows/*.yml).
+Without `--json` the output is annotation/`note:` prose. With `--json` stdout is
+exactly one `ci-policy-verdicts.v1` object instead (per-finding `rule`, `path`,
+`job`, `line`, stable `code`, `retryable`, `next_action`; `unmeasurable` inputs;
+`coverage.limits`; contract in docs/ci-policy-verdicts.md); exit is 2 when any
+input could not be measured. Runs inside the existing required `pr-lint` job, so adopting it in warn mode
 adds no new required check and needs no ruleset change. Stdlib only.
 
 Fail-flip record: `CI_POLICY_MODE` is `error` in the owning workflow since
@@ -45,6 +49,7 @@ local copy stays until the org home carries the lint (case_b57a367e owns that
 move); keep the two in sync until then.
 """
 import glob
+import json
 import os
 import re
 import sys
@@ -74,6 +79,12 @@ class Finding:
     message: str
     file: str = ""  # set with `line` to anchor the annotation on the job
     line: int = 0
+    # Machine-readable identity for `--json`; never rendered in the prose output.
+    rule: str = ""
+    code: str = ""
+    path: str = ""
+    job: str = ""
+    job_line: int = 0
 
 
 def on_section(text):
@@ -241,20 +252,50 @@ def check_ci_ok_needs(path, text, mode):
                    "red and still merge. "
                    f"Add it to `{CI_OK}` `needs:` (and to any per-job list the gate "
                    "reads), or mark the job `# ci-ok: exempt <reason>`.")
-        out.append(Finding(mode, "ci-ok needs", msg, path, job.line))
+        out.append(Finding(
+            mode, "ci-ok needs", msg, path, job.line, "ci-ok-coverage",
+            "ci-ok-exempt-no-reason" if exempt else "ci-ok-needs-missing",
+            path, job.name, job.line,
+        ))
     return out, []
 
 
-def lint_file(path, mode, heavy_after):
+def has_on_key(text):
+    """True when a top-level `on:` key exists (the lint cannot scope a file without one)."""
+    return re.search(r"(?m)^on:", text) is not None
+
+
+def job_line(text, name, blocks):
+    """1-based line of the job header; `split_jobs` and `job_blocks` may disagree on odd headers."""
+    for job in blocks:
+        if job.name == name:
+            return job.line
+    m = re.search(r"(?m)^  " + re.escape(name) + r":\n", text)
+    return text.count("\n", 0, m.start()) + 1 if m else 1
+
+
+def lint_file(path, mode, heavy_after, facts=None):
+    """Findings and notes for one workflow.
+
+    `facts`, when given, receives the scope decision for the JSON report:
+    `scope` is "unparseable", "no-pull-request-trigger", "non-required" or
+    "linted", and `no_ci_ok` is set when the ci-ok rule was skipped.
+    """
     out, notes = [], []
-    text = Path(path).read_text()
+    facts = {} if facts is None else facts
+    text = Path(path).read_text(encoding="utf-8")
     on_text = on_section(text)
+    if not has_on_key(text):
+        facts["scope"] = "unparseable"
     if not has_pr_trigger(on_text):
         notes.append(f"{path}: no pull_request trigger; full-run path, out of scope")
+        facts.setdefault("scope", "no-pull-request-trigger")
         return out, notes
     if EXEMPT.search(text):
         notes.append(f"{path}: marked ci-policy non-required; out of scope")
+        facts["scope"] = "non-required"
         return out, notes
+    facts["scope"] = "linted"
     if has_workflow_paths(on_text):
         out.append(Finding(
             mode, "Change gating",
@@ -263,7 +304,9 @@ def lint_file(path, mode, heavy_after):
             "(`needs:` + `if:`, aggregated by `ci-ok`), or mark the workflow "
             "`ci-policy: non-required` with a reason when it truly produces "
             "no required check.",
+            rule="workflow-paths", code="workflow-level-paths", path=path,
         ))
+    blocks = job_blocks(text)
     for name, body in split_jobs(text).items():
         tm = TIMEOUT.search(body)
         timeout = int(tm.group(1)) if tm else None
@@ -282,10 +325,14 @@ def lint_file(path, mode, heavy_after):
             f"{path}: heavy job `{name}` {why}. Run it only when its area "
             "changed (`needs:` the detector, `if:` on its outputs), or record "
             "why it always runs.",
+            rule="change-gating",
+            code="heavy-job-no-timeout" if timeout is None else "heavy-job-ungated",
+            path=path, job=name, job_line=job_line(text, name, blocks),
         ))
     f, n = check_ci_ok_needs(path, text, mode)
     out.extend(f)
     notes.extend(n)
+    facts["no_ci_ok"] = bool(n)
     return out, notes
 
 
@@ -311,6 +358,119 @@ def annotation(f):
     return f"::{f.level} {where}title={_escape_prop(f.title)}::{_escape(f.message)}"
 
 
+SCHEMA = "ci-policy-verdicts.v1"
+
+# code -> next_action: a closed vocabulary, no prose and no workflow content.
+FINDING_ACTIONS = {
+    "heavy-job-no-timeout": "gate_job_on_change_detection",
+    "heavy-job-ungated": "gate_job_on_change_detection",
+    "workflow-level-paths": "move_paths_filter_to_job_level",
+    "ci-ok-needs-missing": "add_job_to_ci_ok_needs",
+    "ci-ok-exempt-no-reason": "add_exempt_reason",
+}
+UNMEASURABLE_ACTIONS = {
+    "input-missing": "fix_input_path",
+    "input-invalid-encoding": "fix_input_encoding",
+    "workflow-unparseable": "fix_workflow_syntax",
+    "no-inputs-discovered": "provide_workflow_files",
+}
+LIMITS = {
+    "ci-ok-always-structural": (
+        "A job directly listed in the ci-ok needs: that runs under always() counts as "
+        "covered even though its failure would not propagate; the lint is structural."),
+    "skipped-no-pull-request-trigger": (
+        "Workflows with no pull_request or pull_request_target trigger are out of scope "
+        "and were not linted."),
+    "skipped-non-required-marker": (
+        "Workflows carrying a ci-policy: non-required marker are out of scope and were "
+        "not linted."),
+    "ci-ok-rule-skipped-no-ci-ok-job": (
+        "The ci-ok completeness rule does not apply to workflows without a ci-ok job."),
+}
+SCOPE_LIMIT = {
+    "no-pull-request-trigger": "skipped-no-pull-request-trigger",
+    "non-required": "skipped-non-required-marker",
+}
+USAGE = "usage: ci_policy.py [--json] [workflow-file ...]"
+HELP = USAGE + """
+
+Lint PR-triggered GitHub workflows for change gating and ci-ok completeness.
+Default: annotations and notes on stdout. Exit 0 or 1 (1 only in error mode).
+
+  --json    print exactly one `ci-policy-verdicts.v1` JSON object on stdout:
+            outcome clean|findings|unmeasurable, totals, findings (rule, path,
+            job, line, code, retryable, next_action), unmeasurable inputs and
+            coverage.limits. Exit 2 when any input could not be measured.
+  -h, --help  print this help (plain text, exit 0).
+
+Environment: CI_POLICY_MODE warn|error (default warn), HEAVY_TIMEOUT_MINUTES.
+Default files: .github/workflows/*.yml
+"""
+
+
+def _unmeasurable(path, code):
+    return {"path": path, "code": code, "retryable": False,
+            "next_action": UNMEASURABLE_ACTIONS[code]}
+
+
+def verdict_report(files, mode, heavy_after, discovered=False):
+    """The `ci-policy-verdicts.v1` object; rule, location and code only, never content."""
+    files = sorted(set(files))
+    findings, unmeasurable = [], []
+    linted = skipped = 0
+    skip_paths = {code: [] for code in SCOPE_LIMIT.values()}
+    no_ci_ok = []
+    for path in files:
+        facts = {}
+        try:
+            found, _ = lint_file(path, mode, heavy_after, facts)
+        except UnicodeDecodeError:
+            unmeasurable.append(_unmeasurable(path, "input-invalid-encoding"))
+            continue
+        except OSError:
+            unmeasurable.append(_unmeasurable(path, "input-missing"))
+            continue
+        scope = facts.get("scope")
+        if scope == "unparseable":
+            unmeasurable.append(_unmeasurable(path, "workflow-unparseable"))
+        elif scope in SCOPE_LIMIT:
+            skipped += 1
+            skip_paths[SCOPE_LIMIT[scope]].append(path)
+        else:
+            linted += 1
+            if facts.get("no_ci_ok"):
+                no_ci_ok.append(path)
+        for f in found:
+            findings.append({
+                "rule": f.rule, "path": f.path, "job": f.job or None,
+                "line": f.job_line or None, "code": f.code, "retryable": False,
+                "next_action": FINDING_ACTIONS[f.code],
+            })
+    findings.sort(key=lambda r: (r["path"], r["job"] or "", r["rule"], r["code"]))
+    requested = len(files)
+    if not files and discovered:
+        unmeasurable.append(_unmeasurable(None, "no-inputs-discovered"))
+    unmeasurable.sort(key=lambda u: (u["path"] or "", u["code"]))
+    limit_paths = {"ci-ok-always-structural": [], **skip_paths,
+                   "ci-ok-rule-skipped-no-ci-ok-job": no_ci_ok}
+    limits = [{"code": code, "description": LIMITS[code], "paths": paths}
+              for code, paths in limit_paths.items()
+              if code == "ci-ok-always-structural" or paths]
+    outcome = ("unmeasurable" if unmeasurable or not requested
+               else "findings" if findings else "clean")
+    return {
+        "schema": SCHEMA,
+        "mode": "error" if mode == "error" else "warn",
+        "outcome": outcome,
+        "totals": {"requested": requested, "linted": linted, "skipped": skipped,
+                   "unmeasurable": len([u for u in unmeasurable if u["path"] is not None]),
+                   "findings": len(findings)},
+        "findings": findings,
+        "unmeasurable": unmeasurable,
+        "coverage": {"limits": limits},
+    }
+
+
 def main(env=None, argv=None):
     env = dict(os.environ) if env is None else env
     mode = "error" if env.get("CI_POLICY_MODE", "warn").strip().lower() == "error" else "warning"
@@ -318,9 +478,29 @@ def main(env=None, argv=None):
         heavy_after = int(env.get("HEAVY_TIMEOUT_MINUTES") or HEAVY_DEFAULT)
     except ValueError:
         heavy_after = HEAVY_DEFAULT
-    files = list(argv[1:] if argv is not None else sys.argv[1:]) or sorted(
-        glob.glob(os.path.join(".github", "workflows", "*.yml"))
-    )
+    args = list(argv[1:] if argv is not None else sys.argv[1:])
+    as_json, paths = False, []
+    for i, arg in enumerate(args):
+        if arg == "--":
+            paths.extend(args[i + 1:])
+            break
+        if arg in ("-h", "--help"):
+            print(HELP, end="")
+            return 0
+        if arg == "--json":
+            as_json = True
+        elif arg.startswith("-") and arg != "-":
+            print(f"{USAGE}\nci_policy.py: error: unrecognized option: {arg}", file=sys.stderr)
+            return 2
+        else:
+            paths.append(arg)
+    files = paths or sorted(glob.glob(os.path.join(".github", "workflows", "*.yml")))
+    if as_json:
+        report = verdict_report(files, mode, heavy_after, discovered=not paths)
+        print(json.dumps(report, indent=2, sort_keys=False))
+        if report["outcome"] == "unmeasurable":
+            return 2
+        return 1 if mode == "error" and report["findings"] else 0
     findings, notes = evaluate(files, mode, heavy_after)
     for f in findings:
         print(annotation(f))

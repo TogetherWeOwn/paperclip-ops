@@ -354,7 +354,8 @@
     "op-request truthful-publication suite:1",
     "op-request harness suite:1",
     "op-request swap suite:1",
-    "op-request snapshot suite:1"
+    "op-request snapshot suite:1",
+    "shell-substitution JSON acceptance:1"
   ],
   "retained": [
     {
@@ -2006,6 +2007,11 @@
       "name": "op-request snapshot suite",
       "definition_sha256": "77d0abce7e29984df673291e980ff099a4d0ad86f0f77d8ba84d1325bde9cf20",
       "id": "op-request snapshot suite:1"
+    },
+    {
+      "name": "shell-substitution JSON acceptance",
+      "definition_sha256": "335f88370d859cfd2908fe5ea77a41d6a03b8cc8ca84ccbcabeca304a04042d8",
+      "id": "shell-substitution JSON acceptance:1"
     }
   ],
   "removed": [

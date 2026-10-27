@@ -520,7 +520,13 @@ def required_from_rules(rules):
                 error_code="RULES_INVALID",
                 next_action="Fix the rules JSON to be a list of branch rules and rerun the audit",
             )
-        checks = params["required_status_checks"] if "required_status_checks" in params else []
+        if "required_status_checks" not in params:
+            raise InputError(
+                "rules JSON has a required_status_checks rule without a checks list (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)",
+                error_code="RULES_INVALID",
+                next_action="Fix the rules JSON to be a list of branch rules and rerun the audit",
+            )
+        checks = params["required_status_checks"]
         if not isinstance(checks, list):
             raise InputError(
                 "rules JSON has a required_status_checks rule whose checks are not a list (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)",

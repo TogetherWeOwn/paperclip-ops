@@ -135,6 +135,17 @@ class NestedInput(unittest.TestCase):
                 proc = run_tool("--rules-json", rules, "--workflows", self.wf, "--json")
                 self.assert_unmeasurable(proc, "RULES_INVALID")
 
+    def test_rules_missing_checks_list_is_RULES_INVALID(self):
+        for params in ({}, {"strict_required_status_checks_policy": True}):
+            with self.subTest(params=params):
+                rules = self.write_json(
+                    "rules.json",
+                    [{"type": "required_status_checks", "parameters": params},
+                     self._valid_rule()],
+                )
+                proc = run_tool("--rules-json", rules, "--workflows", self.wf, "--json")
+                self.assert_unmeasurable(proc, "RULES_INVALID")
+
     def test_rules_non_integer_integration_id_is_RULES_INVALID(self):
         for bad in ([], {}, "15368", True, 1.5):
             with self.subTest(integration_id=bad):

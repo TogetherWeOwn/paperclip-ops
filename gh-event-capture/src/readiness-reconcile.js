@@ -7,7 +7,9 @@
 // ruleset-only repos), and applies the pure decisions in src/readiness.js:
 // maintain the bot-maintained block, mark-ready on green, draft-reset on a new
 // head or a completed failure, and arm auto-merge only when CI and the
-// Paperclip Review check entry pass on THIS head.
+// Paperclip Review check entry pass on THIS head with the heavy suites job
+// completed successful on THIS head (a draft-run ci-ok success alone proves
+// nothing — draft selection passes ci-ok with every area skipped).
 //
 // HOST-SIDE BY CONSTRUCTION, not in the Worker. The Worker (app.js) is a
 // capture-only store behind an unauthenticated webhook route: giving it an

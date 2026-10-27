@@ -85,6 +85,21 @@ export const manifest: PaperclipPluginManifestV1 = {
 
   tools: [
     {
+      name: TOOL_NAMES.getCollectorEvidence,
+      displayName: "Get collector evidence",
+      description:
+        "Read company-scoped aggregate snapshot counts and JSON byte lengths for a bounded observation window, without provider identities or raw records. Missing lifecycle and diagnostic instrumentation remain unavailable. Never polls or changes the collector.",
+      parametersSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["companyId"],
+        properties: {
+          companyId: { type: "string", minLength: 1 },
+          windowSeconds: { type: "integer", minimum: 60, maximum: 86400, default: 3600 },
+        },
+      },
+    },
+    {
       name: TOOL_NAMES.getProviderUsage,
       displayName: "Get provider usage",
       description:

@@ -75,8 +75,8 @@ Examples:
   make verify-fast-plan
 
 Normal execution is not read-only: it may restore toolkit files, install the
-pinned TypeScript compiler, and write bytecode caches. Only --plan, --dry-run
-and --list make no changes.
+pinned TypeScript compiler (typescript@5.9.3), and write bytecode caches.
+Only --plan, --dry-run and --list make no changes.
 HELP
 }
 
@@ -303,7 +303,7 @@ python3 -m unittest test_alert_queue || fail "alert-queue suite failed"
 python3 -m unittest test_watchdog_snapshot_builder || fail "watchdog snapshot-builder suite failed"
 python3 -m unittest test_case_da79e241_fleet_run_stall || fail "fleet-run-stall suite failed"
 python3 -m unittest test_case_dcf07273_assignment_bundle || fail "assignment host-source suite failed"
-python3 -m unittest test_orphan_suites || fail "orphan-suite ratchet fixtures failed"
+python3 -B -m unittest test_orphan_suites test_orphan_suite_json_acceptance || fail "orphan-suite ratchet fixtures failed"
 python3 -m unittest test_pr3_stop_guard_landing || fail "stop-guard landing suite failed"
 python3 -m unittest test_warn_first_inventory || fail "warn-first inventory suite failed"
 ./ops/case_34c2c99f/test_regen_dry_run_receipt.sh || fail "regen dry-run receipt suite failed"
@@ -330,6 +330,7 @@ PAPERCLIP_RUN_SCRATCH_DIR="${PAPERCLIP_RUN_SCRATCH_DIR:-${PAPERCLIP_SCRATCH_DIR:
 (cd ops/productivity && python3 -m unittest test_nongit_quarantine_custody) || fail "nongit quarantine custody suite failed"
 ./test_review_route.sh || fail "review-route suite failed"
 ./test_shell_subst_guard.sh || fail "shell-subst guard suite failed"
+python3 -B -m unittest test_shell_substitution_json_acceptance || fail "shell-substitution JSON acceptance failed"
 (cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_arm_import) || fail "arm-import suite failed"
 (cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_build_corpus_atomic) || fail "corpus atomic-write suite failed"
 (cd ops/case_1ccef1dc/reviewer-eval/v2 && python3 -m unittest test_merge_survival_atomic) || fail "merge-survival atomic-write suite failed"
@@ -338,10 +339,13 @@ PAPERCLIP_RUN_SCRATCH_DIR="${PAPERCLIP_RUN_SCRATCH_DIR:-${PAPERCLIP_SCRATCH_DIR:
 (cd ops/case_629b4da2 && python3 -m unittest test_check_operator_copy_risk) || fail "operator copy-risk gate suite failed"
 (cd ops/case_0ce22efa && python3 -B -m unittest test_node7b1ff338_pressure_gate) || fail "sweep-auto node7b1ff338 pressure-gate suite failed"
 
-# Translator fixture needs the pinned TypeScript compiler. CI installs
+# Translator fixture needs the pinned TypeScript compiler at exactly 5.9.3: a
+# missing compiler, any other installed version, or unreadable package
+# metadata all count as not ready (same probe as the inventory entry, kept in
+# correspondence by test_typescript_readiness_acceptance). CI installs
 # typescript@5.9.3 before this step; do the same locally with the shared
 # npm cache so scratch worktrees (no node_modules) work identically.
-if (( PREPARE )) && ! node -e "require.resolve('typescript/bin/tsc')" >/dev/null 2>&1; then
+if (( PREPARE )) && ! node -e "try{require.resolve('typescript/bin/tsc');var fs=require('fs');var m=require.resolve('typescript/package.json');if((fs.statSync(m).mode&0o444)===0)process.exit(1);if(JSON.parse(fs.readFileSync(m,'utf8')).version==='5.9.3')process.exit(0);process.exit(1)}catch(e){process.exit(1)}" >/dev/null 2>&1; then
   echo "verify-fast: installing pinned typescript@5.9.3 (shared npm cache)..."
   npm install --no-save --ignore-scripts typescript@5.9.3 || fail "typescript install failed"
 fi
@@ -358,7 +362,7 @@ python3 -m unittest test_migration_drift_gate || fail "migration drift-gate suit
 python3 -m unittest test_migration_evidence_ax || fail "migration evidence-AX suite failed"
 # Plan/list/no-prepare contract plus the strict inventory-to-execution drift
 # check and the PREPARE-guard check. Offline: stdlib unittest, synthetic stubs.
-python3 -B -m unittest test_verify_fast_plan test_verify_fast_plan_gates || fail "verify-fast plan suites failed"
+python3 -B -m unittest test_verify_fast_plan test_verify_fast_plan_gates test_typescript_readiness_acceptance || fail "verify-fast plan suites failed"
 
 if [[ "$rc" -ne 0 ]]; then
   echo "verify-fast: FAILED"

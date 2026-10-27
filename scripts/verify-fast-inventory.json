@@ -8,7 +8,7 @@
     "python3": {"probe": {"which": "python3"}},
     "pyyaml": {"probe": {"argv": ["python3", "-B", "-c", "import yaml; assert yaml.__version__ == '6.0.3'"]}},
     "toolkit-vendored-files": {"probe": {"argv": ["python3", "verification/offline_ci_contract.py", "--check-restored"]}},
-    "typescript@5.9.3": {"probe": {"argv": ["node", "-e", "require.resolve('typescript/bin/tsc')"]}}
+    "typescript@5.9.3": {"probe": {"argv": ["node", "-e", "try{require.resolve('typescript/bin/tsc');var fs=require('fs');var m=require.resolve('typescript/package.json');if((fs.statSync(m).mode&0o444)===0)process.exit(1);if(JSON.parse(fs.readFileSync(m,'utf8')).version==='5.9.3')process.exit(0);process.exit(1)}catch(e){process.exit(1)}"]}}
   },
   "suites": [
     {"id": "parse-bash", "tier": "parse", "prerequisites": ["bash"], "preparation": {"actions": []}, "command": "for f in *.sh lib/*.sh mcp/deploy/*.sh omniroute/*.sh host-ops/*.sh scripts/*.sh templates/org-github/*.sh templates/org-github/tests/*.sh ops/productivity/*.sh verification/private-mutation-gates.sh; do bash -n \"$f\"; done"},
@@ -55,7 +55,7 @@
     {"id": "watchdog-snapshot-builder", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_watchdog_snapshot_builder"]},
     {"id": "fleet-run-stall", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_case_da79e241_fleet_run_stall"]},
     {"id": "assignment-bundle", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_case_dcf07273_assignment_bundle"]},
-    {"id": "orphan-suite-fixtures", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_orphan_suites"]},
+    {"id": "orphan-suite-fixtures", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-B", "-m", "unittest", "test_orphan_suites", "test_orphan_suite_json_acceptance"]},
     {"id": "stop-guard-landing", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_pr3_stop_guard_landing"]},
     {"id": "warn-first-inventory", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_warn_first_inventory"]},
     {"id": "regen-receipt", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./ops/case_34c2c99f/test_regen_dry_run_receipt.sh"]},
@@ -79,6 +79,7 @@
     {"id": "nongit-quarantine-custody", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": "(cd ops/productivity && python3 -m unittest test_nongit_quarantine_custody)"},
     {"id": "review-route", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_review_route.sh"]},
     {"id": "shell-subst-guard", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_shell_subst_guard.sh"]},
+    {"id": "shell-substitution-json", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-B", "-m", "unittest", "test_shell_substitution_json_acceptance"]},
     {"id": "arm-import", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": "(cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_arm_import)"},
     {"id": "corpus-atomic-write", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": "(cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_build_corpus_atomic)"},
     {"id": "merge-survival-atomic", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": "(cd ops/case_1ccef1dc/reviewer-eval/v2 && python3 -m unittest test_merge_survival_atomic)"},
@@ -93,6 +94,6 @@
     {"id": "migration-rehearsal", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_rehearsal.sh"]},
     {"id": "migration-drift-gate", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_migration_drift_gate"]},
     {"id": "migration-evidence-ax", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_migration_evidence_ax"]},
-    {"id": "verify-fast-plan", "tier": "fast", "prerequisites": ["python3", "node", "bash"], "preparation": {"actions": []}, "command": ["python3", "-B", "-m", "unittest", "test_verify_fast_plan", "test_verify_fast_plan_gates"]}
+    {"id": "verify-fast-plan", "tier": "fast", "prerequisites": ["python3", "node", "bash"], "preparation": {"actions": []}, "command": ["python3", "-B", "-m", "unittest", "test_verify_fast_plan", "test_verify_fast_plan_gates", "test_typescript_readiness_acceptance"]}
   ]
 }

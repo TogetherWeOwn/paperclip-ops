@@ -39,5 +39,5 @@ ProtectSystem=strict
 ProtectHome=read-only
 # The host writes nothing: all state (the dated report JSON) lives in the
 # container under <root>/data/worktree-prune, and the report summary goes to
-# stdout (the journal). The host only talks to the podman runtime.
+# stdout (the journal). The host only talks to the container engine.
 UMask=0077

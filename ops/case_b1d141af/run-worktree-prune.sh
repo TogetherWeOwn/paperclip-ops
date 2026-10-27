@@ -134,7 +134,7 @@ ENV_ARGS=(-e PAPERCLIP_API_URL -e PAPERCLIP_API_KEY -e PAPERCLIP_COMPANY_ID -e P
 [[ -n "${WORKTREE_PRUNE_DISABLED:-}" ]] && ENV_ARGS+=(-e WORKTREE_PRUNE_DISABLED)
 
 # A deterministic tar (sorted, fixed owner and mtime) of the four modules only.
-# stdin of `podman exec -i` is that tar; the pruner reads no other stdin.
+# stdin of `$ENGINE exec -i` is that tar; the pruner reads no other stdin.
 tar --create --format=ustar --sort=name --owner=0 --group=0 --numeric-owner \
     --mtime='@0' --directory "$RELEASE_ROOT" "$ALLOWLIST_REL" "$CORE_REL" "$TOOL_REL" "$LIB_REL" \
   | "$ENGINE" exec -i -u node "${ENV_ARGS[@]}" "$PAPERCLIP_WORKTREE_PRUNE_CONTAINER" \

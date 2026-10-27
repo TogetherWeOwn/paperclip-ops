@@ -77,7 +77,7 @@ def matches(path, patterns):
     return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
 
 
-def check(repo, base, head):
+def check(repo, base, head, explain=False):
     if not SHA.fullmatch(base) or not SHA.fullmatch(head):
         raise Unmeasurable("invalid_sha", "Provide full lowercase 40- or 64-character commit SHAs.")
     for sha in (base, head):
@@ -105,6 +105,8 @@ def check(repo, base, head):
         "status": "not_configured" if rules is None else "clean",
     }
     if rules is None:
+        if explain:
+            report["explanations"] = []
         return report
     doc_candidates = {path for status, path in changes if status in {"A", "M"}}
     # A symlink/submodule or chmod-only change is not documentation evidence.
@@ -119,12 +121,22 @@ def check(repo, base, head):
                           if row.startswith(b"100644 blob ") or row.startswith(b"100755 blob ")})
         before, after = blobs
         docs = {path for path in wanted & after.keys() if before.get(path) != after[path]}
+    explanations = []
     for rule in rules:
         sources = sorted({path for _, path in changes if matches(path, rule["sources"])})
         if not sources:
             continue
         report["checked_rules"] += 1
-        if not any(matches(path, rule["docs"]) and not matches(path, rule["sources"]) for path in docs):
+        # One evaluated set per rule: the verdict and the explanation both
+        # read this list, so an explanation can never disagree with a finding.
+        qualifying = sorted(path for path in docs
+                            if matches(path, rule["docs"]) and not matches(path, rule["sources"]))
+        explanations.append({
+            "rule": rule["id"], "matched_source_paths": sources,
+            "qualifying_doc_paths": qualifying,
+            "status": "satisfied" if qualifying else "missing",
+        })
+        if not qualifying:
             report["findings"].append({
                 "code": "docs_required", "rule": rule["id"], "paths": sources,
                 "docs": rule["docs"], "retryable": False,
@@ -132,17 +144,23 @@ def check(repo, base, head):
             })
     if report["findings"]:
         report["status"] = "finding"
+    if explain:
+        report["explanations"] = explanations
     return report
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="example: docs_drift.py --repo . --base <full-target-sha> --head <full-pr-head-sha> --explain")
     parser.add_argument("--repo", type=Path, default=Path("."))
     parser.add_argument("--base", required=True, help="full target branch commit SHA (policy snapshot)")
     parser.add_argument("--head", required=True, help="full PR head commit SHA")
+    parser.add_argument("--explain", action="store_true",
+                        help="also report, per triggered rule, the matched source paths and qualifying changed doc paths")
     args = parser.parse_args(argv)
     try:
-        report = check(args.repo, args.base, args.head)
+        report = check(args.repo, args.base, args.head, explain=args.explain)
     except Unmeasurable as exc:
         print(json.dumps({"schema": "docs-drift.v1", "status": "unmeasurable", "code": exc.code,
                           "retryable": exc.retryable, "next_action": exc.next_action}, sort_keys=True))

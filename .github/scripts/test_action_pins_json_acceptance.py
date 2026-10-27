@@ -108,6 +108,47 @@ def run_cli(args, cwd):
     )
 
 
+ASCII_ENV = {
+    "LC_ALL": "C",
+    "LANG": "C",
+    "PYTHONUTF8": "0",
+    "PYTHONCOERCECLOCALE": "0",
+}
+
+
+def run_cli_with_env(args, cwd, extra_env):
+    env = clean_env()
+    env.update(extra_env)
+    return subprocess.run(
+        [sys.executable, "-B", str(SCRIPT), *args],
+        cwd=cwd, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+    )
+
+
+def _unprivileged_ids():
+    try:
+        import pwd
+        entry = pwd.getpwnam("nobody")
+        return entry.pw_uid, entry.pw_gid
+    except Exception:
+        return 65534, 65534
+
+
+def run_cli_as_nobody(script_path, args, cwd):
+    uid, gid = _unprivileged_ids()
+    return subprocess.run(
+        [sys.executable, "-B", str(script_path), *args],
+        cwd=cwd, env=clean_env(),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+        user=uid, group=gid,
+    )
+
+
+def _is_root():
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
 def write(root, rel, content):
     path = Path(root, rel)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -268,6 +309,23 @@ class JsonContract(unittest.TestCase):
             self.assertEqual(1, len(obj["findings"]))
             self.assert_finding(obj["findings"][0], path="wf.yml", line=2)
 
+    def test_literal_missing_value_placeholder_stays_distinct(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write(tmp, "wf.yml", "steps:\n  - uses: (missing value)\n")
+            proc = run_cli(["--json", "wf.yml"], tmp)
+            self.assertEqual(1, proc.returncode)
+            obj = self.parse_json(proc)
+            self.assert_common(obj, ok=False, scan_complete=True,
+                               requested=1, checked=1, refused=0)
+            self.assertEqual(1, len(obj["findings"]))
+            self.assert_finding(obj["findings"][0], path="wf.yml", line=2)
+            self.assertEqual("(missing value)",
+                             obj["findings"][0]["value"])
+            write(tmp, "empty.yml", "steps:\n  - uses:\n")
+            proc2 = run_cli(["--json", "empty.yml"], tmp)
+            obj2 = self.parse_json(proc2)
+            self.assertEqual("", obj2["findings"][0]["value"])
+
     def test_json_flag_after_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             write(tmp, "wf.yml", UNPINNED)
@@ -303,16 +361,29 @@ class JsonContract(unittest.TestCase):
                               next_action="fix_input_permissions",
                               path="a-dir.yml")
 
-    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0,
-                     "root ignores permission bits")
     def test_explicit_unreadable_input_permissions(self):
+        # Root can read mode-0 files, so when the runner is root the
+        # checker subprocess drops to an unprivileged user; permission
+        # bits are then enforced and the refusal is a real EACCES.
         with tempfile.TemporaryDirectory() as tmp:
             path = write(tmp, "wf.yml", CLEAN)
             path.chmod(0)
-            try:
-                proc = run_cli(["--json", "wf.yml"], tmp)
-            finally:
-                path.chmod(0o644)
+            if _is_root():
+                os.chmod(tmp, 0o755)
+                checker = Path(tmp, "checker.py")
+                checker.write_bytes(SCRIPT.read_bytes())
+                checker.chmod(0o644)
+                try:
+                    proc = run_cli_as_nobody(
+                        checker, ["--json", "wf.yml"], tmp)
+                finally:
+                    os.chmod(tmp, 0o700)
+                    path.chmod(0o644)
+            else:
+                try:
+                    proc = run_cli(["--json", "wf.yml"], tmp)
+                finally:
+                    path.chmod(0o644)
             self.assertEqual(1, proc.returncode)
             obj = self.parse_json(proc)
             self.assert_common(obj, ok=False, scan_complete=False,
@@ -325,6 +396,30 @@ class JsonContract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             write(tmp, "wf.yml", b"steps:\n  - uses: \xff\xfe@v4\n")
             proc = run_cli(["--json", "wf.yml"], tmp)
+            self.assertEqual(1, proc.returncode)
+            obj = self.parse_json(proc)
+            self.assert_common(obj, ok=False, scan_complete=False,
+                               requested=1, checked=0, refused=1)
+            self.assert_error(obj["errors"][0],
+                              code="input-invalid-encoding",
+                              next_action="fix_input_encoding", path="wf.yml")
+
+    def test_valid_utf8_under_ascii_locale_is_checked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write(tmp, "wf.yml",
+                  "steps:\n  - uses: actions/checkout@v4 # café\n")
+            proc = run_cli_with_env(["--json", "wf.yml"], tmp, ASCII_ENV)
+            self.assertEqual(1, proc.returncode)
+            obj = self.parse_json(proc)
+            self.assert_common(obj, ok=False, scan_complete=True,
+                               requested=1, checked=1, refused=0)
+            self.assertEqual(1, len(obj["findings"]))
+            self.assertEqual([], obj["errors"])
+
+    def test_invalid_encoding_under_ascii_locale_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write(tmp, "wf.yml", b"steps:\n  - uses: \xff\xfe@v4\n")
+            proc = run_cli_with_env(["--json", "wf.yml"], tmp, ASCII_ENV)
             self.assertEqual(1, proc.returncode)
             obj = self.parse_json(proc)
             self.assert_common(obj, ok=False, scan_complete=False,

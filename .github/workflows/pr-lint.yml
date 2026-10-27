@@ -77,7 +77,8 @@ jobs:
         run: |
           python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
           python3 -m unittest discover -s .github/scripts -p 'test_ci_policy.py'
-          python3 -m unittest discover -s .github/scripts -p 'test_action_pins*.py'
+          python3 -m unittest discover -s .github/scripts -p 'test_action_pins.py'
+          python3 -B -m unittest discover -s .github/scripts -p 'test_action_pins_json_acceptance.py'
           python3 -m unittest discover -s .github/scripts -p 'test_public_ci.py'
           python3 -m unittest discover -s .github/scripts -p 'test_docs_*.py'
           python3 -B -m unittest discover -s .github/scripts -p 'test_review*.py'

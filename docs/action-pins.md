@@ -16,7 +16,8 @@ Omit the paths to scan the default discovery set
 (`.github/workflows/*.yml|*.yaml` plus
 `.github/actions/**/action.yml|action.yaml`); `--json` may appear before or
 after the paths. Omit `--json` for the existing `::error` annotation/prose
-output used by the `pr-lint` job. `--help` prints the same summary.
+output used by the `pr-lint` job. `--help` prints the same summary. Input
+files are decoded as UTF-8, independent of the host locale.
 
 ## JSON contract: `action-pins.v1`
 

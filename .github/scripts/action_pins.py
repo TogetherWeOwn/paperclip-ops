@@ -53,7 +53,7 @@ class Finding:
     @property
     def message(self):
         return (
-            f"{self.file}:{self.line}: unpinned action `{self.value}`. "
+            f"{self.file}:{self.line}: unpinned action `{self.value or '(missing value)'}`. "
             "Pin third-party actions to a full commit SHA "
             "(`owner/repo@<40-hex>`), use `./...` for local actions, or "
             "`docker://...@sha256:<64-hex>` for containers."
@@ -97,7 +97,7 @@ def lint_text(path, text):
             continue
         value = strip_value(m.group("val") or "")
         if not value:
-            out.append(Finding(str(path), i, "(missing value)"))
+            out.append(Finding(str(path), i, ""))
             continue
         if not is_pinned(value):
             out.append(Finding(str(path), i, value))
@@ -105,7 +105,7 @@ def lint_text(path, text):
 
 
 def lint_file(path):
-    return lint_text(path, Path(path).read_text())
+    return lint_text(path, Path(path).read_text(encoding="utf-8"))
 
 
 def _escape(text):
@@ -183,14 +183,11 @@ def scan_files(files):
 
 
 def _finding_entry(finding):
-    # Finding stores "(missing value)" for prose; the JSON value is the
-    # actual (empty) `uses:` value.
-    value = "" if finding.value == "(missing value)" else finding.value
     return {
         "code": "unpinned-action",
         "path": finding.file,
         "line": finding.line,
-        "value": value,
+        "value": finding.value,
         "message": finding.message,
         "retryable": False,
         "next_action": "pin_to_full_sha_or_digest",

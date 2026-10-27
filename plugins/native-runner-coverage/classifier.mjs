@@ -1,3 +1,5 @@
+import { withResultContract } from "./result-contract.mjs";
+
 const STORE_KEYS = [
   "controller", "journal", "providerState", "mcpHeader",
   "transcript", "sqlite", "runLog", "optionalTrace",
@@ -45,6 +47,10 @@ function leaseState(lease, now) {
 
 /** Pure classification of reported metadata, not independent binding authentication. */
 export function classifyCoverage(input) {
+  return withResultContract(classifyMetadata(input));
+}
+
+function classifyMetadata(input) {
   if (!record(input)) return result("REFUSED", "INVALID_INPUT");
   const { scope, binding, agent, run, observation, now } = input;
   if (!record(scope) || !identifier(scope.companyId) || !Array.isArray(scope.agentIds)

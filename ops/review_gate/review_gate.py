@@ -21,6 +21,8 @@ MAX_QUEUED = 20
 FOCUS_REPOS = runtime.FOCUS_REPOS
 GREEN = {'SUCCESS', 'NEUTRAL', 'SKIPPED'}
 ADVISORY_BOTS = {'CodeRabbit'}
+SWEEP_CHECKS = {'readiness-sweep'}
+SWEEP_WORKFLOWS = {'Readiness Sweep'}
 QUERY = 'query($o:String!,$r:String!,$cursor:String){repository(owner:$o,name:$r){isArchived pullRequests(states:OPEN,first:20,after:$cursor,orderBy:{field:CREATED_AT,direction:ASC}){totalCount pageInfo{hasNextPage endCursor} nodes{\nnumber isDraft isCrossRepository author{__typename login} headRefOid url headRef{target{... on Commit{oid statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{\n... on CheckRun{name status conclusion startedAt checkSuite{workflowRun{workflow{name}}}} ... on StatusContext{context state createdAt}}}}}}}}}}}'
 REVIEWER = runtime.REVIEWER_ID
 
@@ -94,8 +96,10 @@ def ci_green(contexts, required):
         if key not in latest or stamp >= (latest[key].get('startedAt') or latest[key].get('createdAt') or ''):
             latest[key] = c
     results = {}
-    for (_, name), c in latest.items():
+    for (wf, name), c in latest.items():
         if name == 'Paperclip Review':
+            continue
+        if name in SWEEP_CHECKS or wf in SWEEP_WORKFLOWS:
             continue
         if 'state' in c:
             ok, done = (c['state'] == 'SUCCESS', c['state'] not in ('PENDING', 'EXPECTED'))

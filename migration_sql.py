@@ -163,6 +163,20 @@ DIAGNOSTIC_LIMIT = 2000
 SQUAWK_TIMEOUT_SECONDS = 60
 
 
+def squawk_timeout_seconds():
+    """Per-invocation JSON-mode Squawk deadline in seconds.
+
+    SQUAWK_TIMEOUT_SECONDS may override the default; missing, non-numeric
+    and non-positive values keep it, so a mis-set environment can never
+    disable or invert the deadline.
+    """
+    try:
+        value = float(os.environ.get("SQUAWK_TIMEOUT_SECONDS", SQUAWK_TIMEOUT_SECONDS))
+    except ValueError:
+        return SQUAWK_TIMEOUT_SECONDS
+    return value if value > 0 else SQUAWK_TIMEOUT_SECONDS
+
+
 def emit_gate_json(files, error=None):
     """Derive every count and verdict from the emitted per-file results."""
     for result in files:
@@ -201,7 +215,8 @@ def squawk_step(argv):
     prefix = ""
     timed_out = False
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
-    deadline = time.monotonic() + SQUAWK_TIMEOUT_SECONDS
+    timeout = squawk_timeout_seconds()
+    deadline = time.monotonic() + timeout
     with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           start_new_session=True) as proc, selectors.DefaultSelector() as selector:
         selector.register(proc.stdout, selectors.EVENT_READ)
@@ -209,7 +224,7 @@ def squawk_step(argv):
             while selector.get_map():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise subprocess.TimeoutExpired(argv, SQUAWK_TIMEOUT_SECONDS)
+                    raise subprocess.TimeoutExpired(argv, timeout)
                 for key, _events in selector.select(remaining):
                     chunk = os.read(key.fd, 8192)
                     if not chunk:

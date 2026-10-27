@@ -154,7 +154,9 @@ collection and process exit. On expiry its process group is killed and the
 direct child is reaped. The step fails (exit 1) with the fixed `Squawk timed out.`
 diagnostic followed
 by any safe tags collected within the same 2000-character bound. Text-mode
-execution is unchanged.
+execution is unchanged. `SQUAWK_TIMEOUT_SECONDS` overrides the deadline for
+one invocation (seconds, must be positive; a missing, non-numeric or
+non-positive value keeps the 60-second default).
 
 Without squawk, each step is `skip`: normal mode can pass, while `--strict`
 refuses with `error.code: squawk-missing`. Other refusal codes are
@@ -187,7 +189,7 @@ Synthetic failure example (no real SQL or credentials):
 }
 ```
 
-Offline proof: `./test_migration_squawk.sh && ./test_migration_squawk_json.sh`.
+Offline proof: `./test_migration_squawk.sh && ./test_migration_squawk_json.sh && ./test_migration_squawk_json_guarantees.sh`.
 
 ## 3. Gate B — prod-clone rehearsal
 

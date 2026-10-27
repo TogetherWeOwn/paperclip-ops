@@ -41,6 +41,7 @@
 # With explicit files, only those are checked. Otherwise every *.sql under
 # the migrations dir is checked. Default dir: ./migrations.
 # --squawk-config "" disables the canonical config (raw squawk defaults).
+# SQUAWK_TIMEOUT_SECONDS overrides the 60s JSON-mode Squawk deadline.
 #
 # Exit: 0 all pass (squawk SKIP allowed) | 1 a file-standard or squawk
 # finding failed | 2 bad input / strict refusal (squawk missing).

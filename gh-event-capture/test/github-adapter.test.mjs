@@ -709,6 +709,56 @@ test('convert-to-draft resolves the node id then mutates, confirming draft', asy
   assert.equal(noId.calls.length, 1)
 })
 
+// Review pins (PR #169): each lifecycle writer's guards are pinned on both
+// writers, so deleting one writer's copy turns this suite red.
+test('convert-to-draft names the GraphQL class when the runner exits 0 with errors[]', async () => {
+  const nodeId = 'UHVsbFJlcXVlc3Q0Mg=='
+  const idOk = { data: { repository: { nameWithOwner: repository, pullRequest: { id: nodeId } } } }
+  const draftRefusal = (errors) => ({ data: { convertPullRequestToDraft: null }, errors })
+  const draftForbidden = { ...forbidden, path: ['convertPullRequestToDraft'] }
+  for (const [errors, expected] of [
+    [[draftForbidden], 'graphql-forbidden'],
+    // Untyped refusal still classifies from the fixed not-accessible message.
+    [[{ ...draftForbidden, type: undefined }], 'graphql-forbidden'],
+    [[{ type: 'NOT_FOUND', path: ['convertPullRequestToDraft'],
+      message: "Could not resolve to a node with the global id of 'PRIVATE'" }], 'graphql-not-found'],
+  ]) {
+    const exitZero = fake([idOk, draftRefusal(errors)])
+    await assert.rejects(exitZero.adapter.convertToDraft(repository, 42), (error) => {
+      assert.match(error.message, /GitHub convert-to-draft was refused/)
+      assert.equal(writeFailureCode(error), expected)
+      assert.equal(String(error).includes('PRIVATE'), false)
+      return true
+    })
+    assert.equal(exitZero.calls.length, 2)
+  }
+})
+
+test('both lifecycle writers raise node-id-incomplete before any mutation for every malformed node id', async () => {
+  for (const id of [null, undefined, '', 42, 'has space', 'bad;char', 'x'.repeat(257)]) {
+    for (const [name, call] of [
+      ['mark-ready', (adapter) => adapter.markReadyForReview(repository, 42)],
+      ['convert-to-draft', (adapter) => adapter.convertToDraft(repository, 42)],
+    ]) {
+      const noId = fake([{ data: { repository: { nameWithOwner: repository, pullRequest: { id } } } }])
+      await assert.rejects(call(noId.adapter), (error) => {
+        assert.match(error.message, /GitHub PR node id is incomplete/, `${name} ${String(id).slice(0, 12)}`)
+        assert.equal(writeFailureCode(error), 'node-id-incomplete', `${name} ${String(id).slice(0, 12)}`)
+        return true
+      })
+      assert.equal(noId.calls.length, 1, `${name} must not mutate without a node id`)
+    }
+  }
+  // Positive control: the 256-character boundary is still accepted.
+  const longest = 'x'.repeat(256)
+  const ok = fake([
+    { data: { repository: { nameWithOwner: repository, pullRequest: { id: longest } } } },
+    { data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } },
+  ])
+  await ok.adapter.markReadyForReview(repository, 42)
+  assert.ok(ok.calls[1][1].includes(`pullRequestId=${longest}`))
+})
+
 test('enable-auto-merge arms squash bound to the evaluated head', async () => {
   const sha = 'a'.repeat(40)
   const { adapter, calls } = fake([{ stdout: '' }])

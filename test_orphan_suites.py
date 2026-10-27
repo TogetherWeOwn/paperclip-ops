@@ -3,7 +3,10 @@
 Each case builds a miniature tracked repo (git init + git add, so only
 tracked files count) and runs verification/orphan_suites.check against it.
 """
+import contextlib
+import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -1897,6 +1900,96 @@ class OrphanRatchetJsTest(unittest.TestCase):
         self.assertEqual(
             ratchet._join_target("pkg", "./test/zz_x.test.mjs"),
             "pkg/test/zz_x.test.mjs")
+
+
+class OrphanStructuredHardeningTest(unittest.TestCase):
+    """Regression pins for structured-outcome safeguards.
+
+    Each test kills a one-line revert mutant that the paired
+    acceptance suite leaves green: CR filename decoding, the Git
+    timeout, the broad CLI exception boundary, and UTF-8 allowlist
+    reading. They live here (not in the frozen acceptance file) so
+    the contract stays immutable.
+    """
+
+    def test_carriage_return_filename_preserved(self):
+        name = "test_cr\rbreak.sh"
+        root = repo_with(suites=[name], allowlist={})
+        self.assertIn(name, ratchet.tracked_files(root))
+        self.assertIn(name, ratchet.tracked_suites(root))
+        _, findings = ratchet._analyze(root, {})
+        self.assertIn(("orphan-suite", name), findings)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = ratchet.main(["--json", "--root", str(root)])
+        self.assertEqual(code, 1)
+        obj = json.loads(out.getvalue())
+        self.assertEqual(obj["outcome"], "findings")
+        self.assertIn(name, [entry["path"] for entry in obj["findings"]])
+
+    def test_git_calls_are_timeout_bounded(self):
+        root = repo_with(suites=["test_alpha.sh"], allowlist={})
+        with mock.patch.object(ratchet.subprocess, "run",
+                               wraps=subprocess.run) as spy:
+            ratchet.tracked_files(root)
+        self.assertTrue(spy.called)
+        for call in spy.call_args_list:
+            _, kwargs = call
+            self.assertEqual(kwargs.get("timeout"), 30)
+        with mock.patch.object(
+                ratchet.subprocess, "run",
+                side_effect=subprocess.TimeoutExpired(cmd="git",
+                                                      timeout=30)):
+            with self.assertRaises(ratchet.CheckFailure) as ctx:
+                ratchet._git(root, "ls-files", "-z")
+            self.assertEqual(ctx.exception.code, "git-failed")
+
+    def test_missing_verify_fast_is_analysis_failed(self):
+        root = make_repo({
+            ".github/workflows/ci.yml": WORKFLOW.format(runs="echo x"),
+            "verification/orphan_suites_allowlist.json": "{}\n",
+            "test_alpha.sh": "#!/usr/bin/env bash\necho suite\n",
+        })
+        self.assertFalse((root / "scripts/verify-fast.sh").exists())
+        out = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = ratchet.main(["--json", "--root", str(root)])
+        self.assertEqual(code, 1)
+        self.assertEqual(err.getvalue(), "")
+        obj = json.loads(out.getvalue())
+        self.assertEqual(obj["outcome"], "unmeasurable")
+        self.assertFalse(obj["check_complete"])
+        self.assertIsNone(obj["suite_count"])
+        self.assertEqual(obj["diagnostic"]["code"], "analysis-failed")
+
+    def test_utf8_allowlist_under_ascii_locale(self):
+        reason = "café – needs database"
+        root = repo_with(suites=["test_alpha.sh"],
+                         allowlist={"test_alpha.sh": reason})
+        allow_path = root / "verification/orphan_suites_allowlist.json"
+        allow_path.write_bytes(
+            json.dumps({"test_alpha.sh": reason},
+                       ensure_ascii=False).encode("utf-8") + b"\n")
+        env = {
+            "PATH": os.environ["PATH"],
+            "HOME": tempfile.mkdtemp(prefix="orphan-ascii-home-"),
+            "LC_ALL": "C",
+            "PYTHONCOERCECLOCALE": "0",
+            "PYTHONUTF8": "0",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+        }
+        proc = subprocess.run(
+            [sys.executable, "-B",
+             str(ROOT / "verification" / "orphan_suites.py"),
+             "--json", "--root", str(root)],
+            capture_output=True, timeout=30, env=env)
+        self.assertEqual(proc.stderr.decode("utf-8"), "")
+        obj = json.loads(proc.stdout.decode("utf-8"))
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(obj["outcome"], "clean")
+        self.assertTrue(obj["check_complete"])
 
 
 if __name__ == "__main__":

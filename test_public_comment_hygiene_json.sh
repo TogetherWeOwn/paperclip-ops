@@ -505,7 +505,89 @@ else
     "decoded context differs from the input (including its trailing newline)"
 fi
 
-# --- 16. regression control: the text suite still passes -------------------------
+# --- 16. binary body with an ID refuses as a scanner failure ---------------------
+# grep reports a binary match with no line/ID data, so the JSON gate must
+# refuse that incomplete scan as body_scan_failed / fix_scanner -- never PASS,
+# and never degrade to the serializer code (json_encoding_failed).
+printf 'Fixes belong to %s\000after a NUL byte.\n' "$T1" > "$WORK/binary.txt"
+if python3 -c 'import sys; sys.exit(0 if b"\x00" in open(sys.argv[1], "rb").read() else 1)' "$WORK/binary.txt"; then
+  ok "binary fixture actually carries a NUL byte"
+else
+  bad "binary fixture actually carries a NUL byte" "printf octal escape produced no NUL"
+fi
+capture_text binary-text --visibility public --body-file "$WORK/binary.txt"; TEXT_RC=$CAPTURE_RC
+capture_json binary-json --visibility public --body-file "$WORK/binary.txt"; JSON_RC=$CAPTURE_RC
+if [[ "$JSON_RC" -eq 2 ]]; then
+  ok "binary body JSON mode refuses (exit 2)"
+else
+  bad "binary body JSON mode refuses" "want exit 2, got $JSON_RC"
+fi
+if [[ "$TEXT_RC" -eq 1 ]]; then
+  ok "binary body text mode never passes (violation, historical rendering)"
+else
+  bad "binary body text mode never passes" "want exit 1, got $TEXT_RC"
+fi
+check_envelope binary-json "binary body"
+json_ok "$WORK/binary-json.stdout" '.verdict == "error" and .findings == [] and .truncated == 0' \
+  "binary body verdict is error with no findings"
+json_ok "$WORK/binary-json.stdout" '.error.code == "body_scan_failed"' \
+  "binary body reports the scanner code, not the serializer code"
+json_ok "$WORK/binary-json.stdout" '.error.next_action == "fix_scanner"' \
+  "binary body next action is fix_scanner"
+
+# --- 17. error envelope clears partial findings -----------------------------------
+# A body hit is recorded before the branch scan runs; when that scan fails the
+# error envelope must carry findings: [] and truncated 0, never the partial list.
+printf '%s' "Fixes belong to the owner of $T1." > "$WORK/reset-hit.txt"
+# Control: the same body really does produce a finding when nothing fails.
+capture_json reset-control --visibility public --body-file "$WORK/reset-hit.txt" --branch "fix/scrub-bot-comments"
+json_ok "$WORK/reset-control.stdout" '.verdict == "violation" and (.findings | length) == 1' \
+  "error-reset control body produces one finding without a failure"
+capture_text_with_path reset-text "$WORK/shim_branch:$CLEAN_PATH" --visibility public --body-file "$WORK/reset-hit.txt" --branch "fix/scrub-bot-comments"; TEXT_RC=$CAPTURE_RC
+capture_json_with_path reset-json "$WORK/shim_branch:$CLEAN_PATH" --visibility public --body-file "$WORK/reset-hit.txt" --branch "fix/scrub-bot-comments"; JSON_RC=$CAPTURE_RC
+check_parity "body hit plus failing branch scan refuses" "$TEXT_RC" "$JSON_RC" 2
+check_envelope reset-json "error envelope after a recorded body hit"
+json_ok "$WORK/reset-json.stdout" '.verdict == "error"' \
+  "body hit plus failing branch scan verdict is error"
+json_ok "$WORK/reset-json.stdout" '.findings == [] and .truncated == 0' \
+  "error envelope clears the recorded body finding and truncated count"
+json_ok "$WORK/reset-json.stdout" '.error.code == "branch_scan_failed" and .error.next_action == "fix_scanner"' \
+  "failing branch scan reports branch_scan_failed / fix_scanner"
+
+# --- 18. findings cap is a total across body and branch ---------------------------
+# 60 single-hit body lines + 2 branch IDs = 62 occurrences: exactly the 50-cap
+# in body-first scan order, with 12 omitted -- not 50 body + 2 branch.
+: > "$WORK/cap60.txt"
+for i in $(seq 1 60); do
+  printf 'Line %d needs %s-%s for review.\n' "$i" "$PRIMARY_PREFIX" "$(printf '993%04d' "$i")" >> "$WORK/cap60.txt"
+done
+CAP_BRANCH="fix/${PRIMARY_PREFIX}-9930061-and-${PRIMARY_PREFIX}-9930062"
+capture_text cap-text --visibility public --body-file "$WORK/cap60.txt" --branch "$CAP_BRANCH"; TEXT_RC=$CAPTURE_RC
+capture_json cap-json --visibility public --body-file "$WORK/cap60.txt" --branch "$CAP_BRANCH"; JSON_RC=$CAPTURE_RC
+check_parity "cross-source capped body+branch hits fire" "$TEXT_RC" "$JSON_RC" 1
+check_envelope cap-json "cross-source capped hits"
+json_ok "$WORK/cap-json.stdout" '.verdict == "violation"' "cross-source capped verdict is violation"
+CAP_LEN="$(jq -r '.findings | length' "$WORK/cap-json.stdout" 2>/dev/null)"
+CAP_TRUNC="$(jq -r '.truncated' "$WORK/cap-json.stdout" 2>/dev/null)"
+if [[ "$CAP_LEN" == "50" && "$CAP_TRUNC" == "12" ]]; then
+  ok "cross-source cap keeps exactly 50 findings with 12 omitted"
+else
+  bad "cross-source cap keeps exactly 50 findings with 12 omitted" "want len=50 truncated=12; got len=$CAP_LEN truncated=$CAP_TRUNC"
+fi
+CAP_FIRST="${PRIMARY_PREFIX}-$(printf '993%04d' 1)"
+CAP_50TH="${PRIMARY_PREFIX}-$(printf '993%04d' 50)"
+if jq -e --arg first "$CAP_FIRST" --arg last "$CAP_50TH" \
+  '.findings[0] == {source: "body", matched: [$first], line: 1}
+   and .findings[49] == {source: "body", matched: [$last], line: 50}
+   and ([.findings[] | select(.source == "branch")] | length) == 0' \
+  "$WORK/cap-json.stdout" >/dev/null 2>&1; then
+  ok "cross-source cap retains body lines 1-50 in scan order before any branch hit"
+else
+  bad "cross-source cap retains body lines 1-50 in scan order before any branch hit" \
+    "want first=$CAP_FIRST line 1, 50th=$CAP_50TH line 50, no branch rows :: $(head -c 300 "$WORK/cap-json.stdout" 2>/dev/null)"
+fi
+
+# --- 19. regression control: the text suite still passes -------------------------
 if "$TEXT_SUITE" >"$WORK/regression.log" 2>&1; then
   ok "text suite runs green as regression control"
 else

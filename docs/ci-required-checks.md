@@ -42,9 +42,9 @@ to stdout, nothing to stderr, and exits 2:
 | `error_code` | Cause |
 | --- | --- |
 | `MANIFEST_UNREADABLE` | manifest path missing, a directory, or not readable |
-| `MANIFEST_INVALID` | manifest is malformed/non-UTF-8 JSON, not an object, `required` is missing/not a list of `{context, integration_id}` with string contexts, or `branch` is not a string |
+| `MANIFEST_INVALID` | manifest is malformed/non-UTF-8 JSON, not an object, `required` is missing/not a list of `{context, integration_id}` with string contexts and integer-or-absent `integration_id`, or `branch` is not a string |
 | `RULES_UNREADABLE` | rules path missing, a directory, or not readable |
-| `RULES_INVALID` | rules document is malformed/non-UTF-8 JSON, not a list of branch rules, or a nested rule/parameters/check entry is the wrong shape |
+| `RULES_INVALID` | rules document is malformed/non-UTF-8 JSON, not a list of branch rules, or a nested rule (missing/non-string `type`, null/non-object `parameters`, null/non-list checks) or check entry (non-integer `integration_id`) is the wrong shape |
 | `WORKFLOWS_REQUIRED` | `--workflows` omitted with `--manifest`/`--rules-json` |
 | `NO_REQUIRED_CHECKS` | the input read cleanly but names no required status checks |
 | `NO_WORKFLOWS` | the workflow directory cannot be read, or contains no workflow files and no parse errors |

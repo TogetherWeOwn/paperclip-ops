@@ -105,6 +105,57 @@ class NestedInput(unittest.TestCase):
         proc = run_tool("--rules-json", rules, "--workflows", self.wf, "--json")
         self.assert_unmeasurable(proc, "RULES_INVALID")
 
+    def _valid_rule(self):
+        return {"type": "required_status_checks",
+                "parameters": {"required_status_checks": [{"context": "build", "integration_id": 15368}]}}
+
+    def test_rules_rule_without_string_type_cannot_hide_behind_valid_rule(self):
+        for bad in ({}, {"type": None}, {"type": 7}):
+            with self.subTest(bad=bad):
+                rules = self.write_json("rules.json", [bad, self._valid_rule()])
+                proc = run_tool("--rules-json", rules, "--workflows", self.wf, "--json")
+                self.assert_unmeasurable(proc, "RULES_INVALID")
+
+    def test_rules_falsy_parameters_or_checks_cannot_hide_behind_valid_rule(self):
+        for params in (None, False, 0, "", []):
+            with self.subTest(parameters=params):
+                rules = self.write_json(
+                    "rules.json",
+                    [{"type": "required_status_checks", "parameters": params}, self._valid_rule()],
+                )
+                proc = run_tool("--rules-json", rules, "--workflows", self.wf, "--json")
+                self.assert_unmeasurable(proc, "RULES_INVALID")
+        for checks in (None, False, 0, "", {}):
+            with self.subTest(checks=checks):
+                rules = self.write_json(
+                    "rules.json",
+                    [{"type": "required_status_checks", "parameters": {"required_status_checks": checks}},
+                     self._valid_rule()],
+                )
+                proc = run_tool("--rules-json", rules, "--workflows", self.wf, "--json")
+                self.assert_unmeasurable(proc, "RULES_INVALID")
+
+    def test_rules_non_integer_integration_id_is_RULES_INVALID(self):
+        for bad in ([], {}, "15368", True, 1.5):
+            with self.subTest(integration_id=bad):
+                rules = self.write_json(
+                    "rules.json",
+                    [{"type": "required_status_checks",
+                      "parameters": {"required_status_checks": [{"context": "build", "integration_id": bad}]}}],
+                )
+                proc = run_tool("--rules-json", rules, "--workflows", self.wf, "--json")
+                self.assert_unmeasurable(proc, "RULES_INVALID")
+
+    def test_manifest_non_integer_integration_id_is_MANIFEST_INVALID(self):
+        for bad in ([], {}, "15368", True, 1.5):
+            with self.subTest(integration_id=bad):
+                manifest = self.write_json(
+                    "manifest.json",
+                    {"branch": "main", "required": [{"context": "build", "integration_id": bad}]},
+                )
+                proc = run_tool("--manifest", manifest, "--workflows", self.wf, "--json")
+                self.assert_unmeasurable(proc, "MANIFEST_INVALID")
+
     def test_rules_valid_shape_still_measured(self):
         rules = self.write_json(
             "rules.json",

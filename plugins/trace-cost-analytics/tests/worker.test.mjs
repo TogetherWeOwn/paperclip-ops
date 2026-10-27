@@ -141,3 +141,16 @@ test('manifest worker entrypoint resolves to a module that runs the plugin worke
   assert.match(source, /runWorker\s*\(/);
   assert.match(source, /export\s+default\b/);
 });
+
+test('package.json paperclipPlugin points at the manifest and at the same worker module the manifest declares', () => {
+  const root = new URL('../', import.meta.url);
+  const pkg = JSON.parse(readFileSync(new URL('package.json', root), 'utf8'));
+  const resolve = (ref) => new URL(ref, root).href;
+  assert.equal(typeof pkg.paperclipPlugin?.worker, 'string');
+  assert.equal(resolve(pkg.paperclipPlugin.manifest), new URL('src/manifest.mjs', root).href);
+  assert.equal(resolve(pkg.paperclipPlugin.worker), resolve(manifest.entrypoints.worker));
+  assert.equal(resolve(pkg.paperclipPlugin.worker), new URL('src/entrypoint.mjs', root).href);
+  const source = readFileSync(new URL(resolve(pkg.paperclipPlugin.worker)), 'utf8');
+  assert.match(source, /runWorker\s*\(/);
+  assert.match(source, /export\s+default\b/);
+});

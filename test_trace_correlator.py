@@ -98,9 +98,9 @@ def doc(runs=None, work_products=None, deployments=None):
     }
 
 
-def cli(raw):
+def cli(raw, *args):
     return subprocess.run(
-        [sys.executable, "ops/paperclip/trace_correlator.py"],
+        [sys.executable, "ops/paperclip/trace_correlator.py", *args],
         input=raw,
         capture_output=True,
         cwd=ROOT,
@@ -541,6 +541,30 @@ class CliTest(unittest.TestCase):
         self.assertEqual(report["schema"], "trace-correlation.v1")
         self.assertEqual(report["slo"]["verdict"], "met")
         self.assertEqual(len(report["traces"]), 1)
+
+    def test_oversize_diagnostic_limit_is_json_refusal_not_traceback(self):
+        raw = json.dumps(doc()).encode()
+        for value in ("9" * 5000, "-" + "9" * 5000):
+            done = cli(raw, "--explain-joins", "--diagnostic-limit", value)
+            self.assertEqual(done.returncode, 2, done.stderr)
+            self.assertEqual(done.stderr, b"")
+            error = json.loads(done.stdout)["error"]
+            self.assertEqual(error["code"], "invalid_diagnostic_limit")
+
+    def test_leading_zero_diagnostic_limit_stays_valid(self):
+        raw = json.dumps(doc()).encode()
+        done = cli(raw, "--explain-joins", "--diagnostic-limit=" + "0" * 5000 + "7")
+        self.assertIn(done.returncode, (0, 1), done.stderr)
+        self.assertEqual(done.stderr, b"")
+        self.assertEqual(json.loads(done.stdout)["joinDiagnostics"]["limit"], 7)
+
+    def test_dry_run_alone_refuses_bad_stdin_as_json(self):
+        done = cli(b"not json", "--dry-run")
+        self.assertEqual(done.returncode, 2)
+        self.assertEqual(done.stderr, b"")
+        error = json.loads(done.stdout)["error"]
+        self.assertEqual(error["code"], "invalid_input")
+        self.assertFalse(error["retryable"])
 
     def test_unknown_exits_one(self):
         done = cli(json.dumps(doc(runs=[run_row()])).encode())

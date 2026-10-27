@@ -1376,7 +1376,7 @@ jobs:
       # fast and they pin the gates this repo inherits. Gate enforcement
       # inside CI (a gates workflow) is a separate follow-up batch.
       - name: quality-gate helper suites
-        run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target test_docs_drift
+        run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target test_docs_drift test_docs_policy_ambiguity_acceptance
 
       # case_6f2e8a41. Deterministic test-missing gate suites: the unit
       # contract (wider source suffixes, deleted-file handling, vacuity

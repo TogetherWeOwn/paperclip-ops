@@ -107,7 +107,7 @@ class UnitContract(unittest.TestCase):
         self.assertIn(f"/usr/bin/sha256sum --check --strict {base}/SHA256SUMS", pre)
         self.assertIn(f"/usr/bin/test -x {base}/ops/case_b1d141af/run-worktree-prune.sh", pre)
         self.assertIn("/usr/bin/test -x /usr/bin/timeout", pre)
-        self.assertIn("/usr/bin/test -x /usr/bin/podman", pre)
+        self.assertIn("/bin/sh -c '/usr/bin/test -x /usr/bin/podman || /usr/bin/test -x /usr/bin/docker'", pre)
 
     def test_exec_start_runs_the_installed_wrapper(self):
         self.assertIn(

@@ -28,7 +28,7 @@ EnvironmentFile=/etc/paperclip/worktree-prune.env
 WorkingDirectory=/usr/local/libexec/paperclip-worktree-prune/@SOURCE_REF@
 ExecStartPre=/usr/bin/test -x /usr/local/libexec/paperclip-worktree-prune/@SOURCE_REF@/ops/case_b1d141af/run-worktree-prune.sh
 ExecStartPre=/usr/bin/test -x /usr/bin/timeout
-ExecStartPre=/usr/bin/test -x /usr/bin/podman
+ExecStartPre=/bin/sh -c '/usr/bin/test -x /usr/bin/podman || /usr/bin/test -x /usr/bin/docker'
 ExecStartPre=/usr/bin/sha256sum --check --strict /usr/local/libexec/paperclip-worktree-prune/@SOURCE_REF@/SHA256SUMS
 # 25 min in-container bound (wrapper default 1500 s) < 27 min host timeout < 30 min unit bound.
 ExecStart=/usr/bin/timeout --signal=TERM --kill-after=15s 27m /usr/local/libexec/paperclip-worktree-prune/@SOURCE_REF@/ops/case_b1d141af/run-worktree-prune.sh

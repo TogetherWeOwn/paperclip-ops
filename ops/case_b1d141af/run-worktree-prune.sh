@@ -47,8 +47,13 @@ CORE_REL="ops/case_b5184419/terminal_worktree_cache_reclaim.py"
 LIB_REL="ops/lib/atomic_state.py"
 ALLOWLIST_REL="lib/paperclip_api_allowlist.py"
 ALLOWLIST_SH_REL="lib/paperclip_api_allowlist.sh"
-# The host runs the Paperclip server container under podman (README, runbooks).
-ENGINE="${PAPERCLIP_WORKTREE_PRUNE_ENGINE:-/usr/bin/podman}"
+# The host runs the Paperclip server container under podman (README, runbooks)
+# or, on some hosts, docker; both take the same `exec -i -u -e` argv used below.
+# An explicit PAPERCLIP_WORKTREE_PRUNE_ENGINE wins; otherwise podman, then docker.
+ENGINE="${PAPERCLIP_WORKTREE_PRUNE_ENGINE:-}"
+if [[ -z "$ENGINE" ]]; then
+  if [[ -x /usr/bin/podman ]]; then ENGINE=/usr/bin/podman; else ENGINE=/usr/bin/docker; fi
+fi
 # Backstop inside the container: an exec that outlives its client keeps running.
 BOUND_SECONDS="${PAPERCLIP_WORKTREE_PRUNE_BOUND_SECONDS:-1500}"
 

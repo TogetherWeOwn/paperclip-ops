@@ -116,7 +116,7 @@ emit_json() {
          (if $hits[$i] == "body" then {line: ($hits[$i+1] | tonumber)} else {} end)],
        truncated: $truncated,
        error: {code: $code, retryable: false, next_action: $action}}
-    ' -- "${FINDINGS[@]}" 2>/dev/null)"; then
+    ' -- "${FINDINGS[@]+"${FINDINGS[@]}"}" 2>/dev/null)"; then
     # Never expose tool diagnostics, and retain metadata without needing jq.
     printf '{"schema_version":1,"verdict":"error","visibility":'
     json_string "$VISIBILITY"

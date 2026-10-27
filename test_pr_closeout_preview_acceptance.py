@@ -997,5 +997,121 @@ class NormalModePreserved(unittest.TestCase):
             shutil.rmtree(work, ignore_errors=True)
 
 
+class PreviewGuardPins(unittest.TestCase):
+    """Pins for guards no earlier test kills: text-mode safe errors, each
+    output name in the dry-run conflict and normal-mode required checks, and
+    the legacy normal-mode --json failure shape."""
+
+    PROBE = "SECRETMARK_probe_4c1e"
+
+    def _write_probe_registry(self, work):
+        registry_path, snapshot_path = mk_proposals_inputs(work)
+        # Missing repo: the loader's raw message would echo the whole entry.
+        write_json(registry_path, {"entries": [{"pr": 1, self.PROBE: "x"}]})
+        return registry_path, snapshot_path
+
+    def test_text_preview_error_never_echoes_raw_evidence(self):
+        work = tempfile.mkdtemp()
+        try:
+            registry_path, snapshot_path = self._write_probe_registry(work)
+            with WriteRecorder(work) as recorder:
+                code, out, err = run_cli_expect_success(
+                    self,
+                    ["--registry", registry_path, "--snapshot", snapshot_path, "--dry-run"],
+                )
+            combined = f"{out}\n{err}"
+            self.assertEqual(code, 5, f"unmeasurable text preview exits 5; got {combined!r:.500}")
+            self.assertNotIn(self.PROBE, combined, "text preview error must not echo raw input")
+            self.assertNotIn("Traceback", combined)
+            self.assertIn("unmeasurable_evidence", combined, "text error must carry the stable code")
+            self.assertIn("refusing to report a clean board", combined)
+            self.assertEqual(recorder.write_opens, [])
+            self.assertEqual(recorder.after_entries, recorder.before_entries)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    def _assert_dry_run_single_output_rejected(self, flag, extra=()):
+        work = tempfile.mkdtemp()
+        try:
+            registry_path, snapshot_path = mk_proposals_inputs(work)
+            target = os.path.join(work, "out.json")
+            with WriteRecorder(work) as recorder:
+                code, out, err, exit_code = run_cli(
+                    ["--registry", registry_path, "--snapshot", snapshot_path,
+                     "--dry-run", *extra, flag, target]
+                )
+            self.assertIsNone(code, f"dry-run with {flag} must stop at argument parsing")
+            self.assertEqual(exit_code, 2, f"dry-run with {flag} is usage error 2; err={err!r:.400}")
+            text = err.lower()
+            self.assertIn("dry-run", text)
+            self.assertIn("conflict", text, f"{flag} alone must hit the dry-run conflict; got {text!r:.400}")
+            self.assertEqual(out, "", "no plan may be printed on a usage error")
+            self.assertEqual(recorder.write_opens, [])
+            self.assertFalse(os.path.exists(target))
+            self.assertEqual(recorder.after_entries, recorder.before_entries)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    def test_dry_run_with_only_plan_out_is_rejected_without_writes(self):
+        self._assert_dry_run_single_output_rejected("--plan-out")
+
+    def test_dry_run_with_only_ledger_out_is_rejected_without_writes(self):
+        self._assert_dry_run_single_output_rejected("--ledger-out")
+
+    def test_dry_run_json_with_only_plan_out_is_rejected_without_writes(self):
+        self._assert_dry_run_single_output_rejected("--plan-out", extra=("--json",))
+
+    def _assert_normal_mode_missing_one_output(self, given, missing):
+        work = tempfile.mkdtemp()
+        try:
+            registry_path, snapshot_path = mk_proposals_inputs(work)
+            target = os.path.join(work, "out.json")
+            with WriteRecorder(work) as recorder:
+                code, out, err, exit_code = run_cli(
+                    ["--registry", registry_path, "--snapshot", snapshot_path, given, target]
+                )
+            self.assertIsNone(code, f"normal mode with only {given} must stop at argument parsing")
+            self.assertEqual(exit_code, 2, f"normal mode missing {missing} is usage error 2; err={err!r:.400}")
+            self.assertIn("required", err)
+            self.assertIn(missing, err, f"error must name the missing {missing}")
+            self.assertNotIn(given, err.split("required", 1)[1],
+                             f"{given} was supplied and must not be reported missing")
+            self.assertEqual(out, "")
+            self.assertEqual(recorder.write_opens, [])
+            self.assertFalse(os.path.exists(target))
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    def test_normal_mode_with_only_ledger_out_requires_plan_out(self):
+        self._assert_normal_mode_missing_one_output("--ledger-out", "--plan-out")
+
+    def test_normal_mode_with_only_plan_out_requires_ledger_out(self):
+        self._assert_normal_mode_missing_one_output("--plan-out", "--ledger-out")
+
+    def test_normal_mode_json_unmeasurable_keeps_legacy_failure(self):
+        work = tempfile.mkdtemp()
+        try:
+            registry_path, _ = mk_proposals_inputs(work)
+            empty_snapshot = os.path.join(work, "empty_snapshot.json")
+            write_json(empty_snapshot, {"snapshots": {}, "reviews": {}, "cards": {}})
+            ledger_out = os.path.join(work, "ledger.json")
+            plan_out = os.path.join(work, "plan.json")
+            code, out, err = run_cli_expect_success(
+                self,
+                ["--registry", registry_path, "--snapshot", empty_snapshot,
+                 "--ledger-out", ledger_out, "--plan-out", plan_out, "--json"],
+            )
+            self.assertEqual(code, 5)
+            self.assertEqual(out.strip(), "", "normal-mode failure prints no JSON envelope on stdout")
+            self.assertTrue(err.startswith("pr_closeout_ledger: "), f"legacy stderr prefix; got {err!r:.400}")
+            self.assertIn("refusing to report a clean board", err)
+            self.assertNotIn("unmeasurable_evidence", err, "dry-run safe envelope must not leak into normal mode")
+            self.assertNotIn("dry_run", f"{out}\n{err}")
+            self.assertFalse(os.path.exists(ledger_out))
+            self.assertFalse(os.path.exists(plan_out))
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

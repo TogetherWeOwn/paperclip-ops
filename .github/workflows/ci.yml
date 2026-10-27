@@ -1114,6 +1114,14 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_public_comment_hygiene_gate.sh
 
+      # Machine-readable (--json) contract for the same gate: one JSON
+      # document with bounded findings, stable error codes and exit-code
+      # parity with the text mode above. Hermetic like the text suite
+      # (mktemp bodies plus grep shims; needs bash, jq and python3).
+      - name: public-comment hygiene JSON suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_public_comment_hygiene_json.sh
+
       # verify-fast plan/list/no-prepare contract: the acceptance suite plus the
       # strict inventory-to-execution drift check and the --no-prepare guard
       # check. Offline: stdlib unittest, synthetic PATH stubs, no network or
@@ -1380,7 +1388,7 @@ jobs:
       # fast and they pin the gates this repo inherits. Gate enforcement
       # inside CI (a gates workflow) is a separate follow-up batch.
       - name: quality-gate helper suites
-        run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target test_docs_drift
+        run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target test_docs_drift test_docs_explain_acceptance
 
       # case_6f2e8a41. Deterministic test-missing gate suites: the unit
       # contract (wider source suffixes, deleted-file handling, vacuity
@@ -2451,7 +2459,7 @@ jobs:
       # fixtures: no API, database, credential or timer.
       - name: admitted-PR closeout ledger suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: python3 -m unittest -v test_pr_closeout_ledger.py
+        run: python3 -B -m unittest -v test_pr_closeout_ledger test_pr_closeout_preview_acceptance
 
       - name: admitted-PR closeout gates are load-bearing
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'

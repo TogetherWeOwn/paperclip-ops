@@ -49,6 +49,7 @@ import json
 import math
 import re
 import sys
+from urllib.parse import urlsplit
 
 SCANNER_NAME = "secret-scan"
 SCANNER_SCRIPT_PATH = "verification/secret-scan.sh"
@@ -181,8 +182,25 @@ def _validate_rule(value):
 
 
 def _is_https_ref(value):
-    # A bare "https://" has no host, so it is not a reference.
-    return isinstance(value, str) and re.match(r"https://[^\s/?#]+", value) is not None
+    if not isinstance(value, str) or not value.startswith("https://"):
+        return False
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        # Accessing port also validates its syntax and range.
+        parsed.port
+        if not host:
+            return False
+        if ":" in host:
+            # urlsplit validates bracketed IPv6 addresses.
+            return parsed.netloc.startswith("[")
+        host = host.encode("idna").decode("ascii").removesuffix(".")
+    except (ValueError, UnicodeError):
+        return False
+    return len(host) <= 253 and all(
+        re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+        for label in host.split(".")
+    )
 
 
 def _validate_evidence(value):
@@ -210,7 +228,8 @@ def _add_lines(grouped, rule_id, path, lines):
     entry["count"] = len(entry["lines"]) if entry["lines"] else entry["count"] + 1
 
 
-_GREP_LINE = re.compile(r"^(?P<path>[^:\n]+):(?P<line>[0-9]+):")
+_GREP_LINE = re.compile(r"^(?P<path>[^:\n]+):(?P<line>[0-9]{1,8}):")
+_GREP_SPLIT = re.compile(r"(?=:[0-9]+:)")
 
 
 def _parse_raw(raw):
@@ -249,7 +268,10 @@ def _parse_raw(raw):
                 _refuse("scan_output_unrecognized")
             continue
         match = _GREP_LINE.match(line)
-        if match is None:
+        # A second split point may be in a colon-bearing filename or in
+        # matched content. Neither attribution can be proven; refuse both.
+        # Lookahead counts overlapping splits too (e.g. "a:5:2:x").
+        if match is None or len(_GREP_SPLIT.findall(line)) != 1:
             _refuse("scan_output_unrecognized")
         lineno = int(match.group("line"))
         if not 1 <= lineno <= MAX_LINE_NUMBER:

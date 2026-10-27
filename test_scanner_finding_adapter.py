@@ -346,9 +346,11 @@ class InputShapeTests(unittest.TestCase):
         raw = ("src/a.py:1:prefix\u2028forged/path.py:1:x\n"
                "::error::a GitHub-token-shaped string is committed\n")
         result = adapt(raw_outcome(raw))
-        self.assertEqual(result["status"], "payload")
-        paths = [f["identity"]["path"] for f in result["findings"]]
-        self.assertEqual(paths, ["src/a.py"])
+        # The extra path:line split is ambiguous even when inside matched
+        # content. Refusal must not reinterpret U+2028 as a new output line.
+        self.assertEqual(result["status"], "refusal")
+        self.assertEqual(result["reason_code"], "scan_output_unrecognized")
+        self.assertNotIn("forged/path.py", json.dumps(result))
 
 
 class GuardPinTests(unittest.TestCase):
@@ -419,13 +421,120 @@ class GuardPinTests(unittest.TestCase):
 
     def test_colon_path_cannot_yield_false_closure(self):
         # git grep -n prints "a:5:b.txt:2:<content>" for a file named
-        # "a:5:b.txt"; the parser reads path "a", so a closure for the real
-        # name must refuse rather than report zero occurrences.
+        # "a:5:b.txt"; refuse at parse time before the wrong path can
+        # create a finding or a closure can report zero occurrences.
         raw = (f"a:5:b.txt:2:x = '{CANARY}'\n"
                "::error::a GitHub-token-shaped string is committed\n")
         self.assert_refusal(
             raw_outcome(raw, closure_request=closure_request(path="a:5:b.txt")),
-            "closure_path_ambiguous")
+            "scan_output_unrecognized")
+
+
+class BoundaryRegressionTests(unittest.TestCase):
+    def assert_refusal(self, outcome, code):
+        result = adapt(outcome)
+        self.assertEqual(result["status"], "refusal")
+        self.assertEqual(result["reason_code"], code)
+        self.assertEqual(result["findings"], [])
+        self.assertIsNone(result["closure"])
+        self.assertNotIn(CANARY, json.dumps(result))
+
+    def test_ambiguous_raw_path_refuses_create_and_replay(self):
+        annotation = "::error::a GitHub-token-shaped string is committed\n"
+        for prefix in ("", f"a:9:{CANARY}\n"):
+            for path in ("a:5:b.txt:2", "a:5:2"):
+                raw = f"{prefix}{path}:{CANARY}\n{annotation}"
+                with self.subTest(prefix=bool(prefix), path=path):
+                    self.assert_refusal(raw_outcome(raw), "scan_output_unrecognized")
+                    self.assert_refusal(raw_outcome(raw, deliveries=[{
+                        "rule_id": "github-token", "path": "a:5:b.txt", "age_days": 8,
+                        "existing_issue_ids": ["issue-1"]}]), "scan_output_unrecognized")
+
+    def test_huge_raw_line_number_refuses_without_conversion_crash(self):
+        raw = ("src/a.py:" + "9" * 5000 + f":{CANARY}\n"
+               "::error::a GitHub-token-shaped string is committed\n")
+        self.assert_refusal(raw_outcome(raw), "scan_output_unrecognized")
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "ops" / "paperclip" / "scanner_finding_adapter.py")],
+            input=json.dumps(raw_outcome(raw)).encode(), capture_output=True, timeout=30)
+        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(proc.stderr, b"")
+        self.assertEqual(json.loads(proc.stdout)["reason_code"], "scan_output_unrecognized")
+        self.assertNotIn(CANARY.encode(), proc.stdout)
+
+    def test_structured_line_range_refuses(self):
+        for line in (0, -1, adapter.MAX_LINE_NUMBER + 1, True, "1", 1.0):
+            with self.subTest(line=line):
+                self.assert_refusal(finding_outcome([
+                    {"rule_id": "github-token", "path": "src/app.py", "lines": [line]}]),
+                    "invalid_input")
+
+    def test_library_nonfinite_delivery_age_refuses(self):
+        for age in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(age=age):
+                self.assert_refusal(finding_outcome(deliveries=[{
+                    "rule_id": "github-token", "path": "src/app.py", "age_days": age}]),
+                    "delivery_invalid")
+
+    def test_at_limit_findings_evidence_and_path_succeed(self):
+        links = [f"https://example.invalid/e/{i}" for i in range(adapter.MAX_EVIDENCE_LINKS)]
+        occurrences = [{"rule_id": "github-token", "path": f"f{i}.py", "lines": [1]}
+                       for i in range(adapter.MAX_FINDINGS)]
+        occurrences[0]["path"] = "p" * adapter.MAX_PATH_CHARS
+        result = adapt(finding_outcome(occurrences, evidence_links=links))
+        self.assertEqual(result["status"], "payload")
+        self.assertEqual(len(result["findings"]), adapter.MAX_FINDINGS)
+        self.assertIn("p" * adapter.MAX_PATH_CHARS,
+                      [f["identity"]["path"] for f in result["findings"]])
+        self.assertTrue(all(f["evidence_links"] == links for f in result["findings"]))
+
+    def test_at_limit_line_number_succeeds_in_both_modes(self):
+        for line in (1, adapter.MAX_LINE_NUMBER):
+            raw = (f"src/app.py:{line}:{CANARY}\n"
+                   "::error::a GitHub-token-shaped string is committed\n")
+            for outcome in (raw_outcome(raw), finding_outcome([
+                    {"rule_id": "github-token", "path": "src/app.py", "lines": [line]}])):
+                with self.subTest(line=line, raw="raw_stdout" in outcome["scan"]):
+                    result = adapt(outcome)
+                    self.assertEqual(result["status"], "payload")
+                    self.assertEqual(result["findings"][0]["lines"], [line])
+
+    def test_at_limit_raw_and_cli_input_succeed(self):
+        prefix = "src/app.py:1:"
+        suffix = "\n::error::a GitHub-token-shaped string is committed\n"
+        raw = prefix + "x" * (adapter.MAX_INPUT_BYTES - len(prefix) - len(suffix)) + suffix
+        self.assertEqual(len(raw.encode()), adapter.MAX_INPUT_BYTES)
+        self.assertEqual(adapt(raw_outcome(raw))["status"], "payload")
+        text = json.dumps(finding_outcome())
+        text += " " * (adapter.MAX_INPUT_BYTES - len(text.encode()))
+        for extra, code in (("", 0), (" ", 2)):
+            proc = subprocess.run(
+                [sys.executable, str(ROOT / "ops" / "paperclip" / "scanner_finding_adapter.py")],
+                input=(text + extra).encode(), capture_output=True, timeout=30)
+            self.assertEqual(proc.returncode, code)
+            result = json.loads(proc.stdout)
+            self.assertEqual(result["status"], "payload" if code == 0 else "refusal")
+            if code:
+                self.assertEqual(result["reason_code"], "input_too_large")
+
+    def test_valid_https_hosts_succeed_in_evidence_and_acceptance(self):
+        for url in ("https://example.invalid/e", "https://host:443/e", "https://[::1]/e",
+                    "https://example.invalid./e", "https://xn--bcher-kva.invalid/e"):
+            with self.subTest(url=url):
+                finding = adapt(finding_outcome(evidence_links=[url]))
+                self.assertEqual(finding["status"], "payload")
+                self.assertEqual(finding["findings"][0]["evidence_links"], [url])
+                closure = adapt(clean_outcome(closure_request=closure_request(
+                    independent_acceptance_ref=url)))
+                self.assertEqual(closure["closure"]["issue_update"]["status"], "done")
+
+    def test_invalid_https_hosts_refuse_evidence_and_acceptance(self):
+        for url in ("https://:", "https://:443/", "https://host:bad/", "https://[broken/",
+                    "https://a..b/", "https://-host/"):
+            with self.subTest(url=url):
+                self.assert_refusal(finding_outcome(evidence_links=[url]), "evidence_invalid")
+                self.assert_refusal(clean_outcome(closure_request=closure_request(
+                    independent_acceptance_ref=url)), "closure_acceptance_missing")
 
 
 class CliTests(unittest.TestCase):

@@ -47,7 +47,11 @@ duplicate keys and nonfinite numbers rejected):
 `scan` carries either `occurrences` (metadata extracted by the caller)
 or `raw_stdout` (the pinned scanner's own output). With `raw_stdout`,
 only the `path:line:` prefix of each `git grep -n` line is read; the
-matched content after it is discarded immediately. Rule ids are the
+matched content after it is discarded immediately. A raw line with multiple
+`:<digits>:` split points refuses, including overlapping splits: a colon-bearing
+filename and matched content with the same shape cannot be distinguished. This
+conservative refusal applies to creates and updates as well as closures.
+Rule ids are the
 pinned scanner's five rules: `github-token`, `private-key`,
 `discord-webhook`, `stripe-live-key`, `gitignore-coverage`.
 
@@ -59,8 +63,9 @@ the pin, output lines the parser cannot account for, or an exit code
 that disagrees with the parsed occurrences is UNKNOWN. The adapter then
 emits `{"status": "refusal", "reason_code": ...}` with no payloads and
 the CLI exits 2. UNKNOWN creates nothing and closes nothing; the caller
-reports it as unmeasured. A clean scan (exit 0, zero occurrences) is
-`{"status": "none"}` — no create payload and no close payload.
+reports it as unmeasured. Without an explicit closure request, a clean scan
+(exit 0, zero occurrences) is `{"status": "none"}` — no create payload and
+no close payload.
 
 ## Identity and bounded replay
 

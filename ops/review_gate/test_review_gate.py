@@ -55,5 +55,31 @@ class CiGreenAdvisoryTest(unittest.TestCase):
     def test_only_advisory_is_not_green(self):
         rabbit = {'name': 'CodeRabbit', 'state': 'PENDING'}
         self.assertFalse(rg.ci_green([rabbit], []))
+class CiGreenReadinessSweepTest(unittest.TestCase):
+    CI = {'name': 'selftest', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'}
+
+    def sweep(self, conclusion, name='readiness-sweep', workflow='Readiness Sweep'):
+        return {'name': name, 'status': 'COMPLETED', 'conclusion': conclusion,
+                'checkSuite': {'workflowRun': {'workflow': {'name': workflow}}}}
+
+    def test_failed_repo_wide_sweep_does_not_hide_green_head(self):
+        self.assertTrue(rg.ci_green([self.CI, self.sweep('FAILURE')], []))
+        self.assertTrue(rg.ci_green([self.CI, self.sweep('FAILURE')], {'selftest'}))
+
+    def test_failed_sweep_workflow_name_alone_is_ignored(self):
+        self.assertTrue(rg.ci_green([self.CI, self.sweep('FAILURE', name='sweep')], []))
+
+    def test_pending_sweep_does_not_gate(self):
+        pending = {'name': 'readiness-sweep', 'status': 'IN_PROGRESS', 'conclusion': None}
+        self.assertTrue(rg.ci_green([self.CI, pending], []))
+
+    def test_only_sweep_is_not_green(self):
+        self.assertFalse(rg.ci_green([self.sweep('SUCCESS')], []))
+
+    def test_required_sweep_still_fails_closed(self):
+        self.assertFalse(rg.ci_green([self.CI, self.sweep('FAILURE')], {'readiness-sweep'}))
+
+    def test_other_failed_workflow_still_red(self):
+        self.assertFalse(rg.ci_green([self.CI, self.sweep('FAILURE', name='lint', workflow='CI')], []))
 if __name__ == '__main__':
     unittest.main()

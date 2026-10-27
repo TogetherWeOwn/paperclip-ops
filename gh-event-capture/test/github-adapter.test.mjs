@@ -2,7 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { createGithubAdapter } from '../src/github-adapter.js'
+import { rmSync } from 'node:fs'
+import { createGithubAdapter, writeFailureCode } from '../src/github-adapter.js'
+import { createPinnedRunner, prepareIsolatedGhConfigSync } from '../src/gh-pinned.js'
 import { createConsumer } from '../src/consumer.js'
 import { classifyCloseout, closeoutPolicy } from '../src/closeout.js'
 
@@ -545,15 +547,134 @@ test('body updates travel via a file, never argv', async () => {
   assert.equal(calls.length, 0)
 })
 
-test('mark-ready posts to ready_for_review and validates the response', async () => {
-  const { adapter, calls } = fake([{ id: 1 }])
+test('mark-ready resolves the node id then runs the GraphQL mutation, confirming non-draft', async () => {
+  const nodeId = 'UHVsbFJlcXVlc3Q0Mg=='
+  const { adapter, calls } = fake([
+    { data: { repository: { nameWithOwner: repository, pullRequest: { id: nodeId } } } },
+    { data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } },
+  ])
   await adapter.markReadyForReview(repository, 42)
-  assert.deepEqual(calls[0][1], ['api', '--hostname', 'github.com', '--method', 'POST',
-    `repos/${repository}/pulls/42/ready_for_review`])
-  const empty = fake([null])
-  await assert.rejects(empty.adapter.markReadyForReview(repository, 42))
-  const failing = createGithubAdapter({ allowedRepositories: [repository], run: async () => { throw new Error('PRIVATE') } })
-  await assert.rejects(failing.markReadyForReview(repository, 42), /GitHub mark-ready failed/)
+  assert.equal(calls.length, 2)
+  assert.ok(calls[0][1].join(' ').includes('pullRequest'))
+  assert.ok(calls[1][1].some((arg) => arg.includes('markPullRequestReadyForReview')))
+  assert.ok(calls[1][1].some((arg) => arg === `pullRequestId=${nodeId}`))
+  // No REST pulls/{n}/ready_for_review ever: GitHub has no such endpoint.
+  assert.equal(calls.flatMap((call) => call[1]).some((arg) => typeof arg === 'string' && arg.includes('ready_for_review')), false)
+})
+
+test('mark-ready fails closed on an unconfirmed mutation and a missing node id', async () => {
+  const nodeId = 'UHVsbFJlcXVlc3Q0Mg=='
+  const unconfirmed = fake([
+    { data: { repository: { nameWithOwner: repository, pullRequest: { id: nodeId } } } },
+    { data: { markPullRequestReadyForReview: { pullRequest: { isDraft: true } } } },
+  ])
+  await assert.rejects(unconfirmed.adapter.markReadyForReview(repository, 42), /did not confirm/)
+  const noId = fake([{ data: { repository: { nameWithOwner: repository, pullRequest: { id: null } } } }])
+  await assert.rejects(noId.adapter.markReadyForReview(repository, 42), /node id/)
+  assert.equal(noId.calls.length, 1)
+})
+
+test('mark-ready surfaces sanitized failure classes and never echoes child output', async () => {
+  for (const [stderr, expected] of [
+    ['gh: Not Found (HTTP 404)', 'http-404'],
+    ['GraphQL: Resource not accessible by integration (HTTP 403)', 'http-403'],
+    ['gh: Validation Failed (HTTP 422)', 'http-422'],
+    ['PRIVATE transport detail', 'unknown'],
+  ]) {
+    const boom = Object.assign(new Error('PRIVATE'), { stdout: 'PRIVATE', stderr: `${stderr} PRIVATE` })
+    const failing = createGithubAdapter({ allowedRepositories: [repository], run: async () => { throw boom } })
+    await assert.rejects(failing.markReadyForReview(repository, 42), (error) => {
+      assert.match(error.message, /GitHub mark-ready failed/)
+      assert.equal(writeFailureCode(error), expected)
+      assert.equal(String(error).includes('PRIVATE'), false)
+      assert.equal(Object.hasOwn(error, 'stdout'), false)
+      assert.equal(Object.hasOwn(error, 'stderr'), false)
+      return true
+    })
+  }
+  const unconfirmed = fake([
+    { data: { repository: { nameWithOwner: repository, pullRequest: { id: 'UHVsbFJlcXVlc3Q0Mg==' } } } },
+    { data: { markPullRequestReadyForReview: { pullRequest: { isDraft: true } } } },
+  ])
+  await assert.rejects(unconfirmed.adapter.markReadyForReview(repository, 42), (error) => {
+    assert.equal(writeFailureCode(error), 'unconfirmed')
+    return true
+  })
+})
+
+// Realistic GraphQL refusals (PR #169 review): GitHub answers a token that
+// lacks pull-request write with HTTP 200 and errors[].type FORBIDDEN; `gh api
+// graphql` prints the body on stdout, `gh: <message>` (no HTTP code) on
+// stderr, and exits 1. Those must classify as graphql-*, not unknown.
+const graphqlRefusal = (errors) => JSON.stringify({ data: { markPullRequestReadyForReview: null }, errors })
+const forbidden = { type: 'FORBIDDEN', path: ['markPullRequestReadyForReview'], extensions: { saml_failure: false },
+  locations: [{ line: 1, column: 58 }], message: 'Resource not accessible by integration' }
+
+test('mark-ready classifies realistic GraphQL error payloads without an HTTP code', async () => {
+  const nodeId = 'UHVsbFJlcXVlc3Q0Mg=='
+  const idOk = JSON.stringify({ data: { repository: { nameWithOwner: repository, pullRequest: { id: nodeId } } } })
+  for (const [stdout, stderr, expected] of [
+    [graphqlRefusal([forbidden]), 'gh: Resource not accessible by integration', 'graphql-forbidden'],
+    [graphqlRefusal([{ ...forbidden, type: undefined }]), 'gh: Resource not accessible by integration', 'graphql-forbidden'],
+    [graphqlRefusal([{ type: 'NOT_FOUND', path: ['markPullRequestReadyForReview'],
+      message: "Could not resolve to a node with the global id of 'PRIVATE'" }]), 'gh: Could not resolve PRIVATE', 'graphql-not-found'],
+    ['', 'gh: Resource not accessible by personal access token', 'graphql-forbidden'],
+  ]) {
+    // Raw execFile-shaped rejection (the default runner) ...
+    const raw = createGithubAdapter({ allowedRepositories: [repository], run: async (_f, args) => {
+      if (args.some((arg) => arg.includes('ReadinessNodeId'))) return { stdout: idOk }
+      throw Object.assign(new Error('Command failed: gh api graphql PRIVATE'), { code: 1, stdout, stderr: `${stderr} PRIVATE` })
+    } })
+    // ... and the same child behind the production pinned runner.
+    const configDir = prepareIsolatedGhConfigSync()
+    try {
+      const pinned = createGithubAdapter({ allowedRepositories: [repository], run: createPinnedRunner({
+        executable: '/usr/bin/gh', configDir, exec: async (_f, args) => {
+          if (args.some((arg) => arg.includes('ReadinessNodeId'))) return { stdout: idOk, stderr: '' }
+          throw Object.assign(new Error('Command failed: gh api graphql PRIVATE'), { code: 1, stdout, stderr: `${stderr} PRIVATE` })
+        } }) })
+      for (const adapter of [raw, pinned]) {
+        await assert.rejects(adapter.markReadyForReview(repository, 42), (error) => {
+          assert.equal(writeFailureCode(error), expected, stderr)
+          assert.equal(String(error).includes('PRIVATE'), false)
+          return true
+        })
+      }
+    } finally {
+      rmSync(configDir, { recursive: true, force: true })
+    }
+  }
+  // A runner that exits 0 yet returns GraphQL errors also names the class
+  // rather than masking it as an unconfirmed mutation.
+  const exitZero = fake([JSON.parse(idOk), JSON.parse(graphqlRefusal([forbidden]))])
+  await assert.rejects(exitZero.adapter.markReadyForReview(repository, 42), (error) => {
+    assert.equal(writeFailureCode(error), 'graphql-forbidden')
+    return true
+  })
+})
+
+test('every writer keeps the HTTP class through the production pinned runner', async () => {
+  const configDir = prepareIsolatedGhConfigSync()
+  try {
+    const adapter = createGithubAdapter({ allowedRepositories: [repository], run: createPinnedRunner({
+      executable: '/usr/bin/gh', configDir, exec: async () => {
+        throw Object.assign(new Error('Command failed PRIVATE'), { code: 1, stdout: '', stderr: 'gh: Bad credentials (HTTP 401) PRIVATE' })
+      } }) })
+    for (const call of [
+      () => adapter.markReadyForReview(repository, 42),
+      () => adapter.convertToDraft(repository, 42),
+      () => adapter.updatePullRequestBody(repository, 42, 'body'),
+      () => adapter.enableAutoMerge(repository, 42, sha),
+    ]) {
+      await assert.rejects(call(), (error) => {
+        assert.equal(writeFailureCode(error), 'http-401')
+        assert.equal(String(error).includes('PRIVATE'), false)
+        return true
+      })
+    }
+  } finally {
+    rmSync(configDir, { recursive: true, force: true })
+  }
 })
 
 test('convert-to-draft resolves the node id then mutates, confirming draft', async () => {
@@ -572,11 +693,70 @@ test('convert-to-draft resolves the node id then mutates, confirming draft', asy
     { data: { repository: { nameWithOwner: repository, pullRequest: { id: nodeId } } } },
     { data: { convertPullRequestToDraft: { pullRequest: { isDraft: false } } } },
   ])
-  await assert.rejects(unconfirmed.adapter.convertToDraft(repository, 42), /did not confirm/)
-  // A missing node id fails closed before any mutation runs.
+  await assert.rejects(unconfirmed.adapter.convertToDraft(repository, 42), (error) => {
+    assert.match(error.message, /did not confirm/)
+    assert.equal(writeFailureCode(error), 'unconfirmed')
+    return true
+  })
+  // A missing node id fails closed before any mutation runs, carrying the
+  // same node-id-incomplete class the mark-ready writer raises.
   const noId = fake([{ data: { repository: { nameWithOwner: repository, pullRequest: { id: null } } } }])
-  await assert.rejects(noId.adapter.convertToDraft(repository, 42), /node id/)
+  await assert.rejects(noId.adapter.convertToDraft(repository, 42), (error) => {
+    assert.match(error.message, /node id/)
+    assert.equal(writeFailureCode(error), 'node-id-incomplete')
+    return true
+  })
   assert.equal(noId.calls.length, 1)
+})
+
+// Review pins (PR #169): each lifecycle writer's guards are pinned on both
+// writers, so deleting one writer's copy turns this suite red.
+test('convert-to-draft names the GraphQL class when the runner exits 0 with errors[]', async () => {
+  const nodeId = 'UHVsbFJlcXVlc3Q0Mg=='
+  const idOk = { data: { repository: { nameWithOwner: repository, pullRequest: { id: nodeId } } } }
+  const draftRefusal = (errors) => ({ data: { convertPullRequestToDraft: null }, errors })
+  const draftForbidden = { ...forbidden, path: ['convertPullRequestToDraft'] }
+  for (const [errors, expected] of [
+    [[draftForbidden], 'graphql-forbidden'],
+    // Untyped refusal still classifies from the fixed not-accessible message.
+    [[{ ...draftForbidden, type: undefined }], 'graphql-forbidden'],
+    [[{ type: 'NOT_FOUND', path: ['convertPullRequestToDraft'],
+      message: "Could not resolve to a node with the global id of 'PRIVATE'" }], 'graphql-not-found'],
+  ]) {
+    const exitZero = fake([idOk, draftRefusal(errors)])
+    await assert.rejects(exitZero.adapter.convertToDraft(repository, 42), (error) => {
+      assert.match(error.message, /GitHub convert-to-draft was refused/)
+      assert.equal(writeFailureCode(error), expected)
+      assert.equal(String(error).includes('PRIVATE'), false)
+      return true
+    })
+    assert.equal(exitZero.calls.length, 2)
+  }
+})
+
+test('both lifecycle writers raise node-id-incomplete before any mutation for every malformed node id', async () => {
+  for (const id of [null, undefined, '', 42, 'has space', 'bad;char', 'x'.repeat(257)]) {
+    for (const [name, call] of [
+      ['mark-ready', (adapter) => adapter.markReadyForReview(repository, 42)],
+      ['convert-to-draft', (adapter) => adapter.convertToDraft(repository, 42)],
+    ]) {
+      const noId = fake([{ data: { repository: { nameWithOwner: repository, pullRequest: { id } } } }])
+      await assert.rejects(call(noId.adapter), (error) => {
+        assert.match(error.message, /GitHub PR node id is incomplete/, `${name} ${String(id).slice(0, 12)}`)
+        assert.equal(writeFailureCode(error), 'node-id-incomplete', `${name} ${String(id).slice(0, 12)}`)
+        return true
+      })
+      assert.equal(noId.calls.length, 1, `${name} must not mutate without a node id`)
+    }
+  }
+  // Positive control: the 256-character boundary is still accepted.
+  const longest = 'x'.repeat(256)
+  const ok = fake([
+    { data: { repository: { nameWithOwner: repository, pullRequest: { id: longest } } } },
+    { data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } },
+  ])
+  await ok.adapter.markReadyForReview(repository, 42)
+  assert.ok(ok.calls[1][1].includes(`pullRequestId=${longest}`))
 })
 
 test('enable-auto-merge arms squash bound to the evaluated head', async () => {
@@ -634,10 +814,16 @@ test('every GraphQL document the adapter sends is brace- and paren-balanced', as
   ])
   await draftCall.adapter.convertToDraft(repository, 42)
   collect(draftCall.calls)
-  // Four module-level queries plus the two inline convert-to-draft documents.
+  const readyCall = fake([
+    { data: { repository: { nameWithOwner: repository, pullRequest: { id: nodeId } } } },
+    { data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } },
+  ])
+  await readyCall.adapter.markReadyForReview(repository, 42)
+  collect(readyCall.calls)
+  // Four module-level queries plus the two inline documents per lifecycle mutation.
   // If a call shape changes and a document stops being collected, this fails
   // loudly instead of silently shrinking the contract.
-  assert.equal(documents.length, 6)
+  assert.equal(documents.length, 8)
   for (const document of documents) {
     for (const [open, close, label] of [['{', '}', 'brace'], ['(', ')', 'paren']]) {
       let depth = 0

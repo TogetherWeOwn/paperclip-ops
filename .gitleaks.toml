@@ -186,3 +186,11 @@ condition = "AND"
 paths = ['''(^|/)templates/org\-github/tests/test_ax_paperclip_window\.py$''']
 regexTarget = "line"
 regexes = ['''(?m)^\ \ \ \ \ \ \ \ secret\ =\ "synthetic\-secret\-xyz\-789"$''']
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Synthetic never-echoed sentinel strings in the ci-policy verdict acceptance test; not credentials."
+condition = "AND"
+paths = ['''(^|/)\.github/scripts/test_ci_policy_json_acceptance\.py$''']
+regexTarget = "line"
+regexes = ['''(?m)^\ \ \ \ "SENTINEL_BODY_9c1d",\ "SENTINEL_SECRET_7f3a",\ "SENTINEL_REASON_4b2e",$''']

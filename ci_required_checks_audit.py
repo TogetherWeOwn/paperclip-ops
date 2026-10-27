@@ -641,9 +641,9 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     source = None
-    if args.manifest:
+    if args.manifest is not None:
         source = {"kind": "manifest", "path": str(args.manifest)}
-    elif args.rules_json:
+    elif args.rules_json is not None:
         source = {"kind": "rules-json", "path": str(args.rules_json)}
     known_branch = args.branch
 
@@ -667,11 +667,11 @@ def main(argv=None):
         return EXIT_UNMEASURED
 
     try:
-        if args.manifest:
+        if args.manifest is not None:
             required, mbranch = load_manifest(args.manifest)
             branch = args.branch or mbranch
             known_branch = branch
-        elif args.rules_json:
+        elif args.rules_json is not None:
             try:
                 with open(args.rules_json, encoding="utf-8") as fh:
                     required = required_from_rules(json.load(fh))
@@ -691,7 +691,9 @@ def main(argv=None):
                 )
             branch = args.branch or "main"
             known_branch = branch
-        if args.repo:
+        if args.repo is not None:
+            if not args.repo:
+                raise InputError("--repo must not be empty (expected OWNER/NAME)")
             tmp = tempfile.mkdtemp(prefix="ci-required-audit-")
             required, branch = fetch_live(args.repo, args.branch, args.gh_bin, tmp)
             known_branch = branch

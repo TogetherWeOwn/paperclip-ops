@@ -41,9 +41,9 @@ to stdout, nothing to stderr, and exits 2:
 
 | `error_code` | Cause |
 | --- | --- |
-| `MANIFEST_UNREADABLE` | manifest path missing, a directory, or not readable |
+| `MANIFEST_UNREADABLE` | manifest path empty, missing, a directory, or not readable |
 | `MANIFEST_INVALID` | manifest is malformed/non-UTF-8 JSON, not an object, `required` is missing/not a list of `{context, integration_id}` with string contexts and integer/null/absent `integration_id`, or `branch` is not a string |
-| `RULES_UNREADABLE` | rules path missing, a directory, or not readable |
+| `RULES_UNREADABLE` | rules path empty, missing, a directory, or not readable |
 | `RULES_INVALID` | rules document is malformed/non-UTF-8 JSON, not a list of branch rules, or a nested rule (missing/non-string `type`, null/non-object `parameters`, missing/null/non-list checks) or check entry (non-integer non-null `integration_id`) is the wrong shape |
 | `WORKFLOWS_REQUIRED` | `--workflows` omitted with `--manifest`/`--rules-json` |
 | `NO_REQUIRED_CHECKS` | the input read cleanly but names no required status checks |
@@ -80,17 +80,23 @@ sources, and a bare invocation (or only `--repo`/`--json`) print argparse
 usage to stderr with empty stdout and exit 2 — even with `--json`. Parse
 stdout as JSON only for an actual `--json` audit, not a help or usage
 response. Live `--repo` failures keep their existing prose diagnostic and
-exit 2; there is no live-network error envelope in this contract.
+exit 2; there is no live-network error envelope in this contract. An explicit
+empty source value is not an argparse syntax error: `--manifest ""` and
+`--rules-json ""` report the corresponding unreadable-input outcome (including
+its JSON envelope under `--json`); `--repo ""` is rejected locally with prose
+and exit 2 before any temporary directory, `gh` invocation or network call.
 
 ## Offline verification
 
 ```sh
-python3 -B -m unittest -v test_ci_required_checks_audit test_required_checks_unmeasurable_json_acceptance
+python3 -B -m unittest -v test_ci_required_checks_audit test_required_checks_unmeasurable_json_acceptance test_ci_required_checks_nested_input
 ```
 
 The first suite pins the measured audit, finding semantics, text behaviour
 and exits. The second pins this unmeasurable envelope — single-object
 parsing, stable codes, branch handling, no fabricated counts, argparse
 boundary, and zero `gh`/network/write calls behind a poisoned `PATH` and an
-audit-hook guard. Both run in the local fast tier and in CI. This document
-describes source behaviour, not an installation or deployment claim.
+audit-hook guard. The third pins nested-input validation, empty source values,
+non-object manifests, empty contexts, and known/unknown branch derivation without
+an explicit override. All three run in the local fast tier and in CI. This
+document describes source behaviour, not an installation or deployment claim.

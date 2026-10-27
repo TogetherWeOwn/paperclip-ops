@@ -65,6 +65,108 @@ class NestedInput(unittest.TestCase):
         self.assertEqual(doc["outcome"], "unmeasurable")
         self.assertEqual(doc["error_code"], error_code)
         self.assertEqual(doc["measurement_state"], "unmeasured")
+        self.assertEqual(doc["schema_version"], 1)
+        self.assertIs(doc["retryable"], False)
+        self.assertIsNone(doc["counts"])
+        self.assertIsNone(doc["findings"])
+        self.assertTrue(doc["next_action"])
+        self.assertEqual(proc.stderr, "")
+        return doc
+
+    def test_empty_offline_source_path_is_unreadable_not_usage_or_findings(self):
+        for flag, kind, code in (
+            ("--manifest", "manifest", "MANIFEST_UNREADABLE"),
+            ("--rules-json", "rules-json", "RULES_UNREADABLE"),
+        ):
+            for workflows in ((), ("--workflows", self.wf)):
+                with self.subTest(flag=flag, workflows=workflows):
+                    proc = run_tool(flag, "", *workflows, "--json")
+                    doc = self.assert_unmeasurable(proc, code)
+                    self.assertEqual(doc["source"], {"kind": kind, "path": ""})
+                    self.assertIsNone(doc["branch"])
+
+    def test_empty_offline_source_path_text_is_prose_exit_2(self):
+        for flag in ("--manifest", "--rules-json"):
+            with self.subTest(flag=flag):
+                proc = run_tool(flag, "", "--workflows", self.wf)
+                self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                self.assertEqual(proc.stdout, "")
+                self.assertTrue(proc.stderr.startswith("ci_required_checks_audit: "))
+                self.assertNotIn("Traceback", proc.stderr)
+
+    def test_empty_repo_is_prose_exit_2_without_invoking_gh(self):
+        for workflows in ((), ("--workflows", self.wf)):
+            for output in ((), ("--json",)):
+                with self.subTest(workflows=workflows, output=output):
+                    proc = run_tool(
+                        "--repo", "", *workflows, *output,
+                        "--gh-bin", os.path.join(self.tmp.name, "nonexistent-gh"),
+                    )
+                    self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                    self.assertEqual(proc.stdout, "")
+                    self.assertTrue(proc.stderr.startswith("ci_required_checks_audit: "))
+                    self.assertNotIn("Traceback", proc.stderr)
+
+    def test_invalid_manifest_required_keeps_known_branch_without_override(self):
+        manifest = self.write_json(
+            "manifest.json", {"branch": "release/x", "required": [{"context": 123}]}
+        )
+        proc = run_tool("--manifest", manifest, "--workflows", self.wf, "--json")
+        doc = self.assert_unmeasurable(proc, "MANIFEST_INVALID")
+        self.assertEqual(doc["branch"], "release/x")
+        self.assertEqual(doc["source"], {"kind": "manifest", "path": manifest})
+
+    def test_invalid_manifest_branch_does_not_invent_a_branch(self):
+        for branch in (None, 123, False, [], {}):
+            with self.subTest(branch=branch):
+                manifest = self.write_json(
+                    "manifest.json", {"branch": branch, "required": [{"context": "build"}]}
+                )
+                proc = run_tool("--manifest", manifest, "--workflows", self.wf, "--json")
+                doc = self.assert_unmeasurable(proc, "MANIFEST_INVALID")
+                self.assertIsNone(doc["branch"])
+
+    def test_loaded_rules_unmeasurable_outcomes_use_default_main_branch(self):
+        empty_workflows = os.path.join(self.tmp.name, "empty-wf")
+        os.makedirs(empty_workflows)
+        for rules_doc, workflows, code in (
+            ([self._valid_rule()], (), "WORKFLOWS_REQUIRED"),
+            ([self._valid_rule()], ("--workflows", empty_workflows), "NO_WORKFLOWS"),
+            ([], ("--workflows", self.wf), "NO_REQUIRED_CHECKS"),
+        ):
+            with self.subTest(code=code):
+                rules = self.write_json("rules.json", rules_doc)
+                proc = run_tool("--rules-json", rules, *workflows, "--json")
+                doc = self.assert_unmeasurable(proc, code)
+                self.assertEqual(doc["branch"], "main")
+                self.assertEqual(doc["source"], {"kind": "rules-json", "path": rules})
+
+    def test_non_object_manifest_is_invalid_in_json_and_text_modes(self):
+        for value in ([], None, "x", 123, False):
+            for output in ((), ("--json",)):
+                with self.subTest(value=value, output=output):
+                    manifest = self.write_json("manifest.json", value)
+                    proc = run_tool("--manifest", manifest, "--workflows", self.wf, *output)
+                    if output:
+                        doc = self.assert_unmeasurable(proc, "MANIFEST_INVALID")
+                        self.assertIsNone(doc["branch"])
+                    else:
+                        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                        self.assertEqual(proc.stdout, "")
+                        self.assertTrue(proc.stderr.startswith("ci_required_checks_audit: "))
+                        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_empty_context_is_invalid_for_both_offline_sources(self):
+        rule = {"type": "required_status_checks",
+                "parameters": {"required_status_checks": [{"context": ""}]}}
+        for flag, name, value, code in (
+            ("--manifest", "manifest.json", {"required": [{"context": ""}]}, "MANIFEST_INVALID"),
+            ("--rules-json", "rules.json", [rule], "RULES_INVALID"),
+        ):
+            with self.subTest(flag=flag):
+                path = self.write_json(name, value)
+                proc = run_tool(flag, path, "--workflows", self.wf, "--json")
+                self.assert_unmeasurable(proc, code)
 
     def test_rules_null_entry_is_RULES_INVALID(self):
         rules = self.write_json("rules.json", [None])

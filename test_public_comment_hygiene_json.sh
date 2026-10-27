@@ -554,6 +554,34 @@ json_ok "$WORK/reset-json.stdout" '.findings == [] and .truncated == 0' \
 json_ok "$WORK/reset-json.stdout" '.error.code == "branch_scan_failed" and .error.next_action == "fix_scanner"' \
   "failing branch scan reports branch_scan_failed / fix_scanner"
 
+# 17b. More than 50 body hits set truncated before the failing branch scan.
+# Catch a fail() that clears findings but leaves the omitted-hit count behind.
+: > "$WORK/reset60.txt"
+for i in $(seq 1 60); do
+  printf 'Line %d needs %s-%s for review.\n' "$i" "$PRIMARY_PREFIX" "$(printf '994%04d' "$i")" >> "$WORK/reset60.txt"
+done
+capture_json reset60-control --visibility public --body-file "$WORK/reset60.txt" --branch "fix/scrub-bot-comments"
+if [[ "$CAPTURE_RC" -eq 1 ]]; then
+  ok "truncated error-reset control refuses (exit 1)"
+else
+  bad "truncated error-reset control refuses" "want exit 1, got $CAPTURE_RC"
+fi
+check_envelope reset60-control "truncated error-reset control"
+json_ok "$WORK/reset60-control.stdout" '.verdict == "violation" and (.findings | length) == 50 and .truncated == 10' \
+  "error-reset control records 50 body findings and 10 omitted hits before a failure"
+capture_text_with_path reset60-text "$WORK/shim_branch:$CLEAN_PATH" --visibility public --body-file "$WORK/reset60.txt" --branch "fix/scrub-bot-comments"; TEXT_RC=$CAPTURE_RC
+capture_json_with_path reset60-json "$WORK/shim_branch:$CLEAN_PATH" --visibility public --body-file "$WORK/reset60.txt" --branch "fix/scrub-bot-comments"; JSON_RC=$CAPTURE_RC
+check_parity "truncated body plus failing branch scan refuses" "$TEXT_RC" "$JSON_RC" 2
+check_envelope reset60-json "error envelope after truncated body findings"
+json_ok "$WORK/reset60-json.stdout" '.verdict == "error"' \
+  "truncated body plus failing branch scan verdict is error"
+json_ok "$WORK/reset60-json.stdout" '.findings == []' \
+  "error envelope clears all recorded body findings after truncation"
+json_ok "$WORK/reset60-json.stdout" '.truncated == 0' \
+  "error envelope resets a nonzero truncated count to zero"
+json_ok "$WORK/reset60-json.stdout" '.error.code == "branch_scan_failed" and .error.next_action == "fix_scanner"' \
+  "failing branch scan after truncation reports branch_scan_failed / fix_scanner"
+
 # --- 18. findings cap is a total across body and branch ---------------------------
 # 60 single-hit body lines + 2 branch IDs = 62 occurrences: exactly the 50-cap
 # in body-first scan order, with 12 omitted -- not 50 body + 2 branch.

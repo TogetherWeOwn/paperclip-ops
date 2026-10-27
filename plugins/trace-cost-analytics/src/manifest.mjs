@@ -7,7 +7,7 @@ export const manifest = {
   author: 'TogetherWeOwn',
   categories: ['automation'],
   capabilities: ['agent.tools.register'],
-  entrypoints: { worker: './src/worker.mjs' },
+  entrypoints: { worker: './src/entrypoint.mjs' },
   tools: [{
     name: 'analyze_outcome_costs',
     displayName: 'Analyze outcome costs',

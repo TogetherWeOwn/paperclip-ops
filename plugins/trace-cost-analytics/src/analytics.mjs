@@ -65,10 +65,14 @@ function summary(issues, runs, complete, delivered) {
     if (run.finishedAt !== null) runDurationMs += Date.parse(run.finishedAt) - Date.parse(run.startedAt);
   }
   const outcomes = issues.filter((issue) => delivered.has(issue.id));
-  const latencies = outcomes.map((issue) => {
-    const starts = runs.filter((run) => run.issueId === issue.id).map((run) => Date.parse(run.startedAt));
-    return starts.length ? Date.parse(issue.deliveredAt) - Math.min(...starts) : null;
-  });
+  const earliestStart = new Map();
+  for (const run of runs) {
+    const start = Date.parse(run.startedAt);
+    if (!(earliestStart.get(run.issueId) <= start)) earliestStart.set(run.issueId, start);
+  }
+  const latencies = outcomes.map((issue) => (
+    earliestStart.has(issue.id) ? Date.parse(issue.deliveredAt) - earliestStart.get(issue.id) : null
+  ));
   return {
     issues: issues.length,
     runs: runs.length,
@@ -76,7 +80,7 @@ function summary(issues, runs, complete, delivered) {
     knownCostUsd: money(knownCost),
     unknownCostRuns,
     // Integer division rounds down at one nanodollar, never through binary floating point.
-    costPerOutcomeUsd: complete && !unknownCostRuns && outcomes.length && issues.every((issue) => runs.some((run) => run.issueId === issue.id))
+    costPerOutcomeUsd: complete && !unknownCostRuns && outcomes.length && issues.every((issue) => earliestStart.has(issue.id))
       ? money(knownCost / BigInt(outcomes.length)) : null,
     runDurationMs,
     outcomeLatencyMs: outcomes.length && latencies.every((value) => value !== null)
@@ -130,9 +134,14 @@ export function analyzeSnapshot(snapshot, companyId) {
   }
 
   // Attribute a work unit once. Shared multi-model effort is not credited to each model.
+  const runsByIssue = new Map();
+  for (const run of runs.values()) {
+    if (!runsByIssue.has(run.issueId)) runsByIssue.set(run.issueId, []);
+    runsByIssue.get(run.issueId).push(run);
+  }
   const groups = new Map();
   for (const issue of issues.values()) {
-    const issueRuns = [...runs.values()].filter((run) => run.issueId === issue.id);
+    const issueRuns = runsByIssue.get(issue.id) ?? [];
     const models = [...new Set(issueRuns.map((run) => run.model))].sort();
     const key = JSON.stringify(models);
     if (!groups.has(key)) groups.set(key, { model: models.length === 1 ? models[0] : models.length ? 'mixed' : 'unknown', models, issues: [], runs: [] });

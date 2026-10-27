@@ -351,7 +351,8 @@
     "Dispatch sweep failure visibility acceptance:1",
     "native runner coverage classifier suite:1",
     "AX metric contract suites:1",
-    "shell-substitution JSON acceptance:1"
+    "shell-substitution JSON acceptance:1",
+    "public-comment hygiene JSON suite:1"
   ],
   "retained": [
     {
@@ -1988,6 +1989,11 @@
       "name": "shell-substitution JSON acceptance",
       "definition_sha256": "335f88370d859cfd2908fe5ea77a41d6a03b8cc8ca84ccbcabeca304a04042d8",
       "id": "shell-substitution JSON acceptance:1"
+    },
+    {
+      "name": "public-comment hygiene JSON suite",
+      "definition_sha256": "60125ad01be83d0c4323b4495f6a94511b5edc43583305b1bb20a1987ede42bf",
+      "id": "public-comment hygiene JSON suite:1"
     }
   ],
   "removed": [

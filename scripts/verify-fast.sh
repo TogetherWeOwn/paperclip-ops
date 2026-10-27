@@ -280,6 +280,7 @@ python3 check_workflow_job_permissions.py || fail "workflow job permissions gate
 python3 -m unittest test_check_workflow_job_permissions || fail "workflow job permissions acceptance suite failed"
 ./test_readme_script_index.sh || fail "readme script-index gate failed"
 ./test_public_comment_hygiene_gate.sh || fail "public-comment hygiene gate suite failed"
+./test_public_comment_hygiene_json.sh || fail "public-comment hygiene JSON suite failed"
 ./test_acceptance_transport.sh || fail "acceptance-transport reply suite failed"
 ./test_upstream_prepush_hook.sh || fail "upstream pre-push hook suite failed"
 ./test_cliproxy_mgmt_recon_argv.sh || fail "cliproxy recon argv suite failed"

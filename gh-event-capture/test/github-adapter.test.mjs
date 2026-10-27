@@ -2,7 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { rmSync } from 'node:fs'
 import { createGithubAdapter, writeFailureCode } from '../src/github-adapter.js'
+import { createPinnedRunner, prepareIsolatedGhConfigSync } from '../src/gh-pinned.js'
 import { createConsumer } from '../src/consumer.js'
 import { classifyCloseout, closeoutPolicy } from '../src/closeout.js'
 
@@ -598,6 +600,81 @@ test('mark-ready surfaces sanitized failure classes and never echoes child outpu
     assert.equal(writeFailureCode(error), 'unconfirmed')
     return true
   })
+})
+
+// Realistic GraphQL refusals (PR #169 review): GitHub answers a token that
+// lacks pull-request write with HTTP 200 and errors[].type FORBIDDEN; `gh api
+// graphql` prints the body on stdout, `gh: <message>` (no HTTP code) on
+// stderr, and exits 1. Those must classify as graphql-*, not unknown.
+const graphqlRefusal = (errors) => JSON.stringify({ data: { markPullRequestReadyForReview: null }, errors })
+const forbidden = { type: 'FORBIDDEN', path: ['markPullRequestReadyForReview'], extensions: { saml_failure: false },
+  locations: [{ line: 1, column: 58 }], message: 'Resource not accessible by integration' }
+
+test('mark-ready classifies realistic GraphQL error payloads without an HTTP code', async () => {
+  const nodeId = 'UHVsbFJlcXVlc3Q0Mg=='
+  const idOk = JSON.stringify({ data: { repository: { nameWithOwner: repository, pullRequest: { id: nodeId } } } })
+  for (const [stdout, stderr, expected] of [
+    [graphqlRefusal([forbidden]), 'gh: Resource not accessible by integration', 'graphql-forbidden'],
+    [graphqlRefusal([{ ...forbidden, type: undefined }]), 'gh: Resource not accessible by integration', 'graphql-forbidden'],
+    [graphqlRefusal([{ type: 'NOT_FOUND', path: ['markPullRequestReadyForReview'],
+      message: "Could not resolve to a node with the global id of 'PRIVATE'" }]), 'gh: Could not resolve PRIVATE', 'graphql-not-found'],
+    ['', 'gh: Resource not accessible by personal access token', 'graphql-forbidden'],
+  ]) {
+    // Raw execFile-shaped rejection (the default runner) ...
+    const raw = createGithubAdapter({ allowedRepositories: [repository], run: async (_f, args) => {
+      if (args.some((arg) => arg.includes('ReadinessNodeId'))) return { stdout: idOk }
+      throw Object.assign(new Error('Command failed: gh api graphql PRIVATE'), { code: 1, stdout, stderr: `${stderr} PRIVATE` })
+    } })
+    // ... and the same child behind the production pinned runner.
+    const configDir = prepareIsolatedGhConfigSync()
+    try {
+      const pinned = createGithubAdapter({ allowedRepositories: [repository], run: createPinnedRunner({
+        executable: '/usr/bin/gh', configDir, exec: async (_f, args) => {
+          if (args.some((arg) => arg.includes('ReadinessNodeId'))) return { stdout: idOk, stderr: '' }
+          throw Object.assign(new Error('Command failed: gh api graphql PRIVATE'), { code: 1, stdout, stderr: `${stderr} PRIVATE` })
+        } }) })
+      for (const adapter of [raw, pinned]) {
+        await assert.rejects(adapter.markReadyForReview(repository, 42), (error) => {
+          assert.equal(writeFailureCode(error), expected, stderr)
+          assert.equal(String(error).includes('PRIVATE'), false)
+          return true
+        })
+      }
+    } finally {
+      rmSync(configDir, { recursive: true, force: true })
+    }
+  }
+  // A runner that exits 0 yet returns GraphQL errors also names the class
+  // rather than masking it as an unconfirmed mutation.
+  const exitZero = fake([JSON.parse(idOk), JSON.parse(graphqlRefusal([forbidden]))])
+  await assert.rejects(exitZero.adapter.markReadyForReview(repository, 42), (error) => {
+    assert.equal(writeFailureCode(error), 'graphql-forbidden')
+    return true
+  })
+})
+
+test('every writer keeps the HTTP class through the production pinned runner', async () => {
+  const configDir = prepareIsolatedGhConfigSync()
+  try {
+    const adapter = createGithubAdapter({ allowedRepositories: [repository], run: createPinnedRunner({
+      executable: '/usr/bin/gh', configDir, exec: async () => {
+        throw Object.assign(new Error('Command failed PRIVATE'), { code: 1, stdout: '', stderr: 'gh: Bad credentials (HTTP 401) PRIVATE' })
+      } }) })
+    for (const call of [
+      () => adapter.markReadyForReview(repository, 42),
+      () => adapter.convertToDraft(repository, 42),
+      () => adapter.updatePullRequestBody(repository, 42, 'body'),
+      () => adapter.enableAutoMerge(repository, 42, sha),
+    ]) {
+      await assert.rejects(call(), (error) => {
+        assert.equal(writeFailureCode(error), 'http-401')
+        assert.equal(String(error).includes('PRIVATE'), false)
+        return true
+      })
+    }
+  } finally {
+    rmSync(configDir, { recursive: true, force: true })
+  }
 })
 
 test('convert-to-draft resolves the node id then mutates, confirming draft', async () => {

@@ -240,6 +240,40 @@ test('sweep log surfaces the sanitized writeFailure class of a failed mark-ready
     `readiness ${repository}#7@${HEAD}: error (mark-ready) writeFailure=mark-ready:http-404`)
 })
 
+// End to end through runSweep and the production pinned runner (PR #169
+// review): a GraphQL permission refusal on mark-ready (HTTP 200, errors[].type
+// FORBIDDEN, gh exit 1, no HTTP code) and an HTTP 401 must each reach the log
+// line as their class — before the runner kept these facts, both said unknown.
+test('sweep log names the real write failure class through the pinned runner', async (t) => {
+  const refusal = JSON.stringify({ data: { markPullRequestReadyForReview: null },
+    errors: [{ type: 'FORBIDDEN', path: ['markPullRequestReadyForReview'], extensions: { saml_failure: false },
+      locations: [{ line: 1, column: 58 }], message: 'Resource not accessible by integration' }] })
+  for (const [stdout, stderr, expected] of [
+    [refusal, 'gh: Resource not accessible by integration', 'graphql-forbidden'],
+    ['', 'gh: Bad credentials (HTTP 401)', 'http-401'],
+  ]) {
+    const double = githubDouble({ pr: pullRequest({ pushedDate: PUSHED_AT }) })
+    const exec = async (file, args) => {
+      const query = args.find((arg) => typeof arg === 'string' && arg.startsWith('query=')) ?? ''
+      if (query.includes('ReadinessNodeId')) {
+        return { stdout: JSON.stringify({ data: { repository: { nameWithOwner: repository, pullRequest: { id: 'UFJfNw==' } } } }), stderr: '' }
+      }
+      if (query.includes('markPullRequestReadyForReview')) {
+        throw Object.assign(new Error(`Command failed: gh ${TOKEN}`), { code: 1, stdout, stderr: `${stderr} ${TOKEN}` })
+      }
+      return double.exec(file, args)
+    }
+    const policyPath = await policyFile(t, { enabled: [repository] })
+    const result = await runSweep({ policyPath, nowMs: NOW, env: JOB_ENV, exec })
+    const record = result.records[0]
+    assert.equal(record.decision, 'error', JSON.stringify(record))
+    const line = recordLine(record)
+    assert.ok(line.endsWith(` writeFailure=mark-ready:${expected}`), line)
+    assert.equal(JSON.stringify(record).includes(TOKEN), false)
+    assert.equal(line.includes(TOKEN), false)
+  }
+})
+
 test('snapshotFailure is exact for every failure class', async (t) => {
   const classes = {
     'query-transport': { snapshotError: new Error('boom') },

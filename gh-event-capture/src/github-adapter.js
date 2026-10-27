@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { GH_PIN_CODE, childFailureFacts, graphqlErrorType } from './gh-pinned.js'
 
 const execute = promisify(execFile)
 const PR_QUERY = `query BridgePullRequest($owner: String!, $name: String!, $number: Int!) {
@@ -125,13 +126,26 @@ export function writeFailureCode(error) {
   return error instanceof WriteFailureError ? error.code : 'unknown'
 }
 
-// `gh api` prints the HTTP status it received (`(HTTP NNN)` on stderr and in
-// the execFile error message). Keep only that fixed-shape number; every other
-// byte of child output stays out of logs and errors.
+// Map a failed child to its write class. The pinned runner (production)
+// already reduced child output to fixed-shape facts; a raw execFile error
+// (default runner) is reduced the same way here. Every other byte of child
+// output stays out of logs and errors.
 function writeStatusFromChild(error) {
-  const text = `${typeof error?.stderr === 'string' ? error.stderr : ''}\n${error?.message ?? ''}`
-  const match = text.match(/\(HTTP ([1-5][0-9]{2})\)/)
-  return match ? `http-${match[1]}` : 'unknown'
+  const facts = error?.code === GH_PIN_CODE ? error : childFailureFacts(error)
+  if (typeof facts?.httpStatus === 'string' && /^[1-5][0-9]{2}$/.test(facts.httpStatus)) return `http-${facts.httpStatus}`
+  return graphqlClass(facts?.graphqlErrorType) ?? 'unknown'
+}
+
+function graphqlClass(type) {
+  return typeof type === 'string' && /^[A-Z][A-Z_]{0,39}$/.test(type)
+    ? `graphql-${type.toLowerCase().replaceAll('_', '-')}` : null
+}
+
+// A runner that exits 0 with a GraphQL errors[] body still names the class
+// instead of collapsing into `unconfirmed`.
+function refuseGraphqlErrors(result, message) {
+  const type = graphqlClass(graphqlErrorType(result))
+  if (type) throw new WriteFailureError(message, type)
 }
 
 function requireValue(condition, message, code = null) {
@@ -600,6 +614,7 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
         encoding: 'utf8', shell: false, timeout: 30000, maxBuffer: 1024 * 1024,
       })
       const mutateResult = JSON.parse(mutateOut.stdout)
+      refuseGraphqlErrors(mutateResult, 'GitHub mark-ready was refused')
       if (mutateResult?.data?.markPullRequestReadyForReview?.pullRequest?.isDraft !== false) {
         throw new WriteFailureError('GitHub mark-ready did not confirm a non-draft', 'unconfirmed')
       }
@@ -633,6 +648,7 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
         encoding: 'utf8', shell: false, timeout: 30000, maxBuffer: 1024 * 1024,
       })
       const mutateResult = JSON.parse(mutateOut.stdout)
+      refuseGraphqlErrors(mutateResult, 'GitHub convert-to-draft was refused')
       if (mutateResult?.data?.convertPullRequestToDraft?.pullRequest?.isDraft !== true) {
         throw new WriteFailureError('GitHub convert-to-draft did not confirm a draft', 'unconfirmed')
       }

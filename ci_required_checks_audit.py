@@ -58,7 +58,7 @@ import sys
 import tempfile
 
 EXIT_OK, EXIT_FAIL, EXIT_UNMEASURED = 0, 1, 2
-JSON_SCHEMA_VERSION = 1
+UNMEASURABLE_SCHEMA_VERSION = 1
 
 # Job-level `if:` values that cannot skip the job. `always()` runs even after a
 # failed dependency; `!cancelled()` only skips a cancelled run, which is red or
@@ -595,7 +595,7 @@ def main(argv=None):
     def emit_unmeasurable(error_code, next_action, text_message):
         if args.json and source is not None and error_code:
             payload = {
-                "schema_version": JSON_SCHEMA_VERSION,
+                "schema_version": UNMEASURABLE_SCHEMA_VERSION,
                 "outcome": "unmeasurable",
                 "measurement_state": "unmeasured",
                 "error_code": error_code,

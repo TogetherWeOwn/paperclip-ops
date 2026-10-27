@@ -479,7 +479,7 @@ def load_workflows(directory):
         try:
             with open(path, encoding="utf-8") as fh:
                 workflows.append(parse_workflow(fh.read(), path))
-        except ParseError as exc:
+        except (ParseError, OSError, UnicodeDecodeError) as exc:
             errors[path] = str(exc)
     return workflows, errors
 
@@ -494,9 +494,37 @@ def required_from_rules(rules):
         )
     out, seen = [], set()
     for rule in rules:
+        if not isinstance(rule, dict):
+            raise InputError(
+                "rules JSON contains a rule that is not an object (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)",
+                error_code="RULES_INVALID",
+                next_action="Fix the rules JSON to be a list of branch rules and rerun the audit",
+            )
         if rule.get("type") != "required_status_checks":
             continue
-        for chk in (rule.get("parameters") or {}).get("required_status_checks") or []:
+        params = rule.get("parameters")
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            raise InputError(
+                "rules JSON has a required_status_checks rule whose parameters are not an object (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)",
+                error_code="RULES_INVALID",
+                next_action="Fix the rules JSON to be a list of branch rules and rerun the audit",
+            )
+        checks = params.get("required_status_checks") or []
+        if not isinstance(checks, list):
+            raise InputError(
+                "rules JSON has a required_status_checks rule whose checks are not a list (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)",
+                error_code="RULES_INVALID",
+                next_action="Fix the rules JSON to be a list of branch rules and rerun the audit",
+            )
+        for chk in checks:
+            if not isinstance(chk, dict) or not isinstance(chk.get("context"), str) or not chk.get("context"):
+                raise InputError(
+                    "rules JSON has a required check entry without a string context (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)",
+                    error_code="RULES_INVALID",
+                    next_action="Fix the rules JSON to be a list of branch rules and rerun the audit",
+                )
             key = (chk.get("context"), chk.get("integration_id"))
             if key not in seen:
                 seen.add(key)
@@ -551,14 +579,19 @@ def load_manifest(path):
             next_action="Fix the manifest to be valid UTF-8 JSON with a required list and rerun the audit",
         )
     req = doc.get("required")
-    if not isinstance(req, list) or any(not isinstance(r, dict) or not r.get("context") for r in req):
+    branch = doc.get("branch", "main")
+    if (
+        not isinstance(req, list)
+        or any(not isinstance(r, dict) or not isinstance(r.get("context"), str) or not r.get("context") for r in req)
+        or not isinstance(branch, str)
+    ):
         raise InputError(
             f"manifest {path}: `required` must be a list of {{context, integration_id}}",
             error_code="MANIFEST_INVALID",
             next_action="Fix the manifest to be valid UTF-8 JSON with a required list and rerun the audit",
-            branch=doc.get("branch"),
+            branch=branch if isinstance(branch, str) else None,
         )
-    return [{"context": r["context"], "integration_id": r.get("integration_id")} for r in req], doc.get("branch", "main")
+    return [{"context": r["context"], "integration_id": r.get("integration_id")} for r in req], branch
 
 
 def main(argv=None):

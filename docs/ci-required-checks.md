@@ -20,9 +20,9 @@ Omit `--json` for the text report. Helper signatures (`load_manifest`,
 With `--json`, a measured audit prints exactly one object with the existing
 top-level fields: `branch`, `required` (each `context`/`integration_id`),
 `counts` (`FAIL`/`WARN`/`INFO`) and `findings` (each `severity`, `code`,
-`context`, `detail`). An unparseable workflow is still a measured finding
-(`UNPARSEABLE`), not an input failure. Text output and finding semantics are
-unchanged.
+`context`, `detail`). An unparseable workflow — including an entry that cannot
+be opened or decoded — is still a measured finding (`UNPARSEABLE`), not an
+input failure. Text output and finding semantics are unchanged.
 
 ## Unmeasurable JSON: schema version 1
 
@@ -42,9 +42,9 @@ to stdout, nothing to stderr, and exits 2:
 | `error_code` | Cause |
 | --- | --- |
 | `MANIFEST_UNREADABLE` | manifest path missing, a directory, or not readable |
-| `MANIFEST_INVALID` | manifest is malformed/non-UTF-8 JSON, not an object, or `required` is missing/not a list of `{context, integration_id}` |
+| `MANIFEST_INVALID` | manifest is malformed/non-UTF-8 JSON, not an object, `required` is missing/not a list of `{context, integration_id}` with string contexts, or `branch` is not a string |
 | `RULES_UNREADABLE` | rules path missing, a directory, or not readable |
-| `RULES_INVALID` | rules document is malformed/non-UTF-8 JSON or not a list of branch rules |
+| `RULES_INVALID` | rules document is malformed/non-UTF-8 JSON, not a list of branch rules, or a nested rule/parameters/check entry is the wrong shape |
 | `WORKFLOWS_REQUIRED` | `--workflows` omitted with `--manifest`/`--rules-json` |
 | `NO_REQUIRED_CHECKS` | the input read cleanly but names no required status checks |
 | `NO_WORKFLOWS` | the workflow directory cannot be read, or contains no workflow files and no parse errors |

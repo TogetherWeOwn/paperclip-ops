@@ -1005,7 +1005,7 @@ jobs:
       # unmeasurable JSON, exits): docs/ci-required-checks.md.
       #
       - name: required checks all have a producing job
-        run: python3 -m unittest -v test_ci_required_checks_audit.py test_required_checks_unmeasurable_json_acceptance.py
+        run: python3 -m unittest -v test_ci_required_checks_audit.py test_required_checks_unmeasurable_json_acceptance.py test_ci_required_checks_nested_input.py
 
       # case_d5bc7950. The change-gating contract itself is load-bearing: a heavy
       # job whose `needs: changes` is deleted while its area `if:` stays would

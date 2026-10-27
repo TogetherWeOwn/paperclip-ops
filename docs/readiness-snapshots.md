@@ -22,6 +22,10 @@ push age to decide readiness.
   other producers' passes and entries without provenance keep the conservative
   merge unchanged.
 - Strict closeout readers retain their push-age and duplicate-name guards.
+  The shared query's provenance fields (`startedAt`, `checkSuite { app { slug } }`)
+  are parsed for readiness only: closeout snapshots keep their exact check
+  shape and never fail a read on those fields. They add no connection, so the
+  query's rate-limit cost is unchanged.
   Lifecycle, identity, head-window, label and rollup completeness guards remain
   in force for both readers. Snapshot failure causes no ruleset read or write,
   remains a counted error, and is never retried within the pass.

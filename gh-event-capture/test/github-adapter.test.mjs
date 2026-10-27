@@ -488,6 +488,85 @@ test('readiness snapshot supersedes a cancelled run only by a later same-produce
   }
 })
 
+test('closeout snapshot ignores the readiness-only provenance fields the shared query adds', async () => {
+  // SNAPSHOT_QUERY is shared with getCloseoutSnapshot. The startedAt and
+  // checkSuite{app{slug}} selections exist only for the readiness supersede
+  // rule; closeout must parse, shape and classify exactly as before them.
+  const at = (sec) => new Date(pushedMs + sec * 1000).toISOString()
+  const withProvenance = (node, provenance) => ({ ...node, ...provenance })
+  const legacyNodes = [
+    checkRun('ci-ok', 'COMPLETED', 'SUCCESS', at(30)),
+    checkRun('slow', 'IN_PROGRESS'),
+    checkRun('queued', 'QUEUED'),
+    statusCtx('gitleaks', 'SUCCESS', at(40)),
+  ]
+  const expected = [
+    { name: 'ci-ok', status: 'completed', conclusion: 'success', completedMs: pushedMs + 30_000 },
+    { name: 'slow', status: 'in_progress' },
+    { name: 'queued', status: 'queued' },
+    { name: 'gitleaks', status: 'completed', conclusion: 'success', completedMs: pushedMs + 40_000 },
+  ]
+  const read = async (nodes) => {
+    const { adapter, calls } = fake([snapEnvelope(rollupPr(nodes))])
+    const snapshot = await adapter.getCloseoutSnapshot(repository, 42, { nowMs: pushedMs + 3_600_000 })
+    assert.equal(calls.length, 1)
+    return snapshot
+  }
+  const baseline = await read(legacyNodes)
+  assert.deepEqual(baseline.checks, expected)
+
+  // Well-formed provenance, missing provenance and oddly shaped provenance
+  // (including an unparseable start time) all read byte-identically: closeout
+  // never parsed these fields before and must not start failing reads on them.
+  const provenances = [
+    { startedAt: at(10), checkSuite: { app: { slug: 'github-actions' } } },
+    { startedAt: null, checkSuite: null },
+    { startedAt: 'not-a-date', checkSuite: { app: null } },
+    { startedAt: 12345, checkSuite: { app: { slug: 7 } } },
+  ]
+  for (const provenance of provenances) {
+    const nodes = legacyNodes.map((node) => node.__typename === 'CheckRun' ? withProvenance(node, provenance) : node)
+    const snapshot = await read(nodes)
+    assert.deepEqual(snapshot, baseline, `closeout shape changed for ${JSON.stringify(provenance)}`)
+    for (const check of snapshot.checks) {
+      assert.ok(!Object.hasOwn(check, 'startedMs') && !Object.hasOwn(check, 'producer'))
+    }
+    const policy = closeoutPolicy({ requiredChecks: ['ci-ok', 'gitleaks'], missingGraceMs: 600_000, stalledGraceMs: 600_000 })
+    assert.deepEqual(classifyCloseout({ ...snapshot, reviewDecision: 'APPROVED' }, policy),
+      classifyCloseout({ ...baseline, reviewDecision: 'APPROVED' }, policy))
+  }
+
+  // The strict duplicate-name guard is untouched: a cancelled run plus a
+  // later same-producer pass is exactly what readiness supersedes, and
+  // closeout still refuses to read it.
+  const producer = { checkSuite: { app: { slug: 'github-actions' } } }
+  const { adapter } = fake([snapEnvelope(rollupPr([
+    withProvenance(checkRun('pr-lint', 'COMPLETED', 'CANCELLED', at(76)), { startedAt: at(60), ...producer }),
+    withProvenance(checkRun('pr-lint', 'COMPLETED', 'SUCCESS', at(102)), { startedAt: at(79), ...producer }),
+  ]))])
+  await assert.rejects(adapter.getCloseoutSnapshot(repository, 42, { nowMs: pushedMs + 3_600_000 }),
+    /duplicate check names/)
+})
+
+test('snapshot query provenance adds no connections and stays inside checks:read', async () => {
+  // GraphQL rate-limit cost is driven by connections (first/last) and their
+  // sizes. The provenance selection must add only a scalar and plain nested
+  // objects, so closeout and readiness reads cost what they cost before.
+  const { adapter, calls } = fake([snapEnvelope(closeoutPr())])
+  await adapter.getCloseoutSnapshot(repository, 42, { nowMs: pushedMs + 1 })
+  const query = calls[0][1].find((arg) => arg.startsWith('query=')).slice('query='.length)
+  assert.deepEqual(query.match(/\w+\((first|last): \d+\)/g),
+    ['labels(first: 100)', 'commits(last: 10)', 'contexts(first: 100)'])
+  const checkRunSelection = query.match(/\.\.\. on CheckRun \{([^]*?)\}\s*\.\.\. on StatusContext/)[1].replace(/\s+/g, ' ').trim()
+  assert.equal(checkRunSelection, 'name status conclusion startedAt completedAt checkSuite { app { slug } }')
+  // The sweep job token carries checks/statuses/contents/pull-requests only.
+  // The workflow run behind a suite needs an Actions grant it does not have,
+  // so the query must never reach for it (or any other suite connection).
+  for (const forbidden of ['workflowRun', 'checkRuns', 'commit {', 'repository {', 'owner {']) {
+    assert.ok(!checkRunSelection.includes(forbidden), `check run selection reaches ${forbidden}`)
+  }
+})
+
 test('required checks merge legacy contexts and checks, sorted and deduped', async () => {
   const protection = { required_status_checks: { strict: true,
     contexts: ['b-check', 'a-check'], checks: [{ context: 'c-check', app_id: 123 }, { context: 'a-check', app_id: 456 }] } }

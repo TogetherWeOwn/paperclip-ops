@@ -228,17 +228,17 @@ function normalizeCheck(node) {
       // Forward-compat: conclusions pass through lowercased (TIMED_OUT ->
       // timed_out). Unknown ones are closeout's call, which reads them as
       // pending rather than guessing.
-      return { name: node.name, status: 'completed', conclusion: node.conclusion.toLowerCase(), completedMs: parseTime(node.completedAt, 'completed check run has no completion time'), ...provenanceOf(node) }
+      return { name: node.name, status: 'completed', conclusion: node.conclusion.toLowerCase(), completedMs: parseTime(node.completedAt, 'completed check run has no completion time') }
     }
     requireValue(node.status === 'IN_PROGRESS' || RUN_QUEUED.has(node.status), 'GitHub check run status is unknown')
-    return { name: node.name, status: node.status === 'IN_PROGRESS' ? 'in_progress' : 'queued', ...provenanceOf(node) }
+    return { name: node.name, status: node.status === 'IN_PROGRESS' ? 'in_progress' : 'queued' }
   }
   if (node.__typename === 'StatusContext') {
     requireValue(typeof node.context === 'string' && node.context.length > 0, 'GitHub status has no context name')
-    if (node.state === 'SUCCESS') return { name: node.context, status: 'completed', conclusion: 'success', completedMs: parseTime(node.createdAt, 'completed status has no creation time'), ...provenanceOf(node) }
-    if (node.state === 'ERROR' || node.state === 'FAILURE') return { name: node.context, status: 'completed', conclusion: 'failure', completedMs: parseTime(node.createdAt, 'completed status has no creation time'), ...provenanceOf(node) }
+    if (node.state === 'SUCCESS') return { name: node.context, status: 'completed', conclusion: 'success', completedMs: parseTime(node.createdAt, 'completed status has no creation time') }
+    if (node.state === 'ERROR' || node.state === 'FAILURE') return { name: node.context, status: 'completed', conclusion: 'failure', completedMs: parseTime(node.createdAt, 'completed status has no creation time') }
     requireValue(node.state === 'EXPECTED' || node.state === 'PENDING', 'GitHub status state is unknown')
-    return { name: node.context, status: node.state === 'PENDING' ? 'in_progress' : 'queued', ...provenanceOf(node) }
+    return { name: node.context, status: node.state === 'PENDING' ? 'in_progress' : 'queued' }
   }
   throw new Error('GitHub check entry type is unknown')
 }
@@ -315,7 +315,9 @@ function normalizeSnapshot(pr, repository, number, nowMs, readiness = false) {
   for (const node of rollup?.contexts?.nodes ?? []) {
     let check
     try {
-      check = normalizeCheck(node)
+      // Provenance is readiness-only: closeout never reads it, so a closeout
+      // read keeps its exact pre-provenance shape and failure surface.
+      check = readiness ? { ...normalizeCheck(node), ...provenanceOf(node) } : normalizeCheck(node)
     } catch (error) {
       if (!readiness) throw error
       throw new SnapshotReadError('GitHub check entry is malformed', 'check-malformed')

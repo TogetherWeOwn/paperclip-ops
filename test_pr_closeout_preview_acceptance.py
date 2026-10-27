@@ -288,7 +288,7 @@ class DryRunHelp(unittest.TestCase):
     def test_help_names_dry_run_and_nonpersistence(self):
         code, out, err, exit_code = run_cli(["--help"])
         self.assertEqual(exit_code, 0, f"--help must exit 0; stderr={err!r:.400}")
-        text = out.lower()
+        text = " ".join(out.lower().split())
         self.assertIn("--dry-run", text, "help must document the explicit --dry-run flag")
         for token in ("history", "deadline", "diagnostic"):
             self.assertIn(token, text, f"help must say preview {token} wording")

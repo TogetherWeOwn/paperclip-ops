@@ -155,8 +155,9 @@ direct child is reaped. The step fails (exit 1) with the fixed `Squawk timed out
 diagnostic followed
 by any safe tags collected within the same 2000-character bound. Text-mode
 execution is unchanged. `SQUAWK_TIMEOUT_SECONDS` overrides the deadline for
-one invocation (seconds, must be positive; a missing, non-numeric or
-non-positive value keeps the 60-second default).
+one invocation (seconds, must be a finite positive number up to 1000000;
+a missing, non-numeric, non-positive, non-finite or oversized value keeps
+the 60-second default).
 
 Without squawk, each step is `skip`: normal mode can pass, while `--strict`
 refuses with `error.code: squawk-missing`. Other refusal codes are

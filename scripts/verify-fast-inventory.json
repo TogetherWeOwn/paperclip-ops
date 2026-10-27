@@ -8,6 +8,7 @@
     "node": {"probe": {"which": "node"}},
     "python3": {"probe": {"which": "python3"}},
     "pyyaml": {"probe": {"argv": ["python3", "-B", "-c", "import yaml; assert yaml.__version__ == '6.0.3'"]}},
+    "timeout": {"probe": {"which": "timeout"}},
     "toolkit-vendored-files": {"probe": {"argv": ["python3", "verification/offline_ci_contract.py", "--check-restored"]}},
     "typescript@5.9.3": {"probe": {"argv": ["node", "-e", "try{require.resolve('typescript/bin/tsc');var fs=require('fs');var m=require.resolve('typescript/package.json');if((fs.statSync(m).mode&0o444)===0)process.exit(1);if(JSON.parse(fs.readFileSync(m,'utf8')).version==='5.9.3')process.exit(0);process.exit(1)}catch(e){process.exit(1)}"]}}
   },
@@ -92,7 +93,7 @@
     {"id": "migration-timeout-preamble", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_timeout_preamble.sh"]},
     {"id": "migration-squawk", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_squawk.sh"]},
     {"id": "migration-squawk-json", "tier": "fast", "prerequisites": ["bash", "jq", "python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_squawk_json.sh"]},
-    {"id": "migration-squawk-json-guarantees", "tier": "fast", "prerequisites": ["bash", "jq", "python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_squawk_json_guarantees.sh"]},
+    {"id": "migration-squawk-json-guarantees", "tier": "fast", "prerequisites": ["bash", "jq", "python3", "timeout", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_squawk_json_guarantees.sh"]},
     {"id": "migration-rehearsal", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_migration_rehearsal.sh"]},
     {"id": "migration-drift-gate", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_migration_drift_gate"]},
     {"id": "migration-evidence-ax", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_migration_evidence_ax"]},

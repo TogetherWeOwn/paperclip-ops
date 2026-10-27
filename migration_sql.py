@@ -2,6 +2,7 @@
 """Small PostgreSQL-aware statement lexer shared by migration gates."""
 import codecs
 import json
+import math
 import os
 import re
 import selectors
@@ -161,20 +162,25 @@ def check(path):
 SQUAWK_SCHEMA_VERSION = 1
 DIAGNOSTIC_LIMIT = 2000
 SQUAWK_TIMEOUT_SECONDS = 60
+# Selector timeouts overflow past ~1e9; 1e6 is verified safe and absurdly
+# generous for one linter invocation.
+SQUAWK_TIMEOUT_MAX_SECONDS = 1000000
 
 
 def squawk_timeout_seconds():
     """Per-invocation JSON-mode Squawk deadline in seconds.
 
-    SQUAWK_TIMEOUT_SECONDS may override the default; missing, non-numeric
-    and non-positive values keep it, so a mis-set environment can never
-    disable or invert the deadline.
+    SQUAWK_TIMEOUT_SECONDS may override the default; missing, non-numeric,
+    non-positive, non-finite and oversized values keep it, so a mis-set
+    environment can never disable, invert or crash the deadline.
     """
     try:
         value = float(os.environ.get("SQUAWK_TIMEOUT_SECONDS", SQUAWK_TIMEOUT_SECONDS))
     except ValueError:
         return SQUAWK_TIMEOUT_SECONDS
-    return value if value > 0 else SQUAWK_TIMEOUT_SECONDS
+    if not math.isfinite(value) or value <= 0 or value > SQUAWK_TIMEOUT_MAX_SECONDS:
+        return SQUAWK_TIMEOUT_SECONDS
+    return value
 
 
 def emit_gate_json(files, error=None):

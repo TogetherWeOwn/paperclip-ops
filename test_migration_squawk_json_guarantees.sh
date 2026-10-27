@@ -8,12 +8,16 @@
 #   1. The JSON-mode Squawk deadline: a hung linter is killed after
 #      SQUAWK_TIMEOUT_SECONDS (default 60) and the step fails with the fixed
 #      "Squawk timed out." diagnostic -- even when the direct child already
-#      exited 0 and only a descendant holds the output pipe.
+#      exited 0 and only a descendant holds the output pipe. Only finite
+#      positive overrides up to 1000000 apply; anything else keeps 60, and
+#      the gate still prints exactly one JSON document.
 #   2. The tag-only diagnostics projection: SQL excerpts and credential-like
 #      prose from linter output never reach the JSON; tagless output becomes
 #      the fixed "[unstructured diagnostics omitted]" marker.
-#   3. The directory-discovery refusal envelopes: a missing, non-directory
-#      or unreadable migrations dir refuses with a stable code and exit 2.
+#   3. The refusal envelopes: a missing, non-directory, unreadable,
+#      unstatable or empty migrations dir, an unreadable file, a
+#      non-executable squawk bin and an unreadable squawk config each
+#      refuse with a stable code and exit 2.
 #   4. The JSON missing-option-value guard: --migrations-dir/--squawk-bin/
 #      --squawk-config without a value refuse as invalid-input, exit 2.
 #   5. JSON-mode --config forwarding: the configured squawk config reaches
@@ -109,6 +113,10 @@ cat > "$WORK/bin/squawk-argv" <<FAKE
 printf '%s\n' "\$@" > "$WORK/argv.txt"
 exit 0
 FAKE
+cat > "$WORK/bin/squawk-instant" <<'FAKE'
+#!/usr/bin/env bash
+exit 0
+FAKE
 chmod +x "$WORK"/bin/squawk-*
 echo "# probe config" > "$WORK/custom.toml"
 
@@ -177,7 +185,8 @@ jassert '.files[0].squawk.diagnostics | contains("ban-drop-column")' "$OUT/holde
   "the heir-held run keeps the tag printed before the exit"
 wait_dead "$WORK/holder.pid" "the pipe-holding descendant is reaped with the gate"
 
-# 4. The deadline override parses strictly: unset/bogus/empty/non-positive keep 60.
+# 4. The deadline override parses strictly: unset/bogus/empty/non-positive/
+#    non-finite/oversized keep 60; only finite positives within the cap apply.
 timeout_probe() {
   if env SQUAWK_TIMEOUT_SECONDS="$1" python3 -c \
     'import sys; sys.path.insert(0, sys.argv[1]); import migration_sql; sys.exit(0 if migration_sql.squawk_timeout_seconds() == float(sys.argv[2]) else 1)' \
@@ -193,12 +202,32 @@ timeout_probe bogus 60 "a non-numeric override keeps the 60s default"
 timeout_probe '' 60 "an empty override keeps the 60s default"
 timeout_probe 0 60 "a zero override keeps the 60s default"
 timeout_probe -3 60 "a negative override keeps the 60s default"
+timeout_probe inf 60 "an infinite override keeps the 60s default"
+timeout_probe 1e999 60 "an overflowing override keeps the 60s default"
+timeout_probe 1e9 60 "an oversized override keeps the 60s default"
+timeout_probe 3600 3600 "a large finite override still sets the deadline"
 if env -u SQUAWK_TIMEOUT_SECONDS python3 -c \
   'import sys; sys.path.insert(0, sys.argv[1]); import migration_sql; sys.exit(0 if migration_sql.squawk_timeout_seconds() == 60 else 1)' \
   "$HERE"; then
   ok "an unset override keeps the 60s default"
 else
   bad "an unset override keeps the 60s default"
+fi
+
+# An infinite override must still yield one JSON document, never a traceback.
+rc=0
+SQUAWK_TIMEOUT_SECONDS=inf "$GATE" --format json --squawk-bin "$WORK/bin/squawk-instant" \
+  "$WORK/migs/0100_clean.sql" >"$OUT/inftimeout.json" 2>"$ERR/inftimeout.txt" || rc=$?
+[[ "$rc" -eq 0 ]] && ok "infinite-timeout json run exits 0" || bad "infinite-timeout json run exits 0 (got $rc)"
+single_doc "$OUT/inftimeout.json" \
+  && ok "infinite-timeout run prints exactly one JSON document" \
+  || bad "infinite-timeout run prints exactly one JSON document"
+jassert '.files[0].squawk.status == "pass"' "$OUT/inftimeout.json" \
+  "infinite-timeout squawk step reads pass"
+if [[ -s "$ERR/inftimeout.txt" ]]; then
+  bad "infinite-timeout run keeps stderr empty"
+else
+  ok "infinite-timeout run keeps stderr empty"
 fi
 
 # 5. Leaky linter output: tags pass, SQL and credential prose never do.
@@ -278,6 +307,42 @@ else
     "unreadable file pins code file-unreadable"
 fi
 chmod 644 "$WORK/noread.sql"
+
+mkdir -p "$WORK/empty"
+rc=0
+"$GATE" --format json --migrations-dir "$WORK/empty" >"$OUT/empty.json" 2>/dev/null || rc=$?
+[[ "$rc" -eq 2 ]] && ok "empty dir refuses with exit 2" || bad "empty dir refuses with exit 2 (got $rc)"
+single_doc "$OUT/empty.json" \
+  && ok "empty-dir refusal is one JSON document" \
+  || bad "empty-dir refusal is one JSON document"
+jassert '.verdict == "refused" and .error.code == "migrations-empty"' "$OUT/empty.json" \
+  "an empty dir pins code migrations-empty"
+
+# No execute bit at all refuses even for root, so this needs no uid skip.
+printf '#!/usr/bin/env bash\nexit 0\n' > "$WORK/notexec"
+chmod 644 "$WORK/notexec"
+rc=0
+"$GATE" --format json --squawk-bin "$WORK/notexec" \
+  "$WORK/migs/0100_clean.sql" >"$OUT/notexec.json" 2>/dev/null || rc=$?
+[[ "$rc" -eq 2 ]] && ok "non-executable squawk bin refuses with exit 2" || bad "non-executable squawk bin refuses with exit 2 (got $rc)"
+jassert '.verdict == "refused" and .error.code == "squawk-not-executable"' "$OUT/notexec.json" \
+  "a non-executable bin pins code squawk-not-executable"
+
+rc=0
+"$GATE" --format json --squawk-config "$WORK/no-such.toml" \
+  "$WORK/migs/0100_clean.sql" >"$OUT/nocfgfile.json" 2>/dev/null || rc=$?
+[[ "$rc" -eq 2 ]] && ok "missing squawk config refuses with exit 2" || bad "missing squawk config refuses with exit 2 (got $rc)"
+jassert '.verdict == "refused" and .error.code == "squawk-config-unreadable"' "$OUT/nocfgfile.json" \
+  "a missing config pins code squawk-config-unreadable"
+
+# A stat-level failure (overlong name) exercises the directory-stat arm
+# without permission bits, so it holds for every uid.
+LONGDIR="$WORK/$(python3 -c 'print("d" * 300)')"
+rc=0
+"$GATE" --format json --migrations-dir "$LONGDIR" >"$OUT/longdir.json" 2>/dev/null || rc=$?
+[[ "$rc" -eq 2 ]] && ok "unstatable dir refuses with exit 2" || bad "unstatable dir refuses with exit 2 (got $rc)"
+jassert '.verdict == "refused" and .error.code == "migrations-dir-unreadable"' "$OUT/longdir.json" \
+  "an unstatable dir pins code migrations-dir-unreadable"
 
 # 8. A missing option value in JSON mode refuses as invalid-input, never prose.
 rc=0

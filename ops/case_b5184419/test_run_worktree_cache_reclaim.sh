@@ -41,11 +41,6 @@ env = {"PATH": os.environ["PATH"], "HOME": "/nonexistent"}
 for n in names:
     if n in os.environ:
         env[n] = os.environ[n]
-# Harness-only bridge: the wrapper never forwards the allowlist test hatch into
-# the container; mirror the outer value here so the REAL core (section 7) can
-# run against an unresolvable base.
-if "PAPERCLIP_API_ALLOWLIST_TEST" in os.environ:
-    env["PAPERCLIP_API_ALLOWLIST_TEST"] = os.environ["PAPERCLIP_API_ALLOWLIST_TEST"]
 os.execvpe(cmd[0], cmd, env)
 PY
 chmod +x "$FAKE_DOCKER"
@@ -156,6 +151,13 @@ for bad in "a b" "-x" "--privileged" "x;y" '$(id)' ""; do
     fail "container name '$bad' was accepted: rc=$rc"
   fi
 done
+
+rc=0; run_wrapper "$WORK/rr" "${BASE[@]}" PAPERCLIP_WORKTREE_CACHE_RECLAIM_REGISTRY=etc/host-timer-registry.json || rc=$?
+if [[ $rc -eq 2 ]] && grep -q "absolute path" "$WORK/rr.err" && [[ ! -s "$WORK/docker.log" ]]; then
+  ok "a relative registry override is refused before the engine runs"
+else
+  fail "relative registry accepted: rc=$rc err=$(cat "$WORK/rr.err")"
+fi
 
 for bad in "0" "-1" "abc" "1.5"; do
   rc=0; run_wrapper "$WORK/o3" "${BASE[@]}" "PAPERCLIP_WORKTREE_CACHE_RECLAIM_BOUND_SECONDS=$bad" || rc=$?
@@ -309,6 +311,14 @@ i = argv.index("paperclip-server")
 assert argv[i + 1:i + 7] == ["timeout", "--signal=TERM", "--kill-after=30s", "1500", "python3", "-c"], argv[i + 1:i + 7]
 PY
 
+run_wrapper "$WORK/b2" "${BASE[@]}" PAPERCLIP_WORKTREE_CACHE_RECLAIM_BOUND_SECONDS=7 || true
+python3 - "$WORK/docker.log" <<'PY' && ok "a custom bound is forwarded to the in-container timeout" || fail "custom bound not forwarded"
+import json, sys
+argv = json.loads(open(sys.argv[1]).readline())
+i = argv.index("paperclip-server")
+assert argv[i + 1:i + 5] == ["timeout", "--signal=TERM", "--kill-after=30s", "7"], argv[i + 1:i + 5]
+PY
+
 for code in 1 2 3; do
   make_release "$WORK/rel$code" "$code"
   rc=0; RELEASE="$WORK/rel$code" run_wrapper "$WORK/x$code" "${BASE[@]}" || rc=$?
@@ -396,7 +406,8 @@ env -i PATH="$PATH" HOME="$WORK" FAKE_DOCKER_LOG="$WORK/docker.log" \
   PAPERCLIP_API_ALLOWLIST_TEST=1 PAPERCLIP_API_KEY=k PAPERCLIP_COMPANY_ID=c \
   bash "$WRAPPER" > "$WORK/real2.out" 2> "$WORK/real2.err" || rc=$?
 # The fixture registry has no matching entry: the gate must dry-run, never apply.
-if grep -q "^mode: dry-run" "$WORK/real2.err" && ! grep -q "^mode: apply" "$WORK/real2.err"; then
+if grep -q "^mode: dry-run" "$WORK/real2.err" && ! grep -q "^mode: apply" "$WORK/real2.err" \
+    && grep -q "URLError" "$WORK/real2.err"; then
   ok "the real gate reads the bundled registry and dry-runs when the entry is not an active writer"
 else
   fail "real gated run: rc=$rc err=$(head -c 600 "$WORK/real2.err")"
@@ -419,6 +430,33 @@ if [[ $rc -ne 0 ]] && grep -q "^mode: apply (registry entry" "$WORK/real3.err" &
 else
   fail "active registry run: rc=$rc err=$(head -c 400 "$WORK/real3.err")"
 fi
+
+# The in-container consumer of the delegation: no hatch, no /etc/paperclip. The
+# core accepts the forwarded base only on exact equality, else it fails closed.
+CORE="$REPO/ops/case_b5184419/terminal_worktree_cache_reclaim.py"
+for case in match mismatch unset; do
+  case $case in
+    match) dv=http://127.0.0.1:1 ;;
+    mismatch) dv=http://127.0.0.1:2 ;;
+    unset) dv= ;;
+  esac
+  mkdir -p "$WORK/dg-$case"
+  rc=0
+  env -i PATH="$PATH" HOME="$WORK" PAPERCLIP_API_URL=http://127.0.0.1:1 PAPERCLIP_API_KEY=k \
+    PAPERCLIP_COMPANY_ID=c ${dv:+PAPERCLIP_API_ALLOWLIST_CHECKED_BASE=$dv} \
+    python3 "$CORE" --out-dir "$WORK/dg-$case" > "$WORK/dg-$case.out" 2> "$WORK/dg-$case.err" || rc=$?
+  if [[ $case == match ]]; then
+    if [[ $rc -ne 0 && $rc -ne 2 ]] && grep -q "URLError" "$WORK/dg-$case.err"; then
+      ok "the core honors an exactly matching delegated base (reaches the API)"
+    else
+      fail "delegation not honored: rc=$rc err=$(head -c 400 "$WORK/dg-$case.err")"
+    fi
+  elif [[ $rc -eq 2 ]] && grep -q "allowlist" "$WORK/dg-$case.err"; then
+    ok "the core refuses a $case delegated base (fails closed)"
+  else
+    fail "$case delegation accepted: rc=$rc err=$(head -c 400 "$WORK/dg-$case.err")"
+  fi
+done
 
 # ---- 8. static properties of the wrapper bytes ---------------------------
 exec_lines=$(grep -v '^[[:space:]]*#' "$WRAPPER")

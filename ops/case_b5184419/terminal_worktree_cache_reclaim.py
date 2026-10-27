@@ -1172,7 +1172,12 @@ def main(argv=None, run=None, api=None):
         if not (base and company and key):
             raise ReclaimError("API env is required even for dry-run "
                                "(card join reads the live board)")
-        api = ApiClient(base, company, key)
+        # Host-delegated verdict (run-worktree-cache-reclaim.sh): ApiClient
+        # honors it only on exact equality with the base, else it runs the
+        # normal check and fails closed.
+        api = ApiClient(base, company, key,
+                        allowlist_checked_base=os.environ.get(
+                            "PAPERCLIP_API_ALLOWLIST_CHECKED_BASE"))
     return run_tool(apply, run, api, out_dir, opts.root,
                     opts.recent_minutes, opts.workers,
                     mode_why=why, registry_gate=opts.registry_gate,

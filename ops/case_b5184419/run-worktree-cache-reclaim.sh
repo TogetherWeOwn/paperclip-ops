@@ -87,6 +87,8 @@ esac
   || refuse "PAPERCLIP_WORKTREE_CACHE_RECLAIM_BOUND_SECONDS='$BOUND_SECONDS' is not a positive integer"
 # The registry is only consulted by the gated run, but a host that cannot supply
 # it is misconfigured: refuse in both modes so a dry-run proves the real setup.
+[[ "$REGISTRY" == /* ]] \
+  || refuse "PAPERCLIP_WORKTREE_CACHE_RECLAIM_REGISTRY must be an absolute path: $REGISTRY"
 [[ "$(basename -- "$REGISTRY")" == "host-timer-registry.json" ]] \
   || refuse "PAPERCLIP_WORKTREE_CACHE_RECLAIM_REGISTRY must name a file called host-timer-registry.json"
 [[ -f "$REGISTRY" && -r "$REGISTRY" ]] \

@@ -4,6 +4,7 @@
   "prerequisite_catalog": {
     "bash": {"probe": {"which": "bash"}},
     "git": {"probe": {"which": "git"}},
+    "jq": {"probe": {"which": "jq"}},
     "node": {"probe": {"which": "node"}},
     "python3": {"probe": {"which": "python3"}},
     "pyyaml": {"probe": {"argv": ["python3", "-B", "-c", "import yaml; assert yaml.__version__ == '6.0.3'"]}},
@@ -39,6 +40,7 @@
     {"id": "workflow-job-permissions-acceptance", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_check_workflow_job_permissions"]},
     {"id": "readme-script-index", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_readme_script_index.sh"]},
     {"id": "public-comment-hygiene", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_public_comment_hygiene_gate.sh"]},
+    {"id": "public-comment-hygiene-json", "tier": "fast", "prerequisites": ["bash", "jq", "python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_public_comment_hygiene_json.sh"]},
     {"id": "acceptance-transport", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_acceptance_transport.sh"]},
     {"id": "upstream-prepush-hook", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_upstream_prepush_hook.sh"]},
     {"id": "cliproxy-mgmt-recon", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_cliproxy_mgmt_recon_argv.sh"]},

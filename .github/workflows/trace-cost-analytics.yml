@@ -25,4 +25,4 @@ jobs:
         with:
           node-version-file: '.nvmrc'
       - name: Run passive analytics acceptance tests
-        run: node --test plugins/trace-cost-analytics/tests/analytics.test.mjs
+        run: node --test plugins/trace-cost-analytics/tests/analytics.test.mjs plugins/trace-cost-analytics/tests/worker.test.mjs

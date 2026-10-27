@@ -350,7 +350,9 @@
     "trace correlator suite:1",
     "Dispatch sweep failure visibility acceptance:1",
     "native runner coverage classifier suite:1",
-    "AX metric contract suites:1"
+    "AX metric contract suites:1",
+    "shell-substitution JSON acceptance:1",
+    "public-comment hygiene JSON suite:1"
   ],
   "retained": [
     {
@@ -800,7 +802,7 @@
     },
     {
       "name": "admitted-PR closeout ledger suite",
-      "definition_sha256": "b7e419931e56f55a7963e2de7b56de99e96d1f138766df81cf386a139c323a9b",
+      "definition_sha256": "1ff1324f6873861927278c3a8268dfc06a221af1a9e9b8e0f53f0b293b1c36b2",
       "id": "admitted-PR closeout ledger suite:1"
     },
     {
@@ -1790,7 +1792,7 @@
     },
     {
       "name": "quality-gate helper suites",
-      "definition_sha256": "eff2ed20e1d4d438acec4567c8f59687ae4d72049050fa12122563c0a3021b65",
+      "definition_sha256": "9b9c8ed5e8b4dca34886c15a8b2cc2c18fe4396a84080f2024240df67def650a",
       "id": "quality-gate helper suites:1"
     },
     {
@@ -1870,7 +1872,7 @@
     },
     {
       "name": "orphan-suite ratchet fixtures suite",
-      "definition_sha256": "6a78bd74cf80ae987f05bdf0de08f83fd58cbc9b94d89517c714db382c093835",
+      "definition_sha256": "030caee89c9f36d35e1fe2b39ce82c64f1f119c58eb91c2ed5c0f3b9854f86dd",
       "id": "orphan-suite ratchet fixtures suite:1"
     },
     {
@@ -1982,6 +1984,16 @@
       "name": "AX metric contract suites",
       "definition_sha256": "ceff81cd977e688ef434a02945f04141390fe205df5b1f5b7df9e29a15826707",
       "id": "AX metric contract suites:1"
+    },
+    {
+      "name": "shell-substitution JSON acceptance",
+      "definition_sha256": "335f88370d859cfd2908fe5ea77a41d6a03b8cc8ca84ccbcabeca304a04042d8",
+      "id": "shell-substitution JSON acceptance:1"
+    },
+    {
+      "name": "public-comment hygiene JSON suite",
+      "definition_sha256": "60125ad01be83d0c4323b4495f6a94511b5edc43583305b1bb20a1987ede42bf",
+      "id": "public-comment hygiene JSON suite:1"
     }
   ],
   "removed": [

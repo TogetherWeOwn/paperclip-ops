@@ -190,6 +190,47 @@ else
   fail "missing shell allowlist lib not refused: rc=$rc"
 fi
 
+# Default engine selection (no PAPERCLIP_WORKTREE_PRUNE_ENGINE): the first executable of the
+# candidate list wins, podman first. Marker-writing shims show which one actually ran.
+for name in podman docker; do
+  printf '#!/bin/sh\n: > "%s/ran-%s"\nexec "%s" "$@"\n' "$WORK" "$name" "$FAKE_DOCKER" > "$WORK/shim-$name"
+  chmod +x "$WORK/shim-$name"
+done
+CANDIDATES="$WORK/shim-podman $WORK/shim-docker"
+rm -f "$WORK"/ran-*
+rc=0; run_wrapper "$WORK/e1" "${BASE[@]}" PAPERCLIP_WORKTREE_PRUNE_ENGINE= \
+  PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES="$CANDIDATES" || rc=$?
+if [[ $rc -eq 0 && -e "$WORK/ran-podman" && ! -e "$WORK/ran-docker" ]]; then
+  ok "default engine is podman when both are installed"
+else
+  fail "podman-first selection wrong: rc=$rc err=$(cat "$WORK/e1.err")"
+fi
+rm -f "$WORK"/ran-*
+rc=0; run_wrapper "$WORK/e2" "${BASE[@]}" PAPERCLIP_WORKTREE_PRUNE_ENGINE= \
+  PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES="$WORK/no-such-podman $WORK/shim-docker" || rc=$?
+if [[ $rc -eq 0 && -e "$WORK/ran-docker" && ! -e "$WORK/ran-podman" ]]; then
+  ok "a docker-only host falls back to docker"
+else
+  fail "docker fallback wrong: rc=$rc err=$(cat "$WORK/e2.err")"
+fi
+rm -f "$WORK"/ran-*
+rc=0; run_wrapper "$WORK/e3" "${BASE[@]}" PAPERCLIP_WORKTREE_PRUNE_ENGINE= \
+  PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES="$WORK/no-such-podman $WORK/no-such-docker" || rc=$?
+if [[ $rc -eq 2 ]] && grep -q "container engine is not executable: $WORK/no-such-docker" "$WORK/e3.err" \
+    && [[ ! -s "$WORK/docker.log" ]]; then
+  ok "a host with neither engine refuses before anything runs"
+else
+  fail "neither-engine not refused: rc=$rc err=$(cat "$WORK/e3.err")"
+fi
+rm -f "$WORK"/ran-*
+rc=0; run_wrapper "$WORK/e4" "${BASE[@]}" PAPERCLIP_WORKTREE_PRUNE_ENGINE="$WORK/shim-docker" \
+  PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES="$WORK/shim-podman" || rc=$?
+if [[ $rc -eq 0 && -e "$WORK/ran-docker" && ! -e "$WORK/ran-podman" ]]; then
+  ok "an explicit engine override wins over the candidate list"
+else
+  fail "override precedence wrong: rc=$rc err=$(cat "$WORK/e4.err")"
+fi
+
 rc=0; run_wrapper "$WORK/o7" "${BASE[@]}" \
   PAPERCLIP_WORKTREE_PRUNE_ENGINE="$WORK/no-such-docker" || rc=$?
 if [[ $rc -eq 2 ]] && grep -q "container engine is not executable" "$WORK/o7.err"; then

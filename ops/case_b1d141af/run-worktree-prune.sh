@@ -50,9 +50,14 @@ ALLOWLIST_SH_REL="lib/paperclip_api_allowlist.sh"
 # The host runs the Paperclip server container under podman (README, runbooks)
 # or, on some hosts, docker; both take the same `exec -i -u -e` argv used below.
 # An explicit PAPERCLIP_WORKTREE_PRUNE_ENGINE wins; otherwise podman, then docker.
+# PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES (space-separated, default below) is the
+# probe order; the offline suite overrides it to pin both directions of the fallback.
 ENGINE="${PAPERCLIP_WORKTREE_PRUNE_ENGINE:-}"
 if [[ -z "$ENGINE" ]]; then
-  if [[ -x /usr/bin/podman ]]; then ENGINE=/usr/bin/podman; else ENGINE=/usr/bin/docker; fi
+  for candidate in ${PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES:-/usr/bin/podman /usr/bin/docker}; do
+    ENGINE="$candidate"
+    [[ -x "$candidate" ]] && break
+  done
 fi
 # Backstop inside the container: an exec that outlives its client keeps running.
 BOUND_SECONDS="${PAPERCLIP_WORKTREE_PRUNE_BOUND_SECONDS:-1500}"

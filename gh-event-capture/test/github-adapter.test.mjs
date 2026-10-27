@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createGithubAdapter, writeFailureCode } from '../src/github-adapter.js'
+import { createPinnedRunner, prepareIsolatedGhConfigSync } from '../src/gh-pinned.js'
+import { rmSync } from 'node:fs'
 import { createConsumer } from '../src/consumer.js'
 import { classifyCloseout, closeoutPolicy } from '../src/closeout.js'
 
@@ -570,6 +572,25 @@ test('mark-ready fails closed on an unconfirmed mutation and a missing node id',
   const noId = fake([{ data: { repository: { nameWithOwner: repository, pullRequest: { id: null } } } }])
   await assert.rejects(noId.adapter.markReadyForReview(repository, 42), /node id/)
   assert.equal(noId.calls.length, 1)
+})
+
+test('the production pinned runner keeps the HTTP class of a failed write and nothing else', async (t) => {
+  const configDir = prepareIsolatedGhConfigSync()
+  t.after(() => rmSync(configDir, { recursive: true, force: true }))
+  for (const [stderr, expected] of [
+    ['gh: Not Found (HTTP 404)', 'http-404'],
+    ['GraphQL: Resource not accessible by integration (HTTP 403)', 'http-403'],
+    ['PRIVATE transport detail', 'unknown'],
+  ]) {
+    const exec = async () => { throw Object.assign(new Error(`Command failed PRIVATE ${stderr}`), { code: 1, stdout: 'PRIVATE', stderr: `${stderr} PRIVATE` }) }
+    const run = createPinnedRunner({ executable: '/usr/bin/gh', exec, configDir })
+    const adapter = createGithubAdapter({ allowedRepositories: [repository], run })
+    await assert.rejects(adapter.markReadyForReview(repository, 42), (error) => {
+      assert.equal(writeFailureCode(error), expected)
+      assert.equal(String(error).includes('PRIVATE'), false)
+      return true
+    })
+  }
 })
 
 test('mark-ready surfaces sanitized failure classes and never echoes child output', async () => {

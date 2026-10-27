@@ -135,8 +135,13 @@ export function createPinnedRunner({ executable, exec = promisify(execFile), env
     try {
       return await exec(executable, args, { encoding, shell: false, timeout, maxBuffer, env: { ...childEnv } })
     } catch (error) {
-      // Child output can carry token material: only the short code travels.
-      throw pinError(`pinned gh invocation failed: ${String(error?.code ?? 'unknown')}`)
+      // Child output can carry token material: only the short code and the
+      // fixed-shape HTTP status number (`gh api` prints `(HTTP NNN)`) travel.
+      const failure = pinError(`pinned gh invocation failed: ${String(error?.code ?? 'unknown')}`)
+      const status = `${typeof error?.stderr === 'string' ? error.stderr : ''}\n${error?.message ?? ''}`
+        .match(/\(HTTP ([1-5][0-9]{2})\)/)
+      if (status) failure.httpStatus = Number(status[1])
+      throw failure
     }
   }
 }

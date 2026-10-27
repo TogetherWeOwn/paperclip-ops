@@ -129,6 +129,8 @@ export function writeFailureCode(error) {
 // the execFile error message). Keep only that fixed-shape number; every other
 // byte of child output stays out of logs and errors.
 function writeStatusFromChild(error) {
+  // The pinned runner drops child output and carries only this validated number.
+  if (Number.isInteger(error?.httpStatus) && error.httpStatus >= 100 && error.httpStatus <= 599) return `http-${error.httpStatus}`
   const text = `${typeof error?.stderr === 'string' ? error.stderr : ''}\n${error?.message ?? ''}`
   const match = text.match(/\(HTTP ([1-5][0-9]{2})\)/)
   return match ? `http-${match[1]}` : 'unknown'

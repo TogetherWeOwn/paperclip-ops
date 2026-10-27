@@ -1105,6 +1105,48 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_public_comment_hygiene_gate.sh
 
+      # op-request truthful-publication suite: the fixed
+      # ops/operator-safety/wrappers/op-request must exit nonzero with
+      # neither `queued ` nor `op-request ok` on any cp/chown/chmod/log
+      # failure, and publish exactly once on success; post-publication
+      # log/EPIPE failures keep the request and report completed
+      # publication with a no-retry operator diagnostic. Hermetic (fake
+      # cp/chown/chmod/stat/id plus mktemp queue/log; the real queue, log
+      # and accounts are never touched), so it runs in the core area next
+      # to the other contract gates. Suite, harness, swap suite and source
+      # all classify core, so a PR touching any of them runs these steps.
+      # The known-bad red suite stays red on its fixture by design and is
+      # offline evidence only, never a CI step. The `env -u BASH_ENV`
+      # prefix is load-bearing: without it the container PATH reset voids
+      # the fake-command harness. TMPDIR falls back to /tmp when the runner
+      # provides no RUNNER_TEMP.
+      - name: op-request truthful-publication suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: env -u BASH_ENV TMPDIR="${RUNNER_TEMP:-/tmp}" bash ./test_op_request_publication_fixed.sh
+
+      # op-request harness fail-closed regressions plus the dummy-file
+      # atomic install/rollback recipe regressions. Offline only: private
+      # scratch, fake privileged commands, dummy files; never root, never
+      # host paths, never a live queue.
+      - name: op-request harness suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: TMPDIR="${RUNNER_TEMP:-/tmp}" python3 -B -m unittest discover -s tests -p test_op_request_harness.py
+
+      - name: op-request swap suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: TMPDIR="${RUNNER_TEMP:-/tmp}" python3 -B tests/test_op_request_swap.py
+
+      # op-request validated-snapshot suite: same-inode rewrite and
+      # post-validation growth publish only validated bytes, the destination
+      # read-back is bounded, and the nested executable README selects core
+      # CI. Offline: the copy-boundary double mutates only its own sandbox
+      # inode, and the read observer is confined to that suite's step
+      # environment via step-scoped PYTHONPATH. Never root, never a live
+      # queue.
+      - name: op-request snapshot suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: TMPDIR="${RUNNER_TEMP:-/tmp}" python3 -B tests/test_op_request_snapshot_acceptance.py --artifact-root "$GITHUB_WORKSPACE"
+
       # verify-fast plan/list/no-prepare contract: the acceptance suite plus the
       # strict inventory-to-execution drift check and the --no-prepare guard
       # check. Offline: stdlib unittest, synthetic PATH stubs, no network or

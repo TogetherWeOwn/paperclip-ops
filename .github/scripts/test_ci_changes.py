@@ -61,6 +61,19 @@ class Classify(unittest.TestCase):
         self.assertFalse(r["full"])
         self.assertEqual({a for a in cc.AREAS if r[a]}, {"core"})
 
+    def test_op_request_wrappers_wake_only_core(self):
+        # The swap suite extracts and executes the marked install/inverse
+        # block from the nested op-request README, so a recipe-only edit
+        # must wake the suites job's core area and nothing else; the prose
+        # skip must not swallow it. Source and manifest are suite inputs too.
+        for path in ("ops/operator-safety/wrappers/op-request",
+                     "ops/operator-safety/wrappers/op-request.sha256",
+                     "ops/operator-safety/wrappers/README.md"):
+            with self.subTest(path=path):
+                r = self.result(path)
+                self.assertFalse(r["full"])
+                self.assertEqual({a for a in cc.AREAS if r[a]}, {"core"})
+
     def test_migration_standard_doc_wakes_only_core(self):
         # DocsCanonicalTest in test_migration_evidence_ax.py scores the JSON
         # contract in docs/migration-standard.md, so a docs-only edit there

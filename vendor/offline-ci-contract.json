@@ -350,7 +350,11 @@
     "trace correlator suite:1",
     "Dispatch sweep failure visibility acceptance:1",
     "native runner coverage classifier suite:1",
-    "AX metric contract suites:1"
+    "AX metric contract suites:1",
+    "op-request truthful-publication suite:1",
+    "op-request harness suite:1",
+    "op-request swap suite:1",
+    "op-request snapshot suite:1"
   ],
   "retained": [
     {
@@ -1982,6 +1986,26 @@
       "name": "AX metric contract suites",
       "definition_sha256": "ceff81cd977e688ef434a02945f04141390fe205df5b1f5b7df9e29a15826707",
       "id": "AX metric contract suites:1"
+    },
+    {
+      "name": "op-request truthful-publication suite",
+      "definition_sha256": "43903200bc8e843140fa1c41a5a2fa0d7f7beb3e131bb94741d0c308e0ca4231",
+      "id": "op-request truthful-publication suite:1"
+    },
+    {
+      "name": "op-request harness suite",
+      "definition_sha256": "74ee3860aaff1b2be4ac554e186fcf44862cc99a1548ba4f1a22e60da62aba9b",
+      "id": "op-request harness suite:1"
+    },
+    {
+      "name": "op-request swap suite",
+      "definition_sha256": "e1e6cdc3b76f0ede08a03babeab4e1413ef367a80b7c388401d0eb5520997b3a",
+      "id": "op-request swap suite:1"
+    },
+    {
+      "name": "op-request snapshot suite",
+      "definition_sha256": "77d0abce7e29984df673291e980ff099a4d0ad86f0f77d8ba84d1325bde9cf20",
+      "id": "op-request snapshot suite:1"
     }
   ],
   "removed": [

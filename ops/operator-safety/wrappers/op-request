@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# op-request <json-file> — file an approval-queue request (Part B groundwork B3).
+# Validates the JSON (requires what/why/rollback, optional command key) and copies
+# it into /var/lib/paperclip-operator/queue/. Executing queued items is NOT done
+# here. Only accepts files owned by paperclip-operator (no exfiltration of other
+# users' files through the root copy).
+set -uo pipefail
+LOG="/var/log/example/operator-actions.log"
+QUEUE="/var/lib/paperclip-operator/queue"
+refuse() { echo "op-request REFUSED: $1" >&2; echo "$(date -u +%FT%TZ) op-wrapper: op-request REFUSED $1" >> "$LOG"; exit 3; }
+[ $# -eq 1 ] || { echo "usage: op-request <json-file>" >&2; exit 2; }
+SRC="$1"
+OP_UID="$(id -u paperclip-operator)"
+[ -d "$QUEUE" ] || refuse "queue-missing"
+DEST="$QUEUE/req-$(date -u +%Y%m%dT%H%M%SZ)-$$.json"
+# Publication and its success signals are one fail-closed unit.
+# The unchecked `cp && chown && chmod` chain used to fall through to
+# unconditional `queued`/`ok` claims with exit 0 (false success), and `queued`
+# printed before the ok-log append, so the claim also escaped log failures.
+# Every publication-step failure now exits 1 with neither claim; `queued`
+# prints only after the ok line is appended. When DEST already exists
+# (chown/chmod failed, a partial cp left bytes, or the published bytes do
+# not match the validated snapshot), it is kept for operator inspection
+# with a FAILED audit line and an explicit incomplete-publication no-retry
+# diagnostic naming the full DEST. A failed append leaves partial log bytes
+# possible and does not undo publication; a lost final stdout (EPIPE)
+# happens after publication and the append. Both cases keep the published
+# request for operator inspection and report completed publication with an
+# explicit no-retry instruction on stderr.
+# SRC is resolved exactly once. The python step opens it with
+# O_NOFOLLOW|O_NONBLOCK (a FIFO must be refused, not waited on), fstats the
+# fd for type, size and owner (the operator-owner refusal is enforced here,
+# before any byte is read), and parses the JSON from the validated bytes read
+# from that fd. Those bytes are then written to a private staging snapshot
+# next to SRC (O_EXCL, mode 0600), and the copy reads from the already-open
+# staging fd, so bytes rewritten in the SRC inode after validation can never
+# substitute unvalidated bytes: a symlink is refused, the SRC inode is never
+# re-read, and only the validated snapshot is published. Staging is unlinked
+# once the copy returns. The copied DEST is read back with a bounded read and
+# compared to the snapshot; a mismatch is a publication failure, never a
+# queued claim.
+# Every validation refusal, whether raised here or in the python step,
+# appends an op-request REFUSED line to the audit log and keeps exit 3 (a
+# non-object JSON body included); usage keeps exit 2; a failed copy exits 10
+# into the failure branch. Any other python exit (a crash) is an internal
+# error with its own diagnostic, never a publication failure: no copy result
+# exists to report.
+# SIGPIPE is ignored so a closed final stdout becomes a catchable echo
+# failure with a truthful diagnostic, not a silent signal kill.
+trap '' PIPE
+copy_rc=0
+python3 - "$SRC" "$DEST" "$OP_UID" "$LOG" <<'PYEOF' || copy_rc=$?
+import errno, json, os, stat, subprocess, sys, tempfile, time
+
+src, dest, want_uid, log = sys.argv[1:5]
+
+
+def refuse(msg):
+    print(f"op-request REFUSED: {msg}", file=sys.stderr)
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    try:
+        with open(log, "a") as audit:
+            audit.write(f"{stamp} op-wrapper: op-request REFUSED {' '.join(msg.split())}\n")
+    except OSError as e:
+        print(f"op-request: refusal audit append failed: {e}", file=sys.stderr)
+    sys.exit(3)
+
+
+try:
+    fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+except OSError as e:
+    refuse("symlink" if e.errno == errno.ELOOP else "not-a-file")
+info = os.fstat(fd)
+if not stat.S_ISREG(info.st_mode):
+    refuse("not-a-file")
+if info.st_size > 16384:
+    refuse("too-large")
+try:
+    operator_owned = info.st_uid == int(want_uid)
+except ValueError:
+    operator_owned = False
+if not operator_owned:
+    refuse("not-operator-owned")
+with os.fdopen(fd, "rb") as stream:
+    data = stream.read(16385)
+if len(data) > 16384:
+    refuse("too-large")
+try:
+    request = json.loads(data.decode("utf-8"))
+except Exception as e:
+    refuse(f"invalid-json {e}")
+if not isinstance(request, dict):
+    refuse("bad-json-type")
+for k in ("what", "why", "rollback"):
+    v = request.get(k)
+    if not isinstance(v, str) or not (1 <= len(v) <= 2000):
+        refuse(f"bad-or-missing-key {k}")
+if "command" in request and (not isinstance(request["command"], str) or not (1 <= len(request["command"]) <= 500)):
+    refuse("bad-command-key")
+print("request-ok")
+staging_fd, staging = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(src)),
+                                        prefix=".op-request-snapshot-")
+try:
+    offset = 0
+    while offset < len(data):
+        offset += os.write(staging_fd, data[offset:])
+    copy = subprocess.run(["cp", "--", f"/dev/fd/{staging_fd}", dest],
+                          pass_fds=(staging_fd,), capture_output=True, text=True)
+finally:
+    os.close(staging_fd)
+    try:
+        os.unlink(staging)
+    except FileNotFoundError:
+        pass
+if copy.returncode != 0:
+    sys.stderr.write(copy.stderr)
+    sys.exit(10)
+try:
+    with open(dest, "rb") as published:
+        verified = published.read(16385) == data
+except OSError:
+    verified = False
+if not verified:
+    sys.exit(10)
+PYEOF
+[ "$copy_rc" -eq 3 ] && exit 3
+if [ "$copy_rc" -ne 0 ] && [ "$copy_rc" -ne 10 ]; then
+  echo "op-request FAILED: internal error rc=$copy_rc dest=$(basename "$DEST")" >&2
+  if [ -e "$DEST" ]; then
+    echo "op-request: publication state unknown dest=$DEST; do not retry; operator must inspect and reconcile before any further action" >&2
+  fi
+  exit 1
+fi
+if [ "$copy_rc" -eq 0 ] && chown root:paperclip-operator "$DEST" && chmod 0640 "$DEST"; then
+  if echo "$(date -u +%FT%TZ) op-wrapper: op-request ok dest=$(basename "$DEST")" >> "$LOG"; then
+    if echo "queued $DEST"; then
+      exit 0
+    else
+      echo "op-request: publication complete dest=$DEST; audit complete; do not retry; operator must inspect and reconcile before any further action" >&2
+      exit 1
+    fi
+  else
+    echo "op-request FAILED: log-append dest=$(basename "$DEST")" >&2
+    echo "op-request: publication complete dest=$DEST; audit unconfirmed; do not retry; operator must inspect and reconcile before any further action" >&2
+    exit 1
+  fi
+else
+  echo "op-request FAILED: publication dest=$(basename "$DEST")" >&2
+  if [ -e "$DEST" ]; then
+    if echo "$(date -u +%FT%TZ) op-wrapper: op-request FAILED dest=$(basename "$DEST")" >> "$LOG"; then
+      echo "op-request: publication incomplete (metadata not applied) dest=$DEST; audit recorded; do not retry; operator must inspect and reconcile before any further action" >&2
+    else
+      echo "op-request: publication incomplete (metadata not applied) dest=$DEST; audit unconfirmed; do not retry; operator must inspect and reconcile before any further action" >&2
+    fi
+  fi
+  exit 1
+fi

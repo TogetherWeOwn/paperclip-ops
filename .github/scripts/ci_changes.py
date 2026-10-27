@@ -296,6 +296,13 @@ ALSO_CORE_PREFIXES: tuple[str, ...] = (
     # readme script-index gate: test_readme_script_index.sh parses the README
     # "What is here" table, so a README-only edit must wake offline-suites.
     "README.md",
+    # op-request executable runbook: the swap suite extracts and executes the
+    # marked install/inverse block from the nested README, so a recipe-only
+    # edit must wake the suites job's core area; without this entry the
+    # markdown prose skip fires first and the suite is skipped while CI
+    # reports success. The source and manifest under the same prefix are
+    # suite inputs too.
+    "ops/operator-safety/wrappers/",
     # migration contract doc: DocsCanonicalTest in
     # test_migration_evidence_ax.py scores this file, so a docs-only edit to
     # the JSON contract must still wake the suites that guard it.

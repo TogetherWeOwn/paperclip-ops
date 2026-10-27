@@ -295,3 +295,24 @@ test('snapshotFailure is exact for every failure class', async (t) => {
       code)
   }
 })
+
+
+test('readiness rejects malformed check start times before any downstream write', async (t) => {
+  // Date.parse accepts the number 0 through coercion, so this also pins the
+  // explicit string-type guard rather than merely testing an invalid date.
+  for (const startedAt of ['not-a-date', '', 0, false, { value: 1 }]) {
+    const nodes = baseChecks()
+    nodes[0] = { ...nodes[0], startedAt, checkSuite: { app: { slug: 'github-actions' } } }
+    const pr = pullRequest({ pushedDate: PUSHED_AT, nodes })
+    const direct = githubDouble({ pr })
+    await assert.rejects(adapterOver(direct).getReadinessSnapshot(repository, 7, { nowMs: NOW }),
+      (error) => error.code === 'check-malformed')
+    assert.deepEqual(direct.writes, [])
+    const double = githubDouble({ pr })
+    const result = await sweep(t, double, { enabled: [repository] })
+    assert.equal(result.counters.errors, 1, JSON.stringify(startedAt))
+    assert.equal(result.counters.evaluated, 0, JSON.stringify(startedAt))
+    assert.equal(result.records[0].snapshotFailure, 'check-malformed', JSON.stringify(startedAt))
+    assert.deepEqual(double.writes, [], JSON.stringify(startedAt))
+  }
+})

@@ -424,6 +424,31 @@ test('readiness snapshot supersedes a cancelled run only by a later same-produce
     assert.equal(check.conclusion, 'cancelled')
   }
 
+  // An unrelated check from the same app cannot validate this context.
+  {
+    const { check, snapshot } = await aggregated([cancelled(),
+      producedRun('other-check', 'SUCCESS', 79, 102)])
+    assert.equal(check.conclusion, 'cancelled')
+    assert.equal(snapshot.checks.find((c) => c.name === 'other-check').conclusion, 'success')
+  }
+
+  // Known start times alone are not enough when both producer identities are absent.
+  {
+    const noApp = (run) => ({ ...run, checkSuite: null })
+    const { check } = await aggregated([noApp(cancelled()), noApp(laterPass())])
+    assert.equal(check.conclusion, 'cancelled')
+    assert.equal(check.startedMs, pushedMs + 60_000)
+    assert.ok(!Object.hasOwn(check, 'producer'))
+  }
+
+  // Start order, not completion order, determines which attempt is newer.
+  for (const [passStart, passEnd, expected] of [[59, 102, 'cancelled'],
+    [60, 102, 'cancelled'], [61, 102, 'success']]) {
+    const { check } = await aggregated([cancelled(),
+      producedRun('pr-lint', 'SUCCESS', passStart, passEnd)])
+    assert.equal(check.conclusion, expected, `pass started at ${passStart}`)
+  }
+
   // A later pass from a DIFFERENT producer (another checks app, or a status
   // context) never supersedes the cancelled entry: distinct sources may
   // legitimately share a name and none may hide another's result.

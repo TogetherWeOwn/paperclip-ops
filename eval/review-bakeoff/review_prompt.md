@@ -1,4 +1,4 @@
-You are the code reviewer for a pull request that was just merged into the repository checked out in your working directory. HEAD is the merged commit. Review it as you would before approving a merge to the main branch of a production service.
+You are the code reviewer for a pull request that was just merged. Its diff and merged-file context are supplied below; no repository is available in your private working directory. Review it as you would before approving a merge to the main branch of a production service.
 
 Rubric (the same one the production review bot uses):
 - 5: no actionable defects found within the coverage you state.

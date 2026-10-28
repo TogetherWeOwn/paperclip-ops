@@ -54,14 +54,54 @@ for line in text.splitlines():
     m = re.search(r"`([a-z0-9.\-]+)`\)", line)
     if line.startswith("|") and m:
         rows[m.group(1)] = [c.strip() for c in line.strip("|").split("|")]
+
+
+def split_row(line):
+    return [c.strip() for c in line.strip("|").split("|")]
+
+
+def is_separator(line):
+    return all(re.fullmatch(r":?--+?:?", c.strip()) for c in split_row(line))
+
+
+def score_table(stdout):
+    # The scorer prints one Markdown table (header + separator + model rows)
+    # followed by a comparisons footer; select table rows by parsed headers so
+    # added columns and the footer cannot shift or masquerade as cells.
+    lines = [ln for ln in stdout.splitlines() if ln.startswith("|")]
+    assert len(lines) >= 3, "no score table in scorer output: %r" % stdout[:200]
+    header = [c.strip().lower() for c in split_row(lines[0])]
+    assert is_separator(lines[1]), "second table line is not the separator: %r" % lines[1]
+
+    def col(*needles):
+        for i, name in enumerate(header):
+            if all(n in name for n in needles):
+                return i
+        raise AssertionError("no column %r in header %r" % (needles, header))
+
+    mi = col("model")
+    ri = col("recall", "found/defects")
+    fi = col("false-pass")
+    found = {}
+    for ln in lines[2:]:
+        if is_separator(ln):
+            continue
+        cells = split_row(ln)
+        assert len(cells) == len(header), (len(cells), len(header), ln[:120])
+        found[cells[mi]] = cells
+    return found, ri, fi
+
+
 seen = set()
 for arm in arms:
     out = subprocess.run(
         [sys.executable, base + "/score.py", "--cases", base + "/dataset/cases.json",
          "--results", base + "/results/%s-medium-r1" % arm],
-        capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
-    cells = [c.strip() for c in out.strip("|").split("|")]
-    model, recall, false_pass = cells[0], cells[3], cells[10]
+        capture_output=True, text=True, check=True).stdout
+    found, ri, fi = score_table(out)
+    model = next((m for m in found if arm in m or m.startswith(arm)), None)
+    assert model is not None, "no scorer row for arm " + arm
+    recall, false_pass = found[model][ri], found[model][fi]
     assert model in rows, "no table row for " + model
     row = rows[model]
     assert recall in row, (model, recall, row)

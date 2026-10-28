@@ -349,11 +349,14 @@
     "workspace sync-back signal regression suite:1",
     "trace correlator suite:1",
     "Dispatch sweep failure visibility acceptance:1",
+    "reviewer bake-off hygiene suite:1",
     "native runner coverage classifier suite:1",
     "AX metric contract suites:1",
+    "reviewer bake-off launcher contract suite:1",
     "scanner finding adapter suite:1",
     "shell-substitution JSON acceptance:1",
-    "public-comment hygiene JSON suite:1"
+    "public-comment hygiene JSON suite:1",
+    "reviewer bake-off repetition CLI suite:1"
   ],
   "retained": [
     {
@@ -1977,6 +1980,11 @@
       "id": "Dispatch sweep failure visibility acceptance:1"
     },
     {
+      "name": "reviewer bake-off hygiene suite",
+      "definition_sha256": "d09e05169c813417eca5aa0c99433a0039fd55f530d4b0712d5537d449f346df",
+      "id": "reviewer bake-off hygiene suite:1"
+    },
+    {
       "name": "native runner coverage classifier suite",
       "definition_sha256": "c688f1fbbcb023b3afd8dd80c8821306741f9060c3b1185833d6b0dcf68d142b",
       "id": "native runner coverage classifier suite:1"
@@ -1985,6 +1993,11 @@
       "name": "AX metric contract suites",
       "definition_sha256": "ceff81cd977e688ef434a02945f04141390fe205df5b1f5b7df9e29a15826707",
       "id": "AX metric contract suites:1"
+    },
+    {
+      "name": "reviewer bake-off launcher contract suite",
+      "definition_sha256": "43e4f57331574c4602250b6a48549e73c68e1eb022a62f2b137b2bb239c99e73",
+      "id": "reviewer bake-off launcher contract suite:1"
     },
     {
       "name": "scanner finding adapter suite",
@@ -2000,6 +2013,11 @@
       "name": "public-comment hygiene JSON suite",
       "definition_sha256": "60125ad01be83d0c4323b4495f6a94511b5edc43583305b1bb20a1987ede42bf",
       "id": "public-comment hygiene JSON suite:1"
+    },
+    {
+      "name": "reviewer bake-off repetition CLI suite",
+      "definition_sha256": "89fb6b13baf7e6adc96b098e941c34ec38eaf57c04cb384146285e2331453efb",
+      "id": "reviewer bake-off repetition CLI suite:1"
     }
   ],
   "removed": [

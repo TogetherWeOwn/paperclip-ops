@@ -258,16 +258,24 @@ class RunCaseEvidence(unittest.TestCase):
             raw = json.dumps({**GOOD, "findings": findings})
 
         def transport(args, **kw):
-            if args[0] != "codex":
+            argv = list(args)
+            if argv[:1] != ["codex"] and "codex" not in argv:
                 return real_run(args, **kw)
+            # The merged reviewer launches via isolation.py ([python,
+            # isolation.py, runtime, "--", codex, ...]) with the private
+            # runtime as cwd: emulate the model turn at the -o path and
+            # resolve the worktree from the prepare spy. Real Git calls
+            # (no exact "codex" element) still execute.
             if during_review is not None:
-                during_review(kw["cwd"])
-            Path(args[args.index("-o") + 1]).write_text(raw)
+                during_review(prepare_spy.call_args[0][2])
+            Path(argv[argv.index("-o") + 1]).write_text(raw)
             return subprocess.CompletedProcess(args, 0, stdout='{"type":"turn.completed",'
                                                '"usage":{"output_tokens":12}}\n', stderr="")
 
         with patch.dict(os.environ, {"BAKEOFF_FIXTURE_KEY": "offline-fixture-not-a-key"}), \
-                patch.object(rr.subprocess, "run", side_effect=transport):
+                patch.object(rr.subprocess, "run", side_effect=transport), \
+                patch.object(rr, "prepare_worktree",
+                             wraps=rr.prepare_worktree) as prepare_spy:
             return rr.run_case(str(self.repo), case or self.case, "fixture-model", "medium",
                                "BAKEOFF_FIXTURE_KEY", 5)
 

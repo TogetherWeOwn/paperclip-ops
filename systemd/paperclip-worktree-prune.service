@@ -28,7 +28,7 @@ EnvironmentFile=/etc/paperclip/worktree-prune.env
 WorkingDirectory=/usr/local/libexec/paperclip-worktree-prune/@SOURCE_REF@
 ExecStartPre=/usr/bin/test -x /usr/local/libexec/paperclip-worktree-prune/@SOURCE_REF@/ops/case_b1d141af/run-worktree-prune.sh
 ExecStartPre=/usr/bin/test -x /usr/bin/timeout
-ExecStartPre=/bin/sh -c 'e="$${PAPERCLIP_WORKTREE_PRUNE_ENGINE:-}"; if [ -n "$$e" ]; then /usr/bin/test -x "$$e"; else /usr/bin/test -x /usr/bin/podman || /usr/bin/test -x /usr/bin/docker; fi'
+ExecStartPre=/bin/sh -c 'e="$${PAPERCLIP_WORKTREE_PRUNE_ENGINE:-}"; if [ -n "$$e" ]; then /usr/bin/test -x "$$e"; elif [ -n "$${PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES:-}" ]; then for e in $$PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES; do /usr/bin/test -x "$$e" && exit 0; done; exit 1; else /usr/bin/test -x /usr/bin/podman || /usr/bin/test -x /usr/bin/docker; fi'
 ExecStartPre=/usr/bin/sha256sum --check --strict /usr/local/libexec/paperclip-worktree-prune/@SOURCE_REF@/SHA256SUMS
 # 25 min in-container bound (wrapper default 1500 s) < 27 min host timeout < 30 min unit bound.
 ExecStart=/usr/bin/timeout --signal=TERM --kill-after=15s 27m /usr/local/libexec/paperclip-worktree-prune/@SOURCE_REF@/ops/case_b1d141af/run-worktree-prune.sh

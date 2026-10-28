@@ -192,11 +192,14 @@ fi
 
 # Default engine selection (no PAPERCLIP_WORKTREE_PRUNE_ENGINE): the first executable of the
 # candidate list wins, podman first. Marker-writing shims show which one actually ran.
+# Keep candidate paths whitespace-free; the inherited TMPDIR may contain spaces.
+SHIMS=$(mktemp -d /tmp/worktree-prune-engine-test.XXXXXXXX)
+trap 'rm -rf "$WORK" "$SHIMS"' EXIT
 for name in podman docker; do
-  printf '#!/bin/sh\n: > "%s/ran-%s"\nexec "%s" "$@"\n' "$WORK" "$name" "$FAKE_DOCKER" > "$WORK/shim-$name"
-  chmod +x "$WORK/shim-$name"
+  printf '#!/bin/sh\n: > "%s/ran-%s"\nexec "%s" "$@"\n' "$WORK" "$name" "$FAKE_DOCKER" > "$SHIMS/shim-$name"
+  chmod +x "$SHIMS/shim-$name"
 done
-CANDIDATES="$WORK/shim-podman $WORK/shim-docker"
+CANDIDATES="$SHIMS/shim-podman $SHIMS/shim-docker"
 rm -f "$WORK"/ran-*
 rc=0; run_wrapper "$WORK/e1" "${BASE[@]}" PAPERCLIP_WORKTREE_PRUNE_ENGINE= \
   PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES="$CANDIDATES" || rc=$?
@@ -207,7 +210,7 @@ else
 fi
 rm -f "$WORK"/ran-*
 rc=0; run_wrapper "$WORK/e2" "${BASE[@]}" PAPERCLIP_WORKTREE_PRUNE_ENGINE= \
-  PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES="$WORK/no-such-podman $WORK/shim-docker" || rc=$?
+  PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES="$SHIMS/no-such-podman $SHIMS/shim-docker" || rc=$?
 if [[ $rc -eq 0 && -e "$WORK/ran-docker" && ! -e "$WORK/ran-podman" ]]; then
   ok "a docker-only host falls back to docker"
 else
@@ -215,16 +218,16 @@ else
 fi
 rm -f "$WORK"/ran-*
 rc=0; run_wrapper "$WORK/e3" "${BASE[@]}" PAPERCLIP_WORKTREE_PRUNE_ENGINE= \
-  PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES="$WORK/no-such-podman $WORK/no-such-docker" || rc=$?
-if [[ $rc -eq 2 ]] && grep -q "container engine is not executable: $WORK/no-such-docker" "$WORK/e3.err" \
+  PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES="$SHIMS/no-such-podman $SHIMS/no-such-docker" || rc=$?
+if [[ $rc -eq 2 ]] && grep -q "container engine is not executable: $SHIMS/no-such-docker" "$WORK/e3.err" \
     && [[ ! -s "$WORK/docker.log" ]]; then
   ok "a host with neither engine refuses before anything runs"
 else
   fail "neither-engine not refused: rc=$rc err=$(cat "$WORK/e3.err")"
 fi
 rm -f "$WORK"/ran-*
-rc=0; run_wrapper "$WORK/e4" "${BASE[@]}" PAPERCLIP_WORKTREE_PRUNE_ENGINE="$WORK/shim-docker" \
-  PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES="$WORK/shim-podman" || rc=$?
+rc=0; run_wrapper "$WORK/e4" "${BASE[@]}" PAPERCLIP_WORKTREE_PRUNE_ENGINE="$SHIMS/shim-docker" \
+  PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES="$SHIMS/shim-podman" || rc=$?
 if [[ $rc -eq 0 && -e "$WORK/ran-docker" && ! -e "$WORK/ran-podman" ]]; then
   ok "an explicit engine override wins over the candidate list"
 else

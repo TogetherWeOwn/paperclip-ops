@@ -109,6 +109,17 @@ class UnitContract(unittest.TestCase):
         self.assertIn("/usr/bin/test -x /usr/bin/timeout", pre)
         self.assertTrue(any(ln.startswith("/bin/sh -c ") for ln in pre))
 
+    def test_shipped_engine_defaults_match_unit_preflight(self):
+        expected = ["/usr/bin/podman", "/usr/bin/docker"]
+        default = re.search(
+            r'\$\{PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES:-([^}]+)\}', WRAPPER.read_text())
+        self.assertIsNotNone(default, "wrapper must declare its shipped candidate default")
+        self.assertEqual(default.group(1).split(), expected,
+                         "wrapper must prefer podman and retain docker-only fallback")
+        probe = next(ln for ln in self.option("ExecStartPre") if ln.startswith("/bin/sh -c "))
+        self.assertEqual(re.findall(r"/usr/bin/test -x (/[^ ;|]+)", probe), expected,
+                         "unit preflight must check the same shipped paths in the same order")
+
     def test_engine_preflight_mirrors_the_wrapper_selection(self):
         probe = next(ln for ln in self.option("ExecStartPre") if ln.startswith("/bin/sh -c "))
         script = probe[len("/bin/sh -c '"):-1].replace("$$", "$").replace("/usr/bin/test", "test")

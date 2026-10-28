@@ -6,7 +6,6 @@ import subprocess
 import tempfile
 import unittest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/disclosure-audit.yml"
 COUNTS = "== 3 declared/clean, 2 post-hoc adjudicated, 7 undeclared publication(s), 0 unresolved"
@@ -103,8 +102,24 @@ class DisclosureAuditWorkflowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("exit 2", summary)
 
+    def step_lines(self, prefix):
+        lines = WORKFLOW.read_text().splitlines()
+        start = next(i for i, line in enumerate(lines) if line.startswith(prefix))
+        end = next((i for i in range(start + 1, len(lines))
+                    if lines[i].startswith("      - ")), len(lines))
+        return lines[start:end]
+
     def test_checkout_uses_reviewed_default_branch(self):
-        self.assertIn("ref: ${{ github.event.repository.default_branch }}", WORKFLOW.read_text())
+        lines = self.step_lines("      - uses: actions/checkout@")
+        self.assertIn("          ref: ${{ github.event.repository.default_branch }}", lines)
+
+    def test_checkout_does_not_persist_credentials(self):
+        lines = self.step_lines("      - uses: actions/checkout@")
+        self.assertIn("          persist-credentials: false", lines)
+
+    def test_live_step_requires_explicit_opt_in(self):
+        lines = self.step_lines("      - name: Live disclosure audit")
+        self.assertIn("        if: vars.DISCLOSURE_AUDIT_LIVE == '1'", lines)
 
     def test_job_permissions_are_explicit_and_read_only(self):
         self.assertIn("    permissions:\n      contents: read\n", WORKFLOW.read_text())

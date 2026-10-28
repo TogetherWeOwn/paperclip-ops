@@ -52,9 +52,9 @@ Malformed input instead produces `outcome: unmeasurable`,
 | --- | --- | --- | --- |
 | *(none)* | Nonzero coverage for every bridge model. | 0 | false |
 | `zero_coverage` | One evaluated model has no enabled lane-bound row; includes `model_id`. Every zero is reported, with healthy siblings retained. | 2 | false |
-| `fixture_read_error` | Fixture missing, unreadable or not a readable file. | 2 | true |
+| `fixture_read_error` | Fixture missing, unreadable or not a regular file (including a FIFO or device). Non-regular files are refused before opening. | 2 | true |
 | `fixture_decode_error` | Invalid UTF-8/JSON or a JSON decoder limit. | 2 | false |
-| `fixture_schema_error` | Invalid model/lane shape, duplicate identity or invalid bridge enabled boolean, per the existing analyzer. | 2 | false |
+| `fixture_schema_error` | Duplicate JSON object key, invalid model/lane shape, duplicate identity or invalid bridge enabled boolean. Report decoding rejects duplicate keys at every nesting level instead of accepting the last value; the existing analyzer handles row validation. | 2 | false |
 | `usage_error` | Invalid CLI arguments or conflicting output modes. No fixture read or analysis. | 2 | false |
 
 Machine errors never echo the fixture path, contents or raw exception text.

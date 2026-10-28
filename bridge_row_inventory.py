@@ -58,6 +58,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import sys
 
 # (model id, tier, expected lane) in display order: bridge MUSE, PRIMARY,
@@ -163,7 +164,7 @@ def format_table(rows):
 
 
 def load_fixture(path):
-    """Read the fixture file. The only I/O in this module."""
+    """Read a fixture with the legacy JSON decoding semantics."""
     with open(path, "r", encoding="utf-8") as fh:
         doc = json.load(fh)
     if not isinstance(doc, dict):
@@ -205,10 +206,24 @@ def inventory_report(rows=None, *, error_code=None):
     }
 
 
+def _unique_object(pairs):
+    """Do not let last-value-wins decoding turn ambiguous evidence into coverage."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise InventoryError("fixture has a duplicate object key")
+        result[key] = value
+    return result
+
+
 def report_fixture(path):
     """Read once and reuse the legacy analyzer and gate, never their prose."""
     try:
-        doc = load_fixture(path)
+        # Reject pipes/devices before opening: they may never produce EOF.
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return inventory_report(error_code="fixture_read_error")
+        with open(path, "r", encoding="utf-8") as fh:
+            doc = json.load(fh, object_pairs_hook=_unique_object)
     except OSError:
         return inventory_report(error_code="fixture_read_error")
     except InventoryError:
@@ -267,7 +282,9 @@ def main(argv=None):
                "Coverage is not live serving readiness. Synthetic example: "
                "python3 -B bridge_row_inventory.py --report-json --fixture "
                "tests/fixtures/case_381fc549/bridge-assembled-rows.json")
-    p.add_argument("--fixture", default=default_fixture)
+    p.add_argument("--fixture", default=default_fixture,
+                   help="assembled UTF-8 JSON source; report mode requires a "
+                        "regular file and refuses duplicate object keys")
     modes = p.add_mutually_exclusive_group()
     modes.add_argument("--json", action="store_true",
                        help="emit the legacy inventory rows as a JSON array "

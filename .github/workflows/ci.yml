@@ -868,7 +868,7 @@ jobs:
       # Keep the parser/dependency isolated from the other Python suites.
       # GARM VMs ship python3 3.12 but setup-python's tool cache there is a broken
       # half-copy (no pip, and json errors segfault), so it runs on GitHub-hosted only.
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         id: static-label-python
         if: runner.environment == 'github-hosted'
         with:
@@ -1001,11 +1001,11 @@ jobs:
       # copy of the main rulesets) must each be produced by a real job that
       # runs on a pull request and cannot report green without running. A
       # renamed job, a dropped trigger or a continue-on-error turns this red,
-      # and so does every mutant in the suite. Rename a required job in three
-      # steps, see docs/ci-required-checks.md.
+      # and so does every mutant in the suite. Output contract (measured and
+      # unmeasurable JSON, exits): docs/ci-required-checks.md.
       #
       - name: required checks all have a producing job
-        run: python3 -m unittest -v test_ci_required_checks_audit.py
+        run: python3 -m unittest -v test_ci_required_checks_audit.py test_required_checks_unmeasurable_json_acceptance.py test_ci_required_checks_nested_input.py
 
       # case_d5bc7950. The change-gating contract itself is load-bearing: a heavy
       # job whose `needs: changes` is deleted while its area `if:` stays would
@@ -1065,6 +1065,15 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_shell_subst_guard.sh
 
+      # Shell-substitution JSON acceptance: private structured verdicts for
+      # check --json (schema shell-substitution.v1, deterministic envelope,
+      # no supplied-text leakage, input_error codes, JSON help). Hermetic
+      # stdlib unittest, same gating as the detector suite so a machine-mode
+      # regression would merge green without it.
+      - name: shell-substitution JSON acceptance
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest -v test_shell_substitution_json_acceptance
+
       - name: deploy-window wrapper and pin mutation suites
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: |
@@ -1105,6 +1114,14 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_public_comment_hygiene_gate.sh
 
+      # Machine-readable (--json) contract for the same gate: one JSON
+      # document with bounded findings, stable error codes and exit-code
+      # parity with the text mode above. Hermetic like the text suite
+      # (mktemp bodies plus grep shims; needs bash, jq and python3).
+      - name: public-comment hygiene JSON suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_public_comment_hygiene_json.sh
+
       # verify-fast plan/list/no-prepare contract: the acceptance suite plus the
       # strict inventory-to-execution drift check and the --no-prepare guard
       # check. Offline: stdlib unittest, synthetic PATH stubs, no network or
@@ -1134,7 +1151,7 @@ jobs:
       # catch would merge green.
       - name: orphan-suite ratchet fixtures suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: python3 -m unittest -v test_orphan_suites
+        run: python3 -B -m unittest -v test_orphan_suites test_orphan_suite_json_acceptance
 
       - name: workspace sync-back signal acceptance suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
@@ -1147,6 +1164,10 @@ jobs:
       - name: trace correlator suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_trace_correlator
+
+      - name: scanner finding adapter suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_scanner_finding_adapter
 
       # Assignment host-source bundle: the builder, normalizer and detector
       # run as CLIs with the SQL under a SQLite translation — no database,
@@ -1367,7 +1388,7 @@ jobs:
       # fast and they pin the gates this repo inherits. Gate enforcement
       # inside CI (a gates workflow) is a separate follow-up batch.
       - name: quality-gate helper suites
-        run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target test_docs_drift
+        run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target test_docs_drift test_docs_explain_acceptance
 
       # case_6f2e8a41. Deterministic test-missing gate suites: the unit
       # contract (wider source suffixes, deleted-file handling, vacuity
@@ -2438,7 +2459,7 @@ jobs:
       # fixtures: no API, database, credential or timer.
       - name: admitted-PR closeout ledger suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: python3 -m unittest -v test_pr_closeout_ledger.py
+        run: python3 -B -m unittest -v test_pr_closeout_ledger test_pr_closeout_preview_acceptance
 
       - name: admitted-PR closeout gates are load-bearing
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'

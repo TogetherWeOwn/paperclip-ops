@@ -24,6 +24,7 @@ import glob
 import json
 import os
 import re
+import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -152,6 +153,26 @@ def _input_error(code, path, message):
     return InputError(code, path, message, _ERROR_ACTIONS[code])
 
 
+def _refuse_special_file(path):
+    """Refuse existing inputs that are neither regular files nor directories.
+
+    Reading a FIFO with no writer blocks the scan with zero output; sockets
+    and devices are likewise never workflow sources. Refuse them before any
+    read attempt. Directories fall through to the normal read path so their
+    refusal keeps its established message. Anything `stat` cannot inspect
+    (missing, permission-denied) also falls through to the existing handlers.
+    """
+    try:
+        mode = os.stat(path).st_mode
+    except OSError:
+        return None
+    if stat.S_ISDIR(mode) or stat.S_ISREG(mode):
+        return None
+    return _input_error(
+        "input-unreadable", str(path),
+        f"{path}:1: unreadable file (not a regular file)")
+
+
 def scan_files(files):
     """Check each file; return (findings, input_errors, checked_count).
 
@@ -163,6 +184,10 @@ def scan_files(files):
     errors = []
     checked = 0
     for path in files:
+        refusal = _refuse_special_file(path)
+        if refusal is not None:
+            errors.append(refusal)
+            continue
         try:
             found = lint_file(path)
         except FileNotFoundError:
@@ -235,7 +260,27 @@ def build_report(requested, findings, errors, checked, refused):
     }
 
 
+def _ensure_encodable_stdout():
+    """Harden the text emitter against ASCII locales (best-effort).
+
+    Under `LC_ALL=C` stdout encodes as ASCII, so printing a finding whose
+    value or path holds non-ASCII text raises `UnicodeEncodeError` and the
+    run ends in a traceback instead of a verdict. Prefer UTF-8 output with
+    a backslash fallback; the annotation content is unchanged, only the
+    transport encoding is hardened. Streams without `reconfigure`
+    (captured, closed, unsupported) keep their existing behavior.
+    """
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(encoding="utf-8", errors="backslashreplace")
+    except (ValueError, OSError):
+        pass
+
+
 def _print_text(report, errors):
+    _ensure_encodable_stdout()
     for error in errors:
         if error.path is None:
             print(f"::error ::{error.message}")

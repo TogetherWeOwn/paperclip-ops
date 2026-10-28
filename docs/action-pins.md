@@ -17,7 +17,8 @@ Omit the paths to scan the default discovery set
 `.github/actions/**/action.yml|action.yaml`); `--json` may appear before or
 after the paths. Omit `--json` for the existing `::error` annotation/prose
 output used by the `pr-lint` job. `--help` prints the same summary. Input
-files are decoded as UTF-8, independent of the host locale.
+files are decoded as UTF-8, and text output is emitted as UTF-8, independent
+of the host locale.
 
 ## JSON contract: `action-pins.v1`
 
@@ -79,7 +80,8 @@ python3 -B -m unittest discover -s .github/scripts -p 'test_action_pins_json_acc
 ```
 
 These cover the pin rules, text/JSON verdict parity, explicit and
-default-discovered input failures (including a directory or invalid UTF-8),
+default-discovered input failures (including a directory, a non-regular file
+such as a FIFO, or invalid UTF-8),
 deterministic ordering, unusual filenames, help/usage boundaries and
 no-write behaviour. They run in the `pr-lint` CI job; the acceptance file is
 maintained independently of the implementation. This source contract is not

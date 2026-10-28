@@ -125,11 +125,13 @@ class UnitContract(unittest.TestCase):
         script = probe[len("/bin/sh -c '"):-1].replace("$$", "$").replace("/usr/bin/test", "test")
         bin_ok, bin_missing = "/bin/true", "/nonexistent/engine"
 
-        def run(engine, podman, docker):
+        def run(engine, podman, docker, candidates=None):
             body = script.replace("/usr/bin/podman", podman).replace("/usr/bin/docker", docker)
             env = {"PATH": os.environ["PATH"]}
             if engine is not None:
                 env["PAPERCLIP_WORKTREE_PRUNE_ENGINE"] = engine
+            if candidates is not None:
+                env["PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES"] = candidates
             return subprocess.run(["/bin/sh", "-c", body], env=env).returncode
 
         self.assertEqual(run(None, bin_missing, bin_ok), 0)      # docker-only host
@@ -137,6 +139,24 @@ class UnitContract(unittest.TestCase):
         self.assertNotEqual(run(None, bin_missing, bin_missing), 0)
         self.assertEqual(run(bin_ok, bin_missing, bin_missing), 0)   # explicit engine is what is checked
         self.assertNotEqual(run(bin_missing, bin_ok, bin_ok), 0)     # bad override is not masked by defaults
+
+        cases = [
+            ("later configured candidate", None, bin_missing, bin_missing, f"{bin_missing} {bin_ok}", True),
+            ("configured list replaces defaults", None, bin_ok, bin_ok, f"{bin_missing} {bin_missing}", False),
+            ("empty list falls back to podman", None, bin_ok, bin_missing, "", True),
+            ("empty list falls back to docker", None, bin_missing, bin_ok, "", True),
+            ("empty list with no defaults refuses", None, bin_missing, bin_missing, "", False),
+            ("override wins over missing candidates", bin_ok, bin_missing, bin_missing, bin_missing, True),
+            ("bad override is not masked by candidates", bin_missing, bin_ok, bin_ok, bin_ok, False),
+            ("whitespace-only list refuses", None, bin_ok, bin_ok, " \t ", False),
+        ]
+        for name, engine, podman, docker, candidates, allowed in cases:
+            with self.subTest(name=name):
+                rc = run(engine, podman, docker, candidates=candidates)
+                if allowed:
+                    self.assertEqual(rc, 0)
+                else:
+                    self.assertNotEqual(rc, 0)
 
     def test_exec_start_runs_the_installed_wrapper(self):
         self.assertIn(

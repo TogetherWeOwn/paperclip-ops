@@ -7,13 +7,15 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
 
-from test_diagnostic_delta import RepositoryFixture, SCRIPT, PRODUCER, BAD_SCRIPT
+from test_diagnostic_delta import (RepositoryFixture, SCRIPT, PRODUCER, BAD_SCRIPT,
+                                   POLICY, POLICY_VALUE, WORKFLOW_PATH)
 
 ROOT = Path(__file__).resolve().parent
 
@@ -59,6 +61,56 @@ class OutputLimits(unittest.TestCase):
                                 "sys.stderr.buffer.write(b'x' * 65536)\n")
             with patch.object(gate, "PRODUCER", producer):
                 self.assertEqual(gate.scan(root, ["**"], {}), (set(), {"skipped": [], "unknown": []}))
+
+    def test_first_excess_byte_on_either_pipe_is_refused_before_producer_finishes(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            marker = root / "finished"
+            producer = root / "producer.py"
+            for channel, size in (("stdout", 1024 * 1024 + 1), ("stderr", 64 * 1024 + 1)):
+                with self.subTest(channel=channel):
+                    if marker.exists():
+                        marker.unlink()
+                    producer.write_text(
+                        "import sys, time\nfrom pathlib import Path\n"
+                        f"sys.{channel}.buffer.write(b'x' * {size})\n"
+                        f"sys.{channel}.buffer.flush()\n"
+                        "time.sleep(2)\n"
+                        f"Path({str(marker)!r}).touch()\n")
+                    with patch.object(gate, "PRODUCER", producer):
+                        with self.assertRaises(gate.Unmeasurable) as error:
+                            gate.scan(root, ["**"], {})
+                    self.assertEqual(error.exception.code, "producer_output_limit")
+                    self.assertFalse(marker.exists(), "Collector must stop at the cap, not after limit+1 bytes finish")
+
+
+class GitOutputLimits(unittest.TestCase):
+    def test_git_output_is_stopped_at_the_byte_cap_not_spooled_to_completion(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            marker = root / "finished"
+            bindir = root / "bin"
+            bindir.mkdir()
+            fake = bindir / "git"
+            for channel, size, limit in (("stdout", 8192, 1024), ("stderr", 64 * 1024 + 1, 1024 * 1024)):
+                with self.subTest(channel=channel):
+                    if marker.exists():
+                        marker.unlink()
+                    fake.write_text(
+                        "#!/usr/bin/env python3\n"
+                        "import sys, time\nfrom pathlib import Path\n"
+                        f"sys.{channel}.buffer.write(b'x' * {size})\n"
+                        f"sys.{channel}.buffer.flush()\n"
+                        "time.sleep(2)\n"
+                        f"Path({str(marker)!r}).touch()\n")
+                    fake.chmod(0o755)
+                    with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
+                        with self.assertRaises(gate.Unmeasurable) as error:
+                            gate.git(root, "ls-tree", limit=limit)
+                    self.assertEqual(error.exception.code, "git_failed")
+                    self.assertFalse(marker.exists(), "Git must be stopped at the cap, not spooled to completion")
 
 
 class CollectorTimeouts(unittest.TestCase):
@@ -179,7 +231,98 @@ class EnvironmentAndEvidence(RepositoryFixture):
             self.assertIsNone(gate.fingerprint(SCRIPT))
 
 
+class ImmutableSnapshots(RepositoryFixture):
+    def test_hex_named_branch_is_not_an_immutable_sha1_snapshot(self):
+        self.put("scripts/new.sh", BAD_SCRIPT)
+        head = self.commit()
+        branch = "f" * 64
+        self.git("branch", branch, head)
+        self.assertEqual(self.check(2, head=branch)["code"], "invalid_sha")
+        # Moving the same-named ref must not turn refusal into a clean verdict.
+        self.git("branch", "-f", branch, self.base)
+        self.assertEqual(self.check(2, head=branch)["code"], "invalid_sha")
+
+    def test_sha256_repository_rejects_wrong_length_and_hex_refs_but_accepts_full_ids(self):
+        root = Path(self.tmp.name) / "sha256-repo"
+        root.mkdir()
+        env = {"PATH": os.environ["PATH"], "HOME": self.tmp.name,
+               "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+
+        def git(*args):
+            return subprocess.check_output(["git", *args], cwd=root, env=env,
+                                           text=True, timeout=10).strip()
+
+        git("init", "-q", "--object-format=sha256")
+        git("config", "user.name", "Fixture")
+        git("config", "user.email", "fixture@example.invalid")
+        (root / "AGENTS.md").write_text("# map\n")
+        (root / POLICY).write_text(json.dumps(POLICY_VALUE))
+        git("add", "-A")
+        git("commit", "-q", "-m", "test: fixture\n\nCo-Authored-By: Paperclip <noreply@paperclip.ing>")
+        base = git("rev-parse", "HEAD")
+        self.assertEqual(len(base), 64)
+        self.assert_counts(self.check(0, base=base, head=base, repo=root), 0, 0, 0, 0)
+        self.assertEqual(self.check(2, base=base, head=base[:40], repo=root)["code"], "invalid_sha")
+        git("branch", "f" * 64, base)
+        self.assertEqual(self.check(2, base=base, head="f" * 64, repo=root)["code"], "invalid_sha")
+
+
+class WildcardAncestors(RepositoryFixture):
+    def wildcard_base(self):
+        self.put(POLICY, json.dumps({**POLICY_VALUE, "include": ["scripts/pkg-*/**"]}))
+        self.put("scripts/pkg-one/run.sh", BAD_SCRIPT)
+        self.base = self.commit()
+
+    def test_symlink_replacing_wildcard_scoped_directory_is_unmeasurable(self):
+        self.wildcard_base()
+        self.git("rm", "-r", "-q", "scripts/pkg-one")
+        (self.root / "scripts").mkdir(exist_ok=True)
+        (self.root / "scripts/pkg-one").symlink_to(Path(self.tmp.name) / "elsewhere")
+        report = self.check(2, head=self.commit())
+        self.assertEqual(report["code"], "unsupported_source")
+
+    def test_gitlink_replacing_wildcard_scoped_directory_is_unmeasurable(self):
+        self.wildcard_base()
+        self.git("rm", "-r", "-q", "scripts/pkg-one")
+        self.git("update-index", "--add", "--cacheinfo", f"160000,{self.base},scripts/pkg-one")
+        # Commit the index directly: the fixture's add -A would stage the
+        # gitlink's deletion because no worktree directory backs it.
+        self.git("commit", "-q", "-m", "test: fixture\n\nCo-Authored-By: Paperclip <noreply@paperclip.ing>")
+        report = self.check(2, head=self.git("rev-parse", "HEAD"))
+        self.assertEqual(report["code"], "unsupported_source")
+
+
+class QuotedDispatchContainers(RepositoryFixture):
+    @staticmethod
+    def quoted(container, typed):
+        dispatch_line = '"workflow_dispatch":' if container == "workflow_dispatch" else "workflow_dispatch:"
+        inputs_line = '"inputs":' if container == "inputs" else "inputs:"
+        text = (f"name: ship\non:\n  {dispatch_line}\n    {inputs_line}\n"
+                "      target:\n        description: deployment target\n")
+        return text + ("        type: string\n" if typed else "")
+
+    def test_quoted_containers_do_not_silently_clear_untyped_inputs(self):
+        for container in ("workflow_dispatch", "inputs"):
+            with self.subTest(container=container):
+                self.put(WORKFLOW_PATH, self.quoted(container, True))
+                self.base = self.commit()
+                self.assert_counts(self.check(0, head=self.base), 0, 0, 0, 0)
+                self.put(WORKFLOW_PATH, self.quoted(container, False))
+                self.assert_counts(self.check(1), 0, 1, 1, 0)
+
+
 class IntegrationContract(unittest.TestCase):
+    def test_reusable_workflow_artifact_name_is_caller_selectable_without_overwrite(self):
+        import yaml
+        workflow = yaml.load((ROOT / ".github/workflows/diagnostic-delta.yml").read_text(), Loader=yaml.BaseLoader)
+        for trigger in ("workflow_call", "workflow_dispatch"):
+            entry = workflow["on"][trigger]["inputs"]["artifact-name"]
+            self.assertEqual(entry["required"], "false")
+            self.assertEqual(entry["default"], "diagnostic-delta-report")
+        step, = [s for s in workflow["jobs"]["diagnostic-delta"]["steps"]
+                 if s.get("uses", "").startswith("actions/upload-artifact@")]
+        self.assertEqual(step["with"]["name"], "${{ inputs.artifact-name }}")
+        self.assertNotIn("overwrite", step["with"])
     def test_ci_keeps_all_suites_and_uses_prepared_python_and_yaml(self):
         import yaml
         workflow = yaml.load((ROOT / ".github/workflows/ci.yml").read_text(), Loader=yaml.BaseLoader)

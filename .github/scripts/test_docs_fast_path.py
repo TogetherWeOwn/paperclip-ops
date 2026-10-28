@@ -319,15 +319,17 @@ class TestFastProseChecks(unittest.TestCase):
         self.assertEqual(selected, ["docs/renamed.md"])
 
     def test_mixed_code_is_not_docs_only(self):
-        self.write("notes.txt", "Prose.\n")
+        self.assertTrue(is_prose_path("notes.md"))
+        self.write("notes.md", "Prose.\n")
         self.write("app.py", "print('code')\n")
         self.assertFalse(self.commit_and_classify())
 
     def test_code_renamed_to_prose_is_not_docs_only(self):
+        self.assertTrue(is_prose_path("notes.md"))
         self.write("app.py", "print('code')\n")
         self.commit_and_classify()
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
-        self.git("mv", "app.py", "notes.txt")
+        self.git("mv", "app.py", "notes.md")
         self.assertFalse(self.commit_and_classify())
 
 

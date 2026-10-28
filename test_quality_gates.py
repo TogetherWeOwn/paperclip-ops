@@ -7,6 +7,8 @@ boundary. Run: python3 -m unittest test_quality_gates
 """
 import importlib.util
 import json
+import re
+import shlex
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -134,6 +136,85 @@ class TestWorkflowComparisonBase(unittest.TestCase):
             workflow.index("-r scripts/quality-gates-build-requirements.txt"),
             workflow.index("-r scripts/quality-gates-requirements.txt"),
         )
+
+class TestWorkflowBoundedDownloads(unittest.TestCase):
+    """Every tool download in the quality-gates workflow is bounded.
+
+    A bare `curl -sSL` exits 0 on an HTTP error page and can hang a runner
+    indefinitely on a stalled connection. Each download must fail on HTTP
+    errors (-f) and carry explicit connect/total time bounds plus a bounded
+    retry budget. Reverting any single download to `curl -sSL` must turn
+    this suite red.
+    """
+
+    EXPECTED_DOWNLOADS = {
+        "https://bootstrap.pypa.io/get-pip.py": "$RUNNER_TEMP/get-pip.py",
+        "shellcheck/releases/download/": "shellcheck.tar.xz",
+        "mvdan/sh/releases/download/": "shfmt",
+        "rhysd/actionlint/releases/download/": "actionlint.tar.gz",
+        "ast-grep/ast-grep/releases/download/": "ast-grep.zip",
+    }
+    BOUNDED_OPTIONS = (
+        "--connect-timeout", "--max-time", "--retry", "--retry-delay", "--retry-max-time",
+    )
+
+    @staticmethod
+    def curl_invocations():
+        workflow = (REPO_ROOT / ".github" / "workflows" / "quality-gates.yml").read_text()
+        invocations = []
+        for line in workflow.splitlines():
+            stripped = line.strip()
+            # Only shell lines invoking curl are tokenized; other YAML
+            # lines (prose, expressions) need not be valid shell.
+            if stripped.startswith("#") or not re.search(r"(^|[\s;&|(])curl\s", stripped):
+                continue
+            tokens = shlex.split(stripped)
+            invocations.append(tokens[tokens.index("curl") + 1:])
+        return invocations
+
+    @staticmethod
+    def option_value(args, option):
+        for index, arg in enumerate(args):
+            if arg == option and index + 1 < len(args):
+                return args[index + 1]
+            if arg.startswith(option + "="):
+                return arg.split("=", 1)[1]
+        return None
+
+    def test_all_five_downloads_are_present(self):
+        invocations = self.curl_invocations()
+        self.assertEqual(len(invocations), len(self.EXPECTED_DOWNLOADS))
+        for url_part, output in self.EXPECTED_DOWNLOADS.items():
+            matches = [args for args in invocations if any(url_part in arg for arg in args)]
+            self.assertEqual(len(matches), 1, url_part)
+            self.assertEqual(self.option_value(matches[0], "-o"), output, url_part)
+
+    def test_every_download_fails_on_http_errors(self):
+        for args in self.curl_invocations():
+            short_flags = "".join(
+                arg[1:] for arg in args if arg.startswith("-") and not arg.startswith("--")
+                and arg != "-o"
+            )
+            self.assertTrue("f" in short_flags or "--fail" in args, f"missing --fail: {args}")
+            # -sS keeps errors visible; -L follows release redirects.
+            for flag in "sSL":
+                self.assertIn(flag, short_flags, f"missing -{flag}: {args}")
+
+    def test_every_download_has_time_and_retry_bounds(self):
+        for args in self.curl_invocations():
+            values = {}
+            for option in self.BOUNDED_OPTIONS:
+                value = self.option_value(args, option)
+                self.assertIsNotNone(value, f"missing {option}: {args}")
+                self.assertTrue(value.isdigit() and int(value) > 0, f"{option} {value!r}: {args}")
+                values[option] = int(value)
+            # Each attempt is capped by --max-time, so the worst case per
+            # download is (retries + 1) attempts; keep it well under the
+            # job budget so a stalled mirror fails the step instead of
+            # hanging the runner.
+            self.assertLess(values["--connect-timeout"], values["--max-time"], args)
+            self.assertLessEqual(values["--max-time"] * (values["--retry"] + 1), 600, args)
+
 
 class TestScan(unittest.TestCase):
     def _finding(self, file, rule="py-subprocess-timeout"):

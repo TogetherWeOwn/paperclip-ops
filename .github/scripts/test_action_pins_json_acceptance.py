@@ -1033,6 +1033,136 @@ class JsonContract(unittest.TestCase):
                                    scan_complete=True, requested=1, checked=1,
                                    refused=0)
 
+    # -- preflight extraction regression guards -------------------------------
+    def assert_preflight_extraction(self, source, expected):
+        with tempfile.TemporaryDirectory() as tmp:
+            write(tmp, "wf.yml", source)
+            before = snapshot(tmp)
+            structured = run_cli(["--json", "wf.yml"], tmp)
+            text = run_cli(["wf.yml"], tmp)
+            structured_again = run_cli(["--json", "wf.yml"], tmp)
+            text_again = run_cli(["wf.yml"], tmp)
+            self.assertEqual(before, snapshot(tmp))
+            expected_exit = 1 if expected else 0
+            with self.subTest(mode="json"):
+                obj = self.parse_json(structured)
+                self.assertEqual(expected_exit, structured.returncode)
+                self.assertEqual(b"", structured_again.stderr)
+                self.assertEqual(expected_exit, structured_again.returncode)
+                self.assertEqual(structured.stdout, structured_again.stdout)
+                self.assert_common(obj, ok=not expected, scan_complete=True,
+                                   requested=1, checked=1, refused=0)
+                self.assertEqual([], obj["errors"])
+                self.assertEqual(expected, [(f["line"], f["value"])
+                                            for f in obj["findings"]])
+                self.assertEqual("pin_to_full_sha_or_digest" if expected else
+                                 "none", obj["next_action"])
+                for finding in obj["findings"]:
+                    self.assert_finding(finding, path="wf.yml")
+            with self.subTest(mode="text"):
+                self.assertEqual(b"", text.stderr)
+                self.assertEqual(expected_exit, text.returncode)
+                self.assertEqual(structured.returncode, text.returncode)
+                self.assertEqual(b"", text_again.stderr)
+                self.assertEqual(expected_exit, text_again.returncode)
+                self.assertEqual(text.stdout, text_again.stdout)
+                output = text.stdout.decode("utf-8")
+                self.assertNotIn("Traceback", output)
+                if expected:
+                    annotations = output.splitlines()
+                    self.assertEqual(len(expected), len(annotations))
+                    for annotation, (line, value) in zip(annotations, expected):
+                        self.assertTrue(annotation.startswith(
+                            f"::error file=wf.yml,line={line}::"), annotation)
+                        self.assertIn(f"unpinned action `{value}`", annotation)
+                else:
+                    self.assertIn("Action pins OK", output)
+                    self.assertNotIn("::error", output)
+                    self.assertEqual(1, len(output.splitlines()))
+
+    def test_sequence_block_scalar_preserves_unpinned_sibling(self):
+        for marker in ("|", ">-"):
+            with self.subTest(marker=marker):
+                self.assert_preflight_extraction(
+                    f"steps:\n  - name: {marker}\n"
+                    "      Checkout\n"
+                    "    uses: actions/checkout@v4\n",
+                    [(4, "actions/checkout@v4")])
+
+    def test_sequence_block_scalar_pinned_sibling_is_clean(self):
+        for marker in ("|", ">-"):
+            with self.subTest(marker=marker):
+                self.assert_preflight_extraction(
+                    f"steps:\n  - name: {marker}\n"
+                    "      Checkout\n"
+                    f"    uses: actions/checkout@{SHA}\n", [])
+
+    def test_empty_flow_value_preserves_unpinned_sibling(self):
+        self.assert_preflight_extraction(
+            "steps: [{name: , uses: actions/checkout@v4}]\n",
+            [(1, "actions/checkout@v4")])
+
+    def test_empty_flow_value_pinned_sibling_is_clean(self):
+        self.assert_preflight_extraction(
+            f"steps: [{{name: , uses: actions/checkout@{SHA}}}]\n", [])
+
+    def test_empty_flow_value_preserves_later_same_line_step_in_sorted_order(self):
+        self.assert_preflight_extraction(
+            "steps: [{name: , uses: actions/setup-node@v4}, "
+            "{uses: actions/checkout@v4}]\n",
+            [(1, "actions/checkout@v4"), (1, "actions/setup-node@v4")])
+
+    def test_empty_flow_value_preserves_later_flow_line(self):
+        self.assert_preflight_extraction(
+            "steps: [\n"
+            "  {name: , uses: actions/checkout@v4},\n"
+            "  {uses: actions/setup-node@v4}\n"
+            "]\n",
+            [(2, "actions/checkout@v4"), (3, "actions/setup-node@v4")])
+
+    def test_empty_flow_value_pinned_later_flow_line_is_clean(self):
+        self.assert_preflight_extraction(
+            "steps: [\n"
+            f"  {{name: , uses: actions/checkout@{SHA}}},\n"
+            f"  {{uses: actions/setup-node@{SHA}}}\n"
+            "]\n", [])
+
+    def test_empty_trailing_sequence_item_is_clean(self):
+        self.assert_preflight_extraction("branches:\n  - \n", [])
+
+    def test_empty_trailing_sequence_item_eof_and_newline_variants_are_clean(self):
+        sources = (
+            "branches:\n  - ",
+            "branches:\r\n  - \r\n",
+            "branches:\n  - \n\n",
+            "branches:\n  -\n",
+        )
+        for source in sources:
+            with self.subTest(source=source):
+                self.assert_preflight_extraction(source, [])
+
+    def test_empty_sequence_preserves_later_unpinned_mapping_and_key_line(self):
+        cases = (
+            ("branches:\n  - \nuses: actions/checkout@v4\n",
+             [(3, "actions/checkout@v4")]),
+            ("steps:\n  - with:\n      branches:\n        - \n"
+             "    uses: actions/checkout@v4\n",
+             [(5, "actions/checkout@v4")]),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assert_preflight_extraction(source, expected)
+
+    def test_empty_sequence_before_pinned_mapping_is_clean(self):
+        sources = (
+            f"branches:\n  - \nuses: actions/checkout@{SHA}\n",
+            "steps:\n  - with:\n      branches:\n        - \n"
+            f"    uses: actions/checkout@{SHA}\n",
+        )
+        for source in sources:
+            with self.subTest(source=source):
+                self.assert_preflight_extraction(source, [])
+
 
 if __name__ == "__main__":
     unittest.main()

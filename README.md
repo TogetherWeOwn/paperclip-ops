@@ -96,6 +96,10 @@ For native skill versions, reusable examples and isolated pinned-version tests,
 see the [versioned skill fixture procedure](docs/versioned-skill-fixtures.md).
 It adds no runtime registry, host automation or skill-assignment authority.
 
+For passive all-attempt cost per delivered outcome and trace diagnostics, see the
+[Trace and Outcome Costs plugin](plugins/trace-cost-analytics/README.md). It analyzes
+caller-supplied native snapshots without collecting data or changing routing.
+
 For one policy across plan, build, and review phases, see the
 [role, provider, and rubric coherence procedure](docs/role-provider-rubric-coherence.md).
 It scopes guidance to role and phase, keeps task policy provider-independent,

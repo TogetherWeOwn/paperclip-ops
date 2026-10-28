@@ -513,11 +513,11 @@ def _scan_dispatch(relpath, lines):
                 "inputs not parsed"))
             i += 1
             continue
-        match = re.match(r"^(\s*)workflow_dispatch\s*:\s*(.*)$", code)
+        match = re.match(r"^(\s*)(['\"]?)workflow_dispatch\2\s*:\s*(.*)$", code)
         if not match:
             i += 1
             continue
-        if match.group(2).strip():
+        if match.group(3).strip():
             skipped.append(_coverage(
                 relpath, i + 1, "skipped",
                 "inline workflow_dispatch form; inputs not parsed"))
@@ -533,14 +533,14 @@ def _scan_dispatch(relpath, lines):
             i += 1
         block = lines[block_start:i]
         inputs_at = [k for k, ln in enumerate(block)
-                     if re.match(r"^\s*inputs\s*:\s*(#.*)?$", _strip_comment(ln).rstrip())]
+                     if re.match(r"^\s*(['\"]?)inputs\1\s*:\s*(#.*)?$", _strip_comment(ln).rstrip())]
         if not inputs_at:
             for k, ln in enumerate(block):
-                junk = re.match(r"^\s*inputs\s*:\s*(.*)$",
+                junk = re.match(r"^\s*(['\"]?)inputs\1\s*:\s*(.*)$",
                                 _strip_comment(ln).rstrip())
                 if not junk:
                     continue
-                rest = junk.group(1).strip()
+                rest = junk.group(2).strip()
                 if rest in ("{}", "[]"):
                     skipped.append(_coverage(
                         relpath, block_start + k + 1, "skipped",

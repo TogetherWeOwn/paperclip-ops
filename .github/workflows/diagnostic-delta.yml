@@ -20,6 +20,11 @@ on:
         description: Full paperclip-ops commit SHA, pinned alongside the workflow ref
         required: true
         type: string
+      artifact-name:
+        description: Report artifact name; must be unique per invocation within one workflow run
+        required: false
+        default: diagnostic-delta-report
+        type: string
   workflow_dispatch:
     inputs:
       base-sha:
@@ -33,6 +38,11 @@ on:
       tools-ref:
         description: Full paperclip-ops commit SHA, pinned alongside the workflow ref
         required: true
+        type: string
+      artifact-name:
+        description: Report artifact name; must be unique per invocation within one workflow run
+        required: false
+        default: diagnostic-delta-report
         type: string
 
 permissions:
@@ -49,7 +59,7 @@ jobs:
       HEAD_SHA: ${{ inputs.head-sha }}
       TOOLS_REF: ${{ inputs.tools-ref }}
       CALL_INPUTS: ${{ toJSON(inputs) }}
-      REPORT_PATH: /tmp/diagnostic-delta-report.json
+      REPORT_PATH: ${{ github.workspace }}/diagnostic-delta-report.json
     steps:
       - name: Validate immutable inputs
         shell: bash
@@ -92,6 +102,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: diagnostic-delta-report
+          name: ${{ inputs.artifact-name }}
           path: ${{ env.REPORT_PATH }}
           if-no-files-found: error

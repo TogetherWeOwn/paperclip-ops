@@ -30,7 +30,10 @@ base/head/policy SHAs, occurrence counts (`before`, `after`, `new`,
 (`skipped`, `unknown` for base and head). Counts refer to in-scope
 occurrences. Errors name a nonempty `code`/`next_action` pair and a boolean
 `retryable`. Git environment overrides and system/global configuration are
-ignored so they cannot redirect `--repo` to a different repository.
+ignored so they cannot redirect `--repo` to a different repository. Supplied
+SHAs must match the repository's object format (40 hex for SHA-1, 64 for
+SHA-256) and be the exact full object ID they resolve to: refs, hex-looking
+branch names and abbreviations are refused before any snapshot is read.
 
 ## Identity and comparison rules
 
@@ -82,7 +85,10 @@ fields, producers, versions, invalid paths and non-string globs fail closed.
   Git/producer subprocess at 30 seconds. A pinned AX-only collector drains
   producer pipes concurrently, collecting at most 1 MiB of stdout and 64 KiB of
   stderr; the first excess byte kills and reaps the producer, returning
-  `producer_output_limit`. Its inner deadline is 25 seconds, leaving cleanup
+  `producer_output_limit`. Git subprocess output is collected under the same
+  discipline (per-call stdout limit, 64 KiB of stderr, kill and reap on the
+  first excess byte), never spooled unbounded to temporary storage first. Its
+  inner deadline is 25 seconds, leaving cleanup
   time within the outer 30-second deadline. These collection bounds do not
   bound memory used internally by the trusted producer to construct its JSON.
   Policy size is at most 64 KiB and
@@ -90,7 +96,13 @@ fields, producers, versions, invalid paths and non-string globs fail closed.
 - The producer scans a temporary projection containing only scoped regular
   UTF-8 files. Scoped symlinks/submodules, their possible ancestors and the
   producer's excluded directories are refused, rather than silently followed
-  or certified. Its ordinary test-file and non-CLI exclusions still apply.
+  or certified. Possible ancestors are judged against the complete path
+  components before a pattern's first wildcard component, so replacing
+  `scripts/pkg-one` with a symlink or gitlink under a `scripts/pkg-*/**`
+  scope is refused, not reported as resolved debt. Quoted
+  `"workflow_dispatch"` / `"inputs"` container keys are recognised dispatch
+  containers, never silently cleared. Its ordinary test-file and non-CLI
+  exclusions still apply.
 
 The initial policy covers only this checker's own directory
 (`scripts/quality-gates/**`). It does not claim to cover all repository
@@ -100,7 +112,8 @@ modules. Expand coverage only where a real diagnostic contract exists.
 
 `.github/workflows/diagnostic-delta.yml` exposes a `workflow_call` interface
 with required `base-sha`, `head-sha` and `tools-ref` inputs (full lowercase
-commit SHAs), plus `workflow_dispatch` with the same required inputs so a real
+commit SHAs) and an optional `artifact-name` input (default
+`diagnostic-delta-report`), plus `workflow_dispatch` with the same inputs so a real
 Actions run can produce evidence at exact SHAs. There is deliberately no push
 trigger: native push events have no trusted caller-supplied base snapshot to
 measure against. For dispatch runs, the provided base snapshot is the
@@ -114,9 +127,14 @@ separately at `tools-ref`. Raw call inputs are validated before checkout;
 empty or mutable inputs fail rather than falling back to event SHAs or local
 tools. The hosted job runs the pinned checker only, never caller-supplied
 scripts: a caller-local checker copy is ignored even when present. The JSON
-report is written to an absolute, step-cwd-independent path, retained with `always()` even
+report is written to a workspace-specific absolute path (never a shared
+machine-global file), retained with `always()` even
 on failure, and a missing report is an error, never a silent pass. The
 checker's nonzero exit status is preserved through the report capture.
+Artifacts are never overwritten: a caller that invokes the workflow more
+than once in a single workflow run (including through a matrix) must pass a
+distinct `artifact-name` for each invocation, or the later upload fails
+instead of replacing the earlier comparison's evidence.
 
 Both checkouts disable persisted credentials; permissions are only `contents:
 read`. Do not inherit secrets. No host actions, package installs, production

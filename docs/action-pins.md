@@ -1,8 +1,9 @@
 # Action pin check
 
 `.github/scripts/action_pins.py` is the offline, read-only supply-chain
-gate that every `uses:` is SHA-pinned: `owner/repo@<40-hex>` for third-party
-actions and reusable workflows, `./...` for local actions, or
+gate that every `uses:` is SHA-pinned: `owner/repo[/path]@<40-hex>` for
+third-party actions and reusable workflows (for example,
+`octo/repo/.github/workflows/reusable.yml@<40-hex>`), `./...` for local actions, or
 `docker://...@sha256:<64-hex>` for containers. Tags, branches, short SHAs and
 missing values are findings. It never uses the network, `gh`, or writes a
 file; running it is already its dry-run. Pin detection is identical in both
@@ -18,7 +19,16 @@ Omit the paths to scan the default discovery set
 after the paths. Omit `--json` for the existing `::error` annotation/prose
 output used by the `pr-lint` job. `--help` prints the same summary. Input
 files are decoded as UTF-8, and text output is emitted as UTF-8, independent
-of the host locale.
+of the host locale. Text annotation file properties escape `%`, CR, LF, comma
+and colon once; message escaping is separate. JSON paths stay verbatim.
+
+Extraction supports block and nested flow mappings, quoted scalar keys with
+JSON-compatible Unicode escapes, and explicit scalar keys (`? uses` / `: value`).
+It attributes findings to the key's source line, checks every declaration on a
+flow line, and skips quoted values and literal/folded block-scalar bodies rather
+than interpreting shell text as declarations. This is not a general YAML
+validator: anchors, aliases, tags and complex keys are not resolved, and arbitrary
+YAML support is not claimed. Pin policy is the same for all supported key forms.
 
 ## JSON contract: `action-pins.v1`
 
@@ -27,13 +37,16 @@ no annotations, prose, or tracebacks on stdout or stderr:
 
 - `schema`: exactly `"action-pins.v1"`.
 - `ok`: true only when the scan is complete with no findings and no errors.
-- `scan_complete`: true only when at least one input was requested and every
-  requested input was read and checked. A complete scan can still have
-  findings (`ok` false, `scan_complete` true).
-- `requested`, `checked`, `refused`: input counts with
-  `requested == checked + refused`. Explicit mode counts the path arguments;
-  default mode counts discovered files. Each refused input has one `errors`
-  entry. Missing evidence is never a clean result.
+- `scan_complete`: true only when discovery succeeded, at least one input was
+  requested and every requested input was read and checked. A complete scan can
+  still have findings (`ok` false, `scan_complete` true).
+- `requested`, `checked`, `refused`: file-input counts with
+  `requested == checked + refused`. Explicit mode counts unique path arguments;
+  default mode counts uniquely discovered candidate paths. Duplicate paths are
+  counted once. Each refused file input has one `errors` entry, but directory
+  enumeration errors are additional: `len(errors)` is not the refused-file
+  count. Unknown children of an unreadable directory are not counted. Missing
+  evidence is never a clean result.
 - `findings`: pin violations sorted by `(path, line, code, value)`, each with
   `code` (`"unpinned-action"` in v1), `path` (explicit paths verbatim),
   `line` (1-based), `value` (empty for a missing `uses:` value), `message`,
@@ -51,9 +64,15 @@ no annotations, prose, or tracebacks on stdout or stderr:
   | `input-invalid-encoding` | `fix_input_encoding` |
   | `no-inputs-discovered` | `provide_input_files` |
 
-  `no-inputs-discovered` is scan-level: all counts are 0 and
-  `scan_complete` is false. Findings from checked inputs survive a partial
-  input failure.
+  `no-inputs-discovered` means successfully empty discovery: all counts are 0
+  and `scan_complete` is false. Missing optional default roots are normal.
+  Actual enumeration failures (including nested action directories) produce
+  `input-unreadable` with the directory path and diagnostic, force
+  `scan_complete=false`, `ok=false` and exit 1, and preserve accessible findings
+  and file errors. Failed enumeration with zero discovered files reports the
+  enumeration error, not `no-inputs-discovered`. For example, denied workflows
+  plus one readable pinned local action yields requested=1, checked=1, refused=0,
+  an `input-unreadable` directory error and an incomplete/failed verdict.
 - `retryable`: false in v1. `next_action`: `"none"` when `ok`, else the first
   error's, else the first finding's, `next_action`.
 
@@ -80,8 +99,9 @@ python3 -B -m unittest discover -s .github/scripts -p 'test_action_pins_json_acc
 ```
 
 These cover the pin rules, text/JSON verdict parity, explicit and
-default-discovered input failures (including a directory, a non-regular file
-such as a FIFO, or invalid UTF-8),
+default-discovered input failures (including a directory, a no-writer FIFO,
+invalid UTF-8 and actual non-root enumeration denial), ASCII-locale text output,
+the bounded extraction forms and shell-body controls, both annotation sites,
 deterministic ordering, unusual filenames, help/usage boundaries and
 no-write behaviour. They run in the `pr-lint` CI job; the acceptance file is
 maintained independently of the implementation. This source contract is not

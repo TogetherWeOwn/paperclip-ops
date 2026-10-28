@@ -20,7 +20,6 @@ dry-run. Runs inside the existing required `pr-lint` job, so adopting it adds
 no new required check and needs no ruleset change. Stdlib only.
 """
 import argparse
-import glob
 import json
 import os
 import re
@@ -31,11 +30,10 @@ from pathlib import Path
 
 SCHEMA = "action-pins.v1"
 
-# `uses` as a YAML mapping key: at line start (after `-`/indent), or after
-# `{`/`,` in a flow mapping. Covers `- uses:`, `uses:`, `- uses :`,
-# `"uses":`, and `- { uses: ... }`. Deliberately not "anywhere": a `uses:`
-# inside a `run:` script value must not flag.
-USES = re.compile(r'(?:^|[{,\-])\s*["\']?uses["\']?\s*:(?:\s*(?P<val>.+?))?\s*$')
+# Quoted scalars are consumed whole, so flow punctuation in shell strings
+# cannot become mapping keys. This is extraction, not a general YAML loader.
+_QUOTED = re.compile(r'''"(?:\\.|[^"\\])*"|'(?:''|[^'])*' ''', re.X)
+_BLOCK_SCALAR = re.compile(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?\s*(?:#.*)?$")
 SHA40 = re.compile(r"^[0-9a-fA-F]{40}$")
 SHA64 = re.compile(r"^[0-9a-fA-F]{64}$")
 # owner/repo, optional /path, @40-hex. Owner and repo allow word chars, dot,
@@ -87,22 +85,159 @@ def is_pinned(value):
     return bool(PINNED_ACTION.match(value))
 
 
+def _scalar_end(text, start, *, flow=False, key=False):
+    quoted = _QUOTED.match(text, start)
+    if quoted:
+        return quoted.end()
+    pos = start
+    while pos < len(text) and text[pos] not in "\r\n#":
+        char = text[pos]
+        if flow and char in ",[]{}":
+            break
+        if key and char == ":" and (
+                pos + 1 == len(text) or text[pos + 1].isspace()
+                or (flow and text[pos + 1] in ",[]{}")):
+            break
+        pos += 1
+    return pos
+
+
+def _key_text(raw):
+    raw = raw.strip()
+    if raw.startswith('"'):
+        try:
+            return json.loads(raw)  # Includes Unicode escapes in quoted keys.
+        except ValueError:
+            return raw
+    if raw.startswith("'") and raw.endswith("'"):
+        return raw[1:-1].replace("''", "'")
+    return raw
+
+
+def _skip_space(text, pos):
+    while pos < len(text):
+        if text[pos].isspace():
+            pos += 1
+        elif text[pos] == "#":
+            end = text.find("\n", pos)
+            pos = len(text) if end < 0 else end + 1
+        else:
+            break
+    return pos
+
+
+def _flow_uses(text, start):
+    """Extract mapping keys from a flow collection without loading a YAML AST."""
+    mapping = text[start] == "{"
+    close = "}" if mapping else "]"
+    found, pos = [], start + 1
+    while True:
+        pos = _skip_space(text, pos)
+        if pos >= len(text):
+            return found, pos
+        if text[pos] == close:
+            return found, pos + 1
+        if text[pos] == ",":
+            pos += 1
+            continue
+        key, key_start = None, pos
+        if mapping:
+            if text[pos] == "?" and text[pos + 1:pos + 2].isspace():
+                pos = _skip_space(text, pos + 1)
+                key_start = pos
+            end = _scalar_end(text, pos, flow=True, key=True)
+            key = _key_text(text[pos:end])
+            pos = _skip_space(text, end)
+            if pos >= len(text) or text[pos] != ":":
+                return found, pos
+            pos = _skip_space(text, pos + 1)
+        value_start = pos
+        if pos < len(text) and text[pos] in "[{":
+            nested, pos = _flow_uses(text, pos)
+            found.extend(nested)
+        else:
+            pos = _scalar_end(text, pos, flow=True)
+        if key == "uses":
+            found.append((text.count("\n", 0, key_start) + 1,
+                          strip_value(text[value_start:pos])))
+        if pos == value_start and (pos >= len(text) or text[pos] not in (",", close)):
+            return found, pos  # Empty values before delimiters are valid.
+
+
+def _uses_values(text):
+    """Support block/flow scalar keys, explicit keys and quoted key escapes.
+
+    Skip scalar bodies rather than searching their contents for `uses:`.
+    Anchors, aliases, tags and complex keys are not resolved by this checker.
+    """
+    found, offset, consumed = [], 0, 0
+    block_indent, explicit = None, None
+    for number, line in enumerate(text.splitlines(keepends=True), 1):
+        start = offset
+        offset += len(line)
+        if start < consumed:
+            continue
+        content = line.lstrip()
+        indent = len(line) - len(content)
+        if not content.strip() or content.startswith("#"):
+            continue
+        if block_indent is not None and indent > block_indent:
+            continue
+        block_indent = None
+        pos = start + indent
+        if text[pos] == "-" and text[pos + 1:pos + 2].isspace():
+            pos += 1
+            while pos < offset and text[pos] in " \t":
+                pos += 1
+            if pos >= offset or text[pos] in "\r\n":
+                continue  # An empty sequence item must not consume the next line.
+        mapping_indent = pos - start
+        key_line = number
+        if explicit and text[pos] == ":":
+            key, key_line = explicit
+            explicit = None
+            pos += 1
+        else:
+            if explicit and explicit[0] == "uses":
+                found.append((explicit[1], ""))
+            explicit = None
+            if text[pos] in "[{":
+                nested, consumed = _flow_uses(text, pos)
+                found.extend(nested)
+                continue
+            is_explicit = text[pos:pos + 2] == "? "
+            if is_explicit:
+                pos += 2
+            end = _scalar_end(text, pos, key=True)
+            key = _key_text(text[pos:end])
+            pos = end
+            while pos < offset and text[pos] in " \t":
+                pos += 1
+            if pos >= offset or text[pos] != ":":
+                if is_explicit:
+                    explicit = (key, number)
+                continue
+            pos += 1
+        while pos < offset and text[pos] in " \t":
+            pos += 1
+        if pos < offset and text[pos] in "[{":
+            nested, consumed = _flow_uses(text, pos)
+            found.extend(nested)
+            end = consumed
+        else:
+            end = _scalar_end(text, pos)
+            if _BLOCK_SCALAR.fullmatch(text[pos:offset].strip()):
+                block_indent = mapping_indent
+        if key == "uses":
+            found.append((key_line, strip_value(text[pos:end])))
+    if explicit and explicit[0] == "uses":
+        found.append((explicit[1], ""))
+    return found
+
+
 def lint_text(path, text):
-    out = []
-    for i, line in enumerate(text.splitlines(), start=1):
-        stripped = line.lstrip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        m = USES.search(line)
-        if not m:
-            continue
-        value = strip_value(m.group("val") or "")
-        if not value:
-            out.append(Finding(str(path), i, ""))
-            continue
-        if not is_pinned(value):
-            out.append(Finding(str(path), i, value))
-    return out
+    return [Finding(str(path), line, value) for line, value in _uses_values(text)
+            if not is_pinned(value)]
 
 
 def lint_file(path):
@@ -113,17 +248,62 @@ def _escape(text):
     return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
+def _escape_property(text):
+    return _escape(text).replace(",", "%2C").replace(":", "%3A")
+
+
+def _discover_files():
+    """Return candidate paths and observable directory-enumeration errors.
+
+    Missing optional roots are normal. Other failed enumerations are scan
+    errors, not refused files: their unknown children cannot be counted.
+    """
+    found, errors = set(), []
+
+    def visit(directory, recursive=False, optional=False, ancestors=frozenset()):
+        try:
+            identity = os.stat(directory)
+            identity = (identity.st_dev, identity.st_ino)
+            if identity in ancestors:
+                return  # Do not follow a directory symlink cycle.
+            with os.scandir(directory) as entries:
+                entries = sorted(entries, key=lambda entry: entry.name)
+        except FileNotFoundError as exc:
+            if not optional:
+                errors.append(_input_error(
+                    "input-unreadable", directory,
+                    f"{directory}:1: cannot enumerate directory ({exc})"))
+            return
+        except OSError as exc:
+            errors.append(_input_error(
+                "input-unreadable", directory,
+                f"{directory}:1: cannot enumerate directory ({exc})"))
+            return
+        for entry in entries:
+            if entry.name.startswith("."):
+                continue  # Preserve glob's default hidden-path exclusion.
+            candidate = (entry.name in ("action.yml", "action.yaml") if recursive
+                         else entry.name.endswith((".yml", ".yaml")))
+            if candidate:
+                found.add(entry.path)
+            if recursive:
+                try:
+                    is_directory = entry.is_dir()
+                except OSError as exc:
+                    errors.append(_input_error(
+                        "input-unreadable", entry.path,
+                        f"{entry.path}:1: cannot inspect directory ({exc})"))
+                    continue
+                if is_directory:
+                    visit(entry.path, True, ancestors=ancestors | {identity})
+
+    visit(os.path.join(".github", "workflows"), optional=True)
+    visit(os.path.join(".github", "actions"), recursive=True, optional=True)
+    return sorted(found), sorted(errors, key=lambda error: (error.path, error.code))
+
+
 def default_files():
-    pats = [
-        os.path.join(".github", "workflows", "*.yml"),
-        os.path.join(".github", "workflows", "*.yaml"),
-        os.path.join(".github", "actions", "**", "action.yml"),
-        os.path.join(".github", "actions", "**", "action.yaml"),
-    ]
-    found = []
-    for pat in pats:
-        found.extend(glob.glob(pat, recursive=True))
-    return sorted(set(found))
+    return _discover_files()[0]
 
 
 @dataclass
@@ -238,7 +418,7 @@ def build_report(requested, findings, errors, checked, refused):
         (_error_entry(e) for e in errors),
         key=lambda e: (e["path"] or "", e["code"]),
     )
-    scan_complete = requested > 0 and checked == requested
+    scan_complete = requested > 0 and checked == requested and not error_entries
     ok = scan_complete and not finding_entries and not error_entries
     if ok:
         next_action = "none"
@@ -285,10 +465,10 @@ def _print_text(report, errors):
         if error.path is None:
             print(f"::error ::{error.message}")
         else:
-            print(f"::error file={error.path},line=1::{_escape(error.message)}")
+            print(f"::error file={_escape_property(error.path)},line=1::{_escape(error.message)}")
     for entry in report["findings"]:
         print(
-            f"::error file={entry['path']},line={entry['line']}::"
+            f"::error file={_escape_property(entry['path'])},line={entry['line']}::"
             f"{_escape(entry['message'])}"
         )
     if report["ok"]:
@@ -300,13 +480,15 @@ def _parser(prog):
         prog=prog,
         description=(
             "Check that every `uses:` in workflows and local actions is "
-            "SHA-pinned (`owner/repo@<40-hex>`, `./...` local actions, or "
+            "SHA-pinned (`owner/repo[/path]@<40-hex>`, `./...` local actions, or "
             "`docker://...@sha256:<64-hex>`). Offline and read-only."
         ),
         epilog=(
             "With --json a check run prints exactly one action-pins.v1 JSON "
             "object to stdout. Check exits: 0 clean, 1 findings or refused "
-            "input. Usage errors exit 2 with text on stderr and are never "
+            "input/discovery. Counts are unique file paths; directory errors "
+            "are additional and force an incomplete scan. Usage errors exit 2 "
+            "with text on stderr and are never "
             "JSON; --help prints this text and exits 0 even with --json."
         ),
     )
@@ -334,13 +516,12 @@ def main(argv=None):
         findings, errors, checked = scan_files(files)
         requested, refused = len(files), len(errors)
     else:
-        files = default_files()
+        files, discovery_errors = _discover_files()
         requested = len(files)
-        if files:
-            findings, errors, checked = scan_files(files)
-            refused = len(errors)
-        else:
-            findings, checked, refused = [], 0, 0
+        findings, errors, checked = scan_files(files)
+        refused = len(errors)
+        errors.extend(discovery_errors)
+        if not files and not errors:
             errors = [_input_error(
                 "no-inputs-discovered", None, _NO_INPUTS_MESSAGE)]
     report = build_report(requested, findings, errors, checked, refused)

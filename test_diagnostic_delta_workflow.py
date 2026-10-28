@@ -56,9 +56,17 @@ class DiagnosticDeltaWorkflow(unittest.TestCase):
         (self.workspace / "caller").mkdir()
 
     def expression(self, value, contexts):
-        if not value.startswith("${{"):
+        if "${{" not in value:
             return value
-        expression = value.removeprefix("${{").removesuffix("}}").strip()
+        self.assertEqual(value.count("${{"), 1, "Only one expression is supported in offline harness: " + value)
+        match = re.fullmatch(r"(.*?)\$\{\{(.*?)\}\}(.*)", value, re.DOTALL)
+        self.assertIsNotNone(match, "Unsupported expression in offline harness: " + value)
+        prefix, expression, suffix = match.groups()
+        if prefix or suffix:
+            resolved = self.expression("${{" + expression + "}}", contexts)
+            rendered = str(resolved).lower() if isinstance(resolved, bool) else str(resolved)
+            return prefix + rendered + suffix
+        expression = expression.strip()
         if expression == "toJSON(inputs)":
             return json.dumps(contexts["inputs"])
         # Only the sibling workflow's simple expression subset. Reject new

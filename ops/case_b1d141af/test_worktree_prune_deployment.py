@@ -107,7 +107,56 @@ class UnitContract(unittest.TestCase):
         self.assertIn(f"/usr/bin/sha256sum --check --strict {base}/SHA256SUMS", pre)
         self.assertIn(f"/usr/bin/test -x {base}/ops/case_b1d141af/run-worktree-prune.sh", pre)
         self.assertIn("/usr/bin/test -x /usr/bin/timeout", pre)
-        self.assertIn("/usr/bin/test -x /usr/bin/podman", pre)
+        self.assertTrue(any(ln.startswith("/bin/sh -c ") for ln in pre))
+
+    def test_shipped_engine_defaults_match_unit_preflight(self):
+        expected = ["/usr/bin/podman", "/usr/bin/docker"]
+        default = re.search(
+            r'\$\{PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES:-([^}]+)\}', WRAPPER.read_text())
+        self.assertIsNotNone(default, "wrapper must declare its shipped candidate default")
+        self.assertEqual(default.group(1).split(), expected,
+                         "wrapper must prefer podman and retain docker-only fallback")
+        probe = next(ln for ln in self.option("ExecStartPre") if ln.startswith("/bin/sh -c "))
+        self.assertEqual(re.findall(r"/usr/bin/test -x (/[^ ;|]+)", probe), expected,
+                         "unit preflight must check the same shipped paths in the same order")
+
+    def test_engine_preflight_mirrors_the_wrapper_selection(self):
+        probe = next(ln for ln in self.option("ExecStartPre") if ln.startswith("/bin/sh -c "))
+        script = probe[len("/bin/sh -c '"):-1].replace("$$", "$").replace("/usr/bin/test", "test")
+        bin_ok, bin_missing = "/bin/true", "/nonexistent/engine"
+
+        def run(engine, podman, docker, candidates=None):
+            body = script.replace("/usr/bin/podman", podman).replace("/usr/bin/docker", docker)
+            env = {"PATH": os.environ["PATH"]}
+            if engine is not None:
+                env["PAPERCLIP_WORKTREE_PRUNE_ENGINE"] = engine
+            if candidates is not None:
+                env["PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES"] = candidates
+            return subprocess.run(["/bin/sh", "-c", body], env=env).returncode
+
+        self.assertEqual(run(None, bin_missing, bin_ok), 0)      # docker-only host
+        self.assertEqual(run(None, bin_ok, bin_missing), 0)      # podman-only host
+        self.assertNotEqual(run(None, bin_missing, bin_missing), 0)
+        self.assertEqual(run(bin_ok, bin_missing, bin_missing), 0)   # explicit engine is what is checked
+        self.assertNotEqual(run(bin_missing, bin_ok, bin_ok), 0)     # bad override is not masked by defaults
+
+        cases = [
+            ("later configured candidate", None, bin_missing, bin_missing, f"{bin_missing} {bin_ok}", True),
+            ("configured list replaces defaults", None, bin_ok, bin_ok, f"{bin_missing} {bin_missing}", False),
+            ("empty list falls back to podman", None, bin_ok, bin_missing, "", True),
+            ("empty list falls back to docker", None, bin_missing, bin_ok, "", True),
+            ("empty list with no defaults refuses", None, bin_missing, bin_missing, "", False),
+            ("override wins over missing candidates", bin_ok, bin_missing, bin_missing, bin_missing, True),
+            ("bad override is not masked by candidates", bin_missing, bin_ok, bin_ok, bin_ok, False),
+            ("whitespace-only list refuses", None, bin_ok, bin_ok, " \t ", False),
+        ]
+        for name, engine, podman, docker, candidates, allowed in cases:
+            with self.subTest(name=name):
+                rc = run(engine, podman, docker, candidates=candidates)
+                if allowed:
+                    self.assertEqual(rc, 0)
+                else:
+                    self.assertNotEqual(rc, 0)
 
     def test_exec_start_runs_the_installed_wrapper(self):
         self.assertIn(

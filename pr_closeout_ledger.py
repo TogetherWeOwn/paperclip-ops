@@ -25,6 +25,24 @@ per admitted card per pass. There is no --apply flag on purpose.
        --snapshot ledger_snapshot.json --prior-ledger ledger_state.json \\
        --ledger-out ledger_state_new.json --plan-out plan.json --cards cards.json
 
+Preview with the same evaluator but no output files (preview history and
+deadlines are not persisted; recommendations are diagnostic only):
+
+   python3 pr_closeout_ledger.py --registry pr_closeout_registry.json --snapshot ledger_snapshot.json --dry-run --json
+
+Output paths must be distinct: --ledger-out and --plan-out must differ from
+each other and from --registry, --snapshot and --cards, by canonical path
+and by filesystem identity (symlinks, symlinked parents, ../ spellings and
+hard links all count as the same file). Aliases are refused BEFORE either
+output is opened, so a wrong argument cannot erase the supplied evidence or
+replace the ledger with its own proposal plan; refusals exit 2 with a stable
+output_path_conflict (or output_path_unverifiable when aliasing cannot be
+safely determined) code and leave every existing file byte-identical.
+--prior-ledger is exempt on purpose: it is fully loaded before any write, so
+in-place replacement of the prior ledger stays valid unless that same path is
+also a protected input. This is a pre-write check only -- it makes no atomic
+multi-file or hostile-concurrency guarantee.
+
 Exit codes: 0 healthy-or-terminal (no action due), 1 action due (proposals
 emitted), 2 usage/error, 5 COULD NOT MEASURE. Exit 5 is the load-bearing one:
 an empty registry, an empty snapshot, or an unreadable input must refuse to
@@ -38,6 +56,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -1321,6 +1340,89 @@ def load_inputs(
     return registry, snapshots, reviews, cards, prior_records
 
 
+# ---------------------------------------------------------------------------
+# Output-path alias guard
+# ---------------------------------------------------------------------------
+
+OUTPUT_PATH_CONFLICT = "output_path_conflict"
+OUTPUT_PATH_UNVERIFIABLE = "output_path_unverifiable"
+OUTPUT_PATH_NEXT_ACTION = (
+    "Choose distinct paths for --ledger-out and --plan-out that differ "
+    "from each other and from --registry, --snapshot and --cards."
+)
+
+
+def _path_identity(path: str) -> tuple[str, tuple[int, int] | None]:
+    """Canonical spelling plus filesystem identity for one path.
+
+    The canonical path resolves ``.``/``..``, relative spellings and every
+    symlink component that exists (including a symlinked parent and a
+    dangling final symlink, whose target is where a write would land). The
+    ``(st_dev, st_ino)`` pair additionally catches hard links, whose
+    canonical spellings legitimately differ. A simply-absent path has no
+    identity yet and is judged by canonical spelling alone; any other
+    determination failure raises so the caller can fail closed.
+
+    ``realpath`` must see the original spelling: pre-collapsing it with
+    ``abspath``/``normpath`` would resolve ``..`` lexically before any
+    symlink component, so ``linkdir/../new.json`` would be judged as
+    sitting beside ``linkdir`` when a write actually lands in the link
+    target's parent.
+    """
+    canonical = os.path.realpath(path)
+    try:
+        info = os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return canonical, None
+    return canonical, (info.st_dev, info.st_ino)
+
+
+def output_path_refusal(ledger_out: str, plan_out: str,
+                        protected_paths: list[str]) -> str | None:
+    """Stable refusal code if an output aliases another path, else None.
+
+    ``protected_paths`` are the evidence inputs (registry, snapshot, cards).
+    The prior ledger is deliberately not protected: it is fully loaded before
+    any write, so replacing it in place is the intended workflow -- but a
+    prior path that is also a protected input still refuses via that slot.
+    Determination errors fail closed as output_path_unverifiable rather than
+    risking an overwrite. This is a pre-write check, not an atomicity or
+    hostile-concurrency guarantee.
+    """
+    try:
+        outputs = [_path_identity(ledger_out), _path_identity(plan_out)]
+        protected = [_path_identity(path) for path in protected_paths]
+    except (OSError, RuntimeError):
+        return OUTPUT_PATH_UNVERIFIABLE
+
+    def aliases(left: tuple[str, tuple[int, int] | None],
+                right: tuple[str, tuple[int, int] | None]) -> bool:
+        if left[0] == right[0]:
+            return True
+        return left[1] is not None and left[1] == right[1]
+
+    if aliases(outputs[0], outputs[1]):
+        return OUTPUT_PATH_CONFLICT
+    for output in outputs:
+        for evidence in protected:
+            if aliases(output, evidence):
+                return OUTPUT_PATH_CONFLICT
+    return None
+
+
+def report_output_path_refusal(code: str, as_json: bool) -> int:
+    """Emit the refusal without echoing paths, contents or OSError text."""
+    if as_json:
+        print(json.dumps(
+            {"code": code, "retryable": False,
+             "next_action": OUTPUT_PATH_NEXT_ACTION},
+            indent=2, sort_keys=True))
+    else:
+        print(f"pr_closeout_ledger: {code}: {OUTPUT_PATH_NEXT_ACTION}",
+              file=sys.stderr)
+    return 2
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Durable admitted-PR closeout ledger with exact-head sweep gates (case_1926b5a1).")
@@ -1328,40 +1430,96 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--snapshot", required=True, help="snapshot doc with snapshots/reviews/cards")
     parser.add_argument("--prior-ledger", default=None, help="prior ledger_state JSON for history")
     parser.add_argument("--cards", default=None, help="extra cards doc merged over snapshot cards")
-    parser.add_argument("--ledger-out", required=True, help="where to write the canonical ledger state")
-    parser.add_argument("--plan-out", required=True, help="where to write the bounded proposal plan")
+    parser.add_argument("--ledger-out", default=None,
+                        help="where to write the canonical ledger state (required unless --dry-run); "
+                             "must be a distinct path from --plan-out, --registry, --snapshot and --cards")
+    parser.add_argument("--plan-out", default=None,
+                        help="where to write the bounded proposal plan (required unless --dry-run); "
+                             "must be a distinct path from --ledger-out, --registry, --snapshot and --cards")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="preview only: compute proposals without writing output files; "
+                             "preview history and deadlines are not persisted and "
+                             "recommendations are diagnostic only")
     parser.add_argument("--json", action="store_true", help="emit the plan as JSON instead of a table")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.dry_run:
+        if args.ledger_out is not None or args.plan_out is not None:
+            parser.error("--dry-run conflicts with output paths: "
+                         "--ledger-out/--plan-out are not allowed in a dry run")
+    else:
+        missing = [name for name, value in
+                   (("--ledger-out", args.ledger_out), ("--plan-out", args.plan_out))
+                   if value is None]
+        if missing:
+            parser.error(f"the following arguments are required: {', '.join(missing)}")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
     now = utcnow()
+    stamp = now.isoformat().replace("+00:00", "Z")
     try:
         registry, snapshots, reviews, cards, prior_records = load_inputs(
             args.registry, args.snapshot, args.prior_ledger, args.cards)
+        # Keep unreadable evidence in the exit-5 contract, then refuse aliases
+        # before evaluation or either write. The fully loaded prior ledger is
+        # not protected, so intentional in-place replacement stays valid.
+        if not args.dry_run:
+            protected = [args.registry, args.snapshot]
+            if args.cards:
+                protected.append(args.cards)
+            refusal = output_path_refusal(args.ledger_out, args.plan_out, protected)
+            if refusal is not None:
+                return report_output_path_refusal(refusal, args.json)
+        records: dict[str, dict[str, Any]] = {}
+        for entry in registry:
+            key = registry_key(str(entry["repo"]), int(entry["pr"]))
+            records[key] = evaluate(
+                entry, snapshots.get(key), reviews.get(key), prior_records.get(key), now)
+        proposals = plan_proposals(records, cards, now)
     except LedgerError as error:
+        if args.dry_run:
+            # Safe preview failure (JSON and text alike): stable codes only,
+            # never raw input or exception text (a malformed evidence file
+            # can hold anything).
+            safe_error = {
+                "code": "unmeasurable_evidence",
+                "message": "evidence could not be measured; refusing to report a clean board",
+                "retryable": False,
+                "next_action": "fix the caller-supplied registry/snapshot/cards/"
+                               "prior-ledger evidence and re-run the preview",
+            }
+            if args.json:
+                print(json.dumps({
+                    "generatedAt": stamp,
+                    "dry_run": True,
+                    "persisted": False,
+                    "error": safe_error,
+                }, indent=2, sort_keys=True))
+            else:
+                print(f"pr_closeout_ledger: {safe_error['code']}: {safe_error['message']}; "
+                      f"next: {safe_error['next_action']}", file=sys.stderr)
+            return 5
         print(f"pr_closeout_ledger: {error}", file=sys.stderr)
         return 5
-    records: dict[str, dict[str, Any]] = {}
-    for entry in registry:
-        key = registry_key(str(entry["repo"]), int(entry["pr"]))
-        records[key] = evaluate(
-            entry, snapshots.get(key), reviews.get(key), prior_records.get(key), now)
-    proposals = plan_proposals(records, cards, now)
-    stamp = now.isoformat().replace("+00:00", "Z")
-    ledger_doc = {"generatedAt": stamp, "records": records}
-    plan_doc = {"generatedAt": stamp, "proposals": [p.as_dict() for p in proposals]}
-    try:
-        with open(args.ledger_out, "w", encoding="utf-8") as handle:
-            json.dump(ledger_doc, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-        with open(args.plan_out, "w", encoding="utf-8") as handle:
-            json.dump(plan_doc, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-    except OSError as error:
-        print(f"pr_closeout_ledger: cannot write output: {error}", file=sys.stderr)
-        return 2
+    plan_doc: dict[str, Any] = {"generatedAt": stamp,
+                                "proposals": [p.as_dict() for p in proposals]}
+    if args.dry_run:
+        plan_doc["dry_run"] = True
+        plan_doc["persisted"] = False
+    else:
+        ledger_doc = {"generatedAt": stamp, "records": records}
+        try:
+            with open(args.ledger_out, "w", encoding="utf-8") as handle:
+                json.dump(ledger_doc, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+            with open(args.plan_out, "w", encoding="utf-8") as handle:
+                json.dump(plan_doc, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+        except OSError as error:
+            print(f"pr_closeout_ledger: cannot write output: {error}", file=sys.stderr)
+            return 2
     if args.json:
         print(json.dumps(plan_doc, indent=2, sort_keys=True))
     else:
@@ -1379,6 +1537,9 @@ def main(argv: list[str] | None = None) -> int:
                       f"owner={proposal.owner}: {proposal.recommended_action}")
         else:
             print("proposals: none -- owned and monitored, or terminal/excluded")
+        if args.dry_run:
+            print("dry-run preview: history and deadlines were not persisted; "
+                  "recommendations are diagnostic only")
     return 1 if proposals else 0
 
 

@@ -28,7 +28,7 @@
 // arming auto-merge under a hold would fight the disarm duty, which would
 // immediately disarm it again.
 
-import { snapshotFailureCode } from './github-adapter.js'
+import { snapshotFailureCode, writeFailureCode } from './github-adapter.js'
 import {
   REVIEW_CHECK,
   buildReadinessBlock,
@@ -331,8 +331,8 @@ export function createReconciler({ github, policy, nowMs = () => Date.now() }) {
           await writers[action](ref, decision)
           steps.push({ action, result: 'done' })
           counters[counterFor[action]]++
-        } catch {
-          steps.push({ action, result: 'failed', error: `${action}-failed` })
+        } catch (error) {
+          steps.push({ action, result: 'failed', error: `${action}-failed`, failure: writeFailureCode(error) })
           failed = true
         }
       }

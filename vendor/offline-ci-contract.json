@@ -350,7 +350,10 @@
     "trace correlator suite:1",
     "Dispatch sweep failure visibility acceptance:1",
     "native runner coverage classifier suite:1",
-    "AX metric contract suites:1"
+    "AX metric contract suites:1",
+    "scanner finding adapter suite:1",
+    "shell-substitution JSON acceptance:1",
+    "public-comment hygiene JSON suite:1"
   ],
   "retained": [
     {
@@ -390,7 +393,7 @@
     },
     {
       "name": "required checks all have a producing job",
-      "definition_sha256": "8bd1a7d11d818588f4405eab15260f3b256d1bdcdb8701448336e4b8ec1ceeba",
+      "definition_sha256": "fe00bedfc53531ea36934925b53985fbbe0c2c2a127462dc1fa9e06ec82ac487",
       "id": "required checks all have a producing job:1"
     },
     {
@@ -800,7 +803,7 @@
     },
     {
       "name": "admitted-PR closeout ledger suite",
-      "definition_sha256": "b7e419931e56f55a7963e2de7b56de99e96d1f138766df81cf386a139c323a9b",
+      "definition_sha256": "4ed7bfeb9025d95f6c6e43f00d3163685e2867de589cc2e265a82138795a2423",
       "id": "admitted-PR closeout ledger suite:1"
     },
     {
@@ -1755,7 +1758,7 @@
     },
     {
       "name": "migration safety gates suites",
-      "definition_sha256": "8d8bb4965903d1323d089f05c915279ebf0734329327f252ceb0e101e647f886",
+      "definition_sha256": "83e449237e15e4bbc84ddac3a3a08c98d8231e3c57e4bf4626fdf9a73cfd955f",
       "id": "migration safety gates suites:1"
     },
     {
@@ -1790,7 +1793,7 @@
     },
     {
       "name": "quality-gate helper suites",
-      "definition_sha256": "eff2ed20e1d4d438acec4567c8f59687ae4d72049050fa12122563c0a3021b65",
+      "definition_sha256": "9b9c8ed5e8b4dca34886c15a8b2cc2c18fe4396a84080f2024240df67def650a",
       "id": "quality-gate helper suites:1"
     },
     {
@@ -1860,7 +1863,7 @@
     },
     {
       "name": "explicit workflow job permissions gate",
-      "definition_sha256": "3fea71af7b79b15081a92e39f01eff6c316c90ad1999664903a27e76dc891242",
+      "definition_sha256": "97321b0134de55346d8d6bc27a2ef655ec21c8bfc8c81d292b85a3ec1c7b9d94",
       "id": "explicit workflow job permissions gate:1"
     },
     {
@@ -1982,6 +1985,21 @@
       "name": "AX metric contract suites",
       "definition_sha256": "ceff81cd977e688ef434a02945f04141390fe205df5b1f5b7df9e29a15826707",
       "id": "AX metric contract suites:1"
+    },
+    {
+      "name": "scanner finding adapter suite",
+      "definition_sha256": "4f4a5cf1feedf498eef207f0182f3bd6f000d29feaad0cab376b65d19baa5100",
+      "id": "scanner finding adapter suite:1"
+    },
+    {
+      "name": "shell-substitution JSON acceptance",
+      "definition_sha256": "335f88370d859cfd2908fe5ea77a41d6a03b8cc8ca84ccbcabeca304a04042d8",
+      "id": "shell-substitution JSON acceptance:1"
+    },
+    {
+      "name": "public-comment hygiene JSON suite",
+      "definition_sha256": "60125ad01be83d0c4323b4495f6a94511b5edc43583305b1bb20a1987ede42bf",
+      "id": "public-comment hygiene JSON suite:1"
     }
   ],
   "removed": [

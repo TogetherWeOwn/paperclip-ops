@@ -260,7 +260,7 @@ node --test hooks/disposition-stop-guard/disposition-stop-guard.test.mjs hooks/d
 python3 -m unittest test_reharden_relative_targets || fail "reharden relative-target suite failed"
 python3 -m unittest test_deploy_window_manifest || fail "deploy-window manifest gate suite failed"
 ./test_credential_chain_lockdown.sh || fail "credential-chain lockdown fixture suite failed"
-python3 -m unittest test_ci_required_checks_audit || fail "required-checks audit failed"
+python3 -m unittest test_ci_required_checks_audit test_required_checks_unmeasurable_json_acceptance test_ci_required_checks_nested_input || fail "required-checks audit failed"
 # case_6f2e8a41. Deterministic test-missing gate: unit contract plus
 # staged-copy/CLI regression. Hermetic stdlib unittest, no network, no
 # clock, temp fixtures only.
@@ -277,9 +277,10 @@ python3 -m unittest test_quality_gates test_floor_guard test_no_pull_request_tar
 # Explicit workflow job permissions gate: same two commands as the
 # contract-pinned CI step, so the fast tier still executes the gate locally.
 python3 check_workflow_job_permissions.py || fail "workflow job permissions gate failed"
-python3 -B -m unittest test_check_workflow_job_permissions test_workflow_permissions_json_acceptance || fail "workflow job permissions acceptance suite failed"
+python3 -B -m unittest test_check_workflow_job_permissions test_workflow_permissions_json_acceptance test_workflow_permissions_companion || fail "workflow job permissions acceptance suite failed"
 ./test_readme_script_index.sh || fail "readme script-index gate failed"
 ./test_public_comment_hygiene_gate.sh || fail "public-comment hygiene gate suite failed"
+./test_public_comment_hygiene_json.sh || fail "public-comment hygiene JSON suite failed"
 ./test_acceptance_transport.sh || fail "acceptance-transport reply suite failed"
 ./test_upstream_prepush_hook.sh || fail "upstream pre-push hook suite failed"
 ./test_cliproxy_mgmt_recon_argv.sh || fail "cliproxy recon argv suite failed"
@@ -330,6 +331,7 @@ PAPERCLIP_RUN_SCRATCH_DIR="${PAPERCLIP_RUN_SCRATCH_DIR:-${PAPERCLIP_SCRATCH_DIR:
 (cd ops/productivity && python3 -m unittest test_nongit_quarantine_custody) || fail "nongit quarantine custody suite failed"
 ./test_review_route.sh || fail "review-route suite failed"
 ./test_shell_subst_guard.sh || fail "shell-subst guard suite failed"
+python3 -B -m unittest test_shell_substitution_json_acceptance || fail "shell-substitution JSON acceptance failed"
 (cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_arm_import) || fail "arm-import suite failed"
 (cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_build_corpus_atomic) || fail "corpus atomic-write suite failed"
 (cd ops/case_1ccef1dc/reviewer-eval/v2 && python3 -m unittest test_merge_survival_atomic) || fail "merge-survival atomic-write suite failed"
@@ -356,6 +358,8 @@ python3 test_staged_drift.py || fail "staged Tier-0 drift gate failed"
 # step runs.
 ./test_migration_timeout_preamble.sh || fail "migration timeout-preamble suite failed"
 ./test_migration_squawk.sh || fail "migration squawk suite failed"
+./test_migration_squawk_json.sh || fail "migration squawk JSON suite failed"
+./test_migration_squawk_json_guarantees.sh || fail "migration squawk JSON guarantees suite failed"
 ./test_migration_rehearsal.sh || fail "migration rehearsal suite failed"
 python3 -m unittest test_migration_drift_gate || fail "migration drift-gate suite failed"
 python3 -m unittest test_migration_evidence_ax || fail "migration evidence-AX suite failed"

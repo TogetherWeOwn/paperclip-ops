@@ -101,6 +101,97 @@ the reusable installs the pinned `squawk-version` release binary (no
 cargo build); preinstalled runners skip the install. The file-standard
 checks always run either way.
 
+### Agent output — `--format json` (schema version 1)
+
+```bash
+./migration_squawk.sh --format json --migrations-dir path/to/migrations
+./migration_squawk.sh --format json --strict --squawk-bin /path/to/squawk \
+  migrations/0042_add_search.sql
+```
+
+The default (and explicit `--format text`) preserves the existing stdout,
+stderr and exit codes. JSON mode writes exactly one document on stdout,
+including strict refusal, with no prose mixed in. Exit codes remain **0**
+`pass`, **1** `fail`, **2** `refused`. No new rules, thresholds or config
+defaults are introduced; the canonical squawk config and overrides still apply.
+
+Schema (required fields unless marked optional):
+
+| Field | Type / meaning |
+| --- | --- |
+| `schema_version` | Integer, currently `1` |
+| `verdict` | `pass`, `fail`, or `refused` |
+| `files` | Array of per-file results, in explicit argument order or sorted directory order |
+| `files[].file` | File path as supplied (directory discovery preserves the directory prefix) |
+| `files[].verdict` | `fail` if any error finding or squawk failure, otherwise `pass` |
+| `files[].findings` | Array of `{rule, line, severity, message}` |
+| `files[].findings[].line` | 1-based statement line, or `null` for file-level rules |
+| `files[].findings[].severity` | `error` or `warning` |
+| `files[].findings[].message` | Fixed explanation, at most 300 characters, never source SQL |
+| `files[].squawk` | `{status, diagnostics, truncated}`; status is `pass`, `fail`, or `skip` |
+| `files[].squawk.diagnostics` | String, at most 2000 characters; safe severity/rule-tag projection of bounded combined stdout/stderr |
+| `files[].squawk.truncated` | Boolean; the 2000-character input or output bound was exceeded |
+| `summary` | `{total_files, failed_files, error_findings, warning_findings, squawk: {passed, failed, skipped}}`; integer counts derived from the emitted results |
+| `error` | Optional; only on refusal: `{code, message}` with a stable kebab-case code and fixed message |
+
+Stable rule IDs: `file-name`, `phase-header`, `concurrent-index`, and
+`not-valid-constraint` are errors. `split-add-validate` is the existing
+same-file ADD/VALIDATE warning and does not fail the gate. As in text mode,
+an invalid file name short-circuits its other file-standard checks, but not
+squawk. No SQL is attached to a finding.
+
+Squawk's pretty output can include source excerpts and literals. JSON passes
+through only severity/rule tags from diagnostic headers (e.g.
+`error: prefer-concurrent-index` or `warning[ban-drop-column]`); source
+snippets, locations and free-form messages are omitted. Nonempty output with
+no recognizable tag becomes `[unstructured diagnostics omitted]`. Both passing
+and failing steps retain this safe projection. Output is drained with bounded
+memory; only the first 2000 characters are considered. Do not place credentials
+in file paths or diagnostic rule tags: names/tags are evidence, not secret
+containers. SQL bodies and credential-bearing prose are never published.
+Each JSON-mode Squawk invocation has a 60-second deadline, including output
+collection and process exit. On expiry its process group is killed and the
+direct child is reaped. The step fails (exit 1) with the fixed `Squawk timed out.`
+diagnostic followed
+by any safe tags collected within the same 2000-character bound. Text-mode
+execution is unchanged. `SQUAWK_TIMEOUT_SECONDS` overrides the deadline for
+one invocation (seconds, must be a finite positive number up to 1000000;
+a missing, non-numeric, non-positive, non-finite or oversized value keeps
+the 60-second default).
+
+Without squawk, each step is `skip`: normal mode can pass, while `--strict`
+refuses with `error.code: squawk-missing`. Other refusal codes are
+`invalid-input`, `migrations-dir-missing`, `migrations-dir-unreadable`,
+`migrations-empty`, `file-unreadable`,
+`squawk-not-executable`, and `squawk-config-unreadable`. Refusals preserve
+completed file-standard results; files not yet checked are absent. Skipped
+steps have empty diagnostics and `truncated: false`.
+
+Synthetic failure example (no real SQL or credentials):
+
+```json
+{
+  "schema_version": 1,
+  "verdict": "fail",
+  "files": [{
+    "file": "migrations/0042_add_search.sql",
+    "verdict": "fail",
+    "findings": [{
+      "rule": "concurrent-index", "line": 2, "severity": "error",
+      "message": "CREATE INDEX without CONCURRENTLY"
+    }],
+    "squawk": {"status": "skip", "diagnostics": "", "truncated": false}
+  }],
+  "summary": {
+    "total_files": 1, "failed_files": 1,
+    "error_findings": 1, "warning_findings": 0,
+    "squawk": {"passed": 0, "failed": 0, "skipped": 1}
+  }
+}
+```
+
+Offline proof: `./test_migration_squawk.sh && ./test_migration_squawk_json.sh && ./test_migration_squawk_json_guarantees.sh`.
+
 ## 3. Gate B — prod-clone rehearsal
 
 Before a migration chain may ride a production deploy, the exact pending

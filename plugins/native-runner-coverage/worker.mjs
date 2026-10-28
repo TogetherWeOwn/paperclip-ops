@@ -1,5 +1,6 @@
 import { classifyCoverage } from "./classifier.mjs";
 import { toolDeclaration } from "./manifest.mjs";
+import { withResultContract } from "./result-contract.mjs";
 
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const identifier = (value) => typeof value === "string" && value.length > 0
@@ -11,7 +12,7 @@ function failure(status, reason) {
   data.status = status;
   data.reasonCodes = ["BACKEND_UNOBSERVABLE", "AUTHORITY_NOT_TESTED", "CONTENT_NOT_SCANNED", reason];
   data.bindingCheck = status === "REFUSED" ? "REFUSED" : "INCOMPLETE";
-  return response(data);
+  return response(withResultContract(data));
 }
 
 /** Registration has no unscoped config read; every invocation resolves its company. */

@@ -1,0 +1,13 @@
+{
+  "name": "@togetherweown/paperclip-trace-cost-analytics",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Passive trace and all-attempt cost diagnostics per caller-attested delivered outcome",
+  "engines": { "node": ">=22" },
+  "paperclipPlugin": { "manifest": "./src/manifest.mjs", "worker": "./src/entrypoint.mjs" },
+  "files": ["src", "README.md"],
+  "scripts": { "test": "node --test tests/*.test.mjs", "check": "node --check src/analytics.mjs && node --check src/manifest.mjs && node --check src/worker.mjs && node --check src/entrypoint.mjs" },
+  "dependencies": { "@paperclipai/plugin-sdk": "2026.824.1" }
+}

@@ -11,6 +11,15 @@ class TestIsProsePath(unittest.TestCase):
 
     def test_docs_dir_is_prose(self):
         self.assertTrue(is_prose_path("docs/ci-docs-fast-path.md"))
+        self.assertTrue(is_prose_path("docs/notes.txt"))
+
+    def test_root_text_inputs_require_full_ci(self):
+        for path in ("kofra_preview_parity_allowlist.txt", "public-owned-paths.txt",
+                     "quota_brake_exempt.txt", "staged_root_scripts.txt",
+                     "ops-tooling-runtime-manifest.txt", "notes.txt", "-x.txt", "NOTES.TXT"):
+            with self.subTest(path=path):
+                self.assertFalse(is_prose_path(path))
+                self.assertFalse(classify(["README.md", path]))
 
     def test_nested_markdown_outside_docs_is_code(self):
         self.assertFalse(is_prose_path("src/guide.md"))

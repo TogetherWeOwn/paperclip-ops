@@ -16,9 +16,10 @@ name: docs-fast-path
 # Now code-only PRs start no job here, and a prose PR costs one.
 #
 # The `paths:` list MUST stay a superset of what `docs_scope.py` calls prose
-# (root *.md/*.rst/*.txt, docs/**, bare LICENSE names); `test_docs_fast_path.py`
-# enforces that. A mixed docs+code PR still starts the workflow and the
-# classifier reads it as not docs-only.
+# (root *.md/*.rst, docs/**, bare LICENSE names); `test_docs_fast_path.py`
+# enforces that. Root *.txt includes machine inputs and is not docs-only.
+# A mixed docs+code PR still starts the workflow and the classifier reads it
+# as not docs-only.
 
 on:
   pull_request:
@@ -85,10 +86,18 @@ jobs:
           git diff --name-only --no-renames --diff-filter=d "origin/${BASE_REF}...HEAD" > "$RUNNER_TEMP/docs-files.txt"
           test -s "$RUNNER_TEMP/docs-files.txt"
           while IFS= read -r f; do
+            # Never follow a link to runner-local content or a directory.
+            test ! -L "$f"
+            test -f "$f"
             test -s "$f"
-            # Balanced fenced code blocks: an odd count means a broken doc.
-            n=$(grep -c '^```' -- "$f" || true)
-            test $((n % 2)) -eq 0
+            # Only Markdown uses fenced blocks; text/rst may quote backticks.
+            case "${f,,}" in
+              *.md)
+                n=$(grep -c '^```' -- "$f") || test "$?" -eq 1
+                test $((n % 2)) -eq 0
+                ;;
+              *) cat -- "$f" > /dev/null ;;
+            esac
           done < "$RUNNER_TEMP/docs-files.txt"
           echo "docs-only fast path: prose checks passed"
       - name: Code PR (full CI owns correctness)

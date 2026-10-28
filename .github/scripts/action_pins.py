@@ -17,7 +17,8 @@ Usage: action_pins.py [--json] [workflow-file ...] (default:
 With `--json` a check run prints exactly one `action-pins.v1` object to stdout
 (see docs/action-pins.md). Every run is offline and read-only: it is its own
 dry-run. Runs inside the existing required `pr-lint` job, so adopting it adds
-no new required check and needs no ruleset change. Stdlib only.
+no new required check and needs no ruleset change. Parsing requires an explicitly
+prepared PyYAML 6.0.2 interpreter; scans never prepare dependencies.
 """
 import argparse
 import json
@@ -30,10 +31,11 @@ from pathlib import Path
 
 SCHEMA = "action-pins.v1"
 
-# Quoted scalars are consumed whole, so flow punctuation in shell strings
-# cannot become mapping keys. This is extraction, not a general YAML loader.
-_QUOTED = re.compile(r'''"(?:\\.|[^"\\])*"|'(?:''|[^'])*' ''', re.X)
-_BLOCK_SCALAR = re.compile(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?\s*(?:#.*)?$")
+PARSER_VERSION = "6.0.2"
+MAX_SOURCE_BYTES = 4_194_304
+MAX_COLLECTION_DEPTH = 128
+MAX_PARSER_EVENTS = 100_000
+
 SHA40 = re.compile(r"^[0-9a-fA-F]{40}$")
 SHA64 = re.compile(r"^[0-9a-fA-F]{64}$")
 # owner/repo, optional /path, @40-hex. Owner and repo allow word chars, dot,
@@ -81,167 +83,176 @@ def is_pinned(value):
             return False
         if not digest.startswith("sha256:"):
             return False
-        return bool(SHA64.match(digest[len("sha256:"):]))
-    return bool(PINNED_ACTION.match(value))
+        return bool(SHA64.fullmatch(digest[len("sha256:"):]))
+    return bool(PINNED_ACTION.fullmatch(value))
 
 
-def _scalar_end(text, start, *, flow=False, key=False):
-    quoted = _QUOTED.match(text, start)
-    if quoted:
-        return quoted.end()
-    pos = start
-    while pos < len(text) and text[pos] not in "\r\n#":
-        char = text[pos]
-        if flow and char in ",[]{}":
-            break
-        if key and char == ":" and (
-                pos + 1 == len(text) or text[pos + 1].isspace()
-                or (flow and text[pos + 1] in ",[]{}")):
-            break
-        pos += 1
-    return pos
+class ScanRefusal(Exception):
+    """A known file could not be completely parsed and inspected."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
 
 
-def _key_text(raw):
-    raw = raw.strip()
-    if raw.startswith('"'):
-        try:
-            return json.loads(raw)  # Includes Unicode escapes in quoted keys.
-        except ValueError:
-            return raw
-    if raw.startswith("'") and raw.endswith("'"):
-        return raw[1:-1].replace("''", "'")
-    return raw
+def _display_path(path):
+    """Recover valid UTF-8 argv bytes; retain invalid bytes reversibly."""
+    return re.sub(
+        r"[\udc80-\udcff]+",
+        lambda match: match.group().encode("utf-8", errors="surrogateescape").decode(
+            "utf-8", errors="surrogateescape"),
+        str(path),
+    )
 
 
-def _skip_space(text, pos):
-    while pos < len(text):
-        if text[pos].isspace():
-            pos += 1
-        elif text[pos] == "#":
-            end = text.find("\n", pos)
-            pos = len(text) if end < 0 else end + 1
+def _yaml_parser():
+    try:
+        import yaml
+    except ImportError as exc:
+        raise ScanRefusal("input-parser-unavailable",
+                          "prepare the isolated PyYAML 6.0.2 environment") from exc
+    if getattr(yaml, "__version__", None) != PARSER_VERSION:
+        raise ScanRefusal("input-parser-unavailable",
+                          "the isolated parser must be PyYAML 6.0.2")
+    return yaml
+
+
+def _compose_documents(text, yaml):
+    """Validate event bounds/unsupported graph features before composition."""
+    depth = 0
+    events = yaml.parse(text, Loader=yaml.SafeLoader)
+    try:
+        for count, event in enumerate(events, 1):
+            if count > MAX_PARSER_EVENTS:
+                raise ScanRefusal("input-resource-limit", "parser event limit exceeded")
+            if isinstance(event, yaml.events.AliasEvent):
+                raise ScanRefusal("input-unsupported-yaml", "YAML aliases are unsupported")
+            if isinstance(event, yaml.events.CollectionStartEvent):
+                depth += 1
+                if depth > MAX_COLLECTION_DEPTH:
+                    raise ScanRefusal("input-resource-limit", "YAML collection depth exceeded")
+            elif isinstance(event, yaml.events.CollectionEndEvent):
+                depth -= 1
+        # Composition retains mapping pairs and source marks, without calling
+        # constructors. The prior pass rules out aliases and caps the graph.
+        documents = list(yaml.compose_all(text, Loader=yaml.SafeLoader))
+    except (yaml.YAMLError, ValueError, OverflowError) as exc:
+        raise ScanRefusal("input-invalid-yaml", f"invalid YAML ({exc})") from exc
+    except RecursionError as exc:
+        raise ScanRefusal("input-resource-limit", "parser recursion limit reached") from exc
+    finally:
+        events.close()
+    return documents
+
+
+def _validate_nodes(documents, yaml):
+    scalar_tags = {"tag:yaml.org,2002:" + tag for tag in
+                   ("str", "null", "bool", "int", "float", "timestamp", "binary")}
+    stack = [node for node in documents if node is not None]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, yaml.nodes.ScalarNode):
+            if node.tag not in scalar_tags:
+                raise ScanRefusal("input-unsupported-yaml", "unsupported scalar tag or merge key")
+        elif isinstance(node, yaml.nodes.MappingNode):
+            if node.tag != "tag:yaml.org,2002:map":
+                raise ScanRefusal("input-unsupported-yaml", "unsupported mapping tag")
+            for key, value in node.value:
+                if not isinstance(key, yaml.nodes.ScalarNode):
+                    raise ScanRefusal("input-unsupported-yaml", "complex mapping keys are unsupported")
+                stack.extend((key, value))
+        elif isinstance(node, yaml.nodes.SequenceNode):
+            if node.tag != "tag:yaml.org,2002:seq":
+                raise ScanRefusal("input-unsupported-yaml", "unsupported sequence tag")
+            stack.extend(node.value)
         else:
-            break
-    return pos
+            raise ScanRefusal("input-unsupported-yaml", "unsupported YAML node")
 
 
-def _flow_uses(text, start):
-    """Extract mapping keys from a flow collection without loading a YAML AST."""
-    mapping = text[start] == "{"
-    close = "}" if mapping else "]"
-    found, pos = [], start + 1
-    while True:
-        pos = _skip_space(text, pos)
-        if pos >= len(text):
-            return found, pos
-        if text[pos] == close:
-            return found, pos + 1
-        if text[pos] == ",":
-            pos += 1
-            continue
-        key, key_start = None, pos
-        if mapping:
-            if text[pos] == "?" and text[pos + 1:pos + 2].isspace():
-                pos = _skip_space(text, pos + 1)
-                key_start = pos
-            end = _scalar_end(text, pos, flow=True, key=True)
-            key = _key_text(text[pos:end])
-            pos = _skip_space(text, end)
-            if pos >= len(text) or text[pos] != ":":
-                return found, pos
-            pos = _skip_space(text, pos + 1)
-        value_start = pos
-        if pos < len(text) and text[pos] in "[{":
-            nested, pos = _flow_uses(text, pos)
-            found.extend(nested)
+def _invocation_values(documents, yaml):
+    mapping, sequence, scalar = (yaml.nodes.MappingNode, yaml.nodes.SequenceNode,
+                                 yaml.nodes.ScalarNode)
+    string_tag = "tag:yaml.org,2002:str"
+    found = []
+
+    def pairs(node):
+        if not isinstance(node, mapping):
+            raise ScanRefusal("input-unsupported-yaml", "expected an invocation mapping")
+        return node.value
+
+    def values(node, name):
+        result = []
+        for key, value in pairs(node):
+            if key.value == name:
+                if key.tag != string_tag:
+                    raise ScanRefusal("input-unsupported-yaml", "invocation keys must be strings")
+                result.append((key, value))
+        return result
+
+    def invocation(node):
+        for key, value in values(node, "uses"):
+            if not isinstance(value, scalar):
+                raise ScanRefusal("input-unsupported-yaml", "uses values must be scalar strings")
+            if value.tag == "tag:yaml.org,2002:null" and value.value == "":
+                ref = ""  # Preserve the existing missing-value finding.
+            elif value.tag == string_tag:
+                ref = value.value
+            else:
+                raise ScanRefusal("input-unsupported-yaml", "uses values must be strings")
+            found.append((key.start_mark.line + 1, ref))
+
+    def steps(node, fragment=False):
+        if fragment and isinstance(node, mapping):
+            invocation(node)
+        elif isinstance(node, sequence):
+            for step in node.value:
+                if (isinstance(step, scalar) and step.tag == "tag:yaml.org,2002:null"
+                        and step.value == ""):
+                    continue  # Empty sequence entries do not contain invocations.
+                invocation(step)
         else:
-            pos = _scalar_end(text, pos, flow=True)
-        if key == "uses":
-            found.append((text.count("\n", 0, key_start) + 1,
-                          strip_value(text[value_start:pos])))
-        if pos == value_start and (pos >= len(text) or text[pos] not in (",", close)):
-            return found, pos  # Empty values before delimiters are valid.
+            raise ScanRefusal("input-unsupported-yaml", "expected a step sequence")
 
-
-def _uses_values(text):
-    """Support block/flow scalar keys, explicit keys and quoted key escapes.
-
-    Skip scalar bodies rather than searching their contents for `uses:`.
-    Anchors, aliases, tags and complex keys are not resolved by this checker.
-    """
-    found, offset, consumed = [], 0, 0
-    block_indent, explicit = None, None
-    for number, line in enumerate(text.splitlines(keepends=True), 1):
-        start = offset
-        offset += len(line)
-        if start < consumed:
+    for root in documents:
+        if root is None:
             continue
-        content = line.lstrip()
-        indent = len(line) - len(content)
-        if not content.strip() or content.startswith("#"):
-            continue
-        if block_indent is not None and indent > block_indent:
-            continue
-        block_indent = None
-        pos = start + indent
-        if text[pos] == "-" and text[pos + 1:pos + 2].isspace():
-            pos += 1
-            while pos < offset and text[pos] in " \t":
-                pos += 1
-            if pos >= offset or text[pos] in "\r\n":
-                continue  # An empty sequence item must not consume the next line.
-        mapping_indent = pos - start
-        key_line = number
-        if explicit and text[pos] == ":":
-            key, key_line = explicit
-            explicit = None
-            pos += 1
-        else:
-            if explicit and explicit[0] == "uses":
-                found.append((explicit[1], ""))
-            explicit = None
-            if text[pos] in "[{":
-                nested, consumed = _flow_uses(text, pos)
-                found.extend(nested)
-                continue
-            is_explicit = text[pos:pos + 2] == "? "
-            if is_explicit:
-                pos += 2
-            end = _scalar_end(text, pos, key=True)
-            key = _key_text(text[pos:end])
-            pos = end
-            while pos < offset and text[pos] in " \t":
-                pos += 1
-            if pos >= offset or text[pos] != ":":
-                if is_explicit:
-                    explicit = (key, number)
-                continue
-            pos += 1
-        while pos < offset and text[pos] in " \t":
-            pos += 1
-        if pos < offset and text[pos] in "[{":
-            nested, consumed = _flow_uses(text, pos)
-            found.extend(nested)
-            end = consumed
-        else:
-            end = _scalar_end(text, pos)
-            if _BLOCK_SCALAR.fullmatch(text[pos:offset].strip()):
-                block_indent = mapping_indent
-        if key == "uses":
-            found.append((key_line, strip_value(text[pos:end])))
-    if explicit and explicit[0] == "uses":
-        found.append((explicit[1], ""))
+        if isinstance(root, sequence):
+            steps(root)
+        elif isinstance(root, mapping):
+            jobs, runs = values(root, "jobs"), values(root, "runs")
+            if jobs or runs:
+                for _, job_map in jobs:
+                    for _, job in pairs(job_map):
+                        invocation(job)
+                        for _, step_list in values(job, "steps"):
+                            steps(step_list)
+                for _, action in runs:
+                    for _, step_list in values(action, "steps"):
+                        steps(step_list)
+            else:
+                invocation(root)
+                for _, step_list in values(root, "steps"):
+                    steps(step_list, fragment=True)
     return found
 
 
 def lint_text(path, text):
-    return [Finding(str(path), line, value) for line, value in _uses_values(text)
+    if len(text.encode("utf-8")) > MAX_SOURCE_BYTES:
+        raise ScanRefusal("input-resource-limit", "source byte limit exceeded")
+    yaml = _yaml_parser()
+    documents = _compose_documents(text, yaml)
+    _validate_nodes(documents, yaml)
+    values = _invocation_values(documents, yaml)
+    return [Finding(_display_path(path), line, value) for line, value in values
             if not is_pinned(value)]
 
 
 def lint_file(path):
-    return lint_text(path, Path(path).read_text(encoding="utf-8"))
+    with open(path, "rb") as source:
+        raw = source.read(MAX_SOURCE_BYTES + 1)
+    if len(raw) > MAX_SOURCE_BYTES:
+        raise ScanRefusal("input-resource-limit", "source byte limit exceeded")
+    return lint_text(path, raw.decode("utf-8"))
 
 
 def _escape(text):
@@ -260,12 +271,17 @@ def _discover_files():
     """
     found, errors = set(), []
 
-    def visit(directory, recursive=False, optional=False, ancestors=frozenset()):
+    pending = [
+        (os.path.join(".github", "workflows"), False, True, frozenset()),
+        (os.path.join(".github", "actions"), True, True, frozenset()),
+    ]
+    while pending:
+        directory, recursive, optional, ancestors = pending.pop()
         try:
             identity = os.stat(directory)
             identity = (identity.st_dev, identity.st_ino)
             if identity in ancestors:
-                return  # Do not follow a directory symlink cycle.
+                continue  # Do not follow a directory symlink cycle.
             with os.scandir(directory) as entries:
                 entries = sorted(entries, key=lambda entry: entry.name)
         except FileNotFoundError as exc:
@@ -273,12 +289,12 @@ def _discover_files():
                 errors.append(_input_error(
                     "input-unreadable", directory,
                     f"{directory}:1: cannot enumerate directory ({exc})"))
-            return
+            continue
         except OSError as exc:
             errors.append(_input_error(
                 "input-unreadable", directory,
                 f"{directory}:1: cannot enumerate directory ({exc})"))
-            return
+            continue
         for entry in entries:
             if entry.name.startswith("."):
                 continue  # Preserve glob's default hidden-path exclusion.
@@ -295,10 +311,8 @@ def _discover_files():
                         f"{entry.path}:1: cannot inspect directory ({exc})"))
                     continue
                 if is_directory:
-                    visit(entry.path, True, ancestors=ancestors | {identity})
+                    pending.append((entry.path, True, False, ancestors | {identity}))
 
-    visit(os.path.join(".github", "workflows"), optional=True)
-    visit(os.path.join(".github", "actions"), recursive=True, optional=True)
     return sorted(found), sorted(errors, key=lambda error: (error.path, error.code))
 
 
@@ -320,6 +334,10 @@ _ERROR_ACTIONS = {
     "input-unreadable": "fix_input_permissions",
     "input-invalid-encoding": "fix_input_encoding",
     "no-inputs-discovered": "provide_input_files",
+    "input-parser-unavailable": "prepare_parser_dependency",
+    "input-invalid-yaml": "fix_input_yaml",
+    "input-unsupported-yaml": "simplify_input_yaml",
+    "input-resource-limit": "reduce_input_complexity",
 }
 
 _NO_INPUTS_MESSAGE = (
@@ -330,7 +348,8 @@ _NO_INPUTS_MESSAGE = (
 
 
 def _input_error(code, path, message):
-    return InputError(code, path, message, _ERROR_ACTIONS[code])
+    return InputError(code, None if path is None else _display_path(path),
+                      _display_path(message), _ERROR_ACTIONS[code])
 
 
 def _refuse_special_file(path):
@@ -370,9 +389,11 @@ def scan_files(files):
             continue
         try:
             found = lint_file(path)
+        except ScanRefusal as exc:
+            errors.append(_input_error(exc.code, str(path), f"{path}:1: {exc}"))
         except FileNotFoundError:
             errors.append(
-                _input_error("input-missing", str(path), f"missing file {path}"))
+                _input_error("input-missing", str(path), f"missing file {_display_path(path)}"))
         except UnicodeDecodeError as exc:
             errors.append(_input_error(
                 "input-invalid-encoding", str(path),
@@ -489,7 +510,8 @@ def _parser(prog):
             "input/discovery. Counts are unique file paths; directory errors "
             "are additional and force an incomplete scan. Usage errors exit 2 "
             "with text on stderr and are never "
-            "JSON; --help prints this text and exits 0 even with --json."
+            "JSON; --help prints this text and exits 0 even with --json. "
+            "Parsing requires isolated PyYAML 6.0.2; see docs/action-pins.md."
         ),
     )
     parser.add_argument(
@@ -508,6 +530,7 @@ def _parser(prog):
 
 
 def main(argv=None):
+    _ensure_encodable_stdout()
     argv = list(sys.argv if argv is None else argv)
     prog = os.path.basename(argv[0]) if argv else "action_pins.py"
     args = _parser(prog).parse_args(argv[1:])

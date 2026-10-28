@@ -39,6 +39,7 @@
     "schema drift gate": 10,
     "readiness-sweep": 5,
     "quality-gates": 9,
-    "acceptance": 5
+    "acceptance": 5,
+    "diagnostic-delta": 5
   }
 }

@@ -641,8 +641,7 @@ class NodeContract(unittest.TestCase):
                 entry = (obj["errors"] if missing else obj["findings"])[0]
                 self.assertEqual(name, entry["path"])
                 output = self.text_report(text, exit_code=1, annotations=1)
-                self.assertIn(f"::error file={prop}" + ("::" if missing else ",line=1::"),
-                              output)
+                self.assertIn(f"::error file={prop},line=1::", output)
                 self.assertNotIn("�", output)
 
     def test_genuinely_non_utf8_filename_has_reversible_escaped_identity(self):

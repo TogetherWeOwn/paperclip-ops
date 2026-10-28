@@ -5,9 +5,11 @@ Diff-scoped enforcement of the quality floor: fails when a change adds
 suppressions, skips or deletes tests, strips assertions, or moves a
 threshold the wrong way (rows marked must-not-grow fail on growth, all
 others on decrease). Adapted from the constraint-driven-development skill's
-references/floor-guard.md reference implementation; the diff plumbing and
-exit codes are identical, only the patterns are extended for this repo's
-Python+bash stack.
+references/floor-guard.md reference implementation; exit codes are unchanged,
+with path-safe Git collection and patterns extended
+for this repo's Python+bash stack. Git C-quoted patch paths are decoded once;
+deletions use NUL framing and removed lines retain their old-side paths.
+Renames remain delete+add, including moves between test filenames.
 
 Scope: suppression/skip/stub patterns apply to code files only (.py, .sh,
 .js/.mjs/.ts, workflow .yml/.yaml). Suppression names mentioned in markdown
@@ -27,6 +29,7 @@ Stdlib only. Run: python3 -m unittest test_floor_guard
 """
 import argparse
 import fnmatch
+import os
 import re
 import subprocess
 import sys
@@ -120,15 +123,18 @@ def is_assertion_removed(path: str, removed_text: str) -> bool:
 
 
 def find_deleted_tests(name_status: str) -> list:
-    """Return deleted test-file paths from `git diff --name-status` output."""
-    deleted = []
-    for line in name_status.splitlines():
-        # name-status separates status and path with TAB (never spaces):
-        # splitting on whitespace would mangle paths containing spaces.
-        parts = line.split("\t")
-        if len(parts) >= 2 and parts[0].startswith("D") and is_test_file(parts[1]):
-            deleted.append(parts[1])
-    return deleted
+    """Return deleted tests from NUL-framed Git output (or legacy text callers)."""
+    if "\0" in name_status:
+        fields = name_status.split("\0")
+        records = zip(fields[::2], fields[1::2])
+    else:
+        records = (
+            (status, decode_git_path(path))
+            for line in name_status.split("\n") if "\t" in line
+            for status, path in [line.split("\t", 1)]
+        )
+    return [path for status, path in records
+            if status.startswith("D") and is_test_file(path)]
 
 
 def _numbers(text: str) -> list:
@@ -195,42 +201,74 @@ def read_ignore_file(ignore_path: Path) -> list:
     ]
 
 
+def decode_git_path(path: str) -> str:
+    """Decode Git's C quoting once, preserving arbitrary filesystem bytes."""
+    if not path.startswith('"'):
+        return path
+    if not path.endswith('"'):
+        raise ValueError("unterminated Git path")
+    escapes = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11,
+               "f": 12, "r": 13, '"': 34, "\\": 92}
+    raw = bytearray()
+    pos = 1
+    while pos < len(path) - 1:
+        char = path[pos]
+        pos += 1
+        if char != "\\":
+            raw.extend(os.fsencode(char))
+            continue
+        char = path[pos]
+        if char in escapes:
+            raw.append(escapes[char])
+            pos += 1
+        elif re.fullmatch(r"[0-3][0-7]{2}", path[pos:pos + 3]):
+            raw.append(int(path[pos:pos + 3], 8))
+            pos += 3
+        else:
+            raise ValueError("invalid Git path escape")
+    return os.fsdecode(bytes(raw))
+
+
 def parse_diff(diff_text: str) -> tuple:
     added, removed = [], []
-    current = ""
-    for line in diff_text.splitlines():
-        if line.startswith("+++ "):
-            # Git appends a TAB after paths containing spaces
-            # (e.g. `+++ b/sp ace.py<TAB>`); non-ASCII paths arrive raw
-            # because every git() call sets core.quotePath=false. Strip
-            # the TAB so spaced paths still classify as code/test files.
-            current = line[4:].rstrip("\t")
-            if current.startswith("b/"):
-                current = current[2:]
-        elif line.startswith("+") and not line.startswith("+++"):
-            added.append((current, line[1:]))
-        elif line.startswith("-") and not line.startswith("---"):
-            removed.append((current, line[1:]))
+    old_path = new_path = ""
+    in_hunk = False
+    # Only LF frames patch records; splitlines would consume CR in file content.
+    for line in diff_text.split("\n"):
+        if line.startswith("diff --git "):
+            old_path = new_path = ""
+            in_hunk = False
+        elif not in_hunk and line.startswith(("--- ", "+++ ")):
+            path = decode_git_path(line[4:].removesuffix("\t"))
+            if path.startswith(("a/", "b/")):
+                path = path[2:]
+            if line.startswith("--- "):
+                old_path = path
+            else:
+                new_path = path
+        elif line.startswith("@@ "):
+            in_hunk = True
+        elif line.startswith("+"):
+            added.append((new_path, line[1:]))
+        elif line.startswith("-"):
+            removed.append((old_path, line[1:]))
     return added, removed
 
 
 def git(args: list, allowed_returncodes=(0,)) -> str | None:
     try:
         proc = subprocess.run(
-            # core.quotePath=false keeps non-ASCII paths raw (no
-            # octal-quoted `"b/\303\251.py"` headers for parse_diff to
-            # misclassify); ls-files -z output is NUL-delimited already.
             ["git", "-c", "core.quotePath=false"] + args,
             cwd=REPO_ROOT,
             capture_output=True,
-            text=True,
             timeout=120,
         )
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode not in allowed_returncodes:
         return None
-    return proc.stdout
+    # Avoid universal-newline conversion and retain non-UTF-8 filename bytes.
+    return os.fsdecode(proc.stdout)
 
 
 def collect(base: str) -> tuple | None:
@@ -250,8 +288,11 @@ def collect(base: str) -> tuple | None:
     tracked = git(["diff", "--no-renames", "--unified=0", merge_base, "--"])
     if tracked is None:
         return None
-    added, removed = parse_diff(tracked)
-    name_status = git(["diff", "--no-renames", "--name-status", "--diff-filter=D", merge_base, "--"])
+    try:
+        added, removed = parse_diff(tracked)
+    except ValueError:
+        return None
+    name_status = git(["diff", "--no-renames", "--name-status", "-z", "--diff-filter=D", merge_base, "--"])
     if name_status is None:
         return None
     untracked = git(["ls-files", "-z", "--others", "--exclude-standard"])
@@ -267,7 +308,10 @@ def collect(base: str) -> tuple | None:
         if single is None:
             return None
         if single:
-            extra_added, _ = parse_diff(single)
+            try:
+                extra_added, _ = parse_diff(single)
+            except ValueError:
+                return None
             added.extend(extra_added)
     return added, removed, name_status
 

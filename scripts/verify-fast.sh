@@ -270,7 +270,7 @@ python3 -B test_beszel_adapter.py || fail "beszel adapter suite failed"
 python3 -B test_beszel_discord_forwarder.py || fail "beszel discord forwarder suite failed"
 bash test_fetch_beszel_normalized.sh || fail "beszel fetch wrapper suite failed"
 python3 -m unittest test_private_mutation_gates || fail "private mutation harness failed"
-python3 -m unittest test_quality_gates test_floor_guard test_no_pull_request_target \
+python3 -m unittest test_quality_gates test_floor_guard test_floor_guard_paths_acceptance test_no_pull_request_target \
   || fail "quality-gate helper suites failed"
 ./test_mutmut_changed.sh || fail "mutmut budget-kill fixture suite failed"
 ./test_ci_gating.sh || fail "change-gating contract failed"

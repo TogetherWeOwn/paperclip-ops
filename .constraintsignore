@@ -7,3 +7,4 @@
 # fully checked.
 scripts/quality-gates/floor_guard.py
 test_floor_guard.py
+test_floor_guard_paths_acceptance.py

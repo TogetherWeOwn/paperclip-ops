@@ -40,8 +40,14 @@ OTHER_HEAD = "b" * 40
 
 
 def check(check_id=1, head=HEAD, status="completed", conclusion="success",
-          title="5/5", external_id="endpoint:73:" + HEAD, name="Paperclip Review",
+          title="5/5", summary=None, include_title=True,
+          external_id="endpoint:73:" + HEAD, name="Paperclip Review",
           app_id=5191093):
+    output = {}
+    if include_title:
+        output["title"] = title
+    if summary is not None:
+        output["summary"] = summary
     return {
         "id": check_id,
         "name": name,
@@ -49,7 +55,7 @@ def check(check_id=1, head=HEAD, status="completed", conclusion="success",
         "head_sha": head,
         "status": status,
         "conclusion": conclusion,
-        "output": {"title": title},
+        "output": output,
         "external_id": external_id,
     }
 
@@ -107,6 +113,20 @@ class LatestReviewTest(unittest.TestCase):
         got = rc.latest_review([check()], HEAD, 73)
         self.assertIsNotNone(got)
         self.assertEqual(got["id"], 1)
+
+    def test_accepts_first_summary_line_when_title_is_missing(self):
+        got = rc.latest_review(
+            [check(include_title=False, summary="5/5\nother text")], HEAD, 73)
+        self.assertIsNotNone(got)
+
+    def test_accepts_first_summary_line_when_title_is_empty(self):
+        got = rc.latest_review(
+            [check(title="", summary="5/5\nother text")], HEAD, 73)
+        self.assertIsNotNone(got)
+
+    def test_nonempty_title_takes_precedence_over_summary(self):
+        self.assertIsNone(
+            rc.latest_review([check(title="4/5", summary="5/5")], HEAD, 73))
 
     def test_rejects_same_head_different_pr(self):
         # Same head H reviewed 5/5 on PR #10 must not satisfy PR #11.

@@ -318,5 +318,256 @@ class QuarantineCard(unittest.TestCase):
                 company_id='company-1', payload=self.payload())
 
 
+class ReportUnit(unittest.TestCase):
+    """White-box unit regressions for the ranked report helpers.
+
+    The black-box CLI contract lives in test_flake_ledger_report.py (owned
+    by the paired acceptance card; never edited here). These tests pin the
+    pure helpers directly: ordering, gating, validity, IDs, and arg parsing.
+    """
+
+    def setUp(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('flake_ledger_under_test', SCRIPT)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+
+    def test_rank_orders_rate_then_observations_then_job_then_test(self):
+        rows = [
+            ledger_row(job='b job', test='b_test', flips=2, observations=5),
+            ledger_row(job='a job', test='z_test', flips=4, observations=10),
+            ledger_row(job='a job', test='a_test', flips=4, observations=10),
+            ledger_row(job='c job', test='top_test', flips=9, observations=10),
+        ]
+        ranked, insufficient, truncated = self.module.rank_report_rows(rows, 10, 5)
+        self.assertEqual([row['test'] for row in ranked],
+                         ['top_test', 'a_test', 'z_test', 'b_test'])
+        self.assertEqual((insufficient, truncated), ([], 0))
+
+    def test_gate_boundary_is_inclusive_and_top_counts_truncation(self):
+        rows = [
+            ledger_row(test='at_gate_test', flips=4, observations=5),
+            ledger_row(test='above_gate_test', flips=5, observations=5),
+            ledger_row(test='below_gate_test', flips=4, observations=4),
+        ]
+        ranked, insufficient, truncated = self.module.rank_report_rows(rows, 1, 5)
+        self.assertEqual([row['test'] for row in ranked], ['above_gate_test'])
+        self.assertEqual([row['test'] for row in insufficient], ['below_gate_test'])
+        self.assertEqual(truncated, 1)
+
+    def test_duplicate_keys_raise_naming_the_row(self):
+        rows = [ledger_row(flips=4, observations=5),
+                ledger_row(flips=0, observations=5)]
+        with self.assertRaises(self.module.LedgerUnavailable) as raised:
+            self.module.validate_report_rows(rows, 'two-bot-next')
+        self.assertIn('sample_test', str(raised.exception))
+
+    def test_cross_row_test_job_collision_raises_naming_the_value(self):
+        rows = [ledger_row(job='other', test='nightly', flips=5, observations=5),
+                ledger_row(job='nightly', test='job nightly', flips=0, observations=5)]
+        with self.assertRaises(self.module.LedgerUnavailable) as raised:
+            self.module.validate_report_rows(rows, 'two-bot-next')
+        self.assertIn('nightly', str(raised.exception))
+
+    def test_same_row_test_equals_job_is_not_a_collision(self):
+        rows = [ledger_row(job='nightly', test='nightly', flips=4, observations=5)]
+        self.assertEqual(self.module.validate_report_rows(rows, 'two-bot-next'), rows)
+
+    def test_row_ids_are_stable_unique_and_name_the_row(self):
+        first = self.module.report_row_id('two-bot-next', 'rust tests', 'sample_test')
+        second = self.module.report_row_id('two-bot-next', 'rust tests', 'sample_test')
+        other = self.module.report_row_id('two-bot-next', 'rust tests', 'other_test')
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, other)
+        self.assertIn('rust tests', first)
+        self.assertIn('sample_test', first)
+
+    def test_text_format_marks_only_insufficient_lines(self):
+        ranked = [ledger_row(test='ranked_test', flips=4, observations=5)]
+        insufficient = [ledger_row(test='newbie_test', flips=1, observations=2)]
+        text = self.module.format_report_text(
+            ranked=ranked, insufficient=insufficient, min_observations=5)
+        lines = text.splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertNotIn('insufficient', lines[0])
+        self.assertIn('insufficient', lines[1])
+        self.assertIn('ranked_test', lines[0])
+        self.assertIn('newbie_test', lines[1])
+
+    def test_parse_rejects_unknown_flags_and_bad_positionals(self):
+        with self.assertRaises(self.module.ReportUsageError):
+            self.module._parse_report_args(['two-bot-next', '--bogus'])
+        with self.assertRaises(self.module.ReportUsageError):
+            self.module._parse_report_args([])
+        with self.assertRaises(self.module.ReportUsageError):
+            self.module._parse_report_args(['   '])
+        with self.assertRaises(self.module.ReportUsageError):
+            self.module._parse_report_args(['two-bot-next', 'extra'])
+        repo, top, minimum, as_json = self.module._parse_report_args(
+            ['two-bot-next', '--top', '3', '--min-observations', '7', '--json'])
+        self.assertEqual((repo, top, minimum, as_json),
+                         ('two-bot-next', 3, 7, True))
+
+
+class ReportReviewRegressions(unittest.TestCase):
+    """CLI regressions for component-ID aliasing and lost exclusion counts."""
+
+    def report(self, rows, repo='r', *args):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp, 'ledger.jsonl')
+            ledger.write_text(''.join(json.dumps(row) + '\n' for row in rows),
+                              encoding='utf-8')
+            before = ledger.read_bytes()
+            env = dict(os.environ, FLAKE_LEDGER_PATH=str(ledger))
+            documents = []
+            for _ in range(2):
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPT), 'report', repo, '--json', *args],
+                    capture_output=True, text=True, env=env, check=False,
+                    timeout=15)
+                self.assertEqual(ledger.read_bytes(), before,
+                                 'report must leave ledger bytes unchanged')
+                self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()),
+                                 ['ledger.jsonl'], 'report must not create sidecars')
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                document = json.loads(result.stdout)
+                self.assertIsNone(document['error'])
+                for row in document['rows'] + document['insufficient']:
+                    self.assertIsInstance(row['id'], str)
+                    self.assertTrue(row['id'], 'row IDs must be nonempty')
+                document.pop('generated_at')
+                documents.append(document)
+            self.assertEqual(documents[0], documents[1],
+                             'IDs, counts, and ranking must survive repeated invocation')
+            return documents[0]
+
+    def test_slash_components_have_distinct_ids_and_preserve_ranked_evidence(self):
+        # Raw slash joining aliases these different valid (job, test) tuples.
+        rows = [ledger_row(repo='r', job='a', test='b/c', flips=1, observations=10),
+                ledger_row(repo='r', job='a/b', test='c', flips=9, observations=10)]
+        document = self.report(rows)
+        ranked = document['rows']
+        self.assertEqual([(row['job'], row['test'], row['flips'], row['observations'])
+                          for row in ranked],
+                         [('a/b', 'c', 9, 10), ('a', 'b/c', 1, 10)])
+        self.assertEqual([row['rate'] for row in ranked], [0.9, 0.1])
+        self.assertEqual(document['insufficient'], [])
+        self.assertEqual(document['excluded'], [])
+        self.assertEqual(len({row['id'] for row in ranked}), 2,
+                         'different component tuples must not share an ID')
+        reversed_document = self.report(list(reversed(rows)))
+        self.assertEqual(reversed_document, document,
+                         'IDs must not depend on ledger row order')
+
+    def test_ids_stay_disjoint_and_stable_across_the_observation_gate(self):
+        rows = [ledger_row(repo='r', job='a/b', test='c', flips=9, observations=10),
+                ledger_row(repo='r', job='a', test='b/c', flips=1, observations=4)]
+        loose = self.report(rows, 'r', '--min-observations', '1')
+        gated = self.report(rows, 'r', '--min-observations', '5')
+        self.assertEqual([(row['job'], row['test'], row['flips'], row['observations'])
+                          for row in gated['rows']], [('a/b', 'c', 9, 10)])
+        self.assertEqual([(row['job'], row['test'], row['flips'], row['observations'])
+                          for row in gated['insufficient']], [('a', 'b/c', 1, 4)])
+        self.assertEqual(gated['excluded'],
+                         [{'reason': 'insufficient_observations', 'count': 1}])
+        ranked_ids = {row['id'] for row in gated['rows']}
+        short_ids = {row['id'] for row in gated['insufficient']}
+        self.assertTrue(ranked_ids.isdisjoint(short_ids),
+                        'sub-gate and ranked tuples must not share an ID')
+        self.assertEqual([(row['job'], row['test']) for row in loose['rows']],
+                         [('a/b', 'c'), ('a', 'b/c')])
+        self.assertEqual({(row['job'], row['test']): row['id']
+                          for row in loose['rows']},
+                         {(row['job'], row['test']): row['id']
+                          for row in gated['rows'] + gated['insufficient']},
+                         'an ID identifies a tuple, not its eligibility bucket')
+
+    def test_literal_percent_escape_aliases_remain_distinct_in_each_component(self):
+        # Escaping slash alone would alias a literal "%2F" with an escaped slash.
+        for component in ('repo', 'job', 'test'):
+            with self.subTest(component=component):
+                first = ledger_row(repo='r', job='worker', test='sample',
+                                   flips=9, observations=10)
+                second = ledger_row(repo='r', job='worker', test='sample',
+                                    flips=1, observations=10)
+                first[component] = 'a%2Fb'
+                second[component] = 'a/b'
+                rows = [second, first]
+                if component == 'repo':
+                    reported = (self.report(rows, first['repo'])['rows'] +
+                                self.report(rows, second['repo'])['rows'])
+                else:
+                    reported = self.report(rows)['rows']
+                self.assertEqual([(row['job'], row['test'], row['flips'], row['observations'])
+                                  for row in reported],
+                                 [(first['job'], first['test'], 9, 10),
+                                  (second['job'], second['test'], 1, 10)])
+                self.assertEqual(len({row['id'] for row in reported}), 2,
+                                 'literal percent escapes and slash must not alias')
+
+    def test_repository_and_job_and_test_boundaries_do_not_alias(self):
+        rows = [ledger_row(repo='r/a', job='b', test='c', flips=8, observations=10),
+                ledger_row(repo='r', job='a/b', test='c', flips=9, observations=10),
+                ledger_row(repo='r', job='a', test='b/c', flips=1, observations=10)]
+        nested_repo = self.report(rows, 'r/a')
+        root_repo = self.report(rows)
+        self.assertEqual(nested_repo['repo'], 'r/a')
+        self.assertEqual(root_repo['repo'], 'r')
+        self.assertEqual([(row['job'], row['test'], row['flips'])
+                          for row in nested_repo['rows']], [('b', 'c', 8)])
+        self.assertEqual([(row['job'], row['test'], row['flips'])
+                          for row in root_repo['rows']], [('a/b', 'c', 9), ('a', 'b/c', 1)])
+        combined = nested_repo['rows'] + root_repo['rows']
+        self.assertEqual(len({row['id'] for row in combined}), 3,
+                         'repo is an independent ID component, not a path prefix')
+
+    def test_plain_names_remain_readable_in_ids(self):
+        document = self.report([ledger_row(job='rust tests', test='sample_test')],
+                               'two-bot-next')
+        row_id = document['rows'][0]['id']
+        self.assertIn('rust tests', row_id)
+        self.assertIn('sample_test', row_id)
+
+    @staticmethod
+    def eligible_rows():
+        return [ledger_row(repo='r', test=f'ranked_{index}_test',
+                           flips=10 - index, observations=10)
+                for index in range(6)]
+
+    def test_top_truncation_and_insufficient_counts_are_separate(self):
+        rows = self.eligible_rows() + [ledger_row(repo='r', test='newbie_test',
+                                                flips=1, observations=4)]
+        document = self.report(rows, 'r', '--top', '2', '--min-observations', '5')
+        self.assertEqual(document['top'], 2)
+        self.assertEqual([row['test'] for row in document['rows']],
+                         ['ranked_0_test', 'ranked_1_test'])
+        self.assertEqual([(row['test'], row['flips'], row['observations'])
+                          for row in document['insufficient']], [('newbie_test', 1, 4)])
+        self.assertCountEqual(document['excluded'],
+                              [{'reason': 'top_truncated', 'count': 4},
+                               {'reason': 'insufficient_observations', 'count': 1}])
+
+    def test_top_at_or_above_eligible_count_has_only_insufficient_exclusion(self):
+        rows = self.eligible_rows() + [ledger_row(repo='r', test='newbie_test',
+                                                flips=1, observations=4)]
+        for top in ('6', '100'):
+            with self.subTest(top=top):
+                document = self.report(rows, 'r', '--top', top)
+                self.assertEqual([row['test'] for row in document['rows']],
+                                 [f'ranked_{index}_test' for index in range(6)])
+                self.assertEqual([row['test'] for row in document['insufficient']],
+                                 ['newbie_test'])
+                self.assertEqual(document['excluded'],
+                                 [{'reason': 'insufficient_observations', 'count': 1}])
+
+    def test_all_eligible_without_truncation_has_no_exclusions(self):
+        for top in ('6', '100'):
+            with self.subTest(top=top):
+                document = self.report(self.eligible_rows(), 'r', '--top', top)
+                self.assertEqual(len(document['rows']), 6)
+                self.assertEqual(document['insufficient'], [])
+                self.assertEqual(document['excluded'], [])
+
+
 if __name__ == '__main__':
     unittest.main()

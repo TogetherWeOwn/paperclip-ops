@@ -101,9 +101,13 @@ For each `deployment_protection_rule` delivery:
      commit; the review ran on the pull request head, and `merge_commit_sha` is
      GitHub's own link back). On that head there is exactly one latest
      `Paperclip Review` run from the pinned review App (`5191093`,
-     `togetherweown-reviewer`), `completed`/`success`, titled `5/5`, bound to
-     that head, recorded against that pull request number and head (its
-     `external_id` ends `:<number>:<head sha>`), and finished no later than the
+     `togetherweown-reviewer`), `completed`/`success`, with score `5/5` in its
+     title or, only when the title is absent, empty, or whitespace-only, the first
+     line of its output summary. A non-whitespace title remains authoritative;
+     later summary lines never supply the score. The score must match exactly
+     (no trimming or suffix); a CRLF first-line terminator is tolerated.
+     The run is bound to that head, recorded against that pull request number and
+     head (its `external_id` ends `:<number>:<head sha>`), and finished no later than the
      merge. Absent, ambiguous, lower-scored, stale, other-App, other-pull-request
      or post-merge review fails with `source_review_unverified`; a result that
      does not cover all three commits is `source_evidence_missing`. A check-run

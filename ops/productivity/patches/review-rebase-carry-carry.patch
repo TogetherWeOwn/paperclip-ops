@@ -1,0 +1,65 @@
+--- a/ops/sdlc/review_carry.py
++++ b/ops/sdlc/review_carry.py
+@@ -337,6 +337,62 @@
+ def ref_sha(token, repo, branch):
+     result = api(token, f'/repos/{repo}/git/ref/' + urllib.parse.quote(branch.removeprefix('refs/'), safe='/'))
+     return result['object']['sha']
++
++
++def rebase_flow_module():
++    module_dir = str(Path(__file__).resolve().parent.parent / 'productivity')
++    if module_dir not in sys.path:
++        sys.path.insert(0, module_dir)
++    import review_rebase_carry_flow
++    return review_rebase_carry_flow
++
++
++class RebaseEnv:
++    """Adapter from this module's authenticated client to review_rebase_carry_flow."""
++
++    def __init__(self, token, repo):
++        self.token, self.repo = token, repo
++        self.cache = GitCache(repo, token)
++        self.git_dir = str(self.cache.path)
++
++    def get_pr(self, number):
++        return api(self.token, f'/repos/{self.repo}/pulls/{number}')
++
++    def checks_for(self, sha):
++        return checks_for(self.token, self.repo, sha)
++
++    def ensure_objects(self, *shas):
++        self.cache.fetch(*shas)
++
++    def create_check(self, payload):
++        return api(self.token, f'/repos/{self.repo}/check-runs', payload)
++
++    def patch_check(self, check_id, payload):
++        return api(self.token, f'/repos/{self.repo}/check-runs/{check_id}', payload, 'PATCH')
++
++    def now_iso(self):
++        return L.utcnow()
++
++    def log(self, line):
++        L.log('review-carry', line)
++
++
++def process_rebases(token, repo, dry_run=False):
++    """Review-only rebase carry for one repository; returns decision counts.
++
++    Off unless the fail-closed control file enables it; shadow is log-only and dry_run never
++    publishes. Any import or transport failure leaves every head on the normal review path.
++    """
++    try:
++        flow = rebase_flow_module()
++        paths = flow.Paths(Path(__file__).resolve().parent.parent / 'productivity')
++        mode = flow.control_mode(paths)
++        if mode == 'off':
++            return {}
++        numbers = [int(p['number']) for p in pages(token, f'/repos/{repo}/pulls?state=open&per_page=100')]
++        return flow.run_repo(RebaseEnv(token, repo), paths, repo, numbers, 'shadow' if dry_run else mode)
++    except Exception:
++        return {}
+ 
+ 
+ def decide(review, comparison):

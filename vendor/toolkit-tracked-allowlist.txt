@@ -23,3 +23,5 @@ verification/case_46e26fa6-mutation-gate.sh
 # restores around it so CI tests the tree, not the pinned toolkit bytes.
 sibling_guard.sh
 test_sibling_guard.sh
+# Dispatch aggregate rejection: canonical acceptance compatibility, not pinned success.
+plugins/dispatch/test/dispatch.test.mjs

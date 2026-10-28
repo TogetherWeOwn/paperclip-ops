@@ -25,9 +25,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOL_REL="scripts/dispatch_deploy_monitor.sh"
 TOOL_SRC="$REPO_ROOT/$TOOL_REL"
 TEST_SRC="$REPO_ROOT/test_dispatch_deploy_monitor.sh"
+LIB_SRC="$REPO_ROOT/lib/paperclip_api_allowlist.sh"
 
 [ -f "$TOOL_SRC" ] || { echo "FATAL: no tool at $TOOL_SRC" >&2; exit 2; }
 [ -f "$TEST_SRC" ] || { echo "FATAL: no test suite at $TEST_SRC" >&2; exit 2; }
+[ -f "$LIB_SRC" ] || { echo "FATAL: no allowlist lib at $LIB_SRC" >&2; exit 2; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/case_61f5fd2fmonmut.XXXXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -38,9 +40,12 @@ survived() { printf '  \033[31mSURVIVED\033[0m %s\n' "$1"; FAIL=$((FAIL+1)); }
 
 mkscene() {
   local dir="$1"
-  rm -rf "$dir"; mkdir -p "$dir/scripts"
+  rm -rf "$dir"; mkdir -p "$dir/scripts" "$dir/lib"
   cp "$TOOL_SRC" "$dir/scripts/"
   cp "$TEST_SRC" "$dir/"
+  # The wrapper fail-closes (exit 2) without its allowlist dep, so the
+  # unmodified lib rides along; only the staged wrapper copy is mutated.
+  cp "$LIB_SRC" "$dir/lib/"
   chmod +x "$dir/scripts/$(basename "$TOOL_REL")" "$dir/test_dispatch_deploy_monitor.sh"
 }
 

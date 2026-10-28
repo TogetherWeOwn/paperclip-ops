@@ -7,7 +7,9 @@
 // ruleset-only repos), and applies the pure decisions in src/readiness.js:
 // maintain the bot-maintained block, mark-ready on green, draft-reset on a new
 // head or a completed failure, and arm auto-merge only when CI and the
-// Paperclip Review check entry pass on THIS head.
+// Paperclip Review check entry pass on THIS head with the heavy suites job
+// completed successful on THIS head (a draft-run ci-ok success alone proves
+// nothing — draft selection passes ci-ok with every area skipped).
 //
 // HOST-SIDE BY CONSTRUCTION, not in the Worker. The Worker (app.js) is a
 // capture-only store behind an unauthenticated webhook route: giving it an
@@ -26,7 +28,7 @@
 // arming auto-merge under a hold would fight the disarm duty, which would
 // immediately disarm it again.
 
-import { snapshotFailureCode } from './github-adapter.js'
+import { snapshotFailureCode, writeFailureCode } from './github-adapter.js'
 import {
   REVIEW_CHECK,
   buildReadinessBlock,
@@ -329,8 +331,8 @@ export function createReconciler({ github, policy, nowMs = () => Date.now() }) {
           await writers[action](ref, decision)
           steps.push({ action, result: 'done' })
           counters[counterFor[action]]++
-        } catch {
-          steps.push({ action, result: 'failed', error: `${action}-failed` })
+        } catch (error) {
+          steps.push({ action, result: 'failed', error: `${action}-failed`, failure: writeFailureCode(error) })
           failed = true
         }
       }

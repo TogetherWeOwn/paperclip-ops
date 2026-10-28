@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "run_id": "fixture",
+  "status": "drained",
+  "jobs": [
+    {"id": 9004, "name": "single-suite", "failed_step": "Single step", "cause": "AssertionError: single thing broke", "log_file": "single-suite.log"}
+  ],
+  "summary": {"total_jobs": 2, "failed_jobs": 1, "drained_jobs": 1},
+  "error": {"code": "ok", "retryable": false, "next_action": "triage_failures", "unmeasured": null}
+}

@@ -26,6 +26,10 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ops" / "review_tier1"))
+import evidence_gate
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROXY_BASE = "http://cliproxy:8317/v1"
@@ -62,15 +66,20 @@ def build_prompt(template: str, title: str, body: str, files: list[str], diff: s
     return re.sub(r"\{(title|body|files|diff|context)\}", lambda m: values[m.group(1)], template)
 
 
-def read_git_file(cwd: str, path: str) -> str | None:
-    """Text of `path` at HEAD, or None when it is deleted, binary or unreadable."""
-    proc = subprocess.run(["git", "show", f"HEAD:{path}"], cwd=cwd, capture_output=True,
-                          text=True, errors="replace")
-    return proc.stdout if proc.returncode == 0 and "\0" not in proc.stdout else None
+def read_git_file(cwd: str, path: str, head_sha: str = "HEAD") -> str | None:
+    """Read a text blob at the revision, never tree listings or submodules.
+
+    Decode bytes without universal-newline translation: only LF delimits Git
+    source lines, including when a blob contains CR or Unicode separators.
+    """
+    proc = subprocess.run(["git", "cat-file", "blob", f"{head_sha}:{path}"],
+                          cwd=cwd, capture_output=True)
+    return proc.stdout.decode("utf-8", errors="replace") \
+        if proc.returncode == 0 and b"\0" not in proc.stdout else None
 
 
 def number_lines(text: str) -> str:
-    return "\n".join(f"{i:>5}  {line}" for i, line in enumerate(text.splitlines(), 1))
+    return "\n".join(f"{i:>5}  {line}" for i, line in enumerate(evidence_gate.source_lines(text), 1))
 
 
 def build_context(read_file, files: list[str]) -> str:
@@ -163,6 +172,27 @@ def parse_review(text: str) -> tuple[dict | None, str | None]:
     return obj, None
 
 
+def publish_gated_review(review: dict, head_sha: str, read_file) -> dict:
+    """Strip findings that do not resolve at the exact reviewed head.
+
+    Every published finding must cite a file:line readable at `head_sha` and
+    supply non-blank evidence present on that line (whitespace-normalized).
+    Withheld findings are not published: they are counted and listed in the
+    returned record's rationale as "unverified, withheld". The refusal count
+    and rate are the review's citation-refusal metric.
+    """
+    gated = evidence_gate.gate_findings(review.get("findings", []), head_sha, read_file)
+    review["findings"] = gated["verified"]
+    return {
+        "head": gated["head"],
+        "total": gated["total"],
+        "refusal_count": gated["refusal_count"],
+        "refusal_rate": gated["refusal_rate"],
+        "withheld": gated["withheld"],
+        "rationale": gated["rationale"],
+    }
+
+
 def prepare_worktree(repo: str, case: dict, dest: str) -> None:
     """Detached worktree whose HEAD is the commit under review.
 
@@ -184,14 +214,17 @@ def run_case(repo: str, case: dict, model: str, effort: str, key_env: str, timeo
     key = os.environ.get(key_env, "")
     if not key:
         raise SystemExit(f"environment variable {key_env} is empty")
-    template = open(os.path.join(HERE, "review_prompt.md"), encoding="utf-8").read()
+    template = Path(HERE, "review_prompt.md").read_text(encoding="utf-8")
     scratch = tempfile.mkdtemp(prefix="bakeoff-")
     wt = os.path.join(scratch, "wt")
     try:
         prepare_worktree(repo, case, wt)
-        diff = sh("git", "show", "--format=", "--patch", "HEAD", cwd=wt)
-        files = sh("git", "show", "--format=", "--name-only", "HEAD", cwd=wt).split()
-        context = build_context(lambda path: read_git_file(wt, path), files)
+        # Planted cases commit a new head. Pin context and evidence to that
+        # immutable snapshot before invoking the reviewer.
+        head = sh("git", "rev-parse", "HEAD", cwd=wt).strip()
+        diff = sh("git", "show", "--format=", "--patch", head, cwd=wt)
+        files = sh("git", "show", "--format=", "--name-only", head, cwd=wt).split()
+        context = build_context(lambda path: read_git_file(wt, path, head), files)
         prompt = build_prompt(template, case["title"], case.get("body", ""), files, diff, context)
         last = os.path.join(scratch, "last.json")
         env = {"PATH": os.environ["PATH"], "HOME": scratch, "CODEX_HOME": os.path.join(scratch, "ch"),
@@ -210,13 +243,18 @@ def run_case(repo: str, case: dict, model: str, effort: str, key_env: str, timeo
                 if isinstance(exc.stdout, bytes) else (exc.stdout or ""), None, True
         latency = round(time.time() - started, 1)
         events = parse_events(stdout)
-        text = open(last, encoding="utf-8").read() if os.path.exists(last) else ""
+        text = Path(last).read_text(encoding="utf-8") if os.path.exists(last) else ""
         review, parse_error = parse_review(text) if text else (None, "no final message")
+        if review is not None:
+            gate = publish_gated_review(review, head, lambda path: read_git_file(wt, path, head))
+        else:
+            gate = None
         return {
             "case_id": case["id"], "model": model, "effort": effort,
             "latency_s": latency, "exit_code": code, "timed_out": timed_out,
             "usage": events["usage"], "errors": events["errors"],
             "prompt_chars": len(prompt), "review": review, "parse_error": parse_error,
+            "evidence_gate": gate,
             "raw_final": text if review is None else None,
         }
     finally:
@@ -249,8 +287,9 @@ def main(argv: list[str]) -> int:
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(result, fh, indent=2)
     n = len(result["review"]["findings"]) if result["review"] else None
+    w = (result["evidence_gate"] or {}).get("refusal_count")
     print(f"{args.case_id} {args.model} score={result['review']['score'] if result['review'] else None} "
-          f"findings={n} latency={result['latency_s']}s tokens={result['usage']} -> {path}")
+          f"findings={n} withheld={w} latency={result['latency_s']}s tokens={result['usage']} -> {path}")
     return 0 if result["review"] else 1
 
 

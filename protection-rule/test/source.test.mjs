@@ -69,6 +69,24 @@ test('trimmed real GitHub responses for Bot main 7a5043e4b3 and PR #626 head ver
   assert.ok(real.external_id.endsWith(`:${REAL_MAIN_PULLS[0].number}:${prHead}`))
 })
 
+test('a missing or empty review title falls back to the first summary line', async () => {
+  for (const title of [null, '']) {
+    const f = contractFixture()
+    for (const sha of SHAS) {
+      Object.assign(review(f, sha).output, { title, summary: '5/5\nAdditional details' })
+    }
+    assert.deepEqual(await verify(f), { ok: true, shas: SHAS })
+  }
+})
+
+test('a nonempty review title takes precedence over the summary', async () => {
+  const f = contractFixture()
+  for (const sha of SHAS) {
+    Object.assign(review(f, sha).output, { title: '4/5', summary: '5/5\nAdditional details' })
+  }
+  assert.deepEqual(await verify(f), REVIEW)
+})
+
 test('the policy pins CI to GitHub Actions and the review to the review App, with different ids', () => {
   assert.equal(EVIDENCE.ci.appId, CI_APP_ID)
   assert.equal(EVIDENCE.review.appId, REVIEW_APP_ID)

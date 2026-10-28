@@ -122,6 +122,10 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/paperclip_api_allowlist.sh
+_PC_ALLOWLIST_LIB="$HERE/lib/paperclip_api_allowlist.sh"
+[[ -r "$_PC_ALLOWLIST_LIB" ]] || { echo "red_main_poll: API allowlist lib missing (board unreadable)" >&2; exit 3; }
+source "$_PC_ALLOWLIST_LIB"
 CI_STATUS_BIN="${GH_CI_STATUS_BIN:-$HERE/gh_ci_status.sh}"
 API="${GH_API_URL:-https://api.github.com}"
 
@@ -305,6 +309,7 @@ board_titles() {
         echo "red_main_poll: board base authority is not one bare host" >&2; return 1
       fi
     fi
+    paperclip_allowlist_check "$_base" "red_main_poll" || return 1
     # The key travels in a config pipe, never on argv: `curl -H "Bearer $key"`
     # would expose it in /proc/<pid>/cmdline (case_3d790dcb; post_finding.sh §NON-DISCLOSURE).
     # The status comes back through -w: without it a 401 or 500 is an exit-0

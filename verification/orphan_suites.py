@@ -134,6 +134,7 @@ each offending file otherwise.
 """
 import fnmatch
 import json
+import os
 import re
 import subprocess
 import sys
@@ -153,15 +154,77 @@ SPEC_SUFFIXES = (".test.mjs", ".test.cjs", ".test.js", ".test.ts",
                  ".spec.mjs", ".spec.cjs", ".spec.js", ".spec.ts",
                  ".spec.mts", ".spec.cts")
 
-USAGE = ("usage: orphan_suites.py [--root DIR] [--allowlist PATH]")
+USAGE = ("usage: orphan_suites.py [--root DIR] [--allowlist PATH] [--json]")
+HELP = (USAGE + "\n\n"
+        "Offline, read-only check; never executes checked-tree code.\n"
+        "--json: one orphan-suites.v1 object (clean/findings/unmeasurable).\n"
+        "Incomplete checks report null counts. Help and usage errors are text.\n"
+        "Exit: 0 clean; 1 findings or unmeasurable; 2 usage error.\n"
+        "Contract: docs/orphan-suites.md")
+
+FINDING_MESSAGES = {
+    "orphan-suite": (
+        "orphan suite is neither wired nor exempt: {path} "
+        "(wire it into a run: step in .github/workflows/*.yml, or "
+        "exempt it in verification/orphan_suites_allowlist.json)"),
+    "exemption-invalid-reason": "allowlist entry needs a one-line reason: {path}",
+    "exemption-stale-not-a-suite": "stale exemption (not an unwired suite): {path}",
+    "exemption-stale-now-wired": "stale exemption (now wired, drop it): {path}",
+}
+NEXT_ACTIONS = {
+    "orphan-suite": "wire the suite into CI or add an exemption with a one-line reason",
+    "exemption-invalid-reason": "give the exemption a one-line reason",
+    "exemption-stale-not-a-suite": "remove the exemption",
+    "exemption-stale-now-wired": "remove the exemption",
+    "allowlist-missing": "create the allowlist file or pass --allowlist",
+    "allowlist-unreadable": "make the allowlist file readable",
+    "allowlist-malformed": "fix the allowlist to be a JSON object of path to reason",
+    "root-invalid": "pass an existing repository directory as --root",
+    "git-failed": "fix git access for the root and retry",
+    "analysis-failed": "fix the input the checker names and rerun",
+}
+
+
+class CheckFailure(RuntimeError):
+    """A failed scan, not a completed check with policy findings."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def _git(root, *args):
+    try:
+        proc = subprocess.run(["git", "-C", str(root), *args],
+                              capture_output=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise CheckFailure("git-failed", f"git {' '.join(args)} failed: {error}") from error
+    if proc.returncode != 0:
+        detail = proc.stderr.decode("utf-8", errors="replace").strip()
+        raise CheckFailure("git-failed", f"git {' '.join(args)} failed: {detail}")
+    return proc.stdout
+
+
+def _validate_root(root):
+    if not root.is_dir():
+        raise CheckFailure("root-invalid", f"root is not a repository directory: {root}")
+    try:
+        inside = _git(root, "rev-parse", "--is-inside-work-tree").strip()
+    except CheckFailure as error:
+        # An apparent work tree with broken Git access is retryable; a plain
+        # directory outside a work tree is an invalid input instead.
+        if not any((p / ".git").exists() for p in (root, *root.parents)):
+            raise CheckFailure("root-invalid", f"root is not a git work tree: {root}") from error
+        raise
+    if inside != b"true":
+        raise CheckFailure("root-invalid", f"root is not a git work tree: {root}")
 
 
 def tracked_files(root):
-    proc = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
-                          capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"git ls-files failed: {proc.stderr.strip()}")
-    return [entry for entry in proc.stdout.split("\0") if entry]
+    # Decode after splitting NUL-delimited bytes: text-mode universal newline
+    # conversion would corrupt tracked filenames containing carriage returns.
+    return [os.fsdecode(entry) for entry in _git(root, "ls-files", "-z").split(b"\0")
+            if entry]
 
 
 def restored_paths(root):
@@ -2431,24 +2494,27 @@ def is_wired(suite, segments, discovers, counts, tracked=frozenset()):
 
 def load_allowlist(path):
     try:
-        raw = json.loads(Path(path).read_text())
-    except FileNotFoundError:
-        raise RuntimeError(f"allowlist missing: {path}")
-    except (OSError, ValueError) as error:
-        raise RuntimeError(f"allowlist unreadable: {error}")
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise CheckFailure("allowlist-missing", f"allowlist missing: {path}") from error
+    except ValueError as error:
+        raise CheckFailure("allowlist-malformed", f"allowlist unreadable: {error}") from error
+    except OSError as error:
+        raise CheckFailure("allowlist-unreadable", f"allowlist unreadable: {error}") from error
     if not isinstance(raw, dict):
-        raise RuntimeError("allowlist must be a JSON object of path -> reason")
+        raise CheckFailure("allowlist-malformed",
+                           "allowlist must be a JSON object of path -> reason")
     return raw
 
 
-def check(root, allowlist):
-    """Return a list of error strings; empty means the ratchet holds."""
+def _analyze(root, allowlist):
+    """One detector for both renderers; return suite count and (code, path)s."""
     root = Path(root)
-    errors = []
+    findings = []
     for path, reason in sorted(allowlist.items()):
         if (not isinstance(path, str) or not isinstance(reason, str)
                 or not reason.strip() or "\n" in reason.strip()):
-            errors.append(f"allowlist entry needs a one-line reason: {path}")
+            findings.append(("exemption-invalid-reason", path))
     segments = build_corpus(root)
     discovers = discover_patterns(segments)
     suites = set(tracked_suites(root))
@@ -2466,18 +2532,44 @@ def check(root, allowlist):
     wired |= js_wired_suites(root, segments, suites)
     for suite in sorted(suites - wired):
         if suite not in allowlist:
-            errors.append(
-                f"orphan suite is neither wired nor exempt: {suite} "
-                f"(wire it into a run: step in .github/workflows/*.yml, or "
-                f"exempt it in verification/orphan_suites_allowlist.json)")
+            findings.append(("orphan-suite", suite))
     for path in sorted(allowlist):
         if path not in suites:
-            errors.append(
-                f"stale exemption (not an unwired suite): {path}")
+            findings.append(("exemption-stale-not-a-suite", path))
         elif path in wired:
-            errors.append(
-                f"stale exemption (now wired, drop it): {path}")
-    return errors
+            findings.append(("exemption-stale-now-wired", path))
+    return len(suites), findings
+
+
+def _render_finding(code, path):
+    return FINDING_MESSAGES[code].format(path=path)
+
+
+def check(root, allowlist):
+    """Return a list of error strings; empty means the ratchet holds."""
+    _, findings = _analyze(root, allowlist)
+    return [_render_finding(code, path) for code, path in findings]
+
+
+def _entry(code, path):
+    return {"code": code, "path": path, "retryable": code == "git-failed",
+            "next_action": NEXT_ACTIONS[code]}
+
+
+def _json_result(suite_count=None, exemption_count=None, findings=(),
+                 diagnostic=None):
+    complete = diagnostic is None
+    return {
+        "schema": "orphan-suites.v1",
+        "outcome": ("findings" if findings else "clean") if complete else "unmeasurable",
+        "check_complete": complete,
+        "suite_count": suite_count,
+        "exemption_count": exemption_count,
+        "finding_count": len(findings) if complete else None,
+        "findings": [_entry(code, path) for code, path in
+                     sorted(findings, key=lambda finding: (finding[1], finding[0]))],
+        "diagnostic": diagnostic,
+    }
 
 
 def main(argv=None):
@@ -2488,40 +2580,64 @@ def main(argv=None):
     # absolute path into this checkout, so joining it to ``--root``
     # would silently check another tree against our exemptions).
     allowlist_path = None
+    json_mode = False
     i = 0
     while i < len(args):
-        if args[i] == "--root" and i + 1 < len(args):
+        if args[i] in ("--root", "--allowlist"):
+            option = args[i]
+            if i + 1 == len(args) or args[i + 1].startswith("-"):
+                print(f"FAIL: missing argument for {option}\n{USAGE}")
+                return 2
             i += 1
-            root = Path(args[i])
-        elif args[i] == "--allowlist" and i + 1 < len(args):
-            i += 1
-            allowlist_path = Path(args[i])
+            if option == "--root":
+                root = Path(args[i])
+            else:
+                allowlist_path = Path(args[i])
+        elif args[i] == "--json":
+            json_mode = True
         elif args[i] in ("-h", "--help"):
-            print(USAGE)
+            print(HELP)
             return 0
         else:
             print(f"FAIL: unknown option: {args[i]}\n{USAGE}")
             return 2
         i += 1
     try:
+        root = root.resolve()
+        _validate_root(root)
         if allowlist_path is None:
             allowlist_path = Path(
                 "verification/orphan_suites_allowlist.json")
-        allowlist = load_allowlist(root / allowlist_path
-                                   if not Path(allowlist_path).is_absolute()
-                                   else allowlist_path)
-        errors = check(root, allowlist)
-    except RuntimeError as error:
-        print(f"FAIL: {error}")
+        if not allowlist_path.is_absolute():
+            allowlist_path = root / allowlist_path
+        allowlist = load_allowlist(allowlist_path)
+        suite_count, findings = _analyze(root, allowlist)
+    except Exception as error:
+        # CLI error boundary: a detector failure must never become a clean
+        # verdict, fabricated counts, or a traceback instead of a JSON result.
+        code = error.code if isinstance(error, CheckFailure) else "analysis-failed"
+        path = None
+        if code.startswith("allowlist-"):
+            try:
+                path = allowlist_path.resolve().relative_to(root).as_posix()
+            except (ValueError, OSError, RuntimeError):
+                pass
+        if json_mode:
+            print(json.dumps(_json_result(diagnostic=_entry(code, path)),
+                             sort_keys=True))
+        else:
+            print(f"FAIL: {error}")
         return 1
-    for error in errors:
-        print(f"FAIL: {error}")
-    if errors:
-        return 1
-    print(f"PASS: orphan-suite ratchet holds "
-          f"({len(tracked_suites(root))} suites, "
-          f"{len(allowlist)} exemptions)")
-    return 0
+    if json_mode:
+        print(json.dumps(_json_result(suite_count, len(allowlist), findings),
+                         sort_keys=True))
+    else:
+        for code, path in findings:
+            print(f"FAIL: {_render_finding(code, path)}")
+        if not findings:
+            print(f"PASS: orphan-suite ratchet holds "
+                  f"({suite_count} suites, {len(allowlist)} exemptions)")
+    return 1 if findings else 0
 
 
 if __name__ == "__main__":

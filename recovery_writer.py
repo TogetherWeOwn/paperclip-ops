@@ -89,6 +89,9 @@ from typing import Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "lib"))
 import host_pressure
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from paperclip_api_allowlist import (
+    AllowlistRefused, check_api_base_allowed)
 
 POLICY_VERSION = 4
 WRITER_NAME = "recovery-writer/4"
@@ -626,6 +629,10 @@ class PaperclipClient:
         if not _valid_api_base(base):
             raise WriterError(
                 "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
+        try:
+            check_api_base_allowed(base, sender="recovery_writer")
+        except AllowlistRefused as exc:
+            raise WriterError(str(exc)) from exc
         self.base_url = base
         self.api_key = api_key
         self.run_id = run_id

@@ -72,6 +72,7 @@ function check(input) {
   const keys = [
     "status", "reasonCodes", "pathClass", "evidenceBasis", "lifecycle",
     "leaseState", "authority", "contentScan", "stores", "backend", "target", "bindingCheck",
+    "schema_id", "nextActions",
   ];
   assert.ok(Object.keys(result).every((key) => keys.includes(key)));
   if (Object.hasOwn(result, "backend")) assert.equal(result.backend, "UNKNOWN");

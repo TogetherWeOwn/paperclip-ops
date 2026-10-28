@@ -112,6 +112,114 @@ provider authorities are different lifetimes and must not be conflated.
 `authority` is always `UNKNOWN`, `contentScan` always `NOT_PERFORMED`, and backend
 is always `UNKNOWN` because this slice has no backend observation contract.
 
+## Versioned results and remediation
+
+Every classifier and tool outcome, including invocation/config failures, has
+`schema_id: native-runner-coverage-result.v1`. The tool returns `{content, data}`:
+`content` is the JSON serialization of `data`, with the same semantics.
+[`result-contract.mjs`](result-contract.mjs) exports the exact JSON Schema
+`RESULT_SCHEMA` (all fields required, no extra properties) and the immutable
+`REMEDIATION_CATALOGUE`. This is the existing plugin's contract, not a new registry.
+
+| Field | JSON type and allowed values |
+|---|---|
+| `schema_id` | string: `native-runner-coverage-result.v1` |
+| `status` | string: `UNKNOWN`, `ADVERSE`, `REFUSED` |
+| `reasonCodes` | nonempty array of unique strings from the complete mapping below; existing order preserved |
+| `pathClass` | string: `UNKNOWN`, `DOT_STARTUP_ONLY`, `DOT_RETAINED`, `CODEX_LOCAL_MCP_HEADER` |
+| `evidenceBasis` | string: `metadata`, `reported`, `source`, `synthetic` (pure fixtures only) |
+| `lifecycle` | string: `UNKNOWN`, `live`, `warm`, `detached`, `recovery`, `terminal` |
+| `leaseState` | string: `UNKNOWN`, `unexpired_record`, `expired_record`, `revoked_record` |
+| `authority`, `backend` | string: always `UNKNOWN` |
+| `contentScan` | string: always `NOT_PERFORMED` |
+| `target` | string: `UNKNOWN`, `local`, `remote`, `custom` |
+| `bindingCheck` | string: `REPORTED_CONSISTENT`, `INCOMPLETE`, `REFUSED` |
+| `stores` | object: exactly the eight retention keys above, each `UNKNOWN`, `PRESENT`, or `NOT_FOUND_IN_OBSERVED_SCOPE` |
+| `nextActions` | nonempty unique array of objects with exactly `reasonCode`, `action`, `instruction` strings |
+
+There is exactly one action per reason, in `reasonCodes` order. Each instruction
+is the fixed string associated with that action below, never supplied metadata,
+IDs, paths, errors, configuration or content. Structural schema validation alone
+does not prove this correspondence: consumers also check each entry against
+`REMEDIATION_CATALOGUE[result.reasonCodes[index]]`. Advice does not change status
+or provenance, execute recovery, grant access or establish an observation.
+
+| Action | Exact fixed instruction |
+|---|---|
+| `CORRECT_SUPPLIED_METADATA` | Correct supplied metadata only from facts already available within the authorized scope; never invent missing observations. |
+| `USE_AUTHORIZED_NATIVE_SURFACE` | Use only an already-authorized native metadata surface if it exposes the missing fact; otherwise keep it UNKNOWN and report the unsupported boundary. |
+| `PRESERVE_UNKNOWN_AND_REPORT` | Preserve the classification, keep unobserved facts UNKNOWN, and report the unsupported boundary without expanding access or changing configuration. |
+
+Complete reason-to-action mapping (including malformed inputs and worker overrides):
+
+| Reason code | Action |
+|---|---|
+| `BACKEND_UNOBSERVABLE` | `PRESERVE_UNKNOWN_AND_REPORT` |
+| `AUTHORITY_NOT_TESTED` | `PRESERVE_UNKNOWN_AND_REPORT` |
+| `CONTENT_NOT_SCANNED` | `PRESERVE_UNKNOWN_AND_REPORT` |
+| `COVERAGE_INCOMPLETE` | `USE_AUTHORIZED_NATIVE_SURFACE` |
+| `INVALID_INPUT` | `CORRECT_SUPPLIED_METADATA` |
+| `INVALID_OBSERVATION` | `CORRECT_SUPPLIED_METADATA` |
+| `INVALID_POLICY` | `PRESERVE_UNKNOWN_AND_REPORT` |
+| `COMPANY_MISMATCH` | `CORRECT_SUPPLIED_METADATA` |
+| `AGENT_MISMATCH` | `CORRECT_SUPPLIED_METADATA` |
+| `ADAPTER_MISMATCH` | `CORRECT_SUPPLIED_METADATA` |
+| `RUN_MISMATCH` | `CORRECT_SUPPLIED_METADATA` |
+| `SESSION_MISMATCH` | `CORRECT_SUPPLIED_METADATA` |
+| `MISSING_BINDING_METADATA` | `CORRECT_SUPPLIED_METADATA` |
+| `MISSING_SESSION_JOIN` | `USE_AUTHORIZED_NATIVE_SURFACE` |
+| `MISSING_RECEIPT_BINDING` | `CORRECT_SUPPLIED_METADATA` |
+| `UNSUPPORTED_EVIDENCE_BASIS` | `CORRECT_SUPPLIED_METADATA` |
+| `SOURCE_ONLY` | `PRESERVE_UNKNOWN_AND_REPORT` |
+| `SYNTHETIC_FIXTURE` | `PRESERVE_UNKNOWN_AND_REPORT` |
+| `REPORTED_NOT_MEASURED` | `PRESERVE_UNKNOWN_AND_REPORT` |
+| `STORE_SCOPE_UNOBSERVABLE` | `PRESERVE_UNKNOWN_AND_REPORT` |
+| `DEFAULT_SCOPE_MISS_NOT_GLOBAL_ABSENCE` | `PRESERVE_UNKNOWN_AND_REPORT` |
+| `RETAINED_PROVIDER_STATE` | `PRESERVE_UNKNOWN_AND_REPORT` |
+| `RETAINED_MCP_HEADER` | `PRESERVE_UNKNOWN_AND_REPORT` |
+| `MISSING_INVOCATION_COMPANY` | `PRESERVE_UNKNOWN_AND_REPORT` |
+| `CONFIG_UNAVAILABLE` | `PRESERVE_UNKNOWN_AND_REPORT` |
+| `INVOCATION_COMPANY_MISMATCH` | `PRESERVE_UNKNOWN_AND_REPORT` |
+
+Malformed supplied metadata can be corrected only from already-available facts.
+A missing session join needs an actually exposed, already-authorized native fact,
+not a guessed identifier. Invalid/unavailable policy or invocation context is an
+unsupported boundary, not advice to change configuration. No hint authorizes
+credential acquisition, raw-store reads, helpers, schedule changes or scope bypass.
+
+Complete synthetic example of tool `data` for consistent binding metadata with
+no observation (not a live observation or measured recovery result):
+
+```json
+{
+  "status": "UNKNOWN",
+  "reasonCodes": ["BACKEND_UNOBSERVABLE", "AUTHORITY_NOT_TESTED", "CONTENT_NOT_SCANNED", "COVERAGE_INCOMPLETE"],
+  "pathClass": "UNKNOWN",
+  "evidenceBasis": "metadata",
+  "lifecycle": "UNKNOWN",
+  "leaseState": "UNKNOWN",
+  "authority": "UNKNOWN",
+  "contentScan": "NOT_PERFORMED",
+  "stores": {
+    "controller": "UNKNOWN", "journal": "UNKNOWN", "providerState": "UNKNOWN", "mcpHeader": "UNKNOWN",
+    "transcript": "UNKNOWN", "sqlite": "UNKNOWN", "runLog": "UNKNOWN", "optionalTrace": "UNKNOWN"
+  },
+  "backend": "UNKNOWN",
+  "target": "UNKNOWN",
+  "bindingCheck": "REPORTED_CONSISTENT",
+  "schema_id": "native-runner-coverage-result.v1",
+  "nextActions": [
+    {"reasonCode": "BACKEND_UNOBSERVABLE", "action": "PRESERVE_UNKNOWN_AND_REPORT", "instruction": "Preserve the classification, keep unobserved facts UNKNOWN, and report the unsupported boundary without expanding access or changing configuration."},
+    {"reasonCode": "AUTHORITY_NOT_TESTED", "action": "PRESERVE_UNKNOWN_AND_REPORT", "instruction": "Preserve the classification, keep unobserved facts UNKNOWN, and report the unsupported boundary without expanding access or changing configuration."},
+    {"reasonCode": "CONTENT_NOT_SCANNED", "action": "PRESERVE_UNKNOWN_AND_REPORT", "instruction": "Preserve the classification, keep unobserved facts UNKNOWN, and report the unsupported boundary without expanding access or changing configuration."},
+    {"reasonCode": "COVERAGE_INCOMPLETE", "action": "USE_AUTHORIZED_NATIVE_SURFACE", "instruction": "Use only an already-authorized native metadata surface if it exposes the missing fact; otherwise keep it UNKNOWN and report the unsupported boundary."}
+  ]
+}
+```
+
+Source-only tests validate every reason, the exact schema/catalogue and this
+example; they prove no installed-consumer or operational recovery benefit.
+
 ## Helper-free routine wiring candidate (not applied)
 
 Only the routine owner may accept this step and any separately authorized rollout.

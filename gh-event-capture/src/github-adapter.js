@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { GH_PIN_CODE, childFailureFacts, graphqlErrorType } from './gh-pinned.js'
 
 const execute = promisify(execFile)
 const PR_QUERY = `query BridgePullRequest($owner: String!, $name: String!, $number: Int!) {
@@ -54,7 +55,8 @@ const SNAPSHOT_QUERY = `query BridgeCloseoutSnapshot($owner: String!, $name: Str
           oid pushedDate
           statusCheckRollup { contexts(first: 100) {
             nodes { __typename
-              ... on CheckRun { name status conclusion completedAt }
+              ... on CheckRun { name status conclusion startedAt completedAt
+                checkSuite { app { slug } } }
               ... on StatusContext { context state createdAt } }
             pageInfo { hasNextPage } } } }
         }
@@ -110,6 +112,43 @@ export function snapshotFailureCode(error) {
   return error instanceof SnapshotReadError ? error.code : 'snapshot-invalid'
 }
 
+class WriteFailureError extends Error {
+  constructor(message, code) {
+    super(message)
+    this.code = code
+  }
+}
+
+// Closed diagnostic set for write failures, so the sweep log can name the
+// failure class — a nonexistent endpoint, a credential/scope refusal and a
+// transport failure are three different fixes. Child text itself is never
+// echoed: it can carry tokens or private bodies.
+export function writeFailureCode(error) {
+  return error instanceof WriteFailureError ? error.code : 'unknown'
+}
+
+// Map a failed child to its write class. The pinned runner (production)
+// already reduced child output to fixed-shape facts; a raw execFile error
+// (default runner) is reduced the same way here. Every other byte of child
+// output stays out of logs and errors.
+function writeStatusFromChild(error) {
+  const facts = error?.code === GH_PIN_CODE ? error : childFailureFacts(error)
+  if (typeof facts?.httpStatus === 'string' && /^[1-5][0-9]{2}$/.test(facts.httpStatus)) return `http-${facts.httpStatus}`
+  return graphqlClass(facts?.graphqlErrorType) ?? 'unknown'
+}
+
+function graphqlClass(type) {
+  return typeof type === 'string' && /^[A-Z][A-Z_]{0,39}$/.test(type)
+    ? `graphql-${type.toLowerCase().replaceAll('_', '-')}` : null
+}
+
+// A runner that exits 0 with a GraphQL errors[] body still names the class
+// instead of collapsing into `unconfirmed`.
+function refuseGraphqlErrors(result, message) {
+  const type = graphqlClass(graphqlErrorType(result))
+  if (type) throw new WriteFailureError(message, type)
+}
+
 function requireValue(condition, message, code = null) {
   if (!condition) throw code === null ? new Error(message) : new SnapshotReadError(message, code)
 }
@@ -157,6 +196,29 @@ function parseTime(value, message) {
   return ms
 }
 
+// Provenance is auxiliary: it only ever lets readinessChecks recognise a
+// superseded rerun. Anything missing or oddly shaped reads as "unknown
+// producer", which keeps the conservative merge, rather than failing a
+// read whose check results are otherwise trustworthy. A present but
+// unparseable start time stays strict, like every other timestamp here.
+// The producer is the check suite's app — the same identity branch
+// protection pins beside a required context name (context + app_id), and
+// the finest identity readable under the sweep job token's pinned
+// `checks: read` grant: the workflow run behind a suite needs an Actions
+// grant the token deliberately does not carry. Status contexts carry no
+// producer here: they never conclude `cancelled`, and an absent producer
+// can never supersede one.
+function provenanceOf(node) {
+  const out = {}
+  if (node.__typename !== 'CheckRun') return out
+  if (node.startedAt !== null && node.startedAt !== undefined) {
+    out.startedMs = parseTime(node.startedAt, 'check run start time is invalid')
+  }
+  const app = node.checkSuite?.app?.slug
+  if (typeof app === 'string' && app.length > 0) out.producer = `checkrun:${app}`
+  return out
+}
+
 function normalizeCheck(node) {
   requireValue(node && typeof node === 'object', 'GitHub check entry is malformed')
   if (node.__typename === 'CheckRun') {
@@ -183,11 +245,29 @@ function normalizeCheck(node) {
 
 // Readiness has no push-age decision. Repeated names are legitimate across
 // workflows/status sources, but none may hide a failure or an unfinished run.
+// One narrow exception: a CANCELLED entry is a superseded rerun (e.g. a
+// concurrency cancel) when the SAME producer started a later attempt on this
+// head that completed passing. Only that evidence is dropped before the
+// conservative merge; genuine failures, the latest attempt's own
+// cancellation, unknown producers and distinct producers keep the merge
+// exactly as before. Attempt order is the start time, not completion: a
+// body-reading check that started earlier linted an older PR body even if
+// it happened to finish late.
+function supersededCancelled(check, checks) {
+  if (check.status !== 'completed' || check.conclusion !== 'cancelled') return false
+  if (typeof check.producer !== 'string' || !Number.isInteger(check.startedMs)) return false
+  return checks.some((other) => other !== check && other.name === check.name &&
+    other.producer === check.producer && other.status === 'completed' &&
+    ['success', 'neutral', 'skipped'].includes(other.conclusion) &&
+    Number.isInteger(other.startedMs) && other.startedMs > check.startedMs)
+}
+
 function readinessChecks(checks) {
+  const effective = checks.filter((check) => !supersededCancelled(check, checks))
   const rank = (check) => check.status !== 'completed' ? 1
     : ['success', 'neutral', 'skipped'].includes(check.conclusion) ? 0 : 2
   const byName = new Map()
-  for (const check of checks) {
+  for (const check of effective) {
     const prior = byName.get(check.name)
     if (!prior || rank(check) > rank(prior) ||
       (rank(check) === rank(prior) && JSON.stringify(check) < JSON.stringify(prior))) {
@@ -235,7 +315,9 @@ function normalizeSnapshot(pr, repository, number, nowMs, readiness = false) {
   for (const node of rollup?.contexts?.nodes ?? []) {
     let check
     try {
-      check = normalizeCheck(node)
+      // Provenance is readiness-only: closeout never reads it, so a closeout
+      // read keeps its exact pre-provenance shape and failure surface.
+      check = readiness ? { ...normalizeCheck(node), ...provenanceOf(node) } : normalizeCheck(node)
     } catch (error) {
       if (!readiness) throw error
       throw new SnapshotReadError('GitHub check entry is malformed', 'check-malformed')
@@ -540,28 +622,50 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
         '--input', file, `repos/${owner}/${name}/pulls/${number}`], {
         encoding: 'utf8', shell: false, timeout: 30000, maxBuffer: 1024 * 1024,
       })
-    } catch {
-      throw new Error('GitHub body update failed: transport, timeout or output limit')
+    } catch (error) {
+      throw new WriteFailureError('GitHub body update failed: transport, timeout or output limit', writeStatusFromChild(error))
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   }
 
+  // GraphQL only: GitHub ships no REST pulls/{n}/ready_for_review endpoint
+  // (the REST OpenAPI has no such path), so the earlier REST writer 404'd on
+  // every call while the identical-shape GraphQL convert-to-draft below
+  // worked. Mark-ready resolves the node id the same way and confirms the
+  // mutation left the PR non-draft, so a silent no-op fails closed.
   async function markReadyForReview(repository, number) {
     requireValue(prNumber(number), 'GitHub PR number is invalid')
     requireValue(repositories.has(repository), 'GitHub repository is outside the configured scope')
     const [owner, name] = repository.split('/')
-    let result
+    const idQuery = 'query ReadinessNodeId($owner: String!, $name: String!, $number: Int!) {' +
+      ' repository(owner: $owner, name: $name) { nameWithOwner pullRequest(number: $number) { id } } }'
+    const mutation = 'mutation ReadinessToReady($pullRequestId: ID!) {' +
+      ' markPullRequestReadyForReview(input: {pullRequestId: $pullRequestId}) { pullRequest { isDraft } } }'
     try {
-      const { stdout } = await run('gh', ['api', '--hostname', 'github.com', '--method', 'POST',
-        `repos/${owner}/${name}/pulls/${number}/ready_for_review`], {
+      const idOut = await run('gh', ['api', '--hostname', 'github.com', 'graphql',
+        '-f', `query=${idQuery}`, '-f', `owner=${owner}`, '-f', `name=${name}`,
+        '-F', `number=${number}`], {
         encoding: 'utf8', shell: false, timeout: 30000, maxBuffer: 1024 * 1024,
       })
-      result = JSON.parse(stdout)
-    } catch {
-      throw new Error('GitHub mark-ready failed: transport, timeout, output limit or invalid JSON')
+      const idResult = JSON.parse(idOut.stdout)
+      const nodeId = idResult?.data?.repository?.pullRequest?.id
+      if (!(typeof nodeId === 'string' && /^[A-Za-z0-9+/=_-]+$/.test(nodeId) && nodeId.length <= 256)) {
+        throw new WriteFailureError('GitHub PR node id is incomplete', 'node-id-incomplete')
+      }
+      const mutateOut = await run('gh', ['api', '--hostname', 'github.com', 'graphql',
+        '-f', `query=${mutation}`, '-f', `pullRequestId=${nodeId}`], {
+        encoding: 'utf8', shell: false, timeout: 30000, maxBuffer: 1024 * 1024,
+      })
+      const mutateResult = JSON.parse(mutateOut.stdout)
+      refuseGraphqlErrors(mutateResult, 'GitHub mark-ready was refused')
+      if (mutateResult?.data?.markPullRequestReadyForReview?.pullRequest?.isDraft !== false) {
+        throw new WriteFailureError('GitHub mark-ready did not confirm a non-draft', 'unconfirmed')
+      }
+    } catch (error) {
+      if (error instanceof WriteFailureError) throw error
+      throw new WriteFailureError('GitHub mark-ready failed: transport, timeout, output limit or invalid JSON', writeStatusFromChild(error))
     }
-    requireValue(result && typeof result === 'object' && !Array.isArray(result), 'GitHub mark-ready response is incomplete')
   }
 
   async function convertToDraft(repository, number) {
@@ -580,19 +684,21 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
       })
       const idResult = JSON.parse(idOut.stdout)
       const nodeId = idResult?.data?.repository?.pullRequest?.id
-      requireValue(typeof nodeId === 'string' && /^[A-Za-z0-9+/=_-]+$/.test(nodeId) && nodeId.length <= 256,
-        'GitHub PR node id is incomplete')
+      if (!(typeof nodeId === 'string' && /^[A-Za-z0-9+/=_-]+$/.test(nodeId) && nodeId.length <= 256)) {
+        throw new WriteFailureError('GitHub PR node id is incomplete', 'node-id-incomplete')
+      }
       const mutateOut = await run('gh', ['api', '--hostname', 'github.com', 'graphql',
         '-f', `query=${mutation}`, '-f', `pullRequestId=${nodeId}`], {
         encoding: 'utf8', shell: false, timeout: 30000, maxBuffer: 1024 * 1024,
       })
       const mutateResult = JSON.parse(mutateOut.stdout)
-      requireValue(mutateResult?.data?.convertPullRequestToDraft?.pullRequest?.isDraft === true,
-        'GitHub convert-to-draft did not confirm a draft')
+      refuseGraphqlErrors(mutateResult, 'GitHub convert-to-draft was refused')
+      if (mutateResult?.data?.convertPullRequestToDraft?.pullRequest?.isDraft !== true) {
+        throw new WriteFailureError('GitHub convert-to-draft did not confirm a draft', 'unconfirmed')
+      }
     } catch (error) {
-      if (String(error?.message ?? error).startsWith('GitHub PR node id') ||
-        String(error?.message ?? error).startsWith('GitHub convert-to-draft did not')) throw error
-      throw new Error('GitHub convert-to-draft failed: transport, timeout, output limit or invalid JSON')
+      if (error instanceof WriteFailureError) throw error
+      throw new WriteFailureError('GitHub convert-to-draft failed: transport, timeout, output limit or invalid JSON', writeStatusFromChild(error))
     }
   }
 
@@ -615,8 +721,8 @@ export function createGithubAdapter({ allowedRepositories, run = execute, maxPag
         '--auto', '--squash', '--match-head-commit', headSha], {
         encoding: 'utf8', shell: false, timeout: 30000, maxBuffer: 1024 * 1024,
       })
-    } catch {
-      throw new Error('GitHub auto-merge arm failed: transport, timeout or output limit')
+    } catch (error) {
+      throw new WriteFailureError('GitHub auto-merge arm failed: transport, timeout or output limit', writeStatusFromChild(error))
     }
   }
 

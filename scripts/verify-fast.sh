@@ -358,6 +358,8 @@ python3 test_staged_drift.py || fail "staged Tier-0 drift gate failed"
 # step runs.
 ./test_migration_timeout_preamble.sh || fail "migration timeout-preamble suite failed"
 ./test_migration_squawk.sh || fail "migration squawk suite failed"
+./test_migration_squawk_json.sh || fail "migration squawk JSON suite failed"
+./test_migration_squawk_json_guarantees.sh || fail "migration squawk JSON guarantees suite failed"
 ./test_migration_rehearsal.sh || fail "migration rehearsal suite failed"
 python3 -m unittest test_migration_drift_gate || fail "migration drift-gate suite failed"
 python3 -m unittest test_migration_evidence_ax || fail "migration evidence-AX suite failed"

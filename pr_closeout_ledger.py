@@ -1457,22 +1457,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
-    # Refuse aliasing outputs before any output is opened (and before any
-    # work that could be wasted on a doomed write). The prior ledger is not
-    # a protected input here: load_inputs reads it fully before the write
-    # below, so intentional in-place replacement stays valid.
-    protected = [args.registry, args.snapshot]
-    if args.cards:
-        protected.append(args.cards)
-    if not args.dry_run:
-        refusal = output_path_refusal(args.ledger_out, args.plan_out, protected)
-        if refusal is not None:
-            return report_output_path_refusal(refusal, args.json)
     now = utcnow()
     stamp = now.isoformat().replace("+00:00", "Z")
     try:
         registry, snapshots, reviews, cards, prior_records = load_inputs(
             args.registry, args.snapshot, args.prior_ledger, args.cards)
+        # Keep unreadable evidence in the exit-5 contract, then refuse aliases
+        # before evaluation or either write. The fully loaded prior ledger is
+        # not protected, so intentional in-place replacement stays valid.
+        if not args.dry_run:
+            protected = [args.registry, args.snapshot]
+            if args.cards:
+                protected.append(args.cards)
+            refusal = output_path_refusal(args.ledger_out, args.plan_out, protected)
+            if refusal is not None:
+                return report_output_path_refusal(refusal, args.json)
         records: dict[str, dict[str, Any]] = {}
         for entry in registry:
             key = registry_key(str(entry["repo"]), int(entry["pr"]))

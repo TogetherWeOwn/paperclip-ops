@@ -7,6 +7,25 @@ writes, no timer, no host install. It does not deploy, merge, approve or
 gate anything. **Never put it in a transport/execution gate or use its exit
 status to admit or refuse work.** It reports traces, not rollout approval.
 
+## Documentation accompaniment
+
+In `.docs-drift.json`, `trace-correlation-contract` maps the exact source path
+`ops/paperclip/trace_correlator.py` to `docs/trace-correlation.md`. Once the mapping
+is in the supplied target commit, a source change needs an added or content-modified
+regular file at this doc path in the same patch; unrelated, deleted or chmod-only
+docs do not count.
+
+```sh
+python3 scripts/quality-gates/docs_drift.py --base <full-target-sha> --head <full-pr-head-sha>
+```
+
+See [the gate contract](docs-drift.md) for base-owned policy and JSON/exit details.
+Accompaniment is not semantic correctness, capacity admission, deployment
+authorization or evidence freshness. This development-quality check does not
+change `trace-correlation.v1`, its input/error/exit behavior or its read-only
+operation. The correlator must never become an execution/transport gate; neither
+its report nor its exit status authorizes or refuses work.
+
 ## Evidence contract
 
 Feed one JSON document on stdin (strict UTF-8, at most 1048576 bytes,

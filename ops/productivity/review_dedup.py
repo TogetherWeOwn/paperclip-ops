@@ -18,14 +18,14 @@ What is actually enforced in this repo, and by which function:
   Repeated errors must not suppress it, or outage-stranded heads would
   never be woken. One wake per head comes from the reconciler's state
   key, not from an error count.
-- head_decision() plus idempotency_key() reserve the stricter
-  new-review-request rule (an errored head gets at most one retry;
-  unrecognized row states fail closed toward suppress). No production
-  path in this repo calls them today: the reconciler deliberately does
-  not, because it must wake on repeated errors and on unknown states
-  rather than strand the head. Adopters that open real review requests
-  (e.g. a review gate) should call head_decision(); the TwoDeliveriesOneRow
-  tests pin its contract (two deliveries, same head -> one row).
+- head_decision() enforces the stricter new-review-request rule: an
+  errored head gets at most one retry, and unrecognized row states fail
+  closed toward suppress. The CI trigger maps its complete non-verdict
+  check history to error attempts before calling it. The reconciler
+  deliberately does not: it must wake on repeated errors and unknown
+  states rather than strand the head. idempotency_key() supplies a common
+  head identity for adopters; the TwoDeliveriesOneRow tests pin the shared
+  contract (two deliveries, same head -> one row).
 
 Server row vocabulary (chat_github_reviews.state) follows the review-gate
 taxonomy: completed = published verdict; queued/running = live;

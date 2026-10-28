@@ -136,11 +136,28 @@ out of scope -- an unreviewed global shell policy is not this change).
 
 Offline: reads one string or file. No network, no credential, no execution of
 the scanned command. Exit 0 clean - 2 usage error - 3 finding refused.
+
+MACHINE MODE. `check --json` with one of `--command`/`--file`/`--stdin`
+emits exactly one deterministic JSON object on available stdout with empty
+stderr, on every exit (0/2/3). With stdout closed, only the exit status is
+available; closed stdin is an `input-unreadable` error. Schema
+`shell-substitution.v1`:
+`{schema, outcome: clean|findings|input_error, input_kind:
+command|file|stdin|null, finding_count, findings: [{code}], error}`.
+Findings carry only the stable rule code (ordered, deduplicated like the
+text mode); no excerpts, offsets, command text, argv or file bytes appear
+in either stream. Errors are generic `{code, message, retryable: false,
+next_action}` with `invalid-arguments`/`input-unreadable`/`invalid-utf8`.
+`--json --help` adds `{usage, examples}` to a clean envelope. Argparse's
+unambiguous option abbreviations retain the same output mode, including on
+errors and help. Legacy text keeps its diagnostic excerpts by design; machine
+mode is private checker output, not a general redactor or credential boundary.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
 EXIT_OK = 0
@@ -149,6 +166,106 @@ EXIT_FINDING = 3
 
 FINDING_NAME = "unbounded-yes-substitution"
 EXCERPT_LEN = 160
+SCHEMA_ID = "shell-substitution.v1"
+
+_JSON_USAGE = ("shell_subst_guard.py check [--json] "
+               "(--command COMMAND | --file FILE | --stdin)")
+_JSON_EXAMPLES = (
+    "shell_subst_guard.py check --command 'x=$(yes)'",
+    "shell_subst_guard.py check --file ./script.sh",
+    "printf 'x=$(yes)' | shell_subst_guard.py check --stdin",
+    "shell_subst_guard.py check --json --command 'x=$(yes)'",
+)
+_MSG_INVALID_ARGS = ("Invalid arguments. Provide check with exactly one "
+                     "of --command, --file, or --stdin.")
+_MSG_UNREADABLE = ("Input could not be read. Provide a readable file "
+                   "or input stream.")
+_MSG_BAD_UTF8 = "Input is not valid UTF-8. Provide UTF-8 encoded input."
+
+
+def _json_error(code: str, message: str, next_action: str) -> dict:
+    """One generic machine-mode error: a stable code, a message that never
+    quotes supplied input, and the corrective action. Never retryable: the
+    same input would fail the same way."""
+    return {"code": code, "message": message, "retryable": False,
+            "next_action": next_action}
+
+
+def _json_envelope(input_kind: str | None, findings: list[dict],
+                   error: dict | None) -> dict:
+    """The single `shell-substitution.v1` verdict object: outcome is
+    `input_error` when `error` is set, else `findings` or `clean` by count.
+    Findings carry rule codes only — never excerpts, paths or offsets."""
+    count = len(findings)
+    return {"schema": SCHEMA_ID,
+            "outcome": "input_error" if error
+            else ("findings" if count else "clean"),
+            "input_kind": input_kind, "finding_count": count,
+            "findings": findings, "error": error}
+
+
+def _emit_json(obj: dict) -> None:
+    """Write the envelope as one deterministic compact line on stdout.
+    An unavailable stdout (closed before startup) emits nothing instead of
+    raising, so the caller can still return the verdict exit code."""
+    if sys.stdout is not None:
+        sys.stdout.write(json.dumps(obj, sort_keys=True,
+                                    separators=(",", ":")) + "\n")
+
+
+def _json_input_error(input_kind: str | None, code: str, message: str,
+                      next_action: str) -> dict:
+    """An `input_error` envelope with no findings for one input failure."""
+    return _json_envelope(input_kind, [],
+                          _json_error(code, message, next_action))
+
+
+class _GuardParser(argparse.ArgumentParser):
+    """ArgumentParser whose help and error exits stay in machine mode when
+    JSON was requested, so argparse never prints usage prose echoing argv.
+    Text mode keeps the stock argparse behaviour byte-for-byte."""
+
+    def __init__(self, *args, json_mode: bool = False, **kwargs) -> None:
+        """Record whether this parse must answer with JSON envelopes."""
+        super().__init__(*args, **kwargs)
+        self._json_mode = json_mode
+
+    def print_help(self, file=None) -> None:
+        """JSON mode: a clean envelope carrying usage and examples.
+        Text mode: the standard argparse help text."""
+        if self._json_mode:
+            obj = _json_envelope(None, [], None)
+            obj["help"] = {"usage": _JSON_USAGE,
+                           "examples": list(_JSON_EXAMPLES)}
+            _emit_json(obj)
+            return
+        super().print_help(file)
+
+    def error(self, message: str) -> None:
+        """JSON mode: emit a generic `invalid-arguments` envelope (argparse's
+        message quotes the offending argv, so it is discarded) and exit 2.
+        Text mode: the standard argparse error and usage exit."""
+        if self._json_mode:
+            _emit_json(_json_input_error(None, "invalid-arguments",
+                                         _MSG_INVALID_ARGS,
+                                         "correct_arguments"))
+            raise SystemExit(EXIT_REFUSED)
+        super().error(message)
+
+
+def _read_stdin_text() -> str:
+    """Read stdin once and decode it as strict UTF-8. An unavailable stream
+    raises OSError and undecodable bytes raise UnicodeDecodeError, so the
+    caller can tell unreadable input from invalid UTF-8."""
+    if sys.stdin is None:
+        raise OSError("Input stream is unavailable")
+    buf = getattr(sys.stdin, "buffer", None)
+    if buf is not None:
+        data = buf.read()
+        if isinstance(data, str):
+            return data
+        return data.decode("utf-8")
+    return sys.stdin.read()
 
 # Words that, in command position, pass command position through to the next
 # word (with `-flag` words skipped). Flag-argument forms (`sudo -u <user> yes`,
@@ -1346,38 +1463,90 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns 0 when clean, 2 on usage errors (including unreadable or
     undecodable input), and 3 when a finding refuses the command.
+    With --json, available stdout holds exactly one deterministic JSON object
+    and stderr stays empty on every exit; errors use generic codes without
+    echoing supplied text, argv or paths. Closed stdout preserves the exit code.
     """
-    parser = argparse.ArgumentParser(
+    raw = list(sys.argv[1:] if argv is None else argv)
+    # Match argparse's unambiguous --json prefixes, including invalid explicit
+    # values, so parse failures cannot fall back to excerpt-bearing text.
+    json_mode = any(arg.partition("=")[0] in ("--j", "--js", "--jso", "--json")
+                    for arg in raw)
+    parser = _GuardParser(
         prog="shell_subst_guard.py",
-        description="Refuse an unbounded `yes` in shell command substitution.")
+        description="Refuse an unbounded `yes` in shell command substitution.",
+        json_mode=json_mode)
     parser.add_argument("check", nargs="?", help="must be the word `check`")
+    parser.add_argument("--json", action="store_true",
+                        help="emit one private JSON verdict object "
+                        "(schema shell-substitution.v1) with empty stderr")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--command", help="the shell command string to scan")
     group.add_argument("--file", help="file holding the shell command to scan")
     group.add_argument("--stdin", action="store_true",
                        help="read the shell command from stdin")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw)
     if args.check != "check":
+        if json_mode:
+            _emit_json(_json_input_error(None, "invalid-arguments",
+                                         _MSG_INVALID_ARGS,
+                                         "correct_arguments"))
+            return EXIT_REFUSED
         parser.print_usage(sys.stderr)
         return EXIT_REFUSED
     if args.command is not None:
+        input_kind = "command"
         command = args.command
     elif args.file is not None:
+        input_kind = "file"
         try:
             with open(args.file, "r", encoding="utf-8") as fh:
                 command = fh.read()
-        except (OSError, UnicodeDecodeError) as exc:
+        except UnicodeDecodeError:
+            if json_mode:
+                _emit_json(_json_input_error(
+                    input_kind, "invalid-utf8", _MSG_BAD_UTF8,
+                    "provide_utf8_input"))
+                return EXIT_REFUSED
+            print("shell_subst_guard: not readable: %s (invalid UTF-8)"
+                  % (args.file,), file=sys.stderr)
+            return EXIT_REFUSED
+        except OSError as exc:
+            if json_mode:
+                _emit_json(_json_input_error(
+                    input_kind, "input-unreadable", _MSG_UNREADABLE,
+                    "provide_readable_input"))
+                return EXIT_REFUSED
             print("shell_subst_guard: not readable: %s (%s)"
                   % (args.file, exc), file=sys.stderr)
             return EXIT_REFUSED
     else:
+        input_kind = "stdin"
         try:
-            command = sys.stdin.read()
-        except (OSError, UnicodeDecodeError) as exc:
+            command = _read_stdin_text()
+        except UnicodeDecodeError:
+            if json_mode:
+                _emit_json(_json_input_error(
+                    input_kind, "invalid-utf8", _MSG_BAD_UTF8,
+                    "provide_utf8_input"))
+                return EXIT_REFUSED
+            print("shell_subst_guard: not readable: stdin (invalid UTF-8)",
+                  file=sys.stderr)
+            return EXIT_REFUSED
+        except OSError as exc:
+            if json_mode:
+                _emit_json(_json_input_error(
+                    input_kind, "input-unreadable", _MSG_UNREADABLE,
+                    "provide_readable_input"))
+                return EXIT_REFUSED
             print("shell_subst_guard: not readable: stdin (%s)"
                   % (exc,), file=sys.stderr)
             return EXIT_REFUSED
     findings = check_command(command)
+    if json_mode:
+        coded = [{"code": FINDING_NAME} for _ in findings]
+        _emit_json(_json_envelope(input_kind, coded, None))
+        return EXIT_FINDING if coded else EXIT_OK
     if findings:
         for line in findings:
             print("FINDING %s" % line)

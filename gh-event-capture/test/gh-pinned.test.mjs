@@ -3,7 +3,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { GH_PIN_CODE, PINNED_CHILD_ENV, assertIsolatedConfigDir, createPinnedRunner, preflightGh, prepareIsolatedGhConfig, prepareIsolatedGhConfigSync, refuseInheritedTokens, scrubbedEnv } from '../src/gh-pinned.js'
@@ -128,4 +129,66 @@ test('inherited token env is refused; clean env passes', () => {
   assert.throws(() => refuseInheritedTokens({ GITHUB_TOKEN: 'x' }), /refused/)
   refuseInheritedTokens({})
   refuseInheritedTokens({ GH_TOKEN: '', GITHUB_TOKEN: '' })
+})
+
+// Writer diagnostics (PR #169 review): the pinned runner used to drop every
+// byte of child output, so the adapter's write classifier only ever saw the
+// opaque pin message and every production write failure logged
+// writeFailure=...:unknown. The runner now keeps two fixed-shape facts — the
+// `(HTTP NNN)` status gh prints, and the GraphQL errors[].type GitHub returns
+// with HTTP 200 for permission refusals — and still nothing else.
+const GRAPHQL_FORBIDDEN = JSON.stringify({ data: { markPullRequestReadyForReview: null },
+  errors: [{ type: 'FORBIDDEN', path: ['markPullRequestReadyForReview'], extensions: { saml_failure: false },
+    locations: [{ line: 1, column: 58 }], message: 'Resource not accessible by integration' }] })
+
+// A real executable driven through the default execFile path: the exact
+// production runner, only the binary is a stub.
+function fakeGh(t, script) {
+  const dir = mkdtempSync(join(tmpdir(), 'gh-pinned-fake-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const path = join(dir, 'gh')
+  writeFileSync(path, `#!/bin/sh\n${script}\n`)
+  chmodSync(path, 0o700)
+  return path
+}
+
+test('real child failures keep only the sanitized HTTP status and GraphQL type', async (t) => {
+  const cases = [
+    ['echo "gh: Not Found (HTTP 404) SECRET-ghs_abc" >&2; exit 1', { httpStatus: '404', graphqlErrorType: undefined }],
+    [`printf '%s' '${GRAPHQL_FORBIDDEN}'; echo "gh: Resource not accessible by integration SECRET-ghs_abc" >&2; exit 1`,
+      { httpStatus: undefined, graphqlErrorType: 'FORBIDDEN' }],
+    ['echo "gh: Resource not accessible by integration SECRET-ghs_abc" >&2; exit 1',
+      { httpStatus: undefined, graphqlErrorType: 'FORBIDDEN' }],
+    ['echo "SECRET-ghs_abc transport" >&2; exit 1', { httpStatus: undefined, graphqlErrorType: undefined }],
+  ]
+  for (const [script, expected] of cases) {
+    const run = createPinnedRunner({ executable: fakeGh(t, script), configDir: isolatedDir(t) })
+    await assert.rejects(run('gh', ['api', 'graphql']), (error) => {
+      assert.equal(error.code, GH_PIN_CODE)
+      assert.match(error.message, /^pinned gh invocation failed: 1$/)
+      assert.equal(error.httpStatus, expected.httpStatus, script)
+      assert.equal(error.graphqlErrorType, expected.graphqlErrorType, script)
+      assert.equal(Object.hasOwn(error, 'stdout'), false)
+      assert.equal(Object.hasOwn(error, 'stderr'), false)
+      assert.equal(JSON.stringify({ ...error, message: error.message }).includes('SECRET'), false)
+      assert.equal(String(error.stack).includes('SECRET'), false)
+      return true
+    })
+  }
+})
+
+test('child facts outside the fixed shapes are dropped', async (t) => {
+  for (const [stdout, stderr] of [
+    [JSON.stringify({ errors: [{ type: 'forbidden; rm -rf', message: 'x' }] }), ''],
+    [JSON.stringify({ errors: [{ type: 'A'.repeat(64), message: 'x' }] }), ''],
+    ['not json', 'gh: (HTTP 999)'],
+  ]) {
+    const exec = async () => { throw Object.assign(new Error('child failed'), { code: 1, stdout, stderr }) }
+    const run = createPinnedRunner({ executable: PIN, exec, configDir: isolatedDir(t) })
+    await assert.rejects(run('gh', ['api', 'graphql']), (error) => {
+      assert.equal(error.httpStatus, undefined)
+      assert.equal(error.graphqlErrorType, undefined)
+      return true
+    })
+  }
 })

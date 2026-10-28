@@ -9,6 +9,19 @@
         ".docs-drift.json"
       ],
       "docs": ["docs/docs-drift.md"]
+    },
+    {
+      "id": "capacity-evidence-contract",
+      "sources": [
+        "coolify_capacity_headroom.sh",
+        "coolify_capacity_headroom.py"
+      ],
+      "docs": ["docs/capacity-evidence.md"]
+    },
+    {
+      "id": "trace-correlation-contract",
+      "sources": ["ops/paperclip/trace_correlator.py"],
+      "docs": ["docs/trace-correlation.md"]
     }
   ]
 }

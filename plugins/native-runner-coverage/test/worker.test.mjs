@@ -16,6 +16,7 @@ const STORE_KEYS = [
 const OUTPUT_KEYS = [
   "status", "reasonCodes", "pathClass", "evidenceBasis", "lifecycle",
   "leaseState", "authority", "contentScan", "stores", "backend", "target", "bindingCheck",
+  "schema_id", "nextActions",
 ];
 
 function policy() {

@@ -12,7 +12,7 @@ const storeNames = [
 export const toolDeclaration = {
   name: "native_runner_coverage",
   displayName: "Classify native Runner coverage",
-  description: "Classify reported, sanitized native metadata under a fixed company/agent policy. No content scan, independent measurement, or safety-green verdict.",
+  description: "Classify reported, sanitized native metadata under a fixed company/agent policy. Returns native-runner-coverage-result.v1 with fixed nextActions; schema and remediation catalogue: result-contract.mjs. No content scan, independent measurement, safety-green verdict, or new access authority.",
   parametersSchema: {
     type: "object", additionalProperties: false,
     required: ["binding", "agent", "run"],

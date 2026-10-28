@@ -27,6 +27,42 @@ cannot redirect `--repo` to a different repository.
 The report carries immutable base/head/merge-base/policy SHAs and measured
 `changed_paths` and `checked_rules`. Zero checked rules is not a coverage claim.
 
+## Explain mode
+
+Add `--explain` to cite which changed docs satisfy each triggered rule:
+
+```sh
+python3 scripts/quality-gates/docs_drift.py --base <full-target-sha> --head <full-pr-head-sha> --explain
+```
+
+Without `--explain`, stdout is exactly the `docs-drift.v1` object above:
+same keys, values and exit codes. With it, a normal report (`clean`,
+`finding` or `not_configured`) gains exactly one extra top-level key,
+`explanations`; every other value and the exit code is identical to the
+default invocation on the same base/head. `explanations` holds one record
+per triggered (checked) rule, in base-policy rule order, each with exactly:
+
+- `rule`: the existing stable rule ID (same spelling as `findings[].rule`);
+- `matched_source_paths`: sorted, duplicate-free changed paths matching the
+  rule's source patterns, including deleted and renamed-away source paths;
+- `qualifying_doc_paths`: sorted, duplicate-free paths qualifying for this
+  rule under the existing predicate — added or content-modified regular
+  files matching the rule's doc patterns and not its source patterns;
+- `status`: `satisfied` iff `qualifying_doc_paths` is non-empty, else
+  `missing`.
+
+`len(explanations) == checked_rules`. `missing` records correspond
+one-for-one to `findings` (same rule, and `findings[].paths` equals
+`matched_source_paths`); a `satisfied` rule never has a finding. Both come
+from the same single evaluated path sets and predicate as the verdict, not a
+second evaluator. Zero triggered rules yields `explanations: []` (never a
+coverage claim); a missing base policy yields `not_configured` with
+`explanations: []`. An `unmeasurable` refusal keeps exit 2 and invents no
+satisfied evidence. Output carries only paths, rule IDs and the existing
+commit identities — never file bodies or subprocess output. Explanations
+prove accompaniment only, never semantic accuracy or generated-file
+freshness.
+
 Fetch complete common history before running. Missing objects, unrelated history,
 multiple merge bases, malformed base policy and 30-second Git command timeouts
 are errors, never clean passes. Each invocation allows at most 100000 changed
@@ -66,9 +102,21 @@ slash, empty path segment, `.` or `..` segment, or NUL is allowed.
 - Review policy expansions/relaxations normally. This is a development-quality
   check, not a security boundary against PRs that replace the checker/workflow.
 
-The initial local policy covers this checker, its workflow and its policy, mapped
-to this page. It does not claim to cover all repository modules. Expand mappings
-only where a real source-to-doc contract exists; avoid broad unrelated-doc bypasses.
+The local policy has these exact-path contracts:
+
+| Rule ID | Source paths | Required documentation |
+|---|---|---|
+| `docs-drift` | `scripts/quality-gates/docs_drift.py`, `.github/workflows/docs-drift.yml`, `.docs-drift.json` | `docs/docs-drift.md` |
+| `capacity-evidence-contract` | `coolify_capacity_headroom.sh`, `coolify_capacity_headroom.py` | `docs/capacity-evidence.md` |
+| `trace-correlation-contract` | `ops/paperclip/trace_correlator.py` | `docs/trace-correlation.md` |
+
+Run the local check above with full target/head SHAs. New mappings enforce only
+after merge, when present in the supplied target's policy. Accompaniment is not
+semantic correctness, capacity admission, deployment authorization or evidence
+freshness. Checking the trace source's documentation does not make the correlator
+an execution/transport gate; its report and exit status must never admit or refuse
+work. This policy does not cover all repository modules. Expand mappings only
+where a real source-to-doc contract exists; avoid broad unrelated-doc bypasses.
 
 ## Reusable CI
 

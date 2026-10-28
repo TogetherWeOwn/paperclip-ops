@@ -22,9 +22,10 @@
 // touched nothing, and repos in scanRepositories but absent from
 // enabledRepositories log would-act and change nothing. Rollback is the
 // flag: remove the repo. The repo ships readiness-policy.example.json (shape
-// reference) plus the live readiness-policy.json (flag-off until a reviewed
-// flag-on PR lists a repo); the workflow installs the live file 0600 into
-// job-private temp before invoking this script.
+// reference, always flag-off) plus the live readiness-policy.json (flag-on
+// for paperclip-ops only since the reviewed flag-on change; rollback is the
+// revert); the workflow installs the live file 0600 into job-private temp
+// before invoking this script.
 //
 // Credential (review R1): GitHub is reached ONLY through the absolute,
 // policy-pinned `ghExecutable` — never a PATH-resolved `gh` — with a
@@ -153,10 +154,19 @@ export function recordLine(record) {
     ? (record.actions ?? []).join('+')
     : (record.reason ?? 'n/a')
   const facts = record.snapshotFacts
-  const diagnostic = facts
+  const base = facts
     ? ` headPushTime=${facts.headPushTime} repeatedNames=${facts.repeatedNames} repeatedEntries=${facts.repeatedEntries}`
     : record.snapshotFailure ? ` snapshotFailure=${record.snapshotFailure}` : ''
-  return `readiness ${record.repository}#${record.number}@${record.headSha}: ${record.decision} (${detail})${diagnostic}`
+  // A failed write names its sanitized class (adapter writeFailureCode:
+  // fixed words or http-NNN, never child output) so an error line is
+  // diagnosable without the underlying error — endpoint, permission and
+  // transport failures stayed indistinguishable before this.
+  const failedSteps = (record.steps ?? []).filter((step) => step.result === 'failed')
+  const writeDiagnostic = record.decision === 'error' && failedSteps.length > 0 &&
+    failedSteps.every((step) => typeof step.failure === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(step.failure))
+    ? ` writeFailure=${failedSteps.map((step) => `${step.action}:${step.failure}`).join(',')}`
+    : ''
+  return `readiness ${record.repository}#${record.number}@${record.headSha}: ${record.decision} (${detail})${base}${writeDiagnostic}`
 }
 
 // One supervised pass. `github` is injectable only so tests can run without

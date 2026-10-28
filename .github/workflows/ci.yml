@@ -1001,11 +1001,11 @@ jobs:
       # copy of the main rulesets) must each be produced by a real job that
       # runs on a pull request and cannot report green without running. A
       # renamed job, a dropped trigger or a continue-on-error turns this red,
-      # and so does every mutant in the suite. Rename a required job in three
-      # steps, see docs/ci-required-checks.md.
+      # and so does every mutant in the suite. Output contract (measured and
+      # unmeasurable JSON, exits): docs/ci-required-checks.md.
       #
       - name: required checks all have a producing job
-        run: python3 -m unittest -v test_ci_required_checks_audit.py
+        run: python3 -m unittest -v test_ci_required_checks_audit.py test_required_checks_unmeasurable_json_acceptance.py test_ci_required_checks_nested_input.py
 
       # case_d5bc7950. The change-gating contract itself is load-bearing: a heavy
       # job whose `needs: changes` is deleted while its area `if:` stays would

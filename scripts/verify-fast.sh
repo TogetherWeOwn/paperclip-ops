@@ -260,7 +260,7 @@ node --test hooks/disposition-stop-guard/disposition-stop-guard.test.mjs hooks/d
 python3 -m unittest test_reharden_relative_targets || fail "reharden relative-target suite failed"
 python3 -m unittest test_deploy_window_manifest || fail "deploy-window manifest gate suite failed"
 ./test_credential_chain_lockdown.sh || fail "credential-chain lockdown fixture suite failed"
-python3 -m unittest test_ci_required_checks_audit || fail "required-checks audit failed"
+python3 -m unittest test_ci_required_checks_audit test_required_checks_unmeasurable_json_acceptance test_ci_required_checks_nested_input || fail "required-checks audit failed"
 # case_6f2e8a41. Deterministic test-missing gate: unit contract plus
 # staged-copy/CLI regression. Hermetic stdlib unittest, no network, no
 # clock, temp fixtures only.

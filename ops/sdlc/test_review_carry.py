@@ -8,6 +8,7 @@ sys.modules before import; docs_lane is stubbed the same way. Exit codes
 and degraded-outcome strings are pinned; human-readable text is not.
 """
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -251,7 +252,7 @@ class MintStdoutTests(unittest.TestCase):
     Regression: the in-container preflight's stdout gained a pino NDJSON log
     record ahead of the credential JSON, and whole-stream json.loads rejected
     every mint with "reviewer App credential response invalid". Only pino
-    {level,time,msg} records are skipped; any other line, a missing
+    {level,time} records (with an optional string msg) are skipped; any other line, a missing
     credential, or a second credential object fails closed. The placeholder
     below is not a credential.
     """
@@ -274,6 +275,37 @@ class MintStdoutTests(unittest.TestCase):
         pino = '{"level":30,"time":1761097920000,"msg":"r\\u00e9sum\\ncaf\\u00e9"}'
         self.assertEqual(rc.parse_mint_stdout(pino + "\n" + self.CRED + "\n"),
                          "test-token-placeholder")
+
+    def test_raw_unicode_separators_in_message(self):
+        for separator in ("\u0085", "\u2028", "\u2029"):
+            with self.subTest(separator=repr(separator)):
+                log = json.dumps({"level": 30, "time": 1, "msg": "a" + separator + "b"}, ensure_ascii=False)
+                self.assertEqual(rc.parse_mint_stdout(log + "\n" + self.CRED), "test-token-placeholder")
+
+    def test_app_id_context_and_message_less_logs(self):
+        for log in ('{"level":30,"time":1,"msg":"preflight","app_id":1234}',
+                    '{"level":30,"time":1,"app_id":5191093}'):
+            with self.subTest(log=log):
+                self.assertEqual(rc.parse_mint_stdout(log + "\n" + self.CRED), "test-token-placeholder")
+
+    def test_individual_malformed_log_fields_fail_closed(self):
+        for log in ('{"level":"30","time":1,"msg":"x"}',
+                    '{"time":1,"msg":"x"}',
+                    '{"level":30,"time":"1","msg":"x"}',
+                    '{"level":30,"msg":"x"}',
+                    '{"level":30,"time":1,"msg":123}',
+                    '{"level":true,"time":1,"msg":"x"}',
+                    '{"level":30,"time":false,"msg":"x"}',
+                    '{"level":30,"time":NaN,"msg":"x"}',
+                    '{"level":30,"time":Infinity,"msg":"x"}',
+                    '{"level":30,"time":-Infinity,"msg":"x"}'):
+            with self.subTest(log=log), self.assertRaises(ValueError):
+                rc.parse_mint_stdout(log + "\n" + self.CRED)
+
+    def test_non_string_token_fails_closed(self):
+        for token in (123, True, [1], {"value": "x"}):
+            with self.subTest(token=token), self.assertRaises(ValueError):
+                rc.parse_mint_stdout(json.dumps({"app_id": rc.APP_ID, "token": token}))
 
     def test_blank_lines_tolerated(self):
         self.assertEqual(
@@ -339,6 +371,17 @@ class MintContractTests(unittest.TestCase):
         token = self.run_mint(MintStdoutTests.PINO + "\n" +
                               MintStdoutTests.CRED + "\n")
         self.assertEqual(token, "test-token-placeholder")
+
+    def test_invalid_log_and_token_map_to_unsafe(self):
+        for stdout in ('{"level":true,"time":1,"msg":"x"}\n' + MintStdoutTests.CRED,
+                       '{"level":30,"time":NaN,"msg":"x"}\n' + MintStdoutTests.CRED,
+                       '{"app_id":5191093,"token":123}'):
+            with self.subTest(stdout=stdout), self.assertRaisesRegex(rc.Unsafe, "response invalid"):
+                self.run_mint(stdout)
+
+    def test_raw_unicode_log_and_context_mint(self):
+        log = json.dumps({"level": 30, "time": 1, "msg": "a\u2028b", "app_id": 1234}, ensure_ascii=False)
+        self.assertEqual(self.run_mint(log + "\n" + MintStdoutTests.CRED), "test-token-placeholder")
 
     def test_garbage_line_fails_response_invalid(self):
         with self.assertRaisesRegex(rc.Unsafe, "response invalid"):

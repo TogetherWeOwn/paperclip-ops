@@ -17,6 +17,7 @@ import base64
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -131,11 +132,12 @@ def pages(token, path, key=None):
 
 
 def _is_pino_record(record):
-    # Pino NDJSON log records always carry numeric level/time and a string
-    # msg (plus pid/hostname/name). Anything else shaped is not a log line.
-    return (isinstance(record.get('level'), int)
-            and isinstance(record.get('time'), (int, float))
-            and isinstance(record.get('msg'), str))
+    # Pino records carry numeric level/time; object-only logs may omit msg.
+    timestamp = record.get('time')
+    return (type(record.get('level')) is int
+            and (type(timestamp) is int
+                 or (type(timestamp) is float and math.isfinite(timestamp)))
+            and ('msg' not in record or isinstance(record['msg'], str)))
 
 
 def parse_mint_stdout(stdout):
@@ -148,7 +150,7 @@ def parse_mint_stdout(stdout):
     caller fails closed without logging stdout (it may contain credentials).
     """
     credential = None
-    for line in stdout.splitlines():
+    for line in stdout.split('\n'):
         if not line.strip():
             continue
         try:
@@ -157,12 +159,12 @@ def parse_mint_stdout(stdout):
             raise ValueError('mint stdout line is not JSON') from None
         if not isinstance(record, dict):
             raise ValueError('mint stdout line is not an object')
+        if 'token' not in record and _is_pino_record(record):
+            continue
         if 'token' in record or 'app_id' in record:
             if credential is not None:
                 raise ValueError('second credential object in mint stdout')
             credential = record
-        elif _is_pino_record(record):
-            continue
         else:
             raise ValueError('unexpected line in mint stdout')
     if credential is None:

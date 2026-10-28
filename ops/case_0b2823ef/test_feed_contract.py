@@ -12,8 +12,10 @@ import io
 import json
 import os
 import re
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 import feed_contract as fc
 
@@ -500,6 +502,35 @@ class HostPatchHunkStructure(unittest.TestCase):
             cumulative += new_count - old_count
 
 
+def shell_continuations(text):
+    """Delete escaped newlines without splitting words or altering single quotes.
+
+    The pinned blocks contain simple commands, not heredocs. Keep comments and
+    single-quoted data literal; a continuation there cannot repair a guard.
+    """
+    out, quote, i = [], None, 0
+    while i < len(text):
+        ch = text[i]
+        if quote != "'" and ch == "\\" and i + 1 < len(text):
+            if text[i + 1] != "\n":
+                out.append(text[i:i + 2])
+            i += 2
+            continue
+        if quote is None and ch == "#" and (i == 0 or text[i - 1].isspace()):
+            end = text.find("\n", i)
+            end = len(text) if end == -1 else end
+            out.append(text[i:end])
+            i = end
+            continue
+        if ch == quote:
+            quote = None
+        elif quote is None and ch in ("'", '"'):
+            quote = ch
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 class InstallProcedureGuards(unittest.TestCase):
     # The host_patch.diff hunks are pure additions with no context lines,
     # so `patch --forward` alone cannot reject a wrong or already-patched
@@ -515,7 +546,7 @@ class InstallProcedureGuards(unittest.TestCase):
         # Explicit statement sequences cannot borrow an exit or restore
         # from a later conditional when the intended branch is broken.
         blocks = re.findall(r"```sh\n(.*?)```", cls.text, re.DOTALL)
-        cls.preflight, cls.apply = [b.replace("\\\n", " ") for b in blocks[:2]]
+        cls.preflight, cls.apply = [shell_continuations(b) for b in blocks[:2]]
 
     def test_fails_closed(self):
         for block in (self.preflight, self.apply):
@@ -527,7 +558,7 @@ class InstallProcedureGuards(unittest.TestCase):
         self.assertRegex(
             self.preflight,
             r"test \"\$\(wc -c < live_accounts\.py\)\" -eq 42536\s+"
-            r"echo '93a99797[0-9a-f]+  live_accounts\.py' \| sha256sum -c -",
+            r"echo '93a99797b20726182f14938b394f58c4ec6b3adcc87fdfc7bcce787e465bf75e  live_accounts\.py' \| sha256sum -c -",
         )
 
     def test_idempotency_marker_stops_reapply(self):
@@ -568,6 +599,69 @@ class InstallProcedureGuards(unittest.TestCase):
         self.assertIn("Authorization: Bearer", self.text)
         self.assertIn("not enforced by the carrier", self.text)
         self.assertIn("urllib follows redirects with the bearer", self.text)
+
+
+class InstallGuardOracleRegressions(unittest.TestCase):
+    """Mutate the document, then execute the actual guard assertions."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(os.path.dirname(__file__), "INSTALL.md")) as f:
+            cls.original = f.read()
+
+    def check_document(self, text, method, *, accepted):
+        class FixtureGuards(InstallProcedureGuards):
+            pass
+
+        with mock.patch("builtins.open", mock.mock_open(read_data=text)):
+            FixtureGuards.setUpClass()
+        result = unittest.TestResult()
+        FixtureGuards(method).run(result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(len(result.failures), 0 if accepted else 1,
+                         msg="installer oracle accepted a broken guard" if not accepted else str(result.failures))
+
+    def test_real_document_passes_all_guard_assertions(self):
+        for method in unittest.defaultTestLoader.getTestCaseNames(InstallProcedureGuards):
+            with self.subTest(method=method):
+                self.check_document(self.original, method, accepted=True)
+
+    def test_changed_or_truncated_executable_digest_is_rejected(self):
+        digest = "93a99797b20726182f14938b394f58c4ec6b3adcc87fdfc7bcce787e465bf75e"
+        for wrong in (digest[:-1] + "f", digest[:9], digest + "0"):
+            with self.subTest(digest=wrong):
+                text = self.original.replace("echo '" + digest, "echo '" + wrong)
+                self.assertNotEqual(text, self.original)
+                self.check_document(text, "test_sha_precondition_gated", accepted=False)
+
+    def test_single_quoted_checksum_is_not_normalized(self):
+        text = self.original.replace("echo '93a99797", "echo '93a99797\\\n")
+        self.assertNotEqual(text, self.original)
+        self.check_document(text, "test_sha_precondition_gated", accepted=False)
+
+    def test_continuations_delete_bytes_instead_of_inventing_spaces(self):
+        cases = (("test\\\n-e", False), ("test \\\n-e", True),
+                 ("test -\\\ne", True))
+        for command, accepted in cases:
+            with self.subTest(command=command):
+                text = self.original.replace("if test -e live_accounts.py.rej; then",
+                                             "if " + command + " live_accounts.py.rej; then")
+                self.assertNotEqual(text, self.original)
+                self.check_document(text, "test_reject_file_restores_backup", accepted=accepted)
+                # Execute only the extracted conditional with a throwaway reject
+                # file, never any installer/patch/service/credential operation.
+                condition = re.search(r"if test.*?; then", text, re.DOTALL).group()
+                with tempfile.TemporaryDirectory() as work:
+                    with open(os.path.join(work, "live_accounts.py.rej"), "w"):
+                        pass
+                    probe = subprocess.run(
+                        ["bash", "--noprofile", "--norc", "-c",
+                         "set -eu\n" + condition + " printf restored; else printf skipped; fi"],
+                        cwd=work, capture_output=True, text=True, timeout=5,
+                    )
+                self.assertEqual(probe.returncode, 0, probe.stderr)
+                self.assertEqual(probe.stdout, "restored" if accepted else "skipped")
 
 
 if __name__ == "__main__":

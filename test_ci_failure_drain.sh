@@ -10,7 +10,7 @@
 # HERMETIC BY CONSTRUCTION. Recorded jobs-list fixtures plus recorded per-job
 # log files, invoked via --jobs-json/--logs-dir. No network, no credential,
 # nothing leaves the loopback. Requires bash, jq, curl (curl only for the
-# live path, which this suite never takes), plus Python 3 for the workflow pin.
+# live path, which this suite never takes), plus Python 3 and PyYAML for the workflow pin.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,13 +49,28 @@ trap 'rm -rf "$TMP"' EXIT
 hdr "The failure drain only needs read-only GITHUB_TOKEN permissions"
 python3 - "$HERE/.github/workflows/ci.yml" <<'PY'
 import pathlib
-import re
 import sys
+import yaml
+
+def read_only(workflow):
+    permissions = yaml.safe_load(workflow)["jobs"]["failure-log-drain"].get("permissions")
+    return permissions == {"contents": "read", "actions": "read"}
+
 workflow = pathlib.Path(sys.argv[1]).read_text()
-job = re.search(r"(?ms)^  failure-log-drain:\n(.*?)(?=^  [\w-]+:|\Z)", workflow).group(1)
-permissions = re.search(r"(?m)^    permissions:\n((?:      [^\n]*\n)+)", job).group(1)
-assert re.search(r"(?m)^      actions: read$", permissions), permissions
-assert not re.search(r"(?m)^      \S+: write$", permissions), permissions
+assert read_only(workflow), "failure-log-drain must have exactly contents:read/actions:read"
+# Exercise the same oracle used above, not an independent fixture regex.
+fixture = "jobs:\n  failure-log-drain:\n    permissions:\n      contents: read\n      actions: read\n"
+assert read_only(fixture)
+for grant in ("write # widened token", "write   ", '"write"', "'write' # widened token"):
+    widened = fixture.replace("contents: read", "contents: " + grant)
+    assert not read_only(widened), "read-only oracle accepted " + grant
+for permissions in ('read-all', 'write-all', '{contents: write, actions: read}', '{}'):
+    widened = "jobs:\n  failure-log-drain:\n    permissions: " + permissions + "\n"
+    assert not read_only(widened), "read-only oracle accepted " + permissions
+assert not read_only(fixture.replace("actions: read", "actions: write # widened"))
+assert not read_only(fixture + "      issues: write # unrelated scope\n")
+assert read_only(fixture.replace("contents: read", 'contents: "read" # harmless comment'))
+
 PY
 assert $? "failure drain uses read-only GITHUB_TOKEN permissions" \
   "jobs/logs only needs actions:read; artifact upload uses a separate runtime credential"

@@ -1033,7 +1033,7 @@
     },
     {
       "name": "failure-drain suite",
-      "definition_sha256": "6d4cb75ac3a220fb40d16d7c65af81ff1971ecc5989543557b6237a1ff2d3b1e",
+      "definition_sha256": "8230f638f1fefc29a41d5a197ec802c4e930c04d80dd05ea9c3f7b4774840159",
       "id": "failure-drain suite:1"
     },
     {

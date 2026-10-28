@@ -14,6 +14,76 @@ bad() { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; [[ -n "${2:-}" ]] && printf '
 hdr() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 HATCH="PAPERCLIP_API_ALLOWLIST_TEST"
+CHECKED="PAPERCLIP_API_ALLOWLIST_CHECKED_BASE"
+
+# One entrypoint for the real sender scan and every control fixture. Exit 0
+# means absent, 1 means forbidden default, 2 means inspection failed.
+check_defaults() {
+  python3 - "$@" <<'PYCHECK'
+import ast
+import pathlib
+import re
+import sys
+
+kind = sys.argv[1]
+key = "PAPERCLIP_API_ALLOWLIST_TEST" if kind == "hatch" else "PAPERCLIP_API_ALLOWLIST_CHECKED_BASE"
+violations = []
+for filename in sys.argv[2:]:
+    path = pathlib.Path(filename)
+    try:
+        source = path.read_text()
+        if path.suffix == ".sh":
+            # Keep the old lexical coverage for Python embedded in shell
+            # carriers; those files are not standalone Python AST inputs.
+            getter = r"(?:\.(?:get|setdefault)|(?:\.)?getenv)\(\s*"
+            if kind == "hatch":
+                pattern = getter + r"(?:HATCH_VAR|[\"']" + key + r"[\"'])\s*,\s*[\"']?1"
+            else:
+                pattern = getter + r"[\"']" + key + r"[\"']\s*,\s*(?![\"']{2})[^\s,)]"
+            if re.search(pattern, source):
+                violations.append(f"{path}: forbidden {kind} embedded default")
+            if kind == "checked":
+                for match in re.finditer(r"\$\{" + key + r":?-([^}]*)\}", source.replace("\\\n", "")):
+                    if match[1] not in ("", "''", '""'):
+                        violations.append(f"{path}: nonempty CHECKED_BASE shell default")
+            continue
+        tree = ast.parse(source, filename=filename)
+    except (OSError, UnicodeError, SyntaxError) as error:
+        print(f"cannot inspect {path}: {error}", file=sys.stderr)
+        sys.exit(2)
+    # Support both os.getenv and `from os import getenv [as alias]`.
+    getenv_names = {"getenv"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "os":
+            getenv_names.update(alias.asname or alias.name for alias in node.names if alias.name == "getenv")
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call):
+            continue
+        func = call.func
+        if not ((isinstance(func, ast.Attribute) and func.attr in ("get", "setdefault", "getenv"))
+                or (isinstance(func, ast.Name) and func.id in getenv_names)):
+            continue
+        keywords = {kw.arg: kw.value for kw in call.keywords}
+        name = call.args[0] if call.args else keywords.get("key")
+        if not ((isinstance(name, ast.Constant) and name.value == key)
+                or (kind == "hatch" and isinstance(name, ast.Name) and name.id == "HATCH_VAR")):
+            continue
+        default = call.args[1] if len(call.args) > 1 else keywords.get("default")
+        if default is None:
+            continue
+        # Only provably empty checked-base defaults are safe. Parentheses,
+        # multiline calls, expressions, and comments are handled by the AST,
+        # not guessed from the first character on a grep line.
+        empty = isinstance(default, ast.Constant) and default.value in ("", None)
+        unsafe = not empty if kind == "checked" else (
+            not isinstance(default, ast.Constant) or default.value in ("1", 1)
+        )
+        if unsafe:
+            violations.append(f"{path}:{call.lineno}: forbidden {kind} default")
+print("\n".join(violations), end="\n" if violations else "")
+sys.exit(1 if violations else 0)
+PYCHECK
+}
 
 hdr "hatch absent from production surfaces"
 scope_a_hits=""
@@ -60,10 +130,10 @@ for file in "${SCOPE_B[@]}"; do
   [[ -f "$file" ]] || { bad "scope lists a file that no longer exists" "$file"; missing=1; }
 done
 [[ "$missing" -eq 0 ]] && ok "all scoped sender/helper files exist"
-# Default-on shapes: a direct =1 assignment, a shell :-1} default, a
-# mapping .get/.setdefault with a "1" default (literal or via the
-# HATCH_VAR constant), or any default for the host-delegated
-# CHECKED_BASE bypass (see below). Plain `== "1"` comparisons never match.
+# Default-on shapes: a direct assignment, a shell :-1} default, a Python
+# getter with an enabled/unknown default, or a nonempty fallback for the
+# host-delegated CHECKED_BASE bypass. Python calls use ASTs across lines;
+# comments and plain `== "1"` comparisons are not fallback expressions.
 # Capture first, then test the capture: piping a producer straight into an
 # early-exiting `grep -q` under pipefail lets SIGPIPE read a match as a
 # miss (case_c25c4d3f).
@@ -79,25 +149,20 @@ if grep -q . <<<"$hits_b_shell"; then
 else
   ok "no shell default-on in senders/helpers"
 fi
-hits_b_map="$(grep -rnE "\.(get|setdefault)\(\s*(HATCH_VAR|[\"']$HATCH[\"'])\s*,\s*[\"']?1" "${SCOPE_B[@]}" 2>/dev/null)"
-if grep -q . <<<"$hits_b_map"; then
-  bad "no mapping default-on in senders/helpers" "$(head -n 5 <<<"$hits_b_map")"
-else
+if hits_b_map="$(check_defaults hatch "${SCOPE_B[@]}")"; then
   ok "no mapping default-on in senders/helpers"
-fi
-# The host-delegated verdict (PAPERCLIP_API_ALLOWLIST_CHECKED_BASE) skips
-# the in-container file check on exact equality with the forwarded base.
-# It is set only by the wrapper after its host check; no scoped file may
-# give it a default, or a sender could self-delegate a verdict.
-CHECKED="PAPERCLIP_API_ALLOWLIST_CHECKED_BASE"
-hits_b_checked="$(grep -rnE "\.(get|setdefault)\(\s*([\"']$CHECKED[\"'])\s*,\s*([A-Za-z0-9_]|\"[^\"]|'[^'])|${CHECKED}:?-[^}]" "${SCOPE_B[@]}" 2>/dev/null)"
-if grep -q . <<<"$hits_b_checked"; then
-  bad "no CHECKED_BASE default in senders/helpers" "$(head -n 5 <<<"$hits_b_checked")"
 else
+  bad "no mapping default-on in senders/helpers" "$hits_b_map"
+fi
+# Only the checked host wrapper may set a delegated verdict. A nonempty
+# fallback can self-delegate by making checked_base equal the forwarded base.
+if hits_b_checked="$(check_defaults checked "${SCOPE_B[@]}")"; then
   ok "no CHECKED_BASE default in senders/helpers"
+else
+  bad "no CHECKED_BASE default in senders/helpers" "$hits_b_checked"
 fi
 
-hdr "positive controls (the greps detect real violations)"
+hdr "positive controls (the production checks detect real violations)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/test_hatch_absent.XXXXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 printf 'Environment=%s=1\n' "$HATCH" > "$WORK/fake.service"
@@ -115,26 +180,51 @@ grep -qE "$HATCH\"?\]?\s*=[^=]" "$WORK/assign.sh" \
 grep -qE "${HATCH}:-[^}]*1" "$WORK/default.sh" \
   && ok "default grep catches :-1}" || bad "default grep catches :-1}"
 printf 'x = env.setdefault("%s", "1")\n' "$HATCH" > "$WORK/setdefault.py"
-for fixture in "$WORK/getmap.py" "$WORK/getconst.py" "$WORK/setdefault.py"; do
-  grep -qE "\.(get|setdefault)\(\s*(HATCH_VAR|[\"']$HATCH[\"'])\s*,\s*[\"']?1" "$fixture" \
-    && ok "mapping grep catches default in ${fixture##*/}" \
-    || bad "mapping grep catches default in ${fixture##*/}"
+printf "python3 - <<'PY'\nx = env.setdefault(\"%s\", \"1\")\nPY\n" "$HATCH" > "$WORK/setdefault.sh"
+printf 'from os import getenv as read_env\nx = read_env("%s", ("1"))\n' "$HATCH" > "$WORK/getenv_alias.py"
+for fixture in "$WORK/getmap.py" "$WORK/getconst.py" "$WORK/setdefault.py" "$WORK/setdefault.sh" "$WORK/getenv_alias.py"; do
+  check_defaults hatch "$fixture" > "$WORK/hits"; rc=$?
+  [[ "$rc" -eq 1 ]] && ok "mapping check catches default in ${fixture##*/}" \
+    || bad "mapping check catches default in ${fixture##*/}" "exit $rc: $(cat "$WORK/hits")"
 done
-printf 'x = env.get("%s", base)\n' "$CHECKED" > "$WORK/checked_default.py"
-printf 'echo "${%s:-$PAPERCLIP_API_URL}"\n' "$CHECKED" > "$WORK/checked_default.sh"
-printf 'echo "${%s-$PAPERCLIP_API_URL}"\n' "$CHECKED" > "$WORK/checked_default_unset.sh"
-for fixture in "$WORK/checked_default.py" "$WORK/checked_default.sh" "$WORK/checked_default_unset.sh"; do
-  grep -qE "\.(get|setdefault)\(\s*([\"']$CHECKED[\"'])\s*,\s*([A-Za-z0-9_]|\"[^\"]|'[^'])|${CHECKED}:?-[^}]" "$fixture" \
-    && ok "CHECKED_BASE grep catches default in ${fixture##*/}" \
-    || bad "CHECKED_BASE grep catches default in ${fixture##*/}"
+# Rejection corpus is data only. Every file goes through the exact check
+# called with SCOPE_B above, so weakening that check must break a control.
+python3 - "$WORK" "$CHECKED" <<'PYFIXTURES'
+from pathlib import Path
+import sys
+work, key = Path(sys.argv[1]), sys.argv[2]
+for getter in ('env.get', 'env.setdefault', 'os.getenv', 'getenv'):
+    for default in ('base', '(base)', 'base or ""', 'str(base)', '"base"', '"".join([base])'):
+        for layout in ('{getter}("{key}", {default})', '{getter}(\n    "{key}",\n    {default},\n)'):
+            index = len(list(work.glob('reject_*.py')))
+            (work / f'reject_{index}.py').write_text('x = ' + layout.format(getter=getter, key=key, default=default) + '\n')
+for i, getter in enumerate(('env.get', 'env.setdefault', 'os.getenv', 'getenv')):
+    (work / f'allow_{i}.py').write_text(f'x = {getter}("{key}", "")\n')
+(work / 'allow_parenthesized.py').write_text(f'x = env.get(\n"{key}", (""),\n)\n')
+(work / 'reject_keyword.py').write_text(f'x = os.getenv(key="{key}", default=base)\n')
+PYFIXTURES
+printf "python3 - <<'PY'\nx = env.get(\"%s\", base)\nPY\n" "$CHECKED" > "$WORK/reject_embedded.sh"
+printf 'echo "${%s:-$PAPERCLIP_API_URL}"\n' "$CHECKED" > "$WORK/reject_default.sh"
+printf 'echo "${%s-$PAPERCLIP_API_URL}"\n' "$CHECKED" > "$WORK/reject_unset.sh"
+printf 'echo "${%s:-}"\n' "$CHECKED" > "$WORK/allow_empty.sh"
+for fixture in "$WORK"/reject_*; do
+  check_defaults checked "$fixture" > "$WORK/hits"; rc=$?
+  [[ "$rc" -eq 1 ]] && ok "CHECKED_BASE check catches default in ${fixture##*/}" \
+    || bad "CHECKED_BASE check catches default in ${fixture##*/}" "exit $rc: $(cat "$WORK/hits")"
 done
-printf 'x = env.get("%s", "")\n' "$CHECKED" > "$WORK/checked_legit.py"
-hits_checked_legit="$(grep -E "\.(get|setdefault)\(\s*([\"']$CHECKED[\"'])\s*,\s*([A-Za-z0-9_]|\"[^\"]|'[^'])|${CHECKED}:?-[^}]" "$WORK/checked_legit.py")"
-if grep -q . <<<"$hits_checked_legit"; then
-  bad "empty CHECKED_BASE default does not trip the gate"
-else
-  ok "empty CHECKED_BASE default does not trip the gate"
-fi
+for fixture in "$WORK"/allow_*; do
+  if hits="$(check_defaults checked "$fixture")"; then
+    ok "empty CHECKED_BASE default accepted in ${fixture##*/}"
+  else
+    bad "empty CHECKED_BASE default accepted in ${fixture##*/}" "$hits"
+  fi
+done
+printf 'x = env.get(\n' > "$WORK/malformed.py"
+for fixture in "$WORK/malformed.py" "$WORK/missing.py"; do
+  check_defaults checked "$fixture" > "$WORK/hits" 2>&1; rc=$?
+  [[ "$rc" -eq 2 ]] && ok "uninspectable source fails closed in ${fixture##*/}" \
+    || bad "uninspectable source fails closed in ${fixture##*/}" "exit $rc"
+done
 # The legitimate comparison shape must NOT trip the assignment grep.
 printf 'if [[ "${%s:-}" == "1" ]]; then\n' "$HATCH" > "$WORK/legit.sh"
 printf 'if env.get(HATCH_VAR, "") == "1":\n' > "$WORK/legit.py"

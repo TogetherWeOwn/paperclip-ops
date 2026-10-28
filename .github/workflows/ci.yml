@@ -3118,6 +3118,8 @@ jobs:
       # a green that has failed, not a green that cannot.
       - name: failure-drain suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        env:
+          PYTHONPATH: ${{ runner.temp }}/static-label-guard-deps
         run: ./test_ci_failure_drain.sh
 
       # case_821f1653 (M12.3). The machine-readable twin of the failure

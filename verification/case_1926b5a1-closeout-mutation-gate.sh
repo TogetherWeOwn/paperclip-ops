@@ -672,6 +672,22 @@ mutate read-gap-history-reason-mislabelled \
   '"head moved; kept as history only"' \
   test_read_gap_supersedes_prior_head_once
 
+# --- Output-path alias guard: the symlink parent must resolve before `..`
+# is collapsed. A lexical pre-collapse judges linkdir/../new.json as sitting
+# beside linkdir while the write lands in the link target's parent. ---
+mutate alias-canonical-pre-collapsed-with-abspath \
+  '    canonical = os.path.realpath(path)' \
+  '    canonical = os.path.abspath(path)' \
+  test_absent_outputs_aliased_via_symlink_parent_and_dotdot_refuse
+mutate alias-canonical-spelling-unread \
+  '        if left[0] == right[0]:' \
+  '        if False:' \
+  test_relative_symlink_parent_and_dotdot_refuses
+mutate distinct-outputs-always-refuse \
+  '    if aliases(outputs[0], outputs[1]):' \
+  '    if True:' \
+  test_distinct_outputs_via_symlink_parent_and_dotdot_pass
+
 # Completeness. Every test in the suite must be named by at least one mutant
 # above. Without this, an assertion added with no mutant is indistinguishable
 # from an assertion that cannot fail.

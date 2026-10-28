@@ -1352,5 +1352,64 @@ class EndToEndOffline(unittest.TestCase):
             shutil.rmtree(work, ignore_errors=True)
 
 
+class OutputPathSymlinkParentDotDot(unittest.TestCase):
+    """A symlinked parent must resolve before ``..`` is collapsed.
+
+    Lexically collapsing ``linkdir/../new.json`` first would judge the
+    output as ``work/new.json``, while the kernel resolves ``linkdir``
+    first and the write actually lands in the link target's parent.
+    """
+
+    def _layout(self):
+        import os
+        import shutil
+        import tempfile
+
+        work = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        realdir = os.path.join(work, "other", "realdir")
+        os.makedirs(realdir)
+        os.makedirs(os.path.join(work, "work"))
+        os.symlink(realdir, os.path.join(work, "work", "linkdir"))
+        return work
+
+    def test_absent_outputs_aliased_via_symlink_parent_and_dotdot_refuse(self):
+        import os
+
+        work = self._layout()
+        ledger_out = os.path.join(work, "work", "linkdir", "..", "new.json")
+        plan_out = os.path.join(work, "other", "new.json")
+        self.assertEqual(
+            ledger.output_path_refusal(ledger_out, plan_out, []),
+            ledger.OUTPUT_PATH_CONFLICT,
+        )
+
+    def test_relative_symlink_parent_and_dotdot_refuses(self):
+        import os
+
+        work = self._layout()
+        previous = os.getcwd()
+        os.chdir(os.path.join(work, "work"))
+        try:
+            self.assertEqual(
+                ledger.output_path_refusal(
+                    os.path.join("linkdir", "..", "new.json"),
+                    os.path.join(work, "other", "new.json"),
+                    [],
+                ),
+                ledger.OUTPUT_PATH_CONFLICT,
+            )
+        finally:
+            os.chdir(previous)
+
+    def test_distinct_outputs_via_symlink_parent_and_dotdot_pass(self):
+        import os
+
+        work = self._layout()
+        ledger_out = os.path.join(work, "work", "linkdir", "..", "ledger.json")
+        plan_out = os.path.join(work, "other", "plan.json")
+        self.assertIsNone(ledger.output_path_refusal(ledger_out, plan_out, []))
+
+
 if __name__ == "__main__":
     unittest.main()

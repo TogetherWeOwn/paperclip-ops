@@ -47,8 +47,18 @@ CORE_REL="ops/case_b5184419/terminal_worktree_cache_reclaim.py"
 LIB_REL="ops/lib/atomic_state.py"
 ALLOWLIST_REL="lib/paperclip_api_allowlist.py"
 ALLOWLIST_SH_REL="lib/paperclip_api_allowlist.sh"
-# The host runs the Paperclip server container under podman (README, runbooks).
-ENGINE="${PAPERCLIP_WORKTREE_PRUNE_ENGINE:-/usr/bin/podman}"
+# The host runs the Paperclip server container under podman (README, runbooks)
+# or, on some hosts, docker; both take the same `exec -i -u -e` argv used below.
+# An explicit PAPERCLIP_WORKTREE_PRUNE_ENGINE wins; otherwise podman, then docker.
+# PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES (space-separated, default below) is the
+# probe order; the offline suite overrides it to pin both directions of the fallback.
+ENGINE="${PAPERCLIP_WORKTREE_PRUNE_ENGINE:-}"
+if [[ -z "$ENGINE" ]]; then
+  for candidate in ${PAPERCLIP_WORKTREE_PRUNE_ENGINE_CANDIDATES:-/usr/bin/podman /usr/bin/docker}; do
+    ENGINE="$candidate"
+    [[ -x "$candidate" ]] && break
+  done
+fi
 # Backstop inside the container: an exec that outlives its client keeps running.
 BOUND_SECONDS="${PAPERCLIP_WORKTREE_PRUNE_BOUND_SECONDS:-1500}"
 
@@ -129,7 +139,7 @@ ENV_ARGS=(-e PAPERCLIP_API_URL -e PAPERCLIP_API_KEY -e PAPERCLIP_COMPANY_ID -e P
 [[ -n "${WORKTREE_PRUNE_DISABLED:-}" ]] && ENV_ARGS+=(-e WORKTREE_PRUNE_DISABLED)
 
 # A deterministic tar (sorted, fixed owner and mtime) of the four modules only.
-# stdin of `podman exec -i` is that tar; the pruner reads no other stdin.
+# stdin of `$ENGINE exec -i` is that tar; the pruner reads no other stdin.
 tar --create --format=ustar --sort=name --owner=0 --group=0 --numeric-owner \
     --mtime='@0' --directory "$RELEASE_ROOT" "$ALLOWLIST_REL" "$CORE_REL" "$TOOL_REL" "$LIB_REL" \
   | "$ENGINE" exec -i -u node "${ENV_ARGS[@]}" "$PAPERCLIP_WORKTREE_PRUNE_CONTAINER" \

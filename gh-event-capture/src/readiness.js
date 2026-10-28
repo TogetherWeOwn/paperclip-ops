@@ -60,6 +60,9 @@ function checkState(check) {
     requireValue(typeof check.conclusion === 'string' && check.conclusion.length > 0, `completed check has no conclusion: ${check.name}`)
     const conclusion = check.conclusion.toLowerCase()
     if (PASSING.has(conclusion)) return 'pass'
+    // No verdict yet: wait for verified supersession or a completed result.
+    // The snapshot reader retains this entry unless provenance proves a rerun.
+    if (conclusion === 'cancelled') return 'pending'
     return 'fail'
   }
   if (status === 'queued' || status === 'in_progress' || status === 'pending' || status === 'waiting') return 'pending'

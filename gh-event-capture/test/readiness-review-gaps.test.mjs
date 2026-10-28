@@ -170,13 +170,13 @@ test('NEUTRAL with TIMED_OUT aggregates to timed_out in both orders and never pa
   assert.deepEqual(await gateActions(entries, false), ['update-body', 'convert-to-draft'])
 })
 
-test('SKIPPED with CANCELLED aggregates to cancelled in both orders and never passes the gate', async () => {
+test('SKIPPED with unattributed CANCELLED retains cancellation and waits in both orders', async () => {
   const entries = [checkRun('ci-ok', 'COMPLETED', 'SKIPPED', PUSHED_AT), checkRun('ci-ok', 'COMPLETED', 'CANCELLED', PUSHED_AT)]
   const merged = await aggregatedConclusion(entries)
   assert.equal(merged.status, 'completed')
   assert.equal(merged.conclusion, 'cancelled')
   assert.deepEqual(await gateActions(entries, true), ['update-body'])
-  assert.deepEqual(await gateActions(entries, false), ['update-body', 'convert-to-draft'])
+  assert.deepEqual(await gateActions(entries, false), ['update-body'])
 })
 
 // --- Finding 2: readiness absent-date and clock guards -----------------------

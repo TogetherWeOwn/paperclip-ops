@@ -10,7 +10,8 @@ push age to decide readiness.
 - Check names can repeat across workflows, reruns and status/check sources.
   Every entry is validated before aggregation. Each name passes only if all its
   entries pass (`success`, `neutral`, `skipped`). A completed failure wins over
-  pending, and pending wins over passing. Ties and output order are deterministic.
+  pending and retained cancellations; both pending and retained cancellations
+  win over passing. Ties and output order are deterministic.
   This deliberately does not infer which workflow run is newest: a later passing
   rerun cannot hide another failure on the same head. One narrow exception: a
   `cancelled` entry is dropped before aggregation when the same check-suite app
@@ -20,7 +21,14 @@ push age to decide readiness.
   context, and the finest identity readable under the sweep token's
   `checks: read` grant. Genuine failures, a latest attempt's own cancellation,
   other producers' passes and entries without provenance keep the conservative
-  merge unchanged.
+  precedence: no older, differently produced or unattributed pass can turn a
+  retained cancellation green.
+- A retained `cancelled` entry is pending, not a passing or failing verdict.
+  CI rows and the Paperclip Review line render pending; readiness and auto-merge
+  wait, and cancellation alone does not draft-reset a PR on the same head.
+  Genuine failures (including `timed_out` and unknown conclusions) still fail
+  and outrank cancellation, even with a later pass. Failed reviews still render
+  `see check` as failing. A new head still draft-resets a ready PR.
 - Strict closeout readers retain their push-age and duplicate-name guards.
   The shared query's provenance fields (`startedAt`, `checkSuite { app { slug } }`)
   are parsed for readiness only: closeout snapshots keep their exact check

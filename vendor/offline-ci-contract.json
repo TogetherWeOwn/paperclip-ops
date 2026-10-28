@@ -351,7 +351,9 @@
     "Dispatch sweep failure visibility acceptance:1",
     "native runner coverage classifier suite:1",
     "AX metric contract suites:1",
-    "shell-substitution JSON acceptance:1"
+    "scanner finding adapter suite:1",
+    "shell-substitution JSON acceptance:1",
+    "public-comment hygiene JSON suite:1"
   ],
   "retained": [
     {
@@ -391,7 +393,7 @@
     },
     {
       "name": "required checks all have a producing job",
-      "definition_sha256": "8bd1a7d11d818588f4405eab15260f3b256d1bdcdb8701448336e4b8ec1ceeba",
+      "definition_sha256": "fe00bedfc53531ea36934925b53985fbbe0c2c2a127462dc1fa9e06ec82ac487",
       "id": "required checks all have a producing job:1"
     },
     {
@@ -801,7 +803,7 @@
     },
     {
       "name": "admitted-PR closeout ledger suite",
-      "definition_sha256": "b7e419931e56f55a7963e2de7b56de99e96d1f138766df81cf386a139c323a9b",
+      "definition_sha256": "1ff1324f6873861927278c3a8268dfc06a221af1a9e9b8e0f53f0b293b1c36b2",
       "id": "admitted-PR closeout ledger suite:1"
     },
     {
@@ -1985,9 +1987,19 @@
       "id": "AX metric contract suites:1"
     },
     {
+      "name": "scanner finding adapter suite",
+      "definition_sha256": "4f4a5cf1feedf498eef207f0182f3bd6f000d29feaad0cab376b65d19baa5100",
+      "id": "scanner finding adapter suite:1"
+    },
+    {
       "name": "shell-substitution JSON acceptance",
       "definition_sha256": "335f88370d859cfd2908fe5ea77a41d6a03b8cc8ca84ccbcabeca304a04042d8",
       "id": "shell-substitution JSON acceptance:1"
+    },
+    {
+      "name": "public-comment hygiene JSON suite",
+      "definition_sha256": "60125ad01be83d0c4323b4495f6a94511b5edc43583305b1bb20a1987ede42bf",
+      "id": "public-comment hygiene JSON suite:1"
     }
   ],
   "removed": [

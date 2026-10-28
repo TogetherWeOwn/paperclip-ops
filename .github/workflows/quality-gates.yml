@@ -100,11 +100,14 @@ jobs:
           # fail. Try a normal venv first; if the image cannot seed pip,
           # recreate it with --without-pip (stdlib only) and bootstrap pip
           # with the checksum-verified get-pip.py. No sudo is ever needed.
+          # Downloads fail on HTTP errors and retry transient responses within
+          # explicit time bounds. Integrity failures still stop at the pinned
+          # checksum; never replace a digest with one from a failed download.
           PIP_PY="$RUNNER_TEMP/qgvenv/bin/python"
           if ! python3 -m venv "$RUNNER_TEMP/qgvenv" >/dev/null 2>&1; then
             rm -rf "$RUNNER_TEMP/qgvenv"
             python3 -m venv --without-pip "$RUNNER_TEMP/qgvenv"
-            curl -sSL -o "$RUNNER_TEMP/get-pip.py" https://bootstrap.pypa.io/get-pip.py
+            curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 1 --retry-max-time 30 -o "$RUNNER_TEMP/get-pip.py" https://bootstrap.pypa.io/get-pip.py
             echo "${GET_PIP_SHA256}  $RUNNER_TEMP/get-pip.py" | sha256sum -c -
             "$PIP_PY" "$RUNNER_TEMP/get-pip.py" --disable-pip-version-check >/dev/null
           fi
@@ -124,16 +127,16 @@ jobs:
           # Linux x86_64 runners; versions and digests pinned in job
           # env above. Every binary is verified with sha256sum -c before it
           # executes, so a re-pointed mutable tag fails closed.
-          curl -sSL -o shellcheck.tar.xz "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 1 --retry-max-time 30 -o shellcheck.tar.xz "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
           echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
           tar -xf shellcheck.tar.xz --wildcards '*/shellcheck' --strip-components=1
-          curl -sSL -o shfmt "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_amd64"
+          curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 1 --retry-max-time 30 -o shfmt "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_amd64"
           echo "${SHFMT_SHA256}  shfmt" | sha256sum -c -
           chmod +x shfmt
-          curl -sSL -o actionlint.tar.gz "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 1 --retry-max-time 30 -o actionlint.tar.gz "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
           tar -xzf actionlint.tar.gz actionlint
-          curl -sSL -o ast-grep.zip "https://github.com/ast-grep/ast-grep/releases/download/${AST_GREP_VERSION}/app-x86_64-unknown-linux-gnu.zip"
+          curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 1 --retry-max-time 30 -o ast-grep.zip "https://github.com/ast-grep/ast-grep/releases/download/${AST_GREP_VERSION}/app-x86_64-unknown-linux-gnu.zip"
           echo "${AST_GREP_SHA256}  ast-grep.zip" | sha256sum -c -
           python3 -c "import zipfile; zipfile.ZipFile('ast-grep.zip').extractall('sg')"
           chmod +x sg/sg sg/ast-grep

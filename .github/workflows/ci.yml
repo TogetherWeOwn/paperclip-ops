@@ -1001,11 +1001,11 @@ jobs:
       # copy of the main rulesets) must each be produced by a real job that
       # runs on a pull request and cannot report green without running. A
       # renamed job, a dropped trigger or a continue-on-error turns this red,
-      # and so does every mutant in the suite. Rename a required job in three
-      # steps, see docs/ci-required-checks.md.
+      # and so does every mutant in the suite. Output contract (measured and
+      # unmeasurable JSON, exits): docs/ci-required-checks.md.
       #
       - name: required checks all have a producing job
-        run: python3 -m unittest -v test_ci_required_checks_audit.py
+        run: python3 -m unittest -v test_ci_required_checks_audit.py test_required_checks_unmeasurable_json_acceptance.py test_ci_required_checks_nested_input.py
 
       # case_d5bc7950. The change-gating contract itself is load-bearing: a heavy
       # job whose `needs: changes` is deleted while its area `if:` stays would
@@ -1114,6 +1114,14 @@ jobs:
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_public_comment_hygiene_gate.sh
 
+      # Machine-readable (--json) contract for the same gate: one JSON
+      # document with bounded findings, stable error codes and exit-code
+      # parity with the text mode above. Hermetic like the text suite
+      # (mktemp bodies plus grep shims; needs bash, jq and python3).
+      - name: public-comment hygiene JSON suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: ./test_public_comment_hygiene_json.sh
+
       # verify-fast plan/list/no-prepare contract: the acceptance suite plus the
       # strict inventory-to-execution drift check and the --no-prepare guard
       # check. Offline: stdlib unittest, synthetic PATH stubs, no network or
@@ -1156,6 +1164,10 @@ jobs:
       - name: trace correlator suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_trace_correlator
+
+      - name: scanner finding adapter suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_scanner_finding_adapter
 
       # Assignment host-source bundle: the builder, normalizer and detector
       # run as CLIs with the SQL under a SQLite translation — no database,
@@ -2447,7 +2459,7 @@ jobs:
       # fixtures: no API, database, credential or timer.
       - name: admitted-PR closeout ledger suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        run: python3 -m unittest -v test_pr_closeout_ledger.py
+        run: python3 -B -m unittest -v test_pr_closeout_ledger test_pr_closeout_preview_acceptance
 
       - name: admitted-PR closeout gates are load-bearing
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'

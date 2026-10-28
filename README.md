@@ -75,6 +75,12 @@ For the offline card/run/PR/head/deploy trace correlator, see the
 [evidence, join and SLO contract](docs/trace-correlation.md).
 It reads caller-assembled evidence only and authorizes no host action.
 
+For the pure offline adapter from a pinned secret-scan outcome to a
+native finding payload (or a refusal), see the
+[scanner finding adapter contract](docs/scanner-finding-adapter.md).
+It holds no credential, makes no network calls, and authorizes no live
+or automated invocation.
+
 For source-to-documentation accompaniment in pull requests, see the portable
 [documentation drift gate](docs/docs-drift.md), including its JSON contract,
 base-policy trust model and reusable CI interface.

@@ -268,14 +268,23 @@ def run_case(repo: str, case: dict, model: str, effort: str, key_env: str, timeo
                  *codex_args(model, effort, schema, last)],
                 input=prompt, cwd=runtime, env=env, capture_output=True, text=True,
                 errors="replace", timeout=timeout)
-            stdout, code = proc.stdout, proc.returncode
+            stdout, stderr, code = proc.stdout, proc.stderr, proc.returncode
         except subprocess.TimeoutExpired as exc:
             stdout, code, timed_out = (exc.stdout or b"").decode(errors="replace") \
                 if isinstance(exc.stdout, bytes) else (exc.stdout or ""), None, True
+            stderr = (exc.stderr or b"").decode(errors="replace") \
+                if isinstance(exc.stderr, bytes) else (exc.stderr or "")
         latency = round(time.time() - started, 1)
         events = parse_events(stdout)
         text = Path(last).read_text(encoding="utf-8") if os.path.exists(last) else ""
         review, parse_error = parse_review(text) if text else (None, "no final message")
+        if not text and stderr:
+            # A fail-closed launcher can exit before emitting any JSON events.
+            # Keep its reason, never the credential or terminal control bytes.
+            diagnostic = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", stderr.replace(key, "[REDACTED]"))
+            diagnostic = " ".join("".join(c if c.isprintable() else " " for c in diagnostic).split())
+            if diagnostic:
+                events["errors"].append(("launcher stderr: " + diagnostic)[:300])
         if review is not None:
             gate = publish_gated_review(review, head, lambda path: read_git_blob_at(wt, path, head))
         else:

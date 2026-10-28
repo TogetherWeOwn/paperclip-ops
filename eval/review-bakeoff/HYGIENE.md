@@ -74,6 +74,11 @@ The existing Codex read-only sandbox is retained as defense in depth; a prompt
 asking not to use tools is not the security boundary. This is a filesystem
 boundary, not network isolation or a guarantee about effective provider effort.
 
+If the launcher exits or times out without a final message, the saved `errors`
+include its stderr diagnostic, capped at 300 characters with the proxy key
+redacted and terminal controls removed. Existing JSON-event errors and token
+usage remain intact. Stderr handling is unchanged when a final message exists.
+
 ## Offline verification
 
 ```sh

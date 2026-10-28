@@ -699,6 +699,108 @@ class NodeContract(unittest.TestCase):
                     if label != "clean":
                         self.assertIn("::error file=café.yml", output)
 
+    # These guards exercise diagnostics and decoded values, not YAML spellings.
+    def _preflight_invalid_yaml(self, source, *, name="wf.yml", partial=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            write(tmp, name, source)
+            paths = [name]
+            findings = []
+            if partial:
+                write(tmp, "a-find.yml", BAD)
+                paths.append("a-find.yml")
+                findings = [("a-find.yml", 1, "actions/checkout@v4")]
+            before = frozen.snapshot(tmp)
+            env = {**ASCII_ENV, "PYTHONIOENCODING": "ascii"}
+            structured = invoke(["--json", *paths], tmp, extra_env=env)
+            text = invoke(paths, tmp, extra_env=env)
+            self.assertEqual(before, frozen.snapshot(tmp))
+            with self.subTest(mode="json", partial=partial):
+                obj = self.report(structured, requested=2 if partial else 1,
+                                  checked=1 if partial else 0, refused=1,
+                                  complete=False, findings=findings,
+                                  errors=[(name, "input-invalid-yaml")])
+                self.assertIn(name, obj["errors"][0]["message"])
+                self.assertNotIn(b"\x00", structured.stdout)
+            with self.subTest(mode="text", partial=partial):
+                output = self.text_report(text, exit_code=1,
+                                          annotations=2 if partial else 1)
+                self.assertIn(f"::error file={name},line=1::", output)
+                if partial:
+                    self.assertIn("::error file=a-find.yml,line=1::", output)
+                    self.assertIn("unpinned action `actions/checkout@v4`", output)
+                self.assertEqual(2 if partial else 1, len(output.splitlines()))
+                self.assertNotIn("�", output)
+
+    def _preflight_value(self, source, expected):
+        with tempfile.TemporaryDirectory() as tmp:
+            write(tmp, "wf.yml", source)
+            before = frozen.snapshot(tmp)
+            env = {**ASCII_ENV, "PYTHONIOENCODING": "ascii"}
+            structured = invoke(["--json", "wf.yml"], tmp, extra_env=env)
+            text = invoke(["wf.yml"], tmp, extra_env=env)
+            self.assertEqual(before, frozen.snapshot(tmp))
+            with self.subTest(mode="json"):
+                self.report(structured, requested=1, checked=1, refused=0,
+                            complete=True, findings=[
+                                ("wf.yml", line, value) for line, value, _ in expected])
+            with self.subTest(mode="text"):
+                output = self.text_report(text, exit_code=1 if expected else 0,
+                                          annotations=len(expected))
+                if expected:
+                    self.assertEqual(len(expected), len(output.splitlines()))
+                for line, _, annotation_value in expected:
+                    self.assertIn(f"::error file=wf.yml,line={line}::", output)
+                    self.assertIn(f"unpinned action `{annotation_value}`", output)
+
+    def test_preflight_mixed_unicode_diagnostic_preserves_partial_findings(self):
+        for partial in (False, True):
+            with self.subTest(partial=partial):
+                self._preflight_invalid_yaml("steps: [é, @]\n", name="é.yml",
+                                             partial=partial)
+
+    def test_preflight_ascii_diagnostic_controls(self):
+        for source in ("steps: [x, @]\n", "steps: [é, @]\n"):
+            with self.subTest(source=source):
+                self._preflight_invalid_yaml(source, name="ascii.yml")
+
+    def test_preflight_out_of_range_unicode_escapes_are_invalid_yaml(self):
+        for escape in (r"\U00110000", r"\UFFFFFFFF"):
+            for partial in (False, True):
+                with self.subTest(escape=escape, partial=partial):
+                    self._preflight_invalid_yaml('uses: "' + escape + '"\n',
+                                                 partial=partial)
+
+    def test_preflight_valid_unicode_escape_controls(self):
+        for source in ('uses: "\\u002e/local"\n',
+                       'uses: "\\U0000002e/local"\n'):
+            with self.subTest(source=source):
+                self._preflight_value(source, [])
+        self._preflight_value('uses: "\\U00000061ctions/checkout@v4"\n',
+                              [(1, "actions/checkout@v4", "actions/checkout@v4")])
+
+    def test_preflight_escaped_newline_after_sha_is_not_a_pin(self):
+        ref = "actions/checkout@" + "a" * 40
+        self._preflight_value('uses: "' + ref + '\\n"\n',
+                              [(1, ref + "\n", ref + "%0A")])
+
+    def test_preflight_escaped_newline_after_digest_is_not_a_pin(self):
+        ref = "docker://alpine:3@sha256:" + "a" * 64
+        self._preflight_value('uses: "' + ref + '\\n"\n',
+                              [(1, ref + "\n", ref + "%0A")])
+
+    def test_preflight_default_chomping_sha_is_not_a_pin(self):
+        ref = "actions/checkout@" + "a" * 40
+        self._preflight_value("uses: |\n  " + ref + "\n",
+                              [(1, ref + "\n", ref + "%0A")])
+
+    def test_preflight_exact_pin_and_local_newline_controls(self):
+        for ref in ("actions/checkout@" + "a" * 40,
+                    "docker://alpine:3@sha256:" + "a" * 64):
+            with self.subTest(ref=ref):
+                self._preflight_value('uses: "' + ref + '"\n', [])
+        self._preflight_value('uses: "./local\\n"\n', [])
+        self._preflight_value("uses: |\n  ./local\n", [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -79,12 +79,15 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          git diff --name-only "origin/${BASE_REF}...HEAD" -- '*.md' 'docs/**' > "$RUNNER_TEMP/docs-files.txt"
+          # Scope already accepted every path; validate the surviving files of
+          # the same complete diff. Deleted sources (renames, removals) have
+          # nothing to check; a pure deletion still fails on the empty list.
+          git diff --name-only --no-renames --diff-filter=d "origin/${BASE_REF}...HEAD" > "$RUNNER_TEMP/docs-files.txt"
           test -s "$RUNNER_TEMP/docs-files.txt"
           while IFS= read -r f; do
             test -s "$f"
             # Balanced fenced code blocks: an odd count means a broken doc.
-            n=$(grep -c '^```' "$f" || true)
+            n=$(grep -c '^```' -- "$f" || true)
             test $((n % 2)) -eq 0
           done < "$RUNNER_TEMP/docs-files.txt"
           echo "docs-only fast path: prose checks passed"

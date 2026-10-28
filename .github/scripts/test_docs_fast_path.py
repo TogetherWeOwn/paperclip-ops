@@ -7,11 +7,15 @@ that keep it cheap: one job, a workflow-level `paths:` filter so code-only PRs
 start nothing, and a filter that still covers everything `docs_scope.py` calls
 prose so the fast path keeps working. Stdlib only (no PyYAML on the runner).
 """
+import os
 import re
+import subprocess
+import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
-from docs_scope import PROSE_DIRS, PROSE_SUFFIXES, is_prose_path
+from docs_scope import PROSE_DIRS, PROSE_SUFFIXES, classify, is_prose_path, parse_name_status
 
 WORKFLOW = Path(__file__).resolve().parents[1] / "workflows" / "docs-fast-path.yml"
 BARE_LICENSE_NAMES = ("LICENSE", "LICENCE", "LICENSE-MIT", "LICENSE-APACHE")
@@ -115,6 +119,117 @@ class TestDocsFastPathWorkflow(unittest.TestCase):
     def test_public_job_uses_github_hosted_runner(self):
         self.assertIn("runs-on: ubuntu-latest", self.text)
         self.assertNotRegex(self.text, r"(?m)^\s*runs-on:.*self-hosted")
+
+
+class TestFastProseChecks(unittest.TestCase):
+    """Run the real workflow shell against isolated git diffs, not a copied selector."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.env = {
+            **os.environ,
+            "BASE_REF": "main",
+            "RUNNER_TEMP": str(self.root / ".git"),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+        }
+        self.git("init", "-q")
+        self.git("config", "user.email", "test@example.com")
+        self.git("config", "user.name", "Test")
+        self.write("README.md", "Baseline prose.\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "baseline")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        match = re.search(
+            r"(?ms)^      - name: Fast prose checks .*?^        run: \|\n"
+            r"(?P<body>.*?)(?=^      - name:)",
+            WORKFLOW.read_text(),
+        )
+        self.assertIsNotNone(match)
+        self.script = textwrap.dedent(match.group("body"))
+
+    def git(self, *args):
+        return subprocess.run(
+            ["git", *args], cwd=self.root, env=self.env,
+            check=True, capture_output=True, text=True, timeout=10,
+        ).stdout
+
+    def write(self, path, content):
+        target = self.root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+
+    def commit_and_classify(self):
+        self.git("add", "-A")
+        self.git("commit", "-qm", "fixture change")
+        lines = self.git("diff", "--name-status", "origin/main...HEAD").splitlines()
+        return classify(parse_name_status(lines))
+
+    def run_checks(self):
+        return subprocess.run(
+            ["bash", "-c", self.script], cwd=self.root, env=self.env,
+            capture_output=True, text=True, timeout=10,
+        )
+
+    def test_every_accepted_prose_shape_is_selected_and_checked(self):
+        for path in prose_samples() + ["public-paths-freeze.txt", "GUIDE.MD"]:
+            with self.subTest(path=path):
+                self.write(path, "Non-empty prose.\n")
+                self.assertTrue(self.commit_and_classify())
+                result = self.run_checks()
+                # Keep each diff single-file even if a preceding subtest fails.
+                self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                selected = (self.root / ".git/docs-files.txt").read_text().splitlines()
+                self.assertEqual(selected, [path])
+
+    def test_unbalanced_markdown_fails(self):
+        self.write("README.md", "```python\nprint('unclosed')\n")
+        self.assertTrue(self.commit_and_classify())
+        self.assertNotEqual(self.run_checks().returncode, 0)
+
+    def test_dash_named_unbalanced_prose_fails(self):
+        # A leading dash must not let grep read the filename as an option.
+        for path in ("-n.md", "-x.txt"):
+            with self.subTest(path=path):
+                self.write(path, "```python\nprint('unclosed')\n")
+                self.assertTrue(self.commit_and_classify())
+                result = self.run_checks()
+                self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_empty_prose_fails(self):
+        self.write("notes.txt", "")
+        self.assertTrue(self.commit_and_classify())
+        self.assertNotEqual(self.run_checks().returncode, 0)
+
+    def test_deleted_prose_fails(self):
+        self.git("rm", "README.md")
+        self.assertTrue(self.commit_and_classify())
+        self.assertNotEqual(self.run_checks().returncode, 0)
+
+    def test_prose_rename_validates_destination(self):
+        (self.root / "docs").mkdir()
+        self.git("mv", "README.md", "docs/renamed.md")
+        self.assertTrue(self.commit_and_classify())
+        result = self.run_checks()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        selected = (self.root / ".git/docs-files.txt").read_text().splitlines()
+        self.assertEqual(selected, ["docs/renamed.md"])
+
+    def test_mixed_code_is_not_docs_only(self):
+        self.write("notes.txt", "Prose.\n")
+        self.write("app.py", "print('code')\n")
+        self.assertFalse(self.commit_and_classify())
+
+    def test_code_renamed_to_prose_is_not_docs_only(self):
+        self.write("app.py", "print('code')\n")
+        self.commit_and_classify()
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.git("mv", "app.py", "notes.txt")
+        self.assertFalse(self.commit_and_classify())
 
 
 if __name__ == "__main__":

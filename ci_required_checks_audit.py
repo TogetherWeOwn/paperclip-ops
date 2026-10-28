@@ -34,6 +34,16 @@
 #
 # EXIT  0 no FAIL   1 at least one FAIL   2 nothing could be measured / bad input
 # `--strict` also exits 1 on WARN.
+# With `--json`, measured results keep their branch/required/counts/findings
+# object. Caught offline input failures (--manifest/--rules-json) instead emit
+# one versioned schema_version-1 unmeasurable object (stable error_code,
+# retryable, next_action, known branch/source, counts/findings null) on stdout
+# and nothing on stderr; text mode keeps the prose stderr diagnostic. argparse
+# syntax errors (unknown flag, missing value/source, conflicting sources) and
+# bare invocations stay argparse usage on stderr with empty stdout, exit 2.
+# Live --repo failures keep their existing prose/exit-2 behaviour. In
+# NO_REQUIRED_CHECKS/NO_WORKFLOWS after a successful source load, a
+# rules-json run without --branch reports the existing default branch "main".
 # Read-only. It never writes to GitHub.
 # ===========================================================================
 from __future__ import annotations
@@ -48,6 +58,7 @@ import sys
 import tempfile
 
 EXIT_OK, EXIT_FAIL, EXIT_UNMEASURED = 0, 1, 2
+UNMEASURABLE_SCHEMA_VERSION = 1
 
 # Job-level `if:` values that cannot skip the job. `always()` runs even after a
 # failed dependency; `!cancelled()` only skips a cancelled run, which is red or
@@ -68,6 +79,12 @@ class ParseError(Exception):
 
 class InputError(Exception):
     """Bad arguments, an unreadable file or a failed `gh` call: exit 2."""
+
+    def __init__(self, message, error_code=None, next_action=None, branch=None):
+        super().__init__(message)
+        self.error_code = error_code
+        self.next_action = next_action
+        self.branch = branch
 
 
 # ---------------------------------------------------------------------------
@@ -452,26 +469,83 @@ def load_workflows(directory):
     try:
         names = sorted(f for f in os.listdir(directory) if f.endswith((".yml", ".yaml")))
     except OSError as exc:
-        raise InputError(f"cannot read workflows directory {directory}: {exc}")
+        raise InputError(
+            f"cannot read workflows directory {directory}: {exc}",
+            error_code="NO_WORKFLOWS",
+            next_action="Provide a readable workflow directory containing workflow files and rerun the audit",
+        )
     for fname in names:
         path = os.path.join(directory, fname)
         try:
             with open(path, encoding="utf-8") as fh:
                 workflows.append(parse_workflow(fh.read(), path))
-        except ParseError as exc:
+        except (ParseError, OSError, UnicodeDecodeError) as exc:
             errors[path] = str(exc)
     return workflows, errors
+
+
+def _valid_integration_id(value):
+    """GitHub's `integration_id` is an optional integer (bool is not one)."""
+    return value is None or (isinstance(value, int) and not isinstance(value, bool))
 
 
 def required_from_rules(rules):
     """Flatten `gh api repos/R/rules/branches/B` into [{context, integration_id}]."""
     if not isinstance(rules, list):
-        raise InputError("rules JSON is not a list (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)")
+        raise InputError(
+            "rules JSON is not a list (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)",
+            error_code="RULES_INVALID",
+            next_action="Fix the rules JSON to be a list of branch rules and rerun the audit",
+        )
     out, seen = [], set()
     for rule in rules:
-        if rule.get("type") != "required_status_checks":
+        if not isinstance(rule, dict):
+            raise InputError(
+                "rules JSON contains a rule that is not an object (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)",
+                error_code="RULES_INVALID",
+                next_action="Fix the rules JSON to be a list of branch rules and rerun the audit",
+            )
+        if not isinstance(rule.get("type"), str):
+            raise InputError(
+                "rules JSON contains a rule without a string `type` (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)",
+                error_code="RULES_INVALID",
+                next_action="Fix the rules JSON to be a list of branch rules and rerun the audit",
+            )
+        if rule["type"] != "required_status_checks":
             continue
-        for chk in (rule.get("parameters") or {}).get("required_status_checks") or []:
+        params = rule["parameters"] if "parameters" in rule else {}
+        if not isinstance(params, dict):
+            raise InputError(
+                "rules JSON has a required_status_checks rule whose parameters are not an object (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)",
+                error_code="RULES_INVALID",
+                next_action="Fix the rules JSON to be a list of branch rules and rerun the audit",
+            )
+        if "required_status_checks" not in params:
+            raise InputError(
+                "rules JSON has a required_status_checks rule without a checks list (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)",
+                error_code="RULES_INVALID",
+                next_action="Fix the rules JSON to be a list of branch rules and rerun the audit",
+            )
+        checks = params["required_status_checks"]
+        if not isinstance(checks, list):
+            raise InputError(
+                "rules JSON has a required_status_checks rule whose checks are not a list (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)",
+                error_code="RULES_INVALID",
+                next_action="Fix the rules JSON to be a list of branch rules and rerun the audit",
+            )
+        for chk in checks:
+            if not isinstance(chk, dict) or not isinstance(chk.get("context"), str) or not chk.get("context"):
+                raise InputError(
+                    "rules JSON has a required check entry without a string context (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)",
+                    error_code="RULES_INVALID",
+                    next_action="Fix the rules JSON to be a list of branch rules and rerun the audit",
+                )
+            if not _valid_integration_id(chk.get("integration_id")):
+                raise InputError(
+                    "rules JSON has a required check entry whose integration_id is not an integer (expected `gh api repos/OWNER/REPO/rules/branches/BRANCH`)",
+                    error_code="RULES_INVALID",
+                    next_action="Fix the rules JSON to be a list of branch rules and rerun the audit",
+                )
             key = (chk.get("context"), chk.get("integration_id"))
             if key not in seen:
                 seen.add(key)
@@ -506,58 +580,150 @@ def load_manifest(path):
     try:
         with open(path, encoding="utf-8") as fh:
             doc = json.load(fh)
-    except (OSError, ValueError) as exc:
-        raise InputError(f"cannot read manifest {path}: {exc}")
+    except OSError as exc:
+        raise InputError(
+            f"cannot read manifest {path}: {exc}",
+            error_code="MANIFEST_UNREADABLE",
+            next_action="Provide a readable manifest file at the supplied manifest path and rerun the audit",
+        )
+    except ValueError as exc:
+        # Includes json.JSONDecodeError and UnicodeDecodeError.
+        raise InputError(
+            f"cannot read manifest {path}: {exc}",
+            error_code="MANIFEST_INVALID",
+            next_action="Fix the manifest to be valid UTF-8 JSON with a required list and rerun the audit",
+        )
+    if not isinstance(doc, dict):
+        raise InputError(
+            f"manifest {path}: `required` must be a list of {{context, integration_id}}",
+            error_code="MANIFEST_INVALID",
+            next_action="Fix the manifest to be valid UTF-8 JSON with a required list and rerun the audit",
+        )
     req = doc.get("required")
-    if not isinstance(req, list) or any(not isinstance(r, dict) or not r.get("context") for r in req):
-        raise InputError(f"manifest {path}: `required` must be a list of {{context, integration_id}}")
-    return [{"context": r["context"], "integration_id": r.get("integration_id")} for r in req], doc.get("branch", "main")
+    branch = doc.get("branch", "main")
+    if (
+        not isinstance(req, list)
+        or any(not isinstance(r, dict) or not isinstance(r.get("context"), str) or not r.get("context") for r in req)
+        or any(not _valid_integration_id(r.get("integration_id")) for r in req)
+        or not isinstance(branch, str)
+    ):
+        raise InputError(
+            f"manifest {path}: `required` must be a list of {{context, integration_id}}",
+            error_code="MANIFEST_INVALID",
+            next_action="Fix the manifest to be valid UTF-8 JSON with a required list and rerun the audit",
+            branch=branch if isinstance(branch, str) else None,
+        )
+    return [{"context": r["context"], "integration_id": r.get("integration_id")} for r in req], branch
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Audit required checks against the jobs that produce them (read-only).")
+    ap = argparse.ArgumentParser(
+        description="Audit required checks against the jobs that produce them (read-only).",
+        epilog=(
+            "Examples:\n"
+            "  ci_required_checks_audit.py --manifest required_checks.json --workflows .github/workflows --json\n"
+            "  ci_required_checks_audit.py --rules-json rules.json --workflows .github/workflows --branch main --json\n"
+            "With --json, caught offline input failures emit one schema_version 1 unmeasurable object "
+            "on stdout (exit 2) instead of prose. Argument syntax errors remain argparse usage on stderr, exit 2."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--manifest", help="pinned snapshot of the ruleset's required checks (offline CI gate)")
     src.add_argument("--rules-json", help="recorded `gh api repos/OWNER/REPO/rules/branches/BRANCH` output")
     src.add_argument("--repo", help="OWNER/NAME, read live with `gh api` (read-only)")
     ap.add_argument("--workflows", help="directory of workflow files (required with --manifest/--rules-json)")
     ap.add_argument("--branch", default=None, help="target branch (default: manifest branch, else the repo default)")
-    ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--json", action="store_true", help="machine-readable output; offline caught-input failures emit one schema_version 1 unmeasurable object (exit 2)")
     ap.add_argument("--strict", action="store_true", help="exit 1 on WARN as well as FAIL")
     ap.add_argument("--show-unrequired", action="store_true", help="also print INFO NOT_REQUIRED rows")
     ap.add_argument("--gh-bin", default=os.environ.get("AUDIT_GH_BIN", "gh"))
     args = ap.parse_args(argv)
 
+    source = None
+    if args.manifest is not None:
+        source = {"kind": "manifest", "path": str(args.manifest)}
+    elif args.rules_json is not None:
+        source = {"kind": "rules-json", "path": str(args.rules_json)}
+    known_branch = args.branch
+
+    def emit_unmeasurable(error_code, next_action, text_message):
+        if args.json and source is not None and error_code:
+            payload = {
+                "schema_version": UNMEASURABLE_SCHEMA_VERSION,
+                "outcome": "unmeasurable",
+                "measurement_state": "unmeasured",
+                "error_code": error_code,
+                "retryable": False,
+                "next_action": next_action,
+                "branch": known_branch,
+                "source": source,
+                "counts": None,
+                "findings": None,
+            }
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(f"ci_required_checks_audit: {text_message}", file=sys.stderr)
+        return EXIT_UNMEASURED
+
     try:
-        branch = args.branch or "main"
-        if args.manifest:
+        if args.manifest is not None:
             required, mbranch = load_manifest(args.manifest)
             branch = args.branch or mbranch
-        elif args.rules_json:
+            known_branch = branch
+        elif args.rules_json is not None:
             try:
                 with open(args.rules_json, encoding="utf-8") as fh:
                     required = required_from_rules(json.load(fh))
-            except (OSError, ValueError) as exc:
-                raise InputError(f"cannot read rules JSON {args.rules_json}: {exc}")
-        if args.repo:
+            except OSError as exc:
+                raise InputError(
+                    f"cannot read rules JSON {args.rules_json}: {exc}",
+                    error_code="RULES_UNREADABLE",
+                    next_action="Provide a readable rules JSON file at the supplied rules path and rerun the audit",
+                )
+            except ValueError as exc:
+                # Includes json.JSONDecodeError and UnicodeDecodeError. InputError
+                # from required_from_rules is not a ValueError and passes through.
+                raise InputError(
+                    f"cannot read rules JSON {args.rules_json}: {exc}",
+                    error_code="RULES_INVALID",
+                    next_action="Fix the rules JSON to be valid UTF-8 JSON matching the branch rules output and rerun the audit",
+                )
+            branch = args.branch or "main"
+            known_branch = branch
+        if args.repo is not None:
+            if not args.repo:
+                raise InputError("--repo must not be empty (expected OWNER/NAME)")
             tmp = tempfile.mkdtemp(prefix="ci-required-audit-")
             required, branch = fetch_live(args.repo, args.branch, args.gh_bin, tmp)
+            known_branch = branch
             workdir = tmp
         else:
             if not args.workflows:
-                raise InputError("--workflows DIR is required with --manifest / --rules-json")
+                raise InputError(
+                    "--workflows DIR is required with --manifest / --rules-json",
+                    error_code="WORKFLOWS_REQUIRED",
+                    next_action="Pass --workflows with a directory of workflow files and rerun the audit",
+                )
             workdir = args.workflows
         workflows, errors = load_workflows(workdir)
     except InputError as exc:
-        print(f"ci_required_checks_audit: {exc}", file=sys.stderr)
-        return EXIT_UNMEASURED
+        if getattr(exc, "branch", None) is not None:
+            known_branch = args.branch or exc.branch
+        return emit_unmeasurable(exc.error_code, exc.next_action, exc)
 
     if not required:
-        print("ci_required_checks_audit: no required checks were read, so nothing was measured", file=sys.stderr)
-        return EXIT_UNMEASURED
+        return emit_unmeasurable(
+            "NO_REQUIRED_CHECKS" if source is not None else None,
+            "Provide at least one required status check in the input and rerun the audit",
+            "no required checks were read, so nothing was measured",
+        )
     if not workflows and not errors:
-        print("ci_required_checks_audit: no workflow files were read, so nothing was measured", file=sys.stderr)
-        return EXIT_UNMEASURED
+        return emit_unmeasurable(
+            "NO_WORKFLOWS" if source is not None else None,
+            "Provide at least one workflow file in the workflow directory and rerun the audit",
+            "no workflow files were read, so nothing was measured",
+        )
 
     findings = audit(required, workflows, errors, branch)
     counts = {s: sum(1 for f in findings if f["severity"] == s) for s in ("FAIL", "WARN", "INFO")}

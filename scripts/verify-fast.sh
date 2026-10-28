@@ -260,7 +260,7 @@ node --test hooks/disposition-stop-guard/disposition-stop-guard.test.mjs hooks/d
 python3 -m unittest test_reharden_relative_targets || fail "reharden relative-target suite failed"
 python3 -m unittest test_deploy_window_manifest || fail "deploy-window manifest gate suite failed"
 ./test_credential_chain_lockdown.sh || fail "credential-chain lockdown fixture suite failed"
-python3 -m unittest test_ci_required_checks_audit || fail "required-checks audit failed"
+python3 -m unittest test_ci_required_checks_audit test_required_checks_unmeasurable_json_acceptance test_ci_required_checks_nested_input || fail "required-checks audit failed"
 # case_6f2e8a41. Deterministic test-missing gate: unit contract plus
 # staged-copy/CLI regression. Hermetic stdlib unittest, no network, no
 # clock, temp fixtures only.
@@ -280,6 +280,7 @@ python3 check_workflow_job_permissions.py || fail "workflow job permissions gate
 python3 -m unittest test_check_workflow_job_permissions || fail "workflow job permissions acceptance suite failed"
 ./test_readme_script_index.sh || fail "readme script-index gate failed"
 ./test_public_comment_hygiene_gate.sh || fail "public-comment hygiene gate suite failed"
+./test_public_comment_hygiene_json.sh || fail "public-comment hygiene JSON suite failed"
 ./test_acceptance_transport.sh || fail "acceptance-transport reply suite failed"
 ./test_upstream_prepush_hook.sh || fail "upstream pre-push hook suite failed"
 ./test_cliproxy_mgmt_recon_argv.sh || fail "cliproxy recon argv suite failed"
@@ -303,7 +304,7 @@ python3 -m unittest test_alert_queue || fail "alert-queue suite failed"
 python3 -m unittest test_watchdog_snapshot_builder || fail "watchdog snapshot-builder suite failed"
 python3 -m unittest test_case_da79e241_fleet_run_stall || fail "fleet-run-stall suite failed"
 python3 -m unittest test_case_dcf07273_assignment_bundle || fail "assignment host-source suite failed"
-python3 -m unittest test_orphan_suites || fail "orphan-suite ratchet fixtures failed"
+python3 -B -m unittest test_orphan_suites test_orphan_suite_json_acceptance || fail "orphan-suite ratchet fixtures failed"
 python3 -m unittest test_pr3_stop_guard_landing || fail "stop-guard landing suite failed"
 python3 -m unittest test_warn_first_inventory || fail "warn-first inventory suite failed"
 ./ops/case_34c2c99f/test_regen_dry_run_receipt.sh || fail "regen dry-run receipt suite failed"
@@ -330,6 +331,7 @@ PAPERCLIP_RUN_SCRATCH_DIR="${PAPERCLIP_RUN_SCRATCH_DIR:-${PAPERCLIP_SCRATCH_DIR:
 (cd ops/productivity && python3 -m unittest test_nongit_quarantine_custody) || fail "nongit quarantine custody suite failed"
 ./test_review_route.sh || fail "review-route suite failed"
 ./test_shell_subst_guard.sh || fail "shell-subst guard suite failed"
+python3 -B -m unittest test_shell_substitution_json_acceptance || fail "shell-substitution JSON acceptance failed"
 (cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_arm_import) || fail "arm-import suite failed"
 (cd ops/case_1ccef1dc/reviewer-eval && python3 -m unittest test_build_corpus_atomic) || fail "corpus atomic-write suite failed"
 (cd ops/case_1ccef1dc/reviewer-eval/v2 && python3 -m unittest test_merge_survival_atomic) || fail "merge-survival atomic-write suite failed"

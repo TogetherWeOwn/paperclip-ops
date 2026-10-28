@@ -154,10 +154,19 @@ export function recordLine(record) {
     ? (record.actions ?? []).join('+')
     : (record.reason ?? 'n/a')
   const facts = record.snapshotFacts
-  const diagnostic = facts
+  const base = facts
     ? ` headPushTime=${facts.headPushTime} repeatedNames=${facts.repeatedNames} repeatedEntries=${facts.repeatedEntries}`
     : record.snapshotFailure ? ` snapshotFailure=${record.snapshotFailure}` : ''
-  return `readiness ${record.repository}#${record.number}@${record.headSha}: ${record.decision} (${detail})${diagnostic}`
+  // A failed write names its sanitized class (adapter writeFailureCode:
+  // fixed words or http-NNN, never child output) so an error line is
+  // diagnosable without the underlying error — endpoint, permission and
+  // transport failures stayed indistinguishable before this.
+  const failedSteps = (record.steps ?? []).filter((step) => step.result === 'failed')
+  const writeDiagnostic = record.decision === 'error' && failedSteps.length > 0 &&
+    failedSteps.every((step) => typeof step.failure === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(step.failure))
+    ? ` writeFailure=${failedSteps.map((step) => `${step.action}:${step.failure}`).join(',')}`
+    : ''
+  return `readiness ${record.repository}#${record.number}@${record.headSha}: ${record.decision} (${detail})${base}${writeDiagnostic}`
 }
 
 // One supervised pass. `github` is injectable only so tests can run without

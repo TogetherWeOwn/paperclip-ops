@@ -109,6 +109,38 @@ export function prepareIsolatedGhConfigSync() {
   return dir
 }
 
+// The only facts a failed child may contribute, each reduced to a closed
+// shape so no other byte of its output survives: the three-digit status `gh
+// api` prints as `(HTTP NNN)`, and the GraphQL errors[].type GitHub returns
+// with HTTP 200 for refusals (`gh api graphql` prints that body on stdout and
+// exits 1). A refusal with no type is recognised by GitHub's fixed
+// "Resource not accessible by ..." wording and reported as FORBIDDEN. Without
+// these the adapter's write classifier only ever saw `unknown`.
+const GRAPHQL_TYPE = /^[A-Z][A-Z_]{0,39}$/
+const NOT_ACCESSIBLE = /Resource not accessible by (?:integration|personal access token)/
+
+export function graphqlErrorType(body) {
+  const errors = body && typeof body === 'object' && Array.isArray(body.errors) ? body.errors : []
+  for (const entry of errors) {
+    if (typeof entry?.type === 'string' && GRAPHQL_TYPE.test(entry.type)) return entry.type
+  }
+  return errors.some((entry) => typeof entry?.message === 'string' && NOT_ACCESSIBLE.test(entry.message))
+    ? 'FORBIDDEN' : undefined
+}
+
+export function childFailureFacts(error) {
+  const stdout = typeof error?.stdout === 'string' ? error.stdout : ''
+  const stderr = typeof error?.stderr === 'string' ? error.stderr : ''
+  const facts = {}
+  const status = `${stderr}\n${typeof error?.message === 'string' ? error.message : ''}`.match(/\(HTTP ([1-5][0-9]{2})\)/)
+  if (status) facts.httpStatus = status[1]
+  let body = null
+  try { body = JSON.parse(stdout) } catch { body = null }
+  const type = graphqlErrorType(body) ?? (NOT_ACCESSIBLE.test(stderr) ? 'FORBIDDEN' : undefined)
+  if (type) facts.graphqlErrorType = type
+  return facts
+}
+
 // `run` with the adapter's (file, args, options) shape: the file argument is
 // accepted and ignored — the pinned path is always used, so a caller can
 // never redirect execution back to PATH. The shell is forced off even if a
@@ -135,8 +167,10 @@ export function createPinnedRunner({ executable, exec = promisify(execFile), env
     try {
       return await exec(executable, args, { encoding, shell: false, timeout, maxBuffer, env: { ...childEnv } })
     } catch (error) {
-      // Child output can carry token material: only the short code travels.
-      throw pinError(`pinned gh invocation failed: ${String(error?.code ?? 'unknown')}`)
+      // Child output can carry token material: only the short code and the
+      // fixed-shape facts below travel; stdout/stderr never leave this frame.
+      throw Object.assign(pinError(`pinned gh invocation failed: ${String(error?.code ?? 'unknown')}`),
+        childFailureFacts(error))
     }
   }
 }

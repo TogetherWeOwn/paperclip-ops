@@ -27,8 +27,10 @@ Exit status is always 0; the verdict is on stdout for $GITHUB_OUTPUT.
 import re
 import sys
 
-# Prose extensions that are never executed. Case-insensitive.
-PROSE_SUFFIXES = (".md", ".rst", ".txt")
+# Root .txt files include machine-consumed policy and inventory inputs, not
+# necessarily prose. Like ci_changes.py, send all of them through full CI.
+# Text under docs/ remains prose. Extensions are case-insensitive.
+PROSE_SUFFIXES = (".md", ".rst")
 
 # Prose directories. A bare `docs/foo` without suffix still counts.
 PROSE_DIRS = ("docs/",)

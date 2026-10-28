@@ -83,6 +83,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Docs fast-path scope and validation suites
+        run: python3 -m unittest discover -s .github/scripts -p 'test_docs_*.py' -v
+
       - name: Record checked-out PR base for diff gates
         if: github.event_name == 'pull_request'
         shell: bash

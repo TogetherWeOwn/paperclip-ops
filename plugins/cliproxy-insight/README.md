@@ -59,11 +59,12 @@ unreleased source is not a new installable release, and no live success is claim
 `get_provider_usage` accepts an optional `lane` selector: one exact lane id
 from the persisted lane index (an entry in `lanes` from an unfiltered call,
 e.g. `claude.json`). A selected call returns only that lane in
-`lanes`/`laneSnapshots`, counts `accountsCooling` for that subset, and reads
-the lane index plus the selected lane only — never another lane's state.
-Omitting `lane` returns every persisted lane, unchanged. Provider snapshots
-and `modelUsage` keep their existing scope either way; a provider name is not
-a lane id and is never inferred to be one. This is stored history,
+`lanes`/`laneSnapshots` and counts `accountsCooling` for that subset. Among
+lane records, it reads the lane index and selected snapshot, never any other
+lane snapshot; config, provider-index, provider-snapshot and `modelUsage`
+reads retain their existing scope. Omitting `lane` returns every persisted
+lane. Empty or duplicate lane-index entries are ignored. A provider name is
+not a lane id and is never inferred to be one. This is stored history,
 not serving readiness and not an admission decision.
 
 Any present-but-invalid selector (unknown, empty, or non-string) is rejected
@@ -72,6 +73,14 @@ with a fixed shape and no lane data, and the supplied value is never echoed:
 ```json
 { "ok": false, "error": "unknown_lane", "retryable": false, "next_action": "use a lane id from the persisted lane index" }
 ```
+
+Lane rejections increment the best-effort `cliproxy_insight.lane_selection_refused`
+counter with a bounded `invalid_shape` or `unknown_id` reason, never the supplied
+selector. Existing company-scope rejection envelopes are preserved for
+compatibility. An optional `provider` must be an exact entry in `providers`
+from an unfiltered call; empty, non-string or unknown keys return
+`unknown_provider` without deriving a state key or echoing the input. Valid
+provider filters and the company-wide `modelUsage` scope are unchanged.
 
 Synthetic example (ids illustrative only): with the lane index
 `["claude.json", "zai.json"]`, the call

@@ -160,7 +160,7 @@ var manifest = {
           companyId: { type: "string", description: "Company whose CLIProxy history applies" },
           provider: {
             type: "string",
-            description: "Optional. One provider key as published by the lane (e.g. claude, codex, codex-spark, kimi, opencode-go). Omit to return every provider observed so far."
+            description: "Optional. One exact provider key from the persisted provider index (`providers` in an unfiltered call, e.g. claude or codex). Omit to return every provider observed so far. Invalid keys are rejected as unknown_provider."
           },
           lane: {
             type: "string",

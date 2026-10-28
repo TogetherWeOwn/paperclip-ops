@@ -76,6 +76,10 @@ function toolRejection(error: string, extra: Record<string, unknown> = {}): Reco
   return { ok: false, error, ...extra };
 }
 
+function usageRejection(error: string, nextAction: string): { error: string; data: Record<string, unknown> } {
+  return { error, data: toolRejection(error, { retryable: false, next_action: nextAction }) };
+}
+
 /**
  * The stable rejection for a present-but-invalid `lane` selector. Fixed
  * strings only: the supplied value is never echoed and no lane data — not
@@ -83,13 +87,7 @@ function toolRejection(error: string, extra: Record<string, unknown> = {}): Reco
  * Callers learn valid ids from an unfiltered call's `lanes` array.
  */
 function unknownLaneResult(): { error: string; data: Record<string, unknown> } {
-  return {
-    error: "unknown_lane",
-    data: toolRejection("unknown_lane", {
-      retryable: false,
-      next_action: "use a lane id from the persisted lane index",
-    }),
-  };
+  return usageRejection("unknown_lane", "use a lane id from the persisted lane index");
 }
 
 function resolveConfig(raw: unknown): ResolvedConfig {
@@ -406,7 +404,7 @@ export function isStale(observedAt: unknown, staleAfterSeconds: number, nowMs: n
 async function readLaneIndex(read: (stateKey: string) => Promise<unknown>): Promise<string[]> {
   const storedIndex = await read(STATE_KEYS.laneIndex);
   return Array.isArray(storedIndex)
-    ? storedIndex.filter((l): l is string => typeof l === "string")
+    ? [...new Set(storedIndex.filter((l): l is string => typeof l === "string" && l.trim().length > 0))]
     : [];
 }
 
@@ -656,10 +654,7 @@ export function createPlugin() {
         if (config.laneFiles.length > 0) {
           // Union with what we have seen before, same rule as the provider
           // index: a lane missing from one publish is not evidence it is gone.
-          const storedIndex = await ctx.state.get(key(companyId, STATE_KEYS.laneIndex));
-          const knownLanes = Array.isArray(storedIndex)
-            ? storedIndex.filter((l): l is string => typeof l === "string")
-            : [];
+          const knownLanes = await readLaneIndex((stateKey) => ctx.state.get(key(companyId, stateKey)));
           await ctx.state.set(
             key(companyId, STATE_KEYS.laneIndex),
             [...new Set([...knownLanes, ...lanesStored])].sort(),
@@ -850,7 +845,7 @@ export function createPlugin() {
               provider: {
                 type: "string",
                 description:
-                  "Optional. One provider key as published by the lane (e.g. claude, codex, codex-spark, kimi, opencode-go). Omit to return every provider observed so far.",
+                  "Optional. One exact provider key from the persisted provider index (`providers` in an unfiltered call, e.g. claude or codex). Omit to return every provider observed so far. Invalid keys are rejected as unknown_provider.",
               },
               lane: {
                 type: "string",
@@ -868,17 +863,28 @@ export function createPlugin() {
           if (!isConfiguredCompany(companyId))
             return { error: "company is not configured", data: toolRejection("company is not configured") };
 
+          const rejectLane = async (reason: "invalid_shape" | "unknown_id") => {
+            try {
+              await ctx.metrics.write("cliproxy_insight.lane_selection_refused", 1, { companyId, reason });
+            } catch {
+              // A failed metric must not expose an exception or change the safe rejection.
+            }
+            return unknownLaneResult();
+          };
           // Selector shape is validated after the company fence and before
-          // any state read. Only exact membership in the persisted lane
-          // index (checked below) can turn the value into a selection —
-          // a provider name is never inferred to be a lane id. An omitted
-          // or `undefined` selector keeps the unfiltered contract.
+          // any state read. Only exact membership in the persisted index
+          // can turn either value into a state key. A provider name is never
+          // inferred to be a lane id; omitted/undefined selectors stay unfiltered.
           const selectedLane = input.lane;
           if (
             selectedLane !== undefined &&
             (typeof selectedLane !== "string" || selectedLane.trim().length === 0)
           ) {
-            return unknownLaneResult();
+            return rejectLane("invalid_shape");
+          }
+          const requested = input.provider;
+          if (requested !== undefined && (typeof requested !== "string" || requested.trim().length === 0)) {
+            return usageRejection("unknown_provider", "use a provider key from the persisted provider index");
           }
 
           const config = resolveConfig(await ctx.config.get(companyId));
@@ -887,24 +893,27 @@ export function createPlugin() {
           const nowMs = Date.now();
           const readState = (stateKey: string) => ctx.state.get(key(companyId, stateKey));
 
-          // Resolve the lane half before provider/model reads, so a rejected
-          // selector reads the index only — never another lane's snapshot,
-          // and no key is ever derived from the rejected input.
+          // Resolve the lane before provider/model reads, so a rejected lane
+          // reads its index only — never another lane's snapshot.
           const indexedLanes = await readLaneIndex(readState);
           if (!isConfiguredCompany(companyId))
             return { error: "company is not configured", data: toolRejection("company is not configured") };
           if (typeof selectedLane === "string" && !indexedLanes.includes(selectedLane)) {
-            return unknownLaneResult();
+            return rejectLane("unknown_id");
           }
+          const indexedProviders = await readProviderIndex(companyId);
+          if (!isConfiguredCompany(companyId))
+            return { error: "company is not configured", data: toolRejection("company is not configured") };
+          if (typeof requested === "string" && !indexedProviders.includes(requested)) {
+            return usageRejection("unknown_provider", "use a provider key from the persisted provider index");
+          }
+          const providers = typeof requested === "string" ? [requested] : indexedProviders;
           const lane = await laneSummary(
             readState,
             config,
             nowMs,
             typeof selectedLane === "string" ? [selectedLane] : indexedLanes,
           );
-
-          const requested = typeof input.provider === "string" ? input.provider : null;
-          const providers = requested ? [requested] : await readProviderIndex(companyId);
 
           const snapshots: Record<string, unknown> = {};
           for (const provider of providers) {

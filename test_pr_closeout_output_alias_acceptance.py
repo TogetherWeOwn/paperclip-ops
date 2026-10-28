@@ -24,13 +24,18 @@ below currently succeeds and overwrites):
     when the prior path is NOT also a protected input; a prior path
     that IS a protected input still refuses (evidence wins).
   * Machine contract: nonzero existing write/usage exit (2), a stable
-    ``output_path_conflict`` code for determined aliases
-    (``output_path_unverifiable`` only when safe determination fails),
+    ``output_path_conflict`` code for determined aliases and exact
+    ``output_path_unverifiable`` when safe determination fails,
     ``retryable`` false, and a FIXED ``next_action`` naming distinct
     paths. ``--json`` refusals are finite, parseable JSON envelopes;
-    text refusals carry the code plus the fixed remediation. Refusals
-    never echo evidence bytes or arbitrary OSError text, never
-    traceback, and are idempotent.
+    text refusals carry the code plus the fixed remediation. Neither
+    stream may disclose supplied paths, the fixture directory, evidence
+    bytes or arbitrary OSError text, traceback, or success prose.
+    Refusals are idempotent. Symlink loops exercise determination failure
+    even when the runtime bypasses directory permission bits.
+  * Unreadable registry/snapshot/optional cards evidence retains normal
+    mode's existing exit 5 with distinct writable outputs, including
+    when --json is supplied (no invented evidence-error JSON envelope).
   * Positive controls (green on baseline AND after the build):
     ordinary distinct outputs succeed with unchanged proposal/exit
     semantics, and prior-ledger in-place replacement succeeds.
@@ -44,6 +49,7 @@ no-write without depending on this guard).
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
@@ -60,7 +66,9 @@ REQUIRED_CHECKS = ["check", "gitleaks", "pr-lint"]
 EXIT_REFUSED = 2  # existing write/usage class (cannot-write-output today)
 CODE_CONFLICT = "output_path_conflict"
 CODE_UNVERIFIABLE = "output_path_unverifiable"
-STABLE_CODES = (CODE_CONFLICT, CODE_UNVERIFIABLE)
+NEXT_ACTION = (
+    "Choose distinct paths for --ledger-out and --plan-out that differ "
+    "from each other and from --registry, --snapshot and --cards.")
 
 
 def registry_doc(marker):
@@ -174,6 +182,10 @@ class OutputAliasBase(unittest.TestCase):
             self.assertFalse(os.path.lexists(path),
                              "refusal must not create %s" % path)
 
+    def read_bytes(self, path):
+        with open(path, "rb") as handle:
+            return handle.read()
+
     def assert_safe_failure_text(self, proc):
         combined = proc.stdout + proc.stderr
         self.assertNotIn("Traceback (most recent call last)", combined)
@@ -181,6 +193,17 @@ class OutputAliasBase(unittest.TestCase):
         self.assertNotIn("Errno ", combined)
         self.assertNotIn(self.marker, combined,
                          "refusal must not echo evidence bytes")
+        path_options = {
+            "--registry", "--snapshot", "--cards", "--prior-ledger",
+            "--ledger-out", "--plan-out"}
+        supplied_paths = [value for option, value in
+                          zip(proc.args, proc.args[1:])
+                          if option in path_options]
+        for path in [self.work, *supplied_paths]:
+            for spelling in {path, json.dumps(path)[1:-1]}:
+                self.assertNotIn(spelling, combined,
+                                 "refusal must not disclose paths in either "
+                                 "stream")
         return combined
 
     def assert_text_refusal(self, proc, before, absent=(),
@@ -193,11 +216,12 @@ class OutputAliasBase(unittest.TestCase):
         self.assertIn(code, combined,
                       "refusal must carry the stable code %r: %r"
                       % (code, combined))
-        self.assertIn("distinct", combined.lower(),
-                      "refusal must name the fixed distinct-paths remedy: %r"
-                      % combined)
-        self.assertNotIn("admitted records", proc.stdout,
-                         "refusal must not print success prose")
+        self.assertEqual(proc.stdout, "",
+                         "text refusal must not print success prose")
+        self.assertEqual(proc.stderr,
+                         "pr_closeout_ledger: %s: %s\n" % (code, NEXT_ACTION),
+                         "text refusal must contain only the stable code "
+                         "and fixed distinct-paths remedy")
         self.assert_bytes_preserved(before, absent)
 
     def parse_envelope(self, proc):
@@ -222,11 +246,11 @@ class OutputAliasBase(unittest.TestCase):
         data = self.parse_envelope(proc)
         self.assertEqual(data.get("code"), code)
         self.assertIs(data.get("retryable"), False)
-        next_action = data.get("next_action")
-        self.assertIsInstance(next_action, str)
-        self.assertTrue(next_action.strip())
-        self.assertIn("distinct", next_action.lower(),
-                      "next_action must name distinct paths")
+        self.assertEqual(data, {"code": code, "retryable": False,
+                                "next_action": NEXT_ACTION},
+                         "JSON refusal must have only the fixed finite schema")
+        self.assertEqual(proc.stderr, "",
+                         "JSON refusal must not disclose paths on stderr")
         self.assert_safe_failure_text(proc)
         self.assert_bytes_preserved(before, absent)
         return data
@@ -351,6 +375,57 @@ class OutputOutputCollision(OutputAliasBase):
 
 
 class InputEvidenceProtection(OutputAliasBase):
+    def _assert_unreadable_protected_evidence_keeps_exit_5(self, role):
+        # Moving alias inspection before input validation must not reclassify
+        # unreadable evidence as a usage/output-path failure.
+        paths = self.write_inputs(with_cards=True)
+        locked = self.path("locked-evidence")
+        os.mkdir(locked)
+        hidden = os.path.join(locked, role + ".json")
+        os.rename(paths[role], hidden)
+        paths[role] = hidden
+        ledger_out, ledger_body, plan_out, plan_body = self._sentinel_outputs()
+        before = {path: self.read_bytes(path) for path in paths.values()}
+        before.update({ledger_out: ledger_body, plan_out: plan_body})
+        for json_mode in (False, True):
+            with self.subTest(input=role, json_mode=json_mode):
+                os.chmod(locked, 0)
+                try:
+                    try:
+                        with open(hidden, "rb"):
+                            pass
+                    except PermissionError:
+                        pass
+                    else:
+                        self.skipTest("filesystem ignores permission bits here")
+                    proc = self.run_tool(*self.base_argv(
+                        paths, ledger_out, plan_out,
+                        extra=["--json"] if json_mode else []))
+                finally:
+                    os.chmod(locked, 0o755)
+                self.assert_bytes_preserved(before)
+                self.assertEqual(
+                    proc.returncode, 5,
+                    "unreadable %s must retain evidence exit 5, not an "
+                    "output-path refusal: stdout=%r stderr=%r"
+                    % (role, proc.stdout, proc.stderr))
+                self.assertEqual(proc.stdout, "",
+                                 "normal-mode evidence errors do not acquire "
+                                 "a --json evidence envelope")
+                self.assertTrue(proc.stderr.strip())
+                self.assertNotIn(CODE_CONFLICT, proc.stderr)
+                self.assertNotIn(CODE_UNVERIFIABLE, proc.stderr)
+                self.assertNotIn("Traceback (most recent call last)", proc.stderr)
+
+    def test_unreadable_registry_keeps_evidence_exit_5(self):
+        self._assert_unreadable_protected_evidence_keeps_exit_5("registry")
+
+    def test_unreadable_snapshot_keeps_evidence_exit_5(self):
+        self._assert_unreadable_protected_evidence_keeps_exit_5("snapshot")
+
+    def test_unreadable_cards_keeps_evidence_exit_5(self):
+        self._assert_unreadable_protected_evidence_keeps_exit_5("cards")
+
     def _sentinel_outputs(self):
         ledger_out, ledger_body = self.write_sentinel(
             "ledger.json", "ledger-sentinel")
@@ -525,42 +600,80 @@ class FailClosedAndMachineContract(OutputAliasBase):
                          "per collision")
 
     def test_unverifiable_paths_fail_closed(self):
+        paths = self.write_inputs(with_cards=True)
         locked = self.path("locked")
         os.mkdir(locked)
-        guard = os.path.join(locked, "guard.json")
-        with open(guard, "w", encoding="utf-8") as handle:
-            handle.write("{}\n")
-        os.chmod(locked, 0)
-        try:
-            try:
-                os.stat(guard)
-            except OSError:
-                blocked = True
-            else:
-                blocked = False
-            if not blocked:
-                self.skipTest("filesystem ignores permission bits here")
-            paths = self.write_inputs()
-            _, _, plan_out, plan_body = self._sentinel_outputs()
-            reg = open(paths["registry"], "rb").read()
-            snap = open(paths["snapshot"], "rb").read()
-            proc = self.run_tool(*self.base_argv(
-                paths, os.path.join(locked, "ledger.json"), plan_out))
-            self.assertEqual(proc.returncode, EXIT_REFUSED,
-                             "unverifiable paths must fail closed, got %d: "
-                             "stdout=%r stderr=%r"
-                             % (proc.returncode, proc.stdout, proc.stderr))
-            combined = self.assert_safe_failure_text(proc)
-            self.assertTrue(any(code in combined for code in STABLE_CODES),
-                            "unverifiable paths need a stable code %r: %r"
-                            % (STABLE_CODES, combined))
-            self.assert_bytes_preserved(
-                {paths["registry"]: reg, paths["snapshot"]: snap,
-                 self.path("ledger.json"): open(
-                     self.path("ledger.json"), "rb").read(),
-                 plan_out: plan_body})
-        finally:
-            os.chmod(locked, 0o755)
+        hidden, hidden_body = self.write_sentinel(
+            os.path.join("locked", "output.json"), "locked-output")
+        other, other_body = self.write_sentinel("other.json", "other-output")
+        before = {path: self.read_bytes(path) for path in paths.values()}
+        before.update({hidden: hidden_body, other: other_body})
+        for ledger_out, plan_out in ((hidden, other), (other, hidden)):
+            for json_mode in (False, True):
+                with self.subTest(ledger_out=ledger_out, json_mode=json_mode):
+                    os.chmod(locked, 0)
+                    try:
+                        try:
+                            os.stat(hidden)
+                        except PermissionError:
+                            pass
+                        else:
+                            self.skipTest("filesystem ignores permission bits "
+                                          "here")
+                        proc = self.run_tool(*self.base_argv(
+                            paths, ledger_out, plan_out,
+                            extra=["--json"] if json_mode else []))
+                    finally:
+                        os.chmod(locked, 0o755)
+                    assertion = (self.assert_json_refusal if json_mode
+                                 else self.assert_text_refusal)
+                    assertion(proc, before, code=CODE_UNVERIFIABLE)
+
+    def test_symlink_loop_outputs_are_unverifiable_in_text_and_json(self):
+        # Unlike chmod denial, ELOOP still exercises the error branch when
+        # the runtime is privileged enough to bypass directory permissions.
+        paths = self.write_inputs(with_cards=True)
+        first = self.path("loop-a.json")
+        second = self.path("loop-b.json")
+        os.symlink("loop-b.json", first)
+        os.symlink("loop-a.json", second)
+        with self.assertRaises(OSError) as raised:
+            os.stat(first)
+        self.assertEqual(raised.exception.errno, errno.ELOOP)
+        other, other_body = self.write_sentinel("other.json", "other-output")
+        before = {path: self.read_bytes(path) for path in paths.values()}
+        before[other] = other_body
+        for ledger_out, plan_out in ((first, other), (other, first)):
+            for json_mode in (False, True):
+                with self.subTest(ledger_out=ledger_out, json_mode=json_mode):
+                    proc = self.run_tool(*self.base_argv(
+                        paths, ledger_out, plan_out,
+                        extra=["--json"] if json_mode else []))
+                    self.assertTrue(os.path.islink(first))
+                    self.assertTrue(os.path.islink(second))
+                    self.assertEqual(os.readlink(first), "loop-b.json")
+                    self.assertEqual(os.readlink(second), "loop-a.json")
+                    assertion = (self.assert_json_refusal if json_mode
+                                 else self.assert_text_refusal)
+                    assertion(proc, before, code=CODE_UNVERIFIABLE)
+
+    def test_refusals_do_not_disclose_relative_path_spellings(self):
+        # All CLI paths are relative here: leaking argv must be caught even
+        # when neither the fixture directory nor its content marker is echoed.
+        paths = self.write_inputs(with_cards=True, with_prior=True)
+        same, body = self.write_sentinel("shared output.json", "shared-output")
+        before = {path: self.read_bytes(path) for path in paths.values()}
+        before[same] = body
+        relative = {role: os.path.relpath(path, self.work)
+                    for role, path in paths.items()}
+        for json_mode in (False, True):
+            with self.subTest(json_mode=json_mode):
+                proc = self.run_tool(*self.base_argv(
+                    relative, "shared output.json", "./shared output.json",
+                    extra=["--json"] if json_mode else []))
+                assertion = (self.assert_json_refusal if json_mode
+                             else self.assert_text_refusal)
+                assertion(proc, before)
 
     def test_help_states_distinct_output_requirement(self):
         proc = self.run_tool("--help")

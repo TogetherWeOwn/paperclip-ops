@@ -160,6 +160,21 @@ class ProofObligationsAcceptanceTest(unittest.TestCase):
     def run_payload(self, payload, **kwargs):
         return self.run_cli(json.dumps(payload), **kwargs)
 
+    def run_cli_bytes(self, input_bytes):
+        proc = subprocess.run(
+            [sys.executable, "-B", REL_SCRIPT],
+            input=input_bytes,
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            timeout=30,
+        )
+        try:
+            proc.stdout = proc.stdout.decode("utf-8")
+            proc.stderr = proc.stderr.decode("utf-8")
+        except UnicodeDecodeError:
+            self.fail("CLI must emit UTF-8 output without raw invalid bytes")
+        return proc
+
     def report_from(self, proc):
         self.assertNotIn("Traceback", proc.stdout)
         self.assertNotIn("Traceback", proc.stderr)
@@ -664,6 +679,52 @@ class ProofObligationsAcceptanceTest(unittest.TestCase):
         report = self.assert_refused(proc)
         self.assertNotIn(sentinel, proc.stdout)
         self.assertNotIn(sentinel, " ".join(report["errors"]))
+
+    def test_invalid_utf8_bytes_refuse_safely(self):
+        sentinel = "INVALIDUTF8SENTINEL12345"
+        echo_marker = "RAWUTF8DIAGNOSTICS12345"
+        payload = valid_payload(
+            diff=POSITIVE_DIFF + "+# %s %s\n" % (echo_marker, sentinel)
+        )
+        raw = json.dumps(payload).encode("utf-8")
+        encoded_sentinel = sentinel.encode("ascii")
+        self.assertEqual(raw.count(encoded_sentinel), 1)
+        self.assert_valid(self.run_cli_bytes(raw), payload, 0, "mapped")
+
+        # Pass bytes directly to stdin; decoding here would hide the defect.
+        proc = self.run_cli_bytes(raw.replace(encoded_sentinel, b"\xff", 1))
+        self.assert_refused(proc)
+        for output in (proc.stdout, proc.stderr):
+            self.assertNotIn(echo_marker, output)
+            self.assertNotIn("\udcff", output)
+            self.assertNotIn("\\udcff", output.lower())
+
+    def test_count_reason_formatting_limit_refuses_safely(self):
+        get_limit = getattr(sys, "get_int_max_str_digits", None)
+        if get_limit is None:
+            self.skipTest("runtime has no integer-string conversion limit")
+        limit = get_limit()
+        if limit == 0:
+            self.skipTest("runtime integer-string conversion limit is disabled")
+
+        count = int("9" * limit)
+        payload = valid_payload(
+            additions=count,
+            deletions=count,
+            boundary_criteria=[REFUND_CRITERION],
+        )
+        raw = json.dumps(payload)
+        parsed = json.loads(raw)
+        self.assertEqual(parsed["additions"], count)
+        self.assertEqual(parsed["deletions"], count)
+        # Each count is legal; only formatting their sum crosses the limit.
+        with self.assertRaises(ValueError):
+            str(count + count)
+
+        proc = self.run_cli(raw)
+        self.assert_refused(proc)
+        for output in (proc.stdout, proc.stderr):
+            self.assertNotIn("9" * 64, output)
 
     def test_duplicate_object_keys_refuse(self):
         payload = valid_payload()

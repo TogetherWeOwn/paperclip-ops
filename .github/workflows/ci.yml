@@ -1388,7 +1388,14 @@ jobs:
       # fast and they pin the gates this repo inherits. Gate enforcement
       # inside CI (a gates workflow) is a separate follow-up batch.
       - name: quality-gate helper suites
-        run: python3 -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target test_docs_drift test_docs_explain_acceptance
+        env:
+          STATIC_LABEL_PYTHON: ${{ steps.static-label-python.outputs.python-path || '/usr/bin/python3' }}
+          PYTHONPATH: ${{ runner.temp }}/static-label-guard-deps
+        run: |
+          # Name the exact prepared interpreter python3 for static suite discovery.
+          mkdir -p "$RUNNER_TEMP/quality-gate-python"
+          ln -sf "$STATIC_LABEL_PYTHON" "$RUNNER_TEMP/quality-gate-python/python3"
+          "$RUNNER_TEMP/quality-gate-python/python3" -m unittest -v test_quality_gates test_floor_guard test_no_pull_request_target test_docs_drift test_docs_explain_acceptance test_diagnostic_delta test_diagnostic_delta_workflow test_diagnostic_delta_hardening
 
       # case_6f2e8a41. Deterministic test-missing gate suites: the unit
       # contract (wider source suffixes, deleted-file handling, vacuity

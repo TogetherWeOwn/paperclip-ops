@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline controls for the portable docs accompaniment gate."""
 from contextlib import redirect_stdout
+import errno
 import importlib.util
 import io
 import json
@@ -8,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -305,9 +307,13 @@ class DocsWorkflow(unittest.TestCase):
             contexts["github"]["event"]["pull_request"] = {"base": {"sha": "1" * 40}, "head": {"sha": "2" * 40}}
         env = {name: self.resolve(value, contexts) for name, value in self.job_env.items()}
         contexts["env"] = env
-        validation = subprocess.run(["bash", "--noprofile", "--norc", "-c", self.validator],
-                                    env={"PATH": os.environ["PATH"], **env}, cwd=ROOT,
-                                    capture_output=True, text=True, timeout=10)
+        with tempfile.TemporaryDirectory(prefix="docs-workflow-event-") as directory:
+            event_path = Path(directory) / "event.json"
+            event_path.write_text(json.dumps(contexts["github"]["event"]))
+            validation = subprocess.run(["bash", "--noprofile", "--norc", "-c", self.validator],
+                                        env={"PATH": os.environ["PATH"], **env,
+                                             "GITHUB_EVENT_PATH": str(event_path)}, cwd=ROOT,
+                                        capture_output=True, text=True, timeout=10)
         condition = self.fields(self.checkout, 8).get("if", "true")
         pinned = bool(self.expression(condition, contexts))
         checker = self.resolve(self.fields(self.checker, 10)["CHECKER"], contexts)
@@ -404,6 +410,17 @@ class DocsWorkflowHelper(unittest.TestCase):
             "before": "3" * 40,
             "pull_request": {"base": {"sha": "1" * 40}, "head": {"sha": "2" * 40}}})
 
+    def test_raw_event_file_reaches_validator_for_native_and_reusable_calls(self):
+        self.helper.validator = ("python3 -c 'import json, os; "
+                                 "print(json.dumps(json.load(open(os.environ[\"GITHUB_EVENT_PATH\"]))))'")
+        for inputs in ({}, {"base-sha": "a" * 40, "head-sha": "b" * 40, "tools-ref": "c" * 40}):
+            with self.subTest(reusable=bool(inputs)):
+                validation, *_ = self.helper.run_workflow(inputs, "fixture/repo")
+                self.assertEqual(validation.returncode, 0, validation.stderr)
+                self.assertEqual(json.loads(validation.stdout), {
+                    "before": "3" * 40,
+                    "pull_request": {"base": {"sha": "1" * 40}, "head": {"sha": "2" * 40}}})
+
     def test_raw_event_json_preserves_empty_and_nested_untrusted_values(self):
         for event in [{}, {"before": "", "after": None, "deleted": False,
                           "extra": ["quotes'\"\n☃", "${{ inputs.tools-ref }}", "$(id)"]}]:
@@ -436,9 +453,10 @@ class DocsWorkflowHelper(unittest.TestCase):
 class NativeDocsWorkflow(unittest.TestCase):
     """Execute real workflow run blocks; replace only the network checkout boundary.
 
-    Fixtures deliberately separate caller history from the trusted checker repo.
-    A caller can omit/poison its checker and weaken its head policy. Neither may
-    change the trusted program or the policy snapshot used for the actual diff.
+    Fixtures separate measured caller history from the selected workflow
+    revision or reusable tools pin. Native merge revisions include proposed
+    changes; a separate checkout is not an extra trust boundary. A caller-local
+    checker or head policy must not replace the selected file or base policy.
     The parser accepts this workflow's block-scalar subset, not arbitrary YAML;
     unsupported Actions/expressions fail loudly instead of being silently skipped.
     """
@@ -471,9 +489,12 @@ class NativeDocsWorkflow(unittest.TestCase):
         trace = ('import json as _json, os as _os\n'
                  'from pathlib import Path as _Path\n'
                  '_Path(_os.environ["CHECKER_TRACE"]).write_text(_json.dumps({'
-                 '"cwd": _os.getcwd(), "file": str(_Path(__file__).resolve())}))\n')
+                 '"cwd": _os.getcwd(), "file": str(_Path(__file__).resolve()), '
+                 '"workflow_sha": _os.environ["GITHUB_WORKFLOW_SHA"], '
+                 '"event_sha": _os.environ["GITHUB_SHA"]}))\n')
         self.put(self.tools, "scripts/quality-gates/docs_drift.py", trace + SCRIPT.read_text())
         self.tools_sha = self.commit(self.tools)
+        self.merge_revisions = {}
 
     def git(self, repo, *args):
         return subprocess.check_output(["git", "-C", str(repo), *args], env=self.env,
@@ -499,6 +520,31 @@ class NativeDocsWorkflow(unittest.TestCase):
 
     resolve = DocsWorkflow.resolve
 
+    def native_merge_revision(self):
+        key = (self.base, self.head, self.tools_sha)
+        if key not in self.merge_revisions:
+            source = self.root / ("merge-source-" + str(len(self.merge_revisions)))
+            self.git(self.root, "clone", "-q", "--no-hardlinks", str(self.caller), str(source))
+            self.git(source, "config", "user.name", "Fixture")
+            self.git(source, "config", "user.email", "fixture@example.invalid")
+            self.git(source, "checkout", "-q", "--detach", self.head)
+            # Explicitly construct the event's candidate workflow tree, including
+            # the proposed files. Its checker is selected fixture content, not
+            # evidence that GitHub authenticates native revisions as trusted.
+            checker = "scripts/quality-gates/docs_drift.py"
+            if self.git(self.tools, "ls-tree", "--name-only", self.tools_sha, "--", checker):
+                self.put(source, checker, self.git(self.tools, "show", self.tools_sha + ":" + checker) + "\n")
+            else:
+                (source / checker).unlink(missing_ok=True)
+            self.git(source, "add", "-A")
+            tree = self.git(source, "write-tree")
+            parents = [item for sha in dict.fromkeys((self.base, self.head)) for item in ("-p", sha)]
+            revision = self.git(source, "commit-tree", tree, *parents, "-m",
+                                "test: event merge revision\n\nCo-Authored-By: Paperclip <noreply@paperclip.ing>")
+            self.git(source, "checkout", "-q", "--detach", revision)
+            self.merge_revisions[key] = revision, source
+        return self.merge_revisions[key]
+
     def run_native(self, event="pull_request", *, fork=False, inputs=None,
                    workflow_sha=None, base=None, head=None, event_patch=None):
         base = self.base if base is None else base
@@ -507,8 +553,12 @@ class NativeDocsWorkflow(unittest.TestCase):
         workspace = self.root / ("run-" + str(len(list(self.root.glob("run-*")))))
         workspace.mkdir()
         trace = workspace / "checker-trace.json"
+        revision, merge_source = self.native_merge_revision() if event in ("pull_request", "merge_group") else (None, None)
+        event_sha = revision if revision is not None else head
+        selected_sha = revision if revision is not None and not inputs else self.tools_sha
+        measured_head = revision if event == "merge_group" and not inputs else head
         github = {"repository": "TogetherWeOwn/paperclip-ops", "event_name": event,
-                  "sha": head, "workflow_sha": self.tools_sha if workflow_sha is None else workflow_sha,
+                  "sha": event_sha, "workflow_sha": selected_sha if workflow_sha is None else workflow_sha,
                   "workflow_ref": "TogetherWeOwn/paperclip-ops/.github/workflows/docs-drift.yml@refs/heads/main",
                   "workspace": str(workspace), "event": {"before": base}}
         if event == "pull_request":
@@ -516,12 +566,18 @@ class NativeDocsWorkflow(unittest.TestCase):
                 "base": {"sha": base, "repo": {"full_name": github["repository"]}},
                 "head": {"sha": head, "repo": {"full_name": "fixture/fork" if fork else github["repository"]}}}
         elif event == "merge_group":
-            github["event"]["merge_group"] = {"base_sha": base, "head_sha": head}
+            github["event"]["merge_group"] = {"base_sha": base, "head_sha": event_sha}
+        elif event == "push":
+            github["event"].update(after=head, deleted=False, ref="refs/heads/main")
         if event_patch:
             event_patch(github)
+        event_path = workspace / "event.json"
+        event_path.write_text(json.dumps(github["event"]))
         contexts = {"inputs": inputs, "github": github, "env": {}, "steps": {}}
         env = {**self.env, "GITHUB_WORKSPACE": str(workspace),
-               "GITHUB_SHA": str(github["sha"]), "GITHUB_EVENT_NAME": event,
+               "GITHUB_EVENT_PATH": str(event_path),
+               "GITHUB_SHA": str(github.get("sha", "")), "GITHUB_EVENT_NAME": event,
+               "GITHUB_WORKFLOW_SHA": str(github["workflow_sha"]),
                "GITHUB_REPOSITORY": github["repository"], "CHECKER_TRACE": str(trace),
                "GITHUB_ENV": str(workspace / "github-env"),
                "GITHUB_OUTPUT": str(workspace / "github-output")}
@@ -529,6 +585,7 @@ class NativeDocsWorkflow(unittest.TestCase):
             contexts["env"][name] = self.resolve(value, contexts)
         env.update(contexts["env"])
         checkouts, stdout, stderr = [], "", ""
+        max_environment_value_bytes = 0
         code = 0
         caller_checkout = None
         steps = re.findall(r"^      - name: [^\n]+\n(.*?)(?=^      - |\Z)",
@@ -548,9 +605,11 @@ class NativeDocsWorkflow(unittest.TestCase):
                 ref = options.get("ref", github["sha"])
                 checkouts.append({**options, "repository": repository, "ref": ref})
                 # Only known repository+commit pairs are available offline.
-                # A mutable/foreign ref is NOT rescued with the trusted fixture.
+                # A mutable/foreign ref is NOT rescued with the selected fixture.
                 source = None
-                if repository == "TogetherWeOwn/paperclip-ops" and ref == self.tools_sha:
+                if repository in (github["repository"], "TogetherWeOwn/paperclip-ops") and ref == revision:
+                    source = merge_source
+                elif repository == "TogetherWeOwn/paperclip-ops" and ref == self.tools_sha:
                     source = self.tools
                 elif repository in (github["repository"], "fixture/fork") and ref in (self.base, self.head):
                     source = self.caller
@@ -561,7 +620,7 @@ class NativeDocsWorkflow(unittest.TestCase):
                 self.assertTrue(destination.resolve().is_relative_to(workspace.resolve()))
                 self.git(workspace, "clone", "-q", "--no-hardlinks", str(source), str(destination))
                 self.git(destination, "checkout", "-q", "--detach", ref)
-                if source == self.caller:
+                if options.get("path") != "docs-drift-tools":
                     caller_checkout = destination
                 continue
             self.assertEqual(fields.get("shell", "bash"), "bash", "unsupported workflow shell")
@@ -571,8 +630,11 @@ class NativeDocsWorkflow(unittest.TestCase):
             step_env = {name: self.resolve(value, contexts)
                         for name, value in self.section(block, "env", 8).items()}
             cwd = workspace / self.resolve(fields.get("working-directory", "."), contexts)
+            process_env = {**env, **step_env}
+            max_environment_value_bytes = max(max_environment_value_bytes,
+                                              *(len(value.encode()) for value in process_env.values()))
             result = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
-                                     command], cwd=cwd, env={**env, **step_env},
+                                     command], cwd=cwd, env=process_env,
                                     capture_output=True, text=True, timeout=10)
             stdout, stderr = stdout + result.stdout, stderr + result.stderr
             code = result.returncode
@@ -587,22 +649,24 @@ class NativeDocsWorkflow(unittest.TestCase):
         if caller_checkout:
             self.assertEqual(self.git(caller_checkout, "status", "--porcelain"), "",
                              "documentation gate mutated caller files")
-            self.assertEqual(self.git(caller_checkout, "rev-parse", "HEAD"), head)
+            self.assertEqual(self.git(caller_checkout, "rev-parse", "HEAD"), measured_head)
         return {"code": code, "stdout": stdout, "stderr": stderr, "checkouts": checkouts,
                 "trace": json.loads(trace.read_text()) if trace.exists() else None,
-                "caller": caller_checkout, "workspace": workspace}
+                "caller": caller_checkout, "workspace": workspace, "event_path": event_path,
+                "measured_head": measured_head, "max_environment_value_bytes": max_environment_value_bytes}
 
     def assert_report(self, result, code, status):
         self.assertEqual(result["code"], code, result["stdout"] + result["stderr"])
-        self.assertIsNotNone(result["trace"], "trusted checker did not execute (absence must not skip/pass)")
+        self.assertIsNotNone(result["trace"], "selected checker did not execute (absence must not skip/pass)")
         report = json.loads(result["stdout"])
         self.assertEqual(report["status"], status)
         self.assertEqual((report["base_sha"], report["head_sha"], report["policy_sha"]),
-                         (self.base, self.head, self.base))
+                         (self.base, result["measured_head"], self.base))
         self.assertEqual(Path(result["trace"]["cwd"]), result["caller"])
         self.assertFalse(Path(result["trace"]["file"]).is_relative_to(result["caller"]),
-                         "checker came from caller-controlled history")
-        caller_checkout, = [item for item in result["checkouts"] if item["ref"] == self.head]
+                         "checker ran from the measured caller checkout, not its separate selected checkout")
+        caller_checkout, = [item for item in result["checkouts"]
+                            if result["workspace"] / item.get("path", ".") == result["caller"]]
         self.assertEqual(caller_checkout.get("fetch-depth"), "0", "caller diff requires full history")
         for checkout in result["checkouts"]:
             self.assertEqual(checkout.get("persist-credentials"), "false")
@@ -627,6 +691,86 @@ class NativeDocsWorkflow(unittest.TestCase):
                     self.assertEqual(report["checked_rules"], 0 if change == "unrelated" else 1)
                     if want:
                         self.assertEqual(report["findings"][0]["paths"], ["src/api.py"])
+
+    def test_large_push_event_reaches_real_checker_without_payload_environment(self):
+        # An ordinary bounded event must not exceed the OS per-value env limit.
+        commits = [{"id": self.head, "message": f"Commit {index}: " + "ordinary commit metadata " * 80,
+                    "timestamp": "2026-10-01T12:00:00Z",
+                    "url": "https://example.invalid/commit/" + self.head,
+                    "author": {"name": "Fixture", "email": "fixture@example.invalid"},
+                    "committer": {"name": "Fixture", "email": "fixture@example.invalid"},
+                    "added": [], "removed": [], "modified": ["src/api.py"]}
+                   for index in range(80)]
+        metadata_bytes = len(json.dumps(commits).encode())
+        self.assertGreater(metadata_bytes, 128 * 1024)
+        self.assertLess(metadata_bytes, 256 * 1024)
+        try:
+            result = self.run_native("push", event_patch=lambda github: github["event"].update(commits=commits))
+        except OSError as error:
+            if error.errno != errno.E2BIG:
+                raise
+            self.fail(f"valid push with {metadata_bytes} bytes of commit metadata could not start a workflow step: {error}")
+        report = self.assert_report(result, 1, "finding")
+        self.assertEqual(report["findings"][0]["paths"], ["src/api.py"])
+        event_bytes = result["event_path"].stat().st_size
+        self.assertGreater(event_bytes, 128 * 1024)
+        self.assertLess(event_bytes, 256 * 1024, "keep this an ordinary bounded metadata fixture")
+        self.assertEqual(json.loads(result["event_path"].read_text())["commits"], commits)
+        self.assertLess(result["max_environment_value_bytes"], 128 * 1024,
+                        "the full event must stay in its file, not a process environment value")
+
+    def test_caller_directory_provenance_python_is_isolated(self):
+        # Probe resolution of an inert, uniquely named file; never import caller
+        # code or shadow a standard-library module. Real workflow code still runs.
+        self.put(self.caller, "fixture_caller_only.py", '"""Inert caller-only module."""\n')
+        self.head = self.commit(self.caller)
+        probe = ("import importlib.util, json, sys; "
+                 "print(json.dumps({'isolated': sys.flags.isolated, 'caller_module_found': "
+                 "importlib.util.find_spec('fixture_caller_only') is not None}))")
+        wrapper = self.root / "python-probe-bin" / "python3"
+        self.put(wrapper.parent, wrapper.name, "#!" + sys.executable + "\n" + textwrap.dedent(f'''\
+            import json, os, subprocess, sys
+            args = sys.argv[1:]
+            if not args or "-" in args or "-c" in args:
+                boundary = min((args.index(value) for value in ("-", "-c") if value in args), default=len(args))
+                observation = json.loads(subprocess.check_output(
+                    [sys.executable, *args[:boundary], "-c", {probe!r}], text=True))
+                observation["cwd"] = os.getcwd()
+                with open(os.environ["PROVENANCE_TRACE"], "a") as stream:
+                    stream.write(json.dumps(observation) + "\\n")
+            os.execv(sys.executable, [sys.executable, *args])
+            '''))
+        wrapper.chmod(0o755)
+        observation_path = self.root / "provenance-python.jsonl"
+        self.env.update(PATH=str(wrapper.parent) + os.pathsep + self.env["PATH"],
+                        PROVENANCE_TRACE=str(observation_path))
+        for inputs in (None, {"base-sha": self.base, "head-sha": self.head, "tools-ref": self.tools_sha}):
+            with self.subTest(reusable=inputs is not None):
+                result = self.run_native(inputs=inputs)
+                self.assert_report(result, 1, "finding")
+                observations = [json.loads(line) for line in observation_path.read_text().splitlines()]
+                caller_observations = [item for item in observations if Path(item["cwd"]) == result["caller"]]
+                self.assertTrue(caller_observations, "caller-directory provenance interpreter was not observed")
+                self.assertEqual([(item["isolated"], item["caller_module_found"]) for item in caller_observations],
+                                 [(1, False)] * len(caller_observations),
+                                 "provenance Python must isolate and exclude caller modules: " + repr(caller_observations))
+
+    def test_native_merge_workflow_revision_contains_proposed_changes(self):
+        self.put(self.caller, "workflow-proposal.txt", "ordinary proposed change\n")
+        self.head = self.commit(self.caller)
+        for event in ("pull_request", "merge_group"):
+            with self.subTest(event=event):
+                result = self.run_native(event)
+                self.assert_report(result, 1, "finding")
+                revision = result["trace"]["workflow_sha"]
+                self.assertEqual(revision, result["trace"]["event_sha"],
+                                 "native workflow must use the event-associated merge revision")
+                self.assertNotIn(revision, (self.head, self.tools_sha))
+                checkout = result["workspace"] / "docs-drift-tools"
+                self.assertEqual(self.git(checkout, "show", revision + ":workflow-proposal.txt"),
+                                 "ordinary proposed change")
+                self.assertCountEqual(self.git(checkout, "show", "-s", "--format=%P", revision).split(),
+                                      [self.base, self.head])
 
     def test_empty_native_diff_still_executes_trusted_checker(self):
         self.head = self.base
@@ -698,6 +842,41 @@ class NativeDocsWorkflow(unittest.TestCase):
                         result = self.run_native(event, event_patch=poison)
                         self.assertNotEqual(result["code"], 0)
                         self.assertEqual(result["checkouts"], [], "invalid raw event SHA reached checkout")
+
+    def test_native_missing_or_non_string_raw_shas_fail_before_checkout(self):
+        cases = [("missing", None), ("null", None), ("empty", ""), ("boolean", False),
+                 ("number", 7), ("array", ["a" * 40]), ("object", {"sha": "a" * 40})]
+        for event in ("pull_request", "push", "merge_group"):
+            for field in ("base", "head"):
+                for kind, value in cases:
+                    with self.subTest(event=event, field=field, kind=kind):
+                        def poison(github):
+                            if event == "pull_request":
+                                target, key = github["event"][event][field], "sha"
+                            elif event == "merge_group":
+                                target, key = github["event"][event], field + "_sha"
+                            elif field == "base":
+                                target, key = github["event"], "before"
+                            else:
+                                target, key = github, "sha"
+                            if kind == "missing":
+                                target.pop(key)
+                            else:
+                                target[key] = value
+                        result = self.run_native(event, event_patch=poison)
+                        self.assertNotEqual(result["code"], 0, "raw SHA fell through to usable event evidence")
+                        self.assertEqual(result["checkouts"], [], "invalid raw SHA reached checkout")
+                        self.assertIsNone(result["trace"], "invalid raw SHA reached the checker")
+
+    def test_reusable_event_file_preserves_actual_raw_event(self):
+        inputs = {"base-sha": self.base, "head-sha": self.head, "tools-ref": self.tools_sha}
+        extra = {"empty": "", "value": None, "literal": "${{ inputs.tools-ref }}"}
+        result = self.run_native(inputs=inputs, event_patch=lambda github: github["event"].update(extra=extra))
+        self.assert_report(result, 1, "finding")
+        raw_event = json.loads(result["event_path"].read_text())
+        self.assertEqual(raw_event["extra"], extra)
+        self.assertEqual(raw_event["pull_request"]["base"]["sha"], self.base)
+        self.assertEqual(raw_event["pull_request"]["head"]["sha"], self.head)
 
     def test_reusable_invalid_raw_inputs_never_reach_checkout(self):
         for field in ("base-sha", "head-sha", "tools-ref"):

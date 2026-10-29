@@ -662,5 +662,169 @@ class ResourceRegressions(RegressionFixture):
                       env={**self.env, "COMPILER_FEEDBACK_RESOURCE_LIMITS": override})
 
 
+class NumericDomainRegressions(RegressionFixture):
+    """Reject unsupported Decimal work before conversion, never by exhausting it.
+
+    Stored coefficient digits + abs(stored exponent) must be <=1024 before
+    Fraction/other integer-power work. Unsupported duration/budget values retain
+    invalid_duration/invalid_policy, null unknown time and no repair/verified
+    metrics. The guard inspects metadata only, and never forwards an unsupported
+    Decimal. All accepted conversions below are small and real.
+    """
+
+    def load_evaluator(self):
+        from fractions import Fraction as RealFraction
+
+        module = super().load_evaluator()
+        self.assertIs(getattr(module, "Fraction", None), RealFraction,
+                      "conversion safety prerequisite changed; do not run unguarded numeric fixtures")
+        owner = self
+        self.blocked_conversions = []
+
+        class GuardType(type):
+            def __instancecheck__(cls, value):
+                return isinstance(value, RealFraction)
+
+        class GuardedFraction(metaclass=GuardType):
+            def __new__(cls, value=0, *args, **kwargs):
+                if isinstance(value, Decimal):
+                    parts = value.as_tuple()
+                    if not value.is_finite() or len(parts.digits) + abs(parts.exponent) > 1024:
+                        owner.blocked_conversions.append((len(parts.digits), parts.exponent))
+                        raise AssertionError(
+                            "unsupported Decimal reached Fraction before numeric-domain validation: "
+                            f"coefficient_digits={len(parts.digits)}, exponent={parts.exponent}"
+                        )
+                return RealFraction(value, *args, **kwargs)
+
+        patcher = mock.patch.object(module, "Fraction", GuardedFraction)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return module
+
+    def unsupported_literals(self):
+        # Tiny lexemes/coefficients only. No unsupported value reaches Fraction,
+        # and neither this oracle nor fixture construction computes integer powers.
+        return (
+            ("positive_exponent", "1e4096"),
+            ("negative_exponent", "1e-4096"),
+            ("joint_work_one_over", "0." + "1" * 512 + "e-1"),
+            ("stored_trailing_zero_work", "0.1" + "0" * 1023),
+        )
+
+    def duration_bytes(self, trace, literal):
+        trace["attempts"][0]["elapsed_seconds"] = "__numeric_duration__"
+        return json.dumps(trace).replace('"__numeric_duration__"', literal).encode()
+
+    def policy_literal(self, literal):
+        self.git("reset", "--hard", self.base)
+        policy = json.loads(json.dumps(frozen.POLICY))
+        policy["budgets"]["elapsed_seconds"] = "__numeric_budget__"
+        self.put(frozen.POLICY_PATH,
+                 json.dumps(policy).replace('"__numeric_budget__"', literal))
+        self.base = self.commit()
+        self.put("src/value.ts", frozen.AFTER)
+        self.head = self.commit()
+
+    def assert_numeric_refusal(self, report):
+        self.assertIsNone(report["consumed"]["elapsed_seconds"])
+        self.assertFalse(report["retryable"])
+        self.assertEqual(self.blocked_conversions, [],
+                         "domain refusal must happen before the conversion safety guard")
+
+    def test_unsupported_attempt_decimal_is_refused_before_fraction_conversion(self):
+        for label, literal in self.unsupported_literals():
+            with self.subTest(case=label):
+                trace = self.trace()
+                report = self.unmeasurable(trace, "invalid_duration", in_process=True,
+                                          raw=self.duration_bytes(trace, literal))
+                self.assert_numeric_refusal(report)
+
+    def test_unsupported_immutable_policy_decimal_is_refused_before_fraction_conversion(self):
+        for label, literal in self.unsupported_literals():
+            with self.subTest(case=label):
+                self.policy_literal(literal)
+                report = self.unmeasurable(code="invalid_policy", in_process=True)
+                self.assert_numeric_refusal(report)
+
+    def test_combined_numeric_work_at_1024_accepts_a_finite_duration(self):
+        trace = self.trace()
+        literal = "0." + "1" * 512  # 512 coefficient digits, exponent -512.
+        report = self.evaluate(trace, raw=self.duration_bytes(trace, literal), in_process=True)
+        self.assert_consumed(report, seconds=0.1111111111111111)
+        self.assertEqual(self.blocked_conversions, [])
+
+    def test_combined_numeric_work_at_1024_accepts_immutable_policy_budget(self):
+        self.policy_literal("0." + "1" * 512)
+        self.assert_consumed(self.evaluate(self.trace(elapsed=0), in_process=True), seconds=0)
+        self.assertEqual(self.blocked_conversions, [])
+
+    def test_decimal_zero_remains_measured_zero_not_an_invalid_or_unknown_duration(self):
+        for literal in ("0.0", "-0.0"):
+            with self.subTest(literal=literal):
+                trace = self.trace()
+                report = self.evaluate(trace, raw=self.duration_bytes(trace, literal), in_process=True)
+                self.assert_consumed(report, seconds=0)
+                self.assertEqual(self.blocked_conversions, [])
+
+    def test_guarded_ordinary_exact_decimal_pass_remains_at_its_inclusive_ceiling(self):
+        trace, raw = self.decimal_trace("0.1", "0.2", limit=0.3)
+        self.assert_numeric_duration(self.evaluate(trace, raw=raw, in_process=True), "0.3")
+        self.assertEqual(self.blocked_conversions, [])
+
+    def test_guarded_ordinary_exact_decimal_failure_still_exhausts_at_ceiling(self):
+        trace, raw = self.decimal_trace("0.1", "0.7", limit=0.8, passed=False)
+        report = self.exhausted(trace, "elapsed_seconds", raw=raw, in_process=True)
+        self.assert_numeric_duration(report, "0.8")
+        self.assertEqual(self.blocked_conversions, [])
+
+
+class ChangedScopeProofRegressions(RegressionFixture):
+    def test_unchanged_catalog_larger_than_stdout_cap_does_not_refuse_small_repair(self):
+        self.git("reset", "--hard", self.base)
+        for index in range(24):
+            self.put(f"assets/unchanged-{index:02d}.txt", "unchanged\n")
+        self.base = self.commit()
+        self.put("src/value.ts", frozen.AFTER)
+        self.head = self.commit()
+        limit = 1024
+        for sha in (self.base, self.head):
+            listing = self.git_bytes("ls-tree", "-r", "-z", sha).stdout
+            self.assertGreater(len(listing), limit)
+        operations = (
+            ("cat-file", "commit", self.base),
+            ("cat-file", "commit", self.head),
+            ("show", self.base + ":" + frozen.POLICY_PATH),
+            ("show", self.base + ":src/value.ts"),
+            ("show", self.head + ":src/value.ts"),
+            ("ls-tree", "-z", self.base, frozen.POLICY_PATH),
+            ("diff", "--raw", "--no-abbrev", "--no-renames", "-z", self.base, self.head),
+            ("diff", "--name-status", "--no-renames", "-z", self.base, self.head),
+            ("diff", "--numstat", "--no-renames", "-z", self.base, self.head),
+        )
+        for operation in operations:
+            with self.subTest(operation=operation[0:2]):
+                self.assertLessEqual(len(self.git_bytes(*operation).stdout), limit)
+        self.assertEqual(self.git("diff", "--name-only", self.base, self.head), "src/value.ts")
+        report = self.evaluate(in_process=True, limits={**RESOURCE_LIMITS, "git_stdout_bytes": limit})
+        self.assert_consumed(report)
+        self.assertEqual(report["paths"], ["src/value.ts"])
+        for field, want in (("base_sha", self.base), ("head_sha", self.head),
+                            ("policy_sha", self.base), ("tool_sha", self.base)):
+            self.assertEqual(report[field], want)
+        self.assertEqual(report["metrics"]["actions_reported"],
+                         {"attempts": 1, "elapsed_seconds": 3, "repairs": 1})
+
+    def test_pure_source_net_revert_is_not_a_repair_despite_real_step_churn(self):
+        trace = self.trace(passed=False)
+        first = self.head
+        self.put("src/value.ts", frozen.BEFORE)
+        final = self.add_attempt(trace)
+        self.assertEqual(self.git("diff", "--numstat", self.base, first), "1\t1\tsrc/value.ts")
+        self.assertEqual(self.git("diff", "--numstat", first, final), "1\t1\tsrc/value.ts")
+        self.assertEqual(self.git_bytes("diff", "--raw", "-z", self.base, final).stdout, b"")
+        self.unmeasurable(trace, "no_repair_change", in_process=True)
+
+
 if __name__ == "__main__":
     unittest.main()

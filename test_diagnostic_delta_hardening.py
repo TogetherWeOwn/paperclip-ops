@@ -94,7 +94,7 @@ class GitOutputLimits(unittest.TestCase):
             bindir = root / "bin"
             bindir.mkdir()
             fake = bindir / "git"
-            for channel, size, limit in (("stdout", 8192, 1024), ("stderr", 64 * 1024 + 1, 1024 * 1024)):
+            for channel, size, limit in (("stdout", 1024 + 1, 1024), ("stderr", 64 * 1024 + 1, 1024 * 1024)):
                 with self.subTest(channel=channel):
                     if marker.exists():
                         marker.unlink()
@@ -111,6 +111,19 @@ class GitOutputLimits(unittest.TestCase):
                             gate.git(root, "ls-tree", limit=limit)
                     self.assertEqual(error.exception.code, "git_failed")
                     self.assertFalse(marker.exists(), "Git must be stopped at the cap, not spooled to completion")
+
+    def test_git_stdout_at_exact_limit_is_accepted(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bindir = root / "bin"
+            bindir.mkdir()
+            fake = bindir / "git"
+            fake.write_text("#!/usr/bin/env python3\nimport sys\n"
+                            "sys.stdout.buffer.write(b'x' * 1024)\n")
+            fake.chmod(0o755)
+            with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
+                self.assertEqual(gate.git(root, "ls-tree", limit=1024), b"x" * 1024)
 
 
 class CollectorTimeouts(unittest.TestCase):
@@ -310,6 +323,48 @@ class QuotedDispatchContainers(RepositoryFixture):
                 self.put(WORKFLOW_PATH, self.quoted(container, False))
                 self.assert_counts(self.check(1), 0, 1, 1, 0)
 
+    def test_quoted_outer_on_inline_nonempty_inputs_are_unmeasurable(self):
+        for label, outer in (("bare", "on"), ("double", '"on"'), ("single", "'on'")):
+            with self.subTest(outer=label):
+                self.put(WORKFLOW_PATH,
+                         f"name: ship\n{outer}: {{workflow_dispatch: "
+                         "{inputs: {target: {description: x}}}}}\njobs: {}\n")
+                self.assertEqual(self.check(2)["code"], "unsupported_coverage")
+
+    def test_quoted_outer_on_block_untyped_input_is_a_finding(self):
+        self.put(WORKFLOW_PATH,
+                 'name: ship\n"on":\n  workflow_dispatch:\n    inputs:\n'
+                 "      target:\n        description: deployment target\njobs: {}\n")
+        self.assert_counts(self.check(1), 0, 1, 1, 0)
+
+    def test_quoted_empty_containers_are_clean_with_exact_retained_skips(self):
+        cases = (
+            ('on:\n  workflow_dispatch:\n    "inputs": {}\n', 3,
+             "workflow_dispatch inputs use an inline empty form; nothing to type-check"),
+            ("on:\n  workflow_dispatch:\n    'inputs': {}\n", 3,
+             "workflow_dispatch inputs use an inline empty form; nothing to type-check"),
+            ('on:\n  "workflow_dispatch": {}\n', 2,
+             "inline workflow_dispatch form; inputs not parsed"),
+            ("on:\n  'workflow_dispatch': {}\n", 2,
+             "inline workflow_dispatch form; inputs not parsed"),
+        )
+        for text, line, reason in cases:
+            with self.subTest(text=text):
+                self.put(WORKFLOW_PATH, text)
+                self.base = self.commit()
+                report = self.check(0, head=self.base)
+                self.assert_counts(report, 0, 0, 0, 0)
+                expected = [{"path": WORKFLOW_PATH, "line": line,
+                             "category": "skipped", "reason": reason}]
+                for side in ("base", "head"):
+                    self.assertEqual(report["coverage"][side]["skipped"], expected)
+                    self.assertEqual(report["coverage"][side]["unknown"], [])
+
+    def test_quoted_nonempty_inline_inputs_are_not_certified(self):
+        self.put(WORKFLOW_PATH,
+                 'on:\n  workflow_dispatch:\n    "inputs": {target: {description: x}}\n')
+        self.assertEqual(self.check(2)["code"], "unsupported_coverage")
+
 
 class IntegrationContract(unittest.TestCase):
     def test_reusable_workflow_artifact_name_is_caller_selectable_without_overwrite(self):
@@ -339,6 +394,38 @@ class IntegrationContract(unittest.TestCase):
     def test_new_workflow_has_a_matching_hung_job_threshold(self):
         thresholds = json.loads((ROOT / "ops/case_e1e23b50/hung_job_thresholds.json").read_text())
         self.assertEqual(thresholds["jobs"].get("diagnostic-delta"), 5)
+
+    def test_tools_ref_validator_executes_and_rejects_a_64_character_value(self):
+        import yaml
+        workflow = yaml.load((ROOT / ".github/workflows/diagnostic-delta.yml").read_text(), Loader=yaml.BaseLoader)
+        step, = [s for s in workflow["jobs"]["diagnostic-delta"]["steps"]
+                 if s.get("name") == "Validate immutable inputs"]
+        cases = (({"base-sha": "a" * 40, "head-sha": "b" * 40, "tools-ref": "c" * 40}, 0),
+                 ({"base-sha": "a" * 64, "head-sha": "b" * 64, "tools-ref": "c" * 40}, 0),
+                 ({"base-sha": "a" * 64, "head-sha": "b" * 64, "tools-ref": "c" * 64}, 1),
+                 ({"base-sha": "a" * 40, "head-sha": "b" * 40, "tools-ref": "c" * 64}, 1))
+        for inputs, expected in cases:
+            with self.subTest(inputs=inputs):
+                env = {"PATH": os.environ["PATH"],
+                       "BASE_SHA": inputs["base-sha"], "HEAD_SHA": inputs["head-sha"],
+                       "TOOLS_REF": inputs["tools-ref"], "CALL_INPUTS": json.dumps(inputs)}
+                result = subprocess.run(["bash", "--noprofile", "--norc", "-c", step["run"]],
+                                        env=env, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode == 0, expected == 0, result.stderr)
+
+    def test_report_path_resolves_inside_each_distinct_workspace(self):
+        import yaml
+        workflow = yaml.load((ROOT / ".github/workflows/diagnostic-delta.yml").read_text(), Loader=yaml.BaseLoader)
+        raw = workflow["jobs"]["diagnostic-delta"]["env"]["REPORT_PATH"]
+        self.assertTrue(raw.startswith("${{ github.workspace }}/"), raw)
+        resolved = set()
+        for workspace in ("/tmp/fixture-workspace-a", "/tmp/fixture-workspace-b"):
+            path = raw.replace("${{ github.workspace }}", workspace)
+            self.assertNotEqual(path, raw, "Report path must derive from the workspace")
+            self.assertEqual(os.path.commonpath((path, workspace)), workspace)
+            self.assertTrue(path.endswith(".json"), path)
+            resolved.add(path)
+        self.assertEqual(len(resolved), 2, "Distinct workspaces must not share one report path")
 
 
 if __name__ == "__main__":

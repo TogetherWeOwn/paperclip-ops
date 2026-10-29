@@ -100,8 +100,8 @@ fields, producers, versions, invalid paths and non-string globs fail closed.
   components before a pattern's first wildcard component, so replacing
   `scripts/pkg-one` with a symlink or gitlink under a `scripts/pkg-*/**`
   scope is refused, not reported as resolved debt. Quoted
-  `"workflow_dispatch"` / `"inputs"` container keys are recognised dispatch
-  containers, never silently cleared. Its ordinary test-file and non-CLI
+  `"on"` / `"workflow_dispatch"` / `"inputs"` container keys are recognised
+  dispatch containers, never silently cleared. Its ordinary test-file and non-CLI
   exclusions still apply.
 
 The initial policy covers only this checker's own directory
@@ -111,9 +111,12 @@ modules. Expand coverage only where a real diagnostic contract exists.
 ## Reusable CI
 
 `.github/workflows/diagnostic-delta.yml` exposes a `workflow_call` interface
-with required `base-sha`, `head-sha` and `tools-ref` inputs (full lowercase
-commit SHAs) and an optional `artifact-name` input (default
-`diagnostic-delta-report`), plus `workflow_dispatch` with the same inputs so a real
+with required `base-sha`/`head-sha` inputs (full lowercase commit SHAs in the
+caller repository's object format) and a `tools-ref` input (a full lowercase
+40-character commit SHA of this SHA-1 tooling repository, the only length the
+pinned checkout action treats as a commit rather than a named ref), plus an
+optional `artifact-name` input (default
+`diagnostic-delta-report`). It also exposes `workflow_dispatch` with the same inputs so a real
 Actions run can produce evidence at exact SHAs. There is deliberately no push
 trigger: native push events have no trusted caller-supplied base snapshot to
 measure against. For dispatch runs, the provided base snapshot is the

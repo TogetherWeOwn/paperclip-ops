@@ -140,15 +140,23 @@ def evaluate(payload):
 
 def main():
     try:
-        payload = json.load(
-            sys.stdin, object_pairs_hook=unique_object, parse_constant=reject_constant
+        payload = json.loads(
+            sys.stdin.buffer.read().decode("utf-8", errors="strict"),
+            object_pairs_hook=unique_object, parse_constant=reject_constant,
         )
     except (ValueError, RecursionError, UnicodeError):
         report = empty_report()
         report["errors"] = ["invalid-json"]
         code = 2
     else:
-        report, code = evaluate(payload)
+        try:
+            report, code = evaluate(payload)
+        except (ValueError, RecursionError):
+            # The unchanged classifier can exceed the runtime's integer
+            # formatting limit even when both input counts parsed safely.
+            report = empty_report()
+            report["errors"] = ["evaluation-unmeasurable"]
+            code = 2
     print(json.dumps(report, ensure_ascii=True))
     return code
 

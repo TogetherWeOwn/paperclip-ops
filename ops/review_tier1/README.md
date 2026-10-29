@@ -43,8 +43,13 @@ Commit identities must be full lowercase 40-character hexadecimal strings.
 Counts must be nonnegative integers, not booleans. All four list fields contain
 nonempty strings; duplicates within either criteria list are refused. Empty
 lists and an empty diff are valid inputs, but supply no missing evidence.
-Malformed JSON, wrong types and invalid values yield a refusal report, not an
-empty clean result. Diagnostics use stable codes and do not echo raw input.
+Stdin bytes are decoded as strict UTF-8 independently of locale. Malformed
+encoding/JSON, wrong types and invalid values yield a refusal report, not an
+empty clean result. If parsed counts exceed the runtime's integer-formatting
+limit during classification, the whole report is refused with
+`evaluation-unmeasurable`; no partial identities or risk are retained. This does
+not change the canonical classifier or impose another risk threshold. Diagnostics
+use stable codes and do not echo raw input.
 
 Supply complete changed paths (both names for renames), labels and counts from
 the intended revision. Risk classification uses those supplied values, not

@@ -82,8 +82,14 @@ a substitute. Missing, nonfinite, negative, boolean or overflowing durations are
 unknown, not zero. Fractional durations and the `elapsed_seconds` budget are
 compared as exact JSON decimals, never binary floats, so a boundary such as
 0.1 + 0.2 at a 0.3 ceiling classifies exactly; reported durations remain JSON
-numbers. The initial failed-before compiler is not a repair attempt
-and does not consume an attempt duration.
+numbers. Before conversion to an exact integer ratio, finite Decimal inputs
+must satisfy `len(value.as_tuple().digits) + abs(value.as_tuple().exponent) <= 1024`.
+This fixed evaluator-owned work bound counts stored coefficient digits, including
+trailing zeros, without normalization or integer-power expansion. Unsupported
+attempt durations are `invalid_duration`; unsupported elapsed-time budgets in
+the immutable base policy are `invalid_policy`. Unknown elapsed consumption stays
+`null`, and no refusal counts as a repair. The initial failed-before compiler is
+not a repair attempt and does not consume an attempt duration.
 
 Every compiler record has exactly:
 
@@ -109,9 +115,11 @@ first, then the consecutive `parent` headers after it; a `parent` line placed
 after other headers proves nothing. The first parent is BASE, each subsequent
 parent is the preceding candidate, and the last candidate is HEAD. Merge
 candidates, omitted commits, post-success attempts and unrelated histories are
-refused. A different final tree ID is not proof of a repair: HEAD's recursive
-file listing must actually differ from BASE's, so empty commits and
-empty-subtree-only candidates are `no_repair_change`. Intermediate compilers
+refused. A different final tree ID is not proof of a repair: a recursive raw
+BASE-to-HEAD diff must show an actual file change, so empty commits,
+empty-subtree-only candidates and net-reverted source edits are `no_repair_change`.
+This bounded proof reads changed scope, not full listings of unchanged repository
+entries; it does not raise or exempt the Git stdout ceiling. Intermediate compilers
 must fail; a complete pass terminates the trace. Duplicate JSON keys, unknown
 fields, invalid UTF-8/JSON, wrong types and missing evidence fail closed.
 
@@ -229,9 +237,12 @@ The independently authored [acceptance module](../test_compiler_feedback_contrac
 constructs synthetic Git histories, compiler records and Actions-shaped
 receipts; the supplemental
 [regression module](../test_compiler_feedback_regressions.py) pins Git graph
-and file-change proof, exact decimal ceilings, the evaluator resource limits,
-receipt/diff integrity and SHA-256 repositories against the same frozen
-contract. Run both without network, toolkit restoration or dependency installs:
+and file-change proof, exact decimal ceilings, pre-conversion numeric work,
+the evaluator resource limits, receipt/diff integrity and SHA-256 repositories
+against the same frozen contract. A tiny unchanged catalog with a lowered stdout
+cap proves that repair proof depends on changed scope; guarded conversions refuse
+unsupported Decimal metadata without performing expensive arithmetic. Run both
+without network, toolkit restoration or dependency installs:
 
 ```sh
 python3 -B -m unittest -v test_compiler_feedback_contract test_compiler_feedback_regressions

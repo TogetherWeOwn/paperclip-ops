@@ -96,6 +96,11 @@ def as_fraction(value: object) -> Fraction | None:
     elif type(value) is Decimal:
         if not value.is_finite():
             return None
+        # Bound integer-ratio work before conversion, including stored trailing
+        # zeros. Neither normalization nor a later float check bounds this work.
+        parts = value.as_tuple()
+        if len(parts.digits) + abs(parts.exponent) > 1024:
+            return None
         result = Fraction(value)
     elif type(value) is float:
         if not math.isfinite(value):
@@ -295,8 +300,12 @@ class Git:
             self.commits[sha] = (tree, parents)
         return self.commits[sha]
 
-    def file_listing(self, sha: str) -> bytes:
-        return self.run("ls-tree", "-r", "-z", "--full-tree", sha)
+    def file_change(self, base: str, head: str) -> bool:
+        # Recursive raw diff ignores empty subtrees and scales with changed
+        # files, not the unchanged repository catalog. Keep the stdout bound.
+        return bool(self.run("diff", "--no-ext-diff", "--no-textconv", "--no-renames",
+                             "--ignore-submodules=none", "--no-relative", "--raw",
+                             "--no-abbrev", "-z", base, head, "--"))
 
     def diff(self, parent: str, candidate: str) -> tuple[set[str], int]:
         args = ("diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--text",
@@ -530,10 +539,9 @@ def evaluate(args: argparse.Namespace, report: dict) -> tuple[str, str, str | No
         if consumed > limit or (status == "failed" and consumed == limit):
             return "exhausted", "budget_exceeded", dimension
     # A different tree ID is not proof of a source change: an added empty
-    # subtree changes no file blob. Require the recursive file listing at
-    # HEAD to differ from BASE, so only an actual file change can repair.
-    require(base_tree != head_tree and git.file_listing(args.base) != git.file_listing(args.head),
-            "no_repair_change")
+    # subtree changes no file blob. Require an actual BASE-to-HEAD file diff,
+    # without spending the stdout allowance on unchanged repository entries.
+    require(base_tree != head_tree and git.file_change(args.base, args.head), "no_repair_change")
     require(status == "passed", "incomplete_trace")
     require(source != "fixture", "fixture_only")
     bucket["repairs"] = 1

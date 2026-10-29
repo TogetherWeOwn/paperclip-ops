@@ -8,20 +8,37 @@ not authenticated, evidence. See docs/compiler-feedback.md for the v1 contract.
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal
 import fnmatch
+from fractions import Fraction
 import json
 import math
 import os
 from pathlib import Path, PurePosixPath
 import re
+import selectors
 import subprocess
 import tempfile
+import time
 
 
 POLICY_PATH = ".compiler-feedback.json"
 DIMENSIONS = ("attempts", "elapsed_seconds", "changed_paths", "changed_lines")
 SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 DECIMAL = re.compile(r"[0-9]+\Z")
+# Evaluator-owned ceilings on the resources one evaluation may consume. They
+# are fixed here so evidence budgets cannot be laundered into unbounded local
+# work: no CLI option, trace field, base policy or environment value can
+# raise them. A crossed ceiling is a structured resource_limit refusal.
+RESOURCE_LIMITS = {
+    "trace_bytes": 1048576,
+    "blob_bytes": 1048576,
+    "total_blob_bytes": 8388608,
+    "attempt_records": 64,
+    "git_invocations": 1024,
+    "git_stdout_bytes": 4194304,
+    "evaluation_seconds": 30,
+}
 ACTIONS = {
     "invalid_trace": "Supply a complete v1 trace with contiguous observed attempts and no unknown fields.",
     "invalid_duration": "Supply finite, nonnegative whole-attempt durations, including every compiler run.",
@@ -37,6 +54,7 @@ ACTIONS = {
     "incomplete_trace": "Finish the bounded observation; the last compiler still failed below every ceiling.",
     "fixture_only": "Keep fixture results separate; obtain real Actions evidence before claiming a real repair.",
     "trace_unavailable": "Provide a readable UTF-8 JSON trace file.",
+    "resource_limit": "Submit smaller evidence for one evaluation; evaluator resource ceilings cannot be raised by the trace or policy.",
     "protected_path": "Reject this trace: protected files were touched. Preserve independently authored tests and policy.",
     "outside_scope": "Reject this trace: changes exceeded the base policy's allowed paths.",
     "budget_exceeded": "Stop accepting further attempts in this bounded trace; record exhaustion without weakening the policy.",
@@ -58,13 +76,44 @@ def fields(value: object, names: tuple[str, ...], code: str = "invalid_trace") -
     require(isinstance(value, dict) and set(value) == set(names), code)
 
 
-def number(value: object) -> bool:
-    if type(value) not in (int, float) or value < 0:
-        return False
+def finite_fraction(value: Fraction) -> bool:
     try:
-        return math.isfinite(value)
+        return math.isfinite(float(value))
     except OverflowError:
         return False
+
+
+def as_fraction(value: object) -> Fraction | None:
+    """Exact value of a JSON number, or None when it is not a usable duration.
+
+    Integers and Decimal-parsed fractional lexemes stay exact, so ceiling
+    comparisons never depend on binary floating-point rounding. A number is
+    usable only when finite, nonnegative and inside the float range the JSON
+    report can emit; booleans, strings and nonfinite tokens are refused.
+    """
+    if type(value) is int:
+        result = Fraction(value)
+    elif type(value) is Decimal:
+        if not value.is_finite():
+            return None
+        result = Fraction(value)
+    elif type(value) is float:
+        if not math.isfinite(value):
+            return None
+        result = Fraction(value)
+    else:
+        return None
+    if result < 0 or not finite_fraction(result):
+        return None
+    return result
+
+
+def number(value: object) -> bool:
+    return as_fraction(value) is not None
+
+
+def json_number(value: Fraction) -> int | float:
+    return value.numerator if value.denominator == 1 else float(value)
 
 
 def immutable(value: object) -> bool:
@@ -85,19 +134,67 @@ def load_json(raw: bytes, code: str) -> object:
             result[key] = value
         return result
 
+    def decimal(lexeme: str):
+        try:
+            return Decimal(lexeme)
+        except ArithmeticError:
+            # An exponent outside Decimal's range is still just an unusable
+            # number; keep it nonfinite so validators refuse it structurally.
+            return math.inf
+
     try:
         # Preserve nonfinite numeric tokens here so a duration gets its specific
         # invalid_duration verdict; validators reject them everywhere else too.
-        return json.loads(raw.decode("utf-8"), object_pairs_hook=pairs)
-    except (ValueError, UnicodeError, RecursionError):
+        # Fractional lexemes parse as Decimal so duration sums stay exact.
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=pairs, parse_float=decimal)
+    except (ValueError, UnicodeError, RecursionError, ArithmeticError):
         raise Unmeasurable(code) from None
+
+
+class Budget:
+    """Resource accounting for one evaluation, under RESOURCE_LIMITS."""
+
+    def __init__(self, limits: dict):
+        self.limits = limits
+        self.started = time.monotonic()
+        self.git_invocations = 0
+        self.blob_bytes_total = 0
+
+    def check_deadline(self) -> None:
+        if time.monotonic() - self.started > self.limits["evaluation_seconds"]:
+            raise Unmeasurable("resource_limit")
+
+    def remaining_seconds(self) -> float:
+        return self.limits["evaluation_seconds"] - (time.monotonic() - self.started)
+
+    def read_trace(self, path: str) -> bytes:
+        cap = self.limits["trace_bytes"]
+        try:
+            stream = open(path, "rb")
+        except OSError:
+            raise Unmeasurable("trace_unavailable") from None
+        with stream:
+            data = bytearray()
+            try:
+                # Read at most the remaining allowance plus one sentinel byte,
+                # so an oversized trace is refused without being buffered.
+                while len(data) <= cap:
+                    chunk = stream.read(min(65536, cap + 1 - len(data)))
+                    if not chunk:
+                        break
+                    data += chunk
+            except OSError:
+                raise Unmeasurable("trace_unavailable") from None
+        require(len(data) <= cap, "resource_limit")
+        return bytes(data)
 
 
 class Git:
     """Fixed read-only Git operations, without replacement refs or diff drivers."""
 
-    def __init__(self, repo: str):
+    def __init__(self, repo: str, budget: Budget):
         self.repo = repo
+        self.budget = budget
         self.env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
         self.env.update({
             "GIT_NO_REPLACE_OBJECTS": "1", "GIT_NO_LAZY_FETCH": "1",
@@ -107,39 +204,99 @@ class Git:
         })
         self.commits = {}
 
-    def run(self, *args: str, scratch: str | None = None) -> bytes:
+    def run(self, *args: str, scratch: str | None = None, blob: bool = False) -> bytes:
+        budget = self.budget
+        limits = budget.limits
+        budget.check_deadline()
+        require(budget.git_invocations < limits["git_invocations"], "resource_limit")
+        cap = limits["git_stdout_bytes"]
+        if blob:
+            # One immutable blob is bounded by its per-blob ceiling and by
+            # what remains of the cumulative blob allowance, so an oversized
+            # blob is refused before its bytes are captured or copied out.
+            cap = min(cap, limits["blob_bytes"],
+                      limits["total_blob_bytes"] - budget.blob_bytes_total)
         env = self.env if scratch is None else {**self.env, "GIT_CEILING_DIRECTORIES": scratch}
+        budget.git_invocations += 1
         try:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 ["git", "--no-replace-objects", "-c", "core.hooksPath=/dev/null",
                  "-c", "core.fsmonitor=false", "-c", "core.attributesFile=/dev/null",
                  "-c", "protocol.allow=never", "-C", scratch or self.repo, *args],
-                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                timeout=10, check=False,
+                env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
             )
         except FileNotFoundError:
             raise Unmeasurable("git_unavailable") from None
-        except (OSError, subprocess.TimeoutExpired):
+        except OSError:
             raise Unmeasurable("git_failed") from None
-        require(result.returncode in ((0, 1) if scratch is not None else (0,)), "git_failed")
-        return result.stdout
+        try:
+            data = bytearray()
+            stream = process.stdout
+            read = stream.read1 if hasattr(stream, "read1") else stream.read
+            with selectors.DefaultSelector() as selector:
+                selector.register(stream, selectors.EVENT_READ)
+                while len(data) <= cap:
+                    # At most the remaining allowance plus one sentinel byte
+                    # is ever read; silence beyond the per-operation wait (or
+                    # the whole-evaluation deadline) stops the process.
+                    if not selector.select(min(10.0, max(0.0, budget.remaining_seconds()))):
+                        budget.check_deadline()
+                        raise Unmeasurable("git_failed")
+                    chunk = read(min(65536, cap + 1 - len(data)))
+                    if not chunk:
+                        break
+                    data += chunk
+            require(len(data) <= cap, "resource_limit")
+            try:
+                process.wait(timeout=10)
+            except (subprocess.TimeoutExpired, OSError):
+                raise Unmeasurable("git_failed") from None
+            require(process.returncode in ((0, 1) if scratch is not None else (0,)), "git_failed")
+        finally:
+            # Every path reaps the child and closes the pipe; an over-limit
+            # or failed operation never leaves a process writing to nobody.
+            try:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            try:
+                process.stdout.close()
+            except (OSError, ValueError):
+                pass
+        if blob:
+            budget.blob_bytes_total += len(data)
+        budget.check_deadline()
+        return bytes(data)
 
     def commit(self, sha: str) -> tuple[str, list[str]]:
         require(immutable(sha), "invalid_sha")
         if sha not in self.commits:
             require(self.run("cat-file", "-t", sha) == b"commit\n", "git_failed")
             raw = self.run("cat-file", "commit", sha)
+            lines = raw.split(b"\n\n", 1)[0].splitlines()
+            # Git's graph grammar reads tree first, then the consecutive
+            # parent headers that follow it. A parent header appearing after
+            # author/committer is not a parent to Git, so it cannot prove
+            # ancestry here either.
+            require(bool(lines) and lines[0].startswith(b"tree "), "git_failed")
             try:
-                # Author names may be Unicode; only tree/parent headers matter.
-                headers = [line.decode("ascii") for line in raw.split(b"\n\n", 1)[0].splitlines()
-                           if line.startswith((b"tree ", b"parent "))]
+                tree = lines[0][5:].decode("ascii")
+                parents = []
+                for line in lines[1:]:
+                    if not line.startswith(b"parent "):
+                        break
+                    parents.append(line[7:].decode("ascii"))
             except UnicodeError:
                 raise Unmeasurable("git_failed") from None
-            trees = [line[5:] for line in headers if line.startswith("tree ")]
-            parents = [line[7:] for line in headers if line.startswith("parent ")]
-            require(len(trees) == 1 and immutable(trees[0]) and all(map(immutable, parents)), "git_failed")
-            self.commits[sha] = (trees[0], parents)
+            require(immutable(tree) and all(map(immutable, parents)), "git_failed")
+            self.commits[sha] = (tree, parents)
         return self.commits[sha]
+
+    def file_listing(self, sha: str) -> bytes:
+        return self.run("ls-tree", "-r", "-z", "--full-tree", sha)
 
     def diff(self, parent: str, candidate: str) -> tuple[set[str], int]:
         args = ("diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--text",
@@ -155,7 +312,7 @@ class Git:
         try:
             with tempfile.TemporaryDirectory(prefix="compiler-feedback-blobs-") as scratch:
                 for old_oid, new_oid in blobs.values():
-                    before, after = (b"" if set(oid) == {"0"} else self.run("cat-file", "blob", oid)
+                    before, after = (b"" if set(oid) == {"0"} else self.run("cat-file", "blob", oid, blob=True)
                                      for oid in (old_oid, new_oid))
                     require(b"\x00" not in before and b"\x00" not in after, "invalid_diff")
                     if before == after:
@@ -237,7 +394,7 @@ def policy_at(git: Git, base: str) -> dict:
     entry = git.run("ls-tree", "-z", base, "--", POLICY_PATH)
     require(re.fullmatch(rb"100(?:644|755) blob [0-9a-f]{40}(?:[0-9a-f]{24})?\t"
                          rb"\.compiler-feedback\.json\x00", entry) is not None, "invalid_policy")
-    policy = load_json(git.run("cat-file", "blob", base + ":" + POLICY_PATH), "invalid_policy")
+    policy = load_json(git.run("cat-file", "blob", base + ":" + POLICY_PATH, blob=True), "invalid_policy")
     fields(policy, ("version", "budgets", "allowed_paths", "protected_paths"), "invalid_policy")
     require(type(policy["version"]) is int and policy["version"] == 1, "invalid_policy")
     fields(policy["budgets"], DIMENSIONS, "invalid_policy")
@@ -300,15 +457,28 @@ def initial_report() -> dict:
 
 def evaluate(args: argparse.Namespace, report: dict) -> tuple[str, str, str | None]:
     require(immutable(args.base) and immutable(args.head), "invalid_sha")
-    git = Git(args.repo)
+    budget = Budget(RESOURCE_LIMITS)
+    # Evidence is admitted before any Git work: the trace read is byte-bounded
+    # and deadline-checked, and an over-long attempt list is refused before a
+    # single Git process launches. Trace content errors are only raised after
+    # the Git/policy stage below, preserving the established code precedence
+    # for missing objects and invalid policies.
+    raw = budget.read_trace(args.trace)
+    budget.check_deadline()
+    trace = None
+    trace_error = None
+    try:
+        trace = load_json(raw, "invalid_trace")
+    except Unmeasurable as exc:
+        trace_error = exc
+    if isinstance(trace, dict) and isinstance(trace.get("attempts"), list):
+        require(len(trace["attempts"]) <= budget.limits["attempt_records"], "resource_limit")
+    git = Git(args.repo, budget)
     base_tree, _ = git.commit(args.base)
     head_tree, _ = git.commit(args.head)
     policy = policy_at(git, args.base)
-    try:
-        raw = Path(args.trace).read_bytes()
-    except OSError:
-        raise Unmeasurable("trace_unavailable") from None
-    trace = load_json(raw, "invalid_trace")
+    if trace_error is not None:
+        raise trace_error
     fields(trace, ("schema", "source", "base_sha", "head_sha", "policy_sha", "tool_sha", "before", "attempts"))
     require(trace["schema"] == "compiler-feedback-trace.v1" and trace["source"] in ("actions", "fixture"))
     source = trace["source"]
@@ -318,16 +488,18 @@ def evaluate(args: argparse.Namespace, report: dict) -> tuple[str, str, str | No
     report.update(base_sha=args.base, head_sha=args.head, policy_sha=args.base, tool_sha=args.base)
     attempts = trace["attempts"]
     require(isinstance(attempts, list) and bool(attempts))
+    require(len(attempts) <= budget.limits["attempt_records"], "resource_limit")
     receipts = set()
     before = compiler(trace["before"], args.base, args.base, source, receipts)
     require(before == "failed" and any(item.strip() for item in trace["before"]["diagnostics"]), "no_failed_before")
     parent = args.base
-    seconds = 0
+    seconds = Fraction(0)
     paths = set()
     lines = 0
     for index, attempt in enumerate(attempts, 1):
         require(isinstance(attempt, dict))
-        require("elapsed_seconds" in attempt and number(attempt["elapsed_seconds"]), "invalid_duration")
+        duration = as_fraction(attempt["elapsed_seconds"]) if "elapsed_seconds" in attempt else None
+        require(duration is not None, "invalid_duration")
         fields(attempt, ("index", "parent_sha", "candidate_sha", "elapsed_seconds", "compiler"))
         require(type(attempt["index"]) is int and attempt["index"] == index and attempt["parent_sha"] == parent)
         candidate = attempt["candidate_sha"]
@@ -335,31 +507,33 @@ def evaluate(args: argparse.Namespace, report: dict) -> tuple[str, str, str | No
         require(parents == [parent])
         status = compiler(attempt["compiler"], candidate, args.base, source, receipts)
         require(status != "passed" or index == len(attempts))
-        try:
-            seconds += attempt["elapsed_seconds"]
-            require(number(seconds), "invalid_duration")
-        except OverflowError:
-            raise Unmeasurable("invalid_duration") from None
+        seconds += duration
+        require(finite_fraction(seconds), "invalid_duration")
         touched, churn = git.diff(parent, candidate)
         paths.update(touched)
         lines += churn
         parent = candidate
     require(parent == args.head, "invalid_provenance")
-    report["consumed"] = dict(zip(DIMENSIONS, (len(attempts), seconds, len(paths), lines)))
+    exact = dict(zip(DIMENSIONS, (len(attempts), seconds, len(paths), lines)))
+    report["consumed"] = {**exact, "elapsed_seconds": json_number(seconds)}
     report["paths"] = sorted(paths)
     bucket = report["metrics"]["fixture" if source == "fixture" else "actions_reported"]
-    bucket.update(attempts=len(attempts), elapsed_seconds=seconds)
+    bucket.update(attempts=len(attempts), elapsed_seconds=json_number(seconds))
     # Scope is immutable and validated at every step, including reverted edits.
     if any(protected(path, policy["protected_paths"]) for path in paths):
         return "exhausted", "protected_path", "protected_paths"
     if any(not any(fnmatch.fnmatchcase(path, pattern) for pattern in policy["allowed_paths"]) for path in paths):
         return "exhausted", "outside_scope", "allowed_paths"
     for dimension in DIMENSIONS:
-        consumed = report["consumed"][dimension]
-        limit = policy["budgets"][dimension]
+        consumed = exact[dimension]
+        limit = as_fraction(policy["budgets"][dimension])
         if consumed > limit or (status == "failed" and consumed == limit):
             return "exhausted", "budget_exceeded", dimension
-    require(base_tree != head_tree, "no_repair_change")
+    # A different tree ID is not proof of a source change: an added empty
+    # subtree changes no file blob. Require the recursive file listing at
+    # HEAD to differ from BASE, so only an actual file change can repair.
+    require(base_tree != head_tree and git.file_listing(args.base) != git.file_listing(args.head),
+            "no_repair_change")
     require(status == "passed", "incomplete_trace")
     require(source != "fixture", "fixture_only")
     bucket["repairs"] = 1

@@ -79,7 +79,10 @@ An attempt has exactly `index` (integer, contiguous from 1), `parent_sha`,
 `candidate_sha`, `elapsed_seconds`, and `compiler`. Duration covers the **whole
 external attempt**, including its compiler run; evaluator wall-clock time is not
 a substitute. Missing, nonfinite, negative, boolean or overflowing durations are
-unknown, not zero. The initial failed-before compiler is not a repair attempt
+unknown, not zero. Fractional durations and the `elapsed_seconds` budget are
+compared as exact JSON decimals, never binary floats, so a boundary such as
+0.1 + 0.2 at a 0.3 ceiling classifies exactly; reported durations remain JSON
+numbers. The initial failed-before compiler is not a repair attempt
 and does not consume an attempt duration.
 
 Every compiler record has exactly:
@@ -96,16 +99,21 @@ Every compiler record has exactly:
 Actions receipts contain exactly `run_id` (a positive decimal string),
 `run_attempt` (a positive integer), `head_sha` (the compiler's exact SHA) and
 `conclusion` (`failure` or `success`, matching the compiler). A repeated
-run/attempt pair is invalid. Supplied receipts are **not authenticated** by
-this offline helper.
+run/attempt pair is invalid; run IDs are decimal identities, so a zero-padded
+spelling of the same run and attempt is still a replay. Supplied receipts are
+**not authenticated** by this offline helper.
 
 Each candidate must have exactly one direct Git parent, equal to its recorded
-parent. The first parent is BASE, each subsequent parent is the preceding
-candidate, and the last candidate is HEAD. Merge candidates, omitted commits,
-post-success attempts and unrelated histories are refused. A final tree with
-no source change from BASE is not a repair. Intermediate compilers must fail;
-a complete pass terminates the trace. Duplicate JSON keys, unknown fields,
-invalid UTF-8/JSON, wrong types and missing evidence fail closed.
+parent. Parentage follows Git's own commit-header grammar — the `tree` header
+first, then the consecutive `parent` headers after it; a `parent` line placed
+after other headers proves nothing. The first parent is BASE, each subsequent
+parent is the preceding candidate, and the last candidate is HEAD. Merge
+candidates, omitted commits, post-success attempts and unrelated histories are
+refused. A different final tree ID is not proof of a repair: HEAD's recursive
+file listing must actually differ from BASE's, so empty commits and
+empty-subtree-only candidates are `no_repair_change`. Intermediate compilers
+must fail; a complete pass terminates the trace. Duplicate JSON keys, unknown
+fields, invalid UTF-8/JSON, wrong types and missing evidence fail closed.
 
 ## Scope and inclusive ceilings
 
@@ -169,11 +177,39 @@ zero. `paths` is sorted and JSON-escaped without Git quoting.
 Unmeasurable codes are `invalid_trace`, `invalid_duration`, `invalid_policy`,
 `invalid_sha`, `git_failed`, `git_unavailable`, `invalid_diff`,
 `invalid_provenance`, `incomplete_compiler`, `no_failed_before`,
-`no_repair_change`, `incomplete_trace`, `fixture_only` and `trace_unavailable`.
-Git failure, missing Git/trace and incomplete observations are marked retryable;
-that hint does not grant permission to rerun a compiler or external workflow.
-CLI usage errors such as missing required options use argparse's normal stderr
-and exit 2; they are not trace evaluation reports.
+`no_repair_change`, `incomplete_trace`, `fixture_only`, `trace_unavailable` and
+`resource_limit`. Git failure, missing Git/trace and incomplete observations are
+marked retryable; that hint does not grant permission to rerun a compiler or
+external workflow. CLI usage errors such as missing required options use
+argparse's normal stderr and exit 2; they are not trace evaluation reports.
+
+## Evaluator resource limits
+
+Evidence budgets bound a trace, not the evaluator. A single-line blob can be
+arbitrarily large at negligible path/line cost, so the evaluator enforces its
+own fixed `RESOURCE_LIMITS` on every evaluation:
+
+| Limit | Ceiling |
+| --- | ---: |
+| Trace file bytes | 1,048,576 |
+| Bytes per immutable blob (policy included) | 1,048,576 |
+| Cumulative blob bytes processed | 8,388,608 |
+| Attempt records | 64 |
+| Git invocations | 1,024 |
+| Stdout bytes per Git operation | 4,194,304 |
+| Whole-evaluation monotonic seconds | 30 |
+
+The trace is read, byte-counted and deadline-checked before any Git process
+launches; an over-long attempt list is likewise refused before Git traversal.
+Every read is bounded by the remaining allowance plus one sentinel byte, so an
+oversized stream is refused before it is fully buffered; the child process is
+stopped, its pipe closed and scratch storage removed. No CLI option, trace
+field, base-policy field or environment value can raise these ceilings — an
+unknown `resource_limits` field is refused by the strict v1 schemas like any
+other unknown field. Crossing a ceiling returns exit 2,
+`unmeasurable/resource_limit`, dimension `null`, `retryable: false`, with
+unknown consumption left `null` and no repair metrics. Like every refusal here,
+it rejects the supplied evidence; it cannot undo an attempt that already ran.
 
 ## Metrics, live evidence and verification
 
@@ -191,14 +227,18 @@ bucket has `attempts`, `elapsed_seconds` and `repairs`.
 
 The independently authored [acceptance module](../test_compiler_feedback_contract.py)
 constructs synthetic Git histories, compiler records and Actions-shaped
-receipts. Run it without network, toolkit restoration or dependency installs:
+receipts; the supplemental
+[regression module](../test_compiler_feedback_regressions.py) pins Git graph
+and file-change proof, exact decimal ceilings, the evaluator resource limits,
+receipt/diff integrity and SHA-256 repositories against the same frozen
+contract. Run both without network, toolkit restoration or dependency installs:
 
 ```sh
-python3 -B -m unittest -v test_compiler_feedback_contract
+python3 -B -m unittest -v test_compiler_feedback_contract test_compiler_feedback_regressions
 ```
 
 The [contract workflow](../.github/workflows/compiler-feedback-contract.yml)
-runs that same suite on pull requests, main and merge groups with read-only
+runs those same suites on pull requests, main and merge groups with read-only
 permissions on a GitHub-hosted runner. It is separate from the shared pinned CI
 producer inventory to avoid changing unrelated producers. Actions logs are
 receipts of **acceptance test execution**, not evidence of real compiler repair,

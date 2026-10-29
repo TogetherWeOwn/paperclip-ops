@@ -26,4 +26,4 @@ jobs:
         with:
           persist-credentials: false
       - name: Offline compiler-feedback acceptance controls
-        run: python3 -B -m unittest -v test_compiler_feedback_contract
+        run: python3 -B -m unittest -v test_compiler_feedback_contract test_compiler_feedback_regressions

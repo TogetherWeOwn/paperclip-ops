@@ -1,8 +1,9 @@
 """Acceptance tests for the risk-based review proof-obligations CLI.
 
-Hermetic and black-box: every case drives the public command
-``python3 -B ops/review_tier1/proof_obligations.py`` with one JSON object on
-stdin and asserts on its stdout JSON report and exit code. The existing
+Hermetic and black-box: every case drives the public CLI with JSON on
+stdin and asserts on its stdout JSON report and exit code. Most use
+``python3 -B ops/review_tier1/proof_obligations.py``; the isolated no-write
+control omits ``-B`` so the interpreter cannot mask CLI writes. The existing
 classifier (``.github/scripts/review_trigger.py:is_risky``) and the existing
 lexical mapping helpers (``ops/review_tier1/deterministic.py``) are loaded
 only as oracles for the values the adapter must reuse verbatim; no other
@@ -15,6 +16,8 @@ Run from the repo root:
 
 import importlib.util
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -76,6 +79,26 @@ index 333..444 100644
 +    pass
 +def test_shipping_quote_rounds_up_weight(self):
 +    pass
+"""
+
+PARTIAL_CRITERION = "reserve_stock handles shortages"
+SYMBOL_ONLY_DIFF = """diff --git a/src/stock.py b/src/stock.py
+--- a/src/stock.py
++++ b/src/stock.py
+@@ -0,0 +1,2 @@
++def reserve_stock(amount):
++    return amount
+"""
+# The test name is context, not an added definition or hunk symbol. This
+# supplies a test match without also creating a changed-symbol match.
+TEST_ONLY_DIFF = """diff --git a/tests/test_stock.py b/tests/test_stock.py
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -1,3 +1,4 @@
+ # Existing stock regression.
+ def test_reserve_stock_rejects_shortages():
++    assert reserve_stock(0) == 0
+     pass
 """
 
 TOP_LEVEL_KEYS = {
@@ -628,6 +651,57 @@ class ProofObligationsAcceptanceTest(unittest.TestCase):
                 self.assert_obligations(report, payload)
                 self.assertEqual(report["missing"], expected_missing)
 
+    def assert_one_sided_mapping_missing(self, kind, diff, symbol, test):
+        if kind == "acceptance":
+            payload = valid_payload(diff=diff, criteria=[PARTIAL_CRITERION])
+        else:
+            payload = valid_payload(
+                diff=POSITIVE_DIFF + diff,
+                labels=["security"],
+                boundary_criteria=[PARTIAL_CRITERION],
+            )
+        report = self.assert_valid(
+            self.run_payload(payload), payload, 1, "missing"
+        )
+        self.assertEqual(report["missing"], [kind + "-mapping"])
+        self.assertEqual(
+            len(report["obligations"]), 1 if kind == "acceptance" else 2
+        )
+        record = report["obligations"][-1]
+        self.assertEqual(
+            record,
+            {
+                "kind": kind,
+                "criterion": PARTIAL_CRITERION,
+                "symbol": symbol,
+                "test": test,
+                "mapped": False,
+            },
+        )
+        self.assertIs(record["mapped"], False)
+        if kind == "boundary":
+            self.assertIs(report["obligations"][0]["mapped"], True)
+
+    def test_acceptance_symbol_without_test_is_missing(self):
+        self.assert_one_sided_mapping_missing(
+            "acceptance", SYMBOL_ONLY_DIFF, "reserve_stock", ""
+        )
+
+    def test_acceptance_test_without_symbol_is_missing(self):
+        self.assert_one_sided_mapping_missing(
+            "acceptance", TEST_ONLY_DIFF, "", "test_reserve_stock_rejects_shortages"
+        )
+
+    def test_boundary_symbol_without_test_is_missing(self):
+        self.assert_one_sided_mapping_missing(
+            "boundary", SYMBOL_ONLY_DIFF, "reserve_stock", ""
+        )
+
+    def test_boundary_test_without_symbol_is_missing(self):
+        self.assert_one_sided_mapping_missing(
+            "boundary", TEST_ONLY_DIFF, "", "test_reserve_stock_rejects_shortages"
+        )
+
     def test_same_criterion_may_appear_in_both_lists(self):
         payload = valid_payload(
             labels=["security"],
@@ -887,6 +961,45 @@ class ProofObligationsAcceptanceTest(unittest.TestCase):
                 "CLI must not write into its working directory",
             )
             self.assertEqual(before, snapshot())
+
+    def test_cli_without_interpreter_guard_writes_no_files(self):
+        with tempfile.TemporaryDirectory(prefix="proof-obligations-no-write-") as tmp:
+            root = Path(tmp)
+            for relative in (
+                REL_SCRIPT,
+                "ops/review_tier1/deterministic.py",
+                ".github/scripts/review_trigger.py",
+            ):
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(REPO_ROOT / relative, target)
+
+            def snapshot():
+                return sorted(str(p.relative_to(root)) for p in root.rglob("*"))
+
+            before = snapshot()
+            env = dict(os.environ)
+            # Neither an inherited -B equivalent nor cache redirection may
+            # hide bytecode writes outside this fresh, writable helper tree.
+            env.pop("PYTHONDONTWRITEBYTECODE", None)
+            env.pop("PYTHONPYCACHEPREFIX", None)
+            payload = valid_payload()
+            proc = subprocess.run(
+                [sys.executable, str(root / REL_SCRIPT)],
+                input=json.dumps(payload),
+                cwd=str(root),
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=30,
+            )
+            report = self.assert_valid(proc, payload, 0, "mapped")
+            self.assert_obligations(report, payload)
+            self.assertEqual(
+                before, snapshot(),
+                "CLI must not create files without interpreter bytecode guards",
+            )
 
     def test_supplied_strings_are_data_not_code(self):
         with tempfile.TemporaryDirectory() as tmp:

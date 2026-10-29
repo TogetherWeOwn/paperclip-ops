@@ -123,10 +123,13 @@ where a real source-to-doc contract exists; avoid broad unrelated-doc bypasses.
 `.github/workflows/docs-drift.yml` runs here on PRs, main pushes and merge groups.
 The caller is checked out at the comparison head with complete history. The
 checker is **always a separate checkout**: native events use `github.repository`
-at `github.workflow_sha` (the immutable workflow-file revision), including in
-forks or renamed copies. A PR head may predate the checker, or contain a different
-checker; neither selects the executable. The workflow revision must contain the
-checker. Missing tools fail the job, never fall back to caller files or skip.
+at `github.workflow_sha` (the immutable event-associated workflow revision),
+including in forks or renamed copies. For `pull_request` this may be the PR merge
+commit; for `merge_group` it is the merge-group revision. These revisions may
+contain proposed checker changes: they are not an independently reviewed main
+revision. The comparison PR head is not selected directly as the tools ref and
+may predate the checker. The workflow revision must contain the checker. Missing
+tools fail the job, never fall back to caller files or skip.
 
 Reusable callers, including this same repository, use its `workflow_call`
 interface with `base-sha`, `head-sha` and `tools-ref`. Pin both
@@ -138,13 +141,17 @@ are validated before any checkout. Raw call inputs and native event SHAs are
 validated too: empty or mutable values cannot fall back to different event
 SHAs or tools. For PR callers pass `github.event.pull_request.base.sha` and
 `github.event.pull_request.head.sha`; other events must supply their own real
-comparison SHAs.
+comparison SHAs. Native raw event fields are read from the runner's
+`GITHUB_EVENT_PATH` file, not serialized into a job environment value, so large
+valid push metadata does not exceed the per-string process environment limit.
 
 The checker still runs **in the caller directory**, so diffs and policy come from
 caller history; the policy snapshot remains the supplied target/base commit,
 not the tools checkout or PR policy. Stdout remains the single checker JSON
-report. Stderr includes a `docs-drift.tools.v1` provenance object with exact
-base/head, tools repository/ref and reusable-call mode. For hosted verification,
+report. The inline validation and provenance interpreters use Python isolated
+mode; the caller directory and Python environment cannot supply their imports.
+Stderr includes a `docs-drift.tools.v1` provenance object with exact base/head,
+tools repository/ref and reusable-call mode. For hosted verification,
 record the run/job URL, this provenance and the checker's policy/merge-base SHAs,
 `changed_paths`, `checked_rules` and findings; a green job alone is not coverage.
 Rerunning an old failed run uses that run's old workflow revision, not this repair;

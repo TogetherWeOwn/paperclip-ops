@@ -87,9 +87,10 @@ fields, producers, versions, invalid paths and non-string globs fail closed.
   stderr; the first excess byte kills and reaps the producer, returning
   `producer_output_limit`. Git subprocess output is collected under the same
   discipline (per-call stdout limit, 64 KiB of stderr, kill and reap on the
-  first excess byte), never spooled unbounded to temporary storage first. Its
-  inner deadline is 25 seconds, leaving cleanup
-  time within the outer 30-second deadline. These collection bounds do not
+  first excess byte), never spooled unbounded to temporary storage first. Both
+  bounds are pinned constants in the checker: `GIT_TIMEOUT` (30 seconds) is the
+  outer Git deadline and the collector's inner deadline is 25 seconds, leaving
+  cleanup time within it. These collection bounds do not
   bound memory used internally by the trusted producer to construct its JSON.
   Policy size is at most 64 KiB and
   each glob at most 256 characters. Oversized inputs are unmeasurable, not clean.

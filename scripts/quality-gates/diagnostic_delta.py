@@ -21,6 +21,9 @@ MAX_REPORT = 1024 * 1024
 MAX_SOURCE = 1024 * 1024
 MAX_TOTAL = 32 * 1024 * 1024
 MAX_PATHS = 10000
+# Documented outer bound for each Git collection subprocess; the pinned AX
+# collector keeps its own 25-second inner deadline beneath this one.
+GIT_TIMEOUT = 30
 RULES = {
     "agents-map/missing": "agents-map",
     "agents-map/oversize": "agents-map",
@@ -80,7 +83,7 @@ def git(repo, *args, input=None, limit=16 * 1024 * 1024):
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_NO_LAZY_FETCH="1",
                GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + GIT_TIMEOUT
     try:
         process = subprocess.Popen(["git", "-C", str(repo), *args],
                                    stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,

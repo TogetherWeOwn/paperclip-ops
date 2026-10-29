@@ -125,6 +125,44 @@ class GitOutputLimits(unittest.TestCase):
             with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
                 self.assertEqual(gate.git(root, "ls-tree", limit=1024), b"x" * 1024)
 
+    def test_documented_git_deadline_is_pinned_at_thirty_seconds(self):
+        # The published collection bound, not an incidental literal: relaxing it
+        # silently buys an unbounded hang for every caller of the gate.
+        self.assertEqual(load_gate().GIT_TIMEOUT, 30)
+
+    def test_stalled_git_is_timed_out_and_reaped_with_open_or_closed_pipes(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            marker = root / "finished"
+            pid_file = root / "pid"
+            bindir = root / "bin"
+            bindir.mkdir()
+            fake = bindir / "git"
+            for close_pipes in (False, True):
+                with self.subTest(close_pipes=close_pipes):
+                    if marker.exists():
+                        marker.unlink()
+                    fake.write_text(
+                        "#!/usr/bin/env python3\n"
+                        "import os, time\nfrom pathlib import Path\n"
+                        f"Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+                        + ("os.close(1); os.close(2)\n" if close_pipes else "")
+                        + "time.sleep(10)\n"
+                        f"Path({str(marker)!r}).touch()\n")
+                    fake.chmod(0o755)
+                    start = time.monotonic()
+                    with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
+                        with patch.object(gate, "GIT_TIMEOUT", 0.5):
+                            with self.assertRaises(gate.Unmeasurable) as error:
+                                gate.git(root, "ls-tree")
+                    self.assertEqual(error.exception.code, "git_timeout")
+                    self.assertTrue(error.exception.retryable)
+                    self.assertLess(time.monotonic() - start, 5)
+                    self.assertFalse(marker.exists(), "Stalled Git must be killed before it finishes")
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(int(pid_file.read_text()), 0)
+
 
 class CollectorTimeouts(unittest.TestCase):
     def test_stalled_producer_is_reaped_with_open_or_closed_pipes(self):
@@ -307,9 +345,13 @@ class WildcardAncestors(RepositoryFixture):
 
 class QuotedDispatchContainers(RepositoryFixture):
     @staticmethod
-    def quoted(container, typed):
-        dispatch_line = '"workflow_dispatch":' if container == "workflow_dispatch" else "workflow_dispatch:"
-        inputs_line = '"inputs":' if container == "inputs" else "inputs:"
+    def quoted(container, typed, quote='"'):
+        name = "workflow_dispatch" if container == "workflow_dispatch" else "inputs"
+        quoted = f"{quote}{name}{quote}:"
+        # Only the container under test is quoted; the others stay bare so the
+        # block recognition path being exercised is unambiguous.
+        dispatch_line = quoted if container == "workflow_dispatch" else "workflow_dispatch:"
+        inputs_line = quoted if container == "inputs" else "inputs:"
         text = (f"name: ship\non:\n  {dispatch_line}\n    {inputs_line}\n"
                 "      target:\n        description: deployment target\n")
         return text + ("        type: string\n" if typed else "")
@@ -321,6 +363,19 @@ class QuotedDispatchContainers(RepositoryFixture):
                 self.base = self.commit()
                 self.assert_counts(self.check(0, head=self.base), 0, 0, 0, 0)
                 self.put(WORKFLOW_PATH, self.quoted(container, False))
+                self.assert_counts(self.check(1), 0, 1, 1, 0)
+
+    def test_single_quoted_inputs_block_preserves_typed_and_untyped_classification(self):
+        # Block-recognition regex, not the inline fallback: a bare
+        # workflow_dispatch with a single-quoted `inputs:` key must still be
+        # parsed as a real block, so dropping single-quote support there cannot
+        # silently reclassify a typed input as clean or an untyped one as unknown.
+        for quote in ("'", '"'):
+            with self.subTest(quote=quote):
+                self.put(WORKFLOW_PATH, self.quoted("inputs", True, quote=quote))
+                self.base = self.commit()
+                self.assert_counts(self.check(0, head=self.base), 0, 0, 0, 0)
+                self.put(WORKFLOW_PATH, self.quoted("inputs", False, quote=quote))
                 self.assert_counts(self.check(1), 0, 1, 1, 0)
 
     def test_quoted_outer_on_inline_nonempty_inputs_are_unmeasurable(self):

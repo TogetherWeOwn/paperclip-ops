@@ -66,15 +66,21 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, os, re
-          values = {name: os.environ[name] for name in ("BASE_SHA", "HEAD_SHA")}
+          values = {name: os.environ[name] for name in ("BASE_SHA", "HEAD_SHA", "TOOLS_REF")}
           call_inputs = json.loads(os.environ["CALL_INPUTS"])
           if call_inputs:
               # Validate raw call inputs: empty required values must not fall
               # through to the native-event SHA expressions above.
               values = {name: call_inputs.get(key, "") for name, key in
                         (("BASE_SHA", "base-sha"), ("HEAD_SHA", "head-sha"), ("TOOLS_REF", "tools-ref"))}
+          # Caller snapshots may come from SHA-1 or SHA-256 repositories, but
+          # the tooling checkout action only pins an exact 40-character value
+          # as a commit; a longer tools-ref would resolve as a named ref.
+          patterns = {"BASE_SHA": r"[0-9a-f]{40}(?:[0-9a-f]{24})?",
+                      "HEAD_SHA": r"[0-9a-f]{40}(?:[0-9a-f]{24})?",
+                      "TOOLS_REF": r"[0-9a-f]{40}"}
           for name, value in values.items():
-              if not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", value):
+              if not re.fullmatch(patterns[name], value):
                   raise SystemExit(f"{name}: provide a full lowercase commit SHA, not a branch or expression")
           PY
       - name: Check out the caller history

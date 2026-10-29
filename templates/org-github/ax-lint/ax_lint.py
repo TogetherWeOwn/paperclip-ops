@@ -504,8 +504,8 @@ def _scan_dispatch(relpath, lines):
     while i < total:
         line = lines[i]
         code = _strip_comment(line).rstrip()
-        on_match = re.match(r"^\s*on\s*:\s*(.*)$", code)
-        if on_match and on_match.group(1).strip() \
+        on_match = re.match(r"^\s*(['\"]?)on\1\s*:\s*(.*)$", code)
+        if on_match and on_match.group(2).strip() \
                 and "workflow_dispatch" in code:
             skipped.append(_coverage(
                 relpath, i + 1, "skipped",

@@ -155,6 +155,13 @@ def valid_payload(**overrides):
     return payload
 
 
+def unicode_payload():
+    return valid_payload(
+        changed_files=["src/café_雪.py", "tests/test_pricing.py"],
+        diff=POSITIVE_DIFF + "+# ENCODEDSNAPSHOT café 雪 🌱\n",
+    )
+
+
 def expected_mapping(criteria, diff):
     return deterministic.ac_coverage(
         list(criteria),
@@ -753,6 +760,30 @@ class ProofObligationsAcceptanceTest(unittest.TestCase):
         report = self.assert_refused(proc)
         self.assertNotIn(sentinel, proc.stdout)
         self.assertNotIn(sentinel, " ".join(report["errors"]))
+
+    def test_utf8_unicode_snapshot_bytes_map(self):
+        payload = unicode_payload()
+        raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        report = self.assert_valid(
+            self.run_cli_bytes(raw), payload, 0, "mapped"
+        )
+        self.assert_obligations(report, payload)
+
+    def test_utf16_bom_snapshot_bytes_refuse_safely(self):
+        raw = json.dumps(unicode_payload(), ensure_ascii=False).encode("utf-16")
+        self.assertTrue(raw.startswith((b"\xff\xfe", b"\xfe\xff")))
+        proc = self.run_cli_bytes(raw)
+        self.assert_refused(proc)
+        self.assertNotIn("ENCODEDSNAPSHOT", proc.stdout + proc.stderr)
+
+    def test_utf32_bom_snapshot_bytes_refuse_safely(self):
+        raw = json.dumps(unicode_payload(), ensure_ascii=False).encode("utf-32")
+        self.assertTrue(
+            raw.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff"))
+        )
+        proc = self.run_cli_bytes(raw)
+        self.assert_refused(proc)
+        self.assertNotIn("ENCODEDSNAPSHOT", proc.stdout + proc.stderr)
 
     def test_invalid_utf8_bytes_refuse_safely(self):
         sentinel = "INVALIDUTF8SENTINEL12345"

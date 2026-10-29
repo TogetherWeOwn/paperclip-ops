@@ -1,0 +1,29 @@
+name: compiler-feedback-contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compiler-feedback-contract-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  compiler-feedback-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Checkout and synthetic local Git fixtures only; no API writes or repair.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Offline compiler-feedback acceptance controls
+        run: python3 -B -m unittest -v test_compiler_feedback_contract test_compiler_feedback_regressions

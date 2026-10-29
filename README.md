@@ -85,6 +85,11 @@ For source-to-documentation accompaniment in pull requests, see the portable
 [documentation drift gate](docs/docs-drift.md), including its JSON contract,
 base-policy trust model and reusable CI interface.
 
+For read-only acceptance of observed compiler-feedback traces, see the
+[bounded report contract](docs/compiler-feedback.md). It measures attempt, time
+and immutable Git scope ceilings without running repairs or authenticating
+supplied Actions receipts.
+
 For offline CI-wiring checks, see the [orphan-suite CLI contract](docs/orphan-suites.md),
 including opt-in JSON outcomes, incomplete-check diagnostics and exit boundaries.
 

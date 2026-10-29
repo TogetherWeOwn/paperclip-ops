@@ -21,6 +21,7 @@
     "ci-ok": 5,
     "Failure log drain": 10,
     "Live public-fork disclosure audit": 15,
+    "disclosure-audit": 15,
     "public-safety": 5,
     "docs-verdict": 5,
     "docs-drift": 3,

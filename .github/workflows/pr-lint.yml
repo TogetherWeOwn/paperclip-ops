@@ -68,16 +68,21 @@ jobs:
       - name: Restore pinned toolkit test dependencies
         run: bash scripts/sync-toolkit.sh
 
-      - name: Install pinned workflow parser
-        run: python3 -m pip install --disable-pip-version-check --no-deps --target "${RUNNER_TEMP}/public-ci-python" 'PyYAML==6.0.2'
+      - name: Prepare isolated pinned workflow parser
+        shell: bash
+        run: |
+          python3 -m venv --without-pip "${RUNNER_TEMP}/action-pins-python"
+          python3 -m pip --python "${RUNNER_TEMP}/action-pins-python/bin/python3" install \
+            --disable-pip-version-check --no-deps -r .github/scripts/action-pins-requirements.txt
+          printf '%s\n' "${RUNNER_TEMP}/action-pins-python/bin" >> "$GITHUB_PATH"
 
       - name: Unit-test the lint
-        env:
-          PYTHONPATH: ${{ runner.temp }}/public-ci-python
         run: |
           python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
           python3 -m unittest discover -s .github/scripts -p 'test_ci_policy.py'
           python3 -m unittest discover -s .github/scripts -p 'test_action_pins.py'
+          python3 -B -m unittest discover -s .github/scripts -p 'test_action_pins_json_acceptance.py'
+          python3 -B -m unittest discover -s .github/scripts -p 'test_action_pins_node_acceptance.py'
           python3 -m unittest discover -s .github/scripts -p 'test_public_ci.py'
           python3 -m unittest discover -s .github/scripts -p 'test_docs_*.py'
           python3 -B -m unittest discover -s .github/scripts -p 'test_review*.py'

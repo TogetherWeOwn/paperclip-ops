@@ -481,9 +481,7 @@ class NativeDocsWorkflow(unittest.TestCase):
         self.put(self.caller, ".docs-drift.json", json.dumps(self.policy))
         self.put(self.caller, "src/api.py", "before\n")
         self.put(self.caller, "docs/api.md", "before\n")
-        self.base = self.commit(self.caller)
-        self.put(self.caller, "src/api.py", "after\n")
-        self.head = self.commit(self.caller)
+        self.proposal_base = self.commit(self.caller)
         # Instrument the real checker only to prove provenance and cwd. Its
         # parser, Git calls, policy selection and exit status are unmodified.
         trace = ('import json as _json, os as _os\n'
@@ -492,8 +490,16 @@ class NativeDocsWorkflow(unittest.TestCase):
                  '"cwd": _os.getcwd(), "file": str(_Path(__file__).resolve()), '
                  '"workflow_sha": _os.environ["GITHUB_WORKFLOW_SHA"], '
                  '"event_sha": _os.environ["GITHUB_SHA"]}))\n')
-        self.put(self.tools, "scripts/quality-gates/docs_drift.py", trace + SCRIPT.read_text())
+        self.checker_source = trace + SCRIPT.read_text()
+        self.put(self.tools, "scripts/quality-gates/docs_drift.py", self.checker_source)
         self.tools_sha = self.commit(self.tools)
+        # The target introduces the checker after the oldest proposal branch.
+        # Native candidates merge actual target/proposal history; the reusable
+        # tools pin is a separate repository and never rewrites those candidates.
+        self.put(self.caller, "scripts/quality-gates/docs_drift.py", self.checker_source)
+        self.base = self.commit(self.caller)
+        self.put(self.caller, "src/api.py", "after\n")
+        self.head = self.commit(self.caller)
         self.merge_revisions = {}
 
     def git(self, repo, *args):
@@ -521,23 +527,15 @@ class NativeDocsWorkflow(unittest.TestCase):
     resolve = DocsWorkflow.resolve
 
     def native_merge_revision(self):
-        key = (self.base, self.head, self.tools_sha)
+        key = (self.base, self.head)
         if key not in self.merge_revisions:
             source = self.root / ("merge-source-" + str(len(self.merge_revisions)))
             self.git(self.root, "clone", "-q", "--no-hardlinks", str(self.caller), str(source))
             self.git(source, "config", "user.name", "Fixture")
             self.git(source, "config", "user.email", "fixture@example.invalid")
-            self.git(source, "checkout", "-q", "--detach", self.head)
-            # Explicitly construct the event's candidate workflow tree, including
-            # the proposed files. Its checker is selected fixture content, not
-            # evidence that GitHub authenticates native revisions as trusted.
-            checker = "scripts/quality-gates/docs_drift.py"
-            if self.git(self.tools, "ls-tree", "--name-only", self.tools_sha, "--", checker):
-                self.put(source, checker, self.git(self.tools, "show", self.tools_sha + ":" + checker) + "\n")
-            else:
-                (source / checker).unlink(missing_ok=True)
-            self.git(source, "add", "-A")
-            tree = self.git(source, "write-tree")
+            # Use Git's real merge tree, including proposed checker changes or
+            # deletions. Native provenance does not authenticate proposed content.
+            tree = self.git(source, "merge-tree", "--write-tree", self.base, self.head)
             parents = [item for sha in dict.fromkeys((self.base, self.head)) for item in ("-p", sha)]
             revision = self.git(source, "commit-tree", tree, *parents, "-m",
                                 "test: event merge revision\n\nCo-Authored-By: Paperclip <noreply@paperclip.ing>")
@@ -555,7 +553,7 @@ class NativeDocsWorkflow(unittest.TestCase):
         trace = workspace / "checker-trace.json"
         revision, merge_source = self.native_merge_revision() if event in ("pull_request", "merge_group") else (None, None)
         event_sha = revision if revision is not None else head
-        selected_sha = revision if revision is not None and not inputs else self.tools_sha
+        selected_sha = self.tools_sha if inputs else event_sha
         measured_head = revision if event == "merge_group" and not inputs else head
         github = {"repository": "TogetherWeOwn/paperclip-ops", "event_name": event,
                   "sha": event_sha, "workflow_sha": selected_sha if workflow_sha is None else workflow_sha,
@@ -672,14 +670,15 @@ class NativeDocsWorkflow(unittest.TestCase):
             self.assertEqual(checkout.get("persist-credentials"), "false")
         return report
 
-    def test_native_heads_without_checker_measure_real_diff_for_every_event(self):
-        # Removing the native tools checkout or falling back to HEAD must fail.
+    def test_native_event_revisions_measure_real_diff_for_every_event(self):
+        # Removing the separate checker checkout or using a caller-local path must fail.
         for event, fork in [("pull_request", False), ("pull_request", True),
                             ("push", False), ("merge_group", False)]:
             for change, want, status in [("undocumented", 1, "finding"),
                                          ("covered", 0, "clean"), ("unrelated", 0, "clean")]:
                 with self.subTest(event=event, fork=fork, change=change):
-                    self.git(self.caller, "reset", "--hard", self.base)
+                    start = self.base if event == "push" else self.proposal_base
+                    self.git(self.caller, "reset", "--hard", start)
                     if change == "unrelated":
                         self.put(self.caller, "unrelated.txt", "new\n")
                     else:
@@ -687,6 +686,10 @@ class NativeDocsWorkflow(unittest.TestCase):
                     if change == "covered":
                         self.put(self.caller, "docs/api.md", "updated\n")
                     self.head = self.commit(self.caller)
+                    if event != "push":
+                        self.assertEqual(self.git(self.caller, "ls-tree", "--name-only", self.head, "--",
+                                                  "scripts/quality-gates/docs_drift.py"), "",
+                                         "old PR proposal must predate the target's checker")
                     report = self.assert_report(self.run_native(event, fork=fork), want, status)
                     self.assertEqual(report["checked_rules"], 0 if change == "unrelated" else 1)
                     if want:
@@ -749,6 +752,11 @@ class NativeDocsWorkflow(unittest.TestCase):
                 result = self.run_native(inputs=inputs)
                 self.assert_report(result, 1, "finding")
                 observations = [json.loads(line) for line in observation_path.read_text().splitlines()]
+                validator_observations = [item for item in observations if Path(item["cwd"]) == result["workspace"]]
+                self.assertTrue(validator_observations, "pre-checkout validation interpreter was not observed")
+                self.assertEqual([(item["isolated"], item["caller_module_found"]) for item in validator_observations],
+                                 [(1, False)] * len(validator_observations),
+                                 "pre-checkout validation Python must isolate: " + repr(validator_observations))
                 caller_observations = [item for item in observations if Path(item["cwd"]) == result["caller"]]
                 self.assertTrue(caller_observations, "caller-directory provenance interpreter was not observed")
                 self.assertEqual([(item["isolated"], item["caller_module_found"]) for item in caller_observations],
@@ -772,30 +780,66 @@ class NativeDocsWorkflow(unittest.TestCase):
                 self.assertCountEqual(self.git(checkout, "show", "-s", "--format=%P", revision).split(),
                                       [self.base, self.head])
 
+    def test_native_merge_tree_retains_proposed_checker_comment_without_execution(self):
+        checker = "scripts/quality-gates/docs_drift.py"
+        proposed = self.checker_source + "\n# Proposed checker comment.\n"
+        self.put(self.caller, checker, proposed)
+        self.head = self.commit(self.caller)
+        revision, source = self.native_merge_revision()
+        actual = subprocess.check_output(["git", "-C", str(source), "show", revision + ":" + checker],
+                                         env=self.env, timeout=10)
+        self.assertEqual(actual, proposed.encode(), "native merge tree sanitized proposed checker bytes")
+        self.assertCountEqual(self.git(source, "show", "-s", "--format=%P", revision).split(),
+                              [self.base, self.head])
+        self.assertEqual(list(self.root.glob("run-*")), [], "content proof must not execute proposed Python")
+
     def test_empty_native_diff_still_executes_trusted_checker(self):
         self.head = self.base
         report = self.assert_report(self.run_native(), 0, "clean")
         self.assertEqual(report["changed_paths"], 0)
 
-    def test_native_head_checker_cannot_replace_trusted_program(self):
-        self.put(self.caller, "scripts/quality-gates/docs_drift.py", 'print("untrusted checker ran")\n')
+    def test_reusable_pinned_checker_ignores_proposed_checker_changes(self):
+        # Native merge trees include proposed content; only reusable calls have
+        # the independent tool pin that the original substitution oracle assumed.
+        checker = "scripts/quality-gates/docs_drift.py"
+        proposed = self.checker_source + "\n# Caller-only checker comment.\n"
+        self.put(self.caller, checker, proposed)
         self.head = self.commit(self.caller)
-        result = self.run_native(fork=True)
-        self.assertNotIn("untrusted checker ran", result["stdout"])
+        inputs = {"base-sha": self.base, "head-sha": self.head, "tools-ref": self.tools_sha}
+        result = self.run_native(fork=True, inputs=inputs)
         self.assert_report(result, 1, "finding")
+        self.assertEqual((result["caller"] / checker).read_bytes(), proposed.encode())
+        self.assertEqual((result["workspace"] / "docs-drift-tools" / checker).read_bytes(),
+                         self.checker_source.encode(), "reusable tool pin was replaced with proposal content")
 
-    def test_missing_trusted_checker_fails_even_when_caller_has_one(self):
-        self.git(self.tools, "rm", "scripts/quality-gates/docs_drift.py")
+    def test_missing_native_checker_fails_without_reusable_fallback(self):
+        checker = "scripts/quality-gates/docs_drift.py"
+        self.git(self.caller, "rm", checker)
+        self.head = self.commit(self.caller)
+        for event in ("pull_request", "push", "merge_group"):
+            with self.subTest(event=event):
+                result = self.run_native(event)
+                self.assertNotEqual(result["code"], 0, "missing native checker was skipped or replaced")
+                self.assertIsNone(result["trace"])
+                self.assertFalse((result["workspace"] / "docs-drift-tools" / checker).exists())
+                self.assertEqual(self.git(self.tools, "show", self.tools_sha + ":" + checker),
+                                 self.checker_source.rstrip(), "the reusable fallback control must remain available")
+
+    def test_missing_reusable_checker_fails_even_when_caller_has_one(self):
+        checker = "scripts/quality-gates/docs_drift.py"
+        self.git(self.tools, "rm", checker)
         self.tools_sha = self.commit(self.tools)
+        self.git(self.caller, "rm", checker)
         for caller_has_checker in (False, True):
             with self.subTest(caller_has_checker=caller_has_checker):
                 if caller_has_checker:
-                    self.put(self.caller, "scripts/quality-gates/docs_drift.py", 'print("caller fallback ran")\n')
-                    self.head = self.commit(self.caller)
-                result = self.run_native()
-                self.assertNotEqual(result["code"], 0, "missing trusted tool was silently skipped or replaced")
+                    self.put(self.caller, checker, self.checker_source + "\n# Available only in caller history.\n")
+                self.head = self.commit(self.caller)
+                inputs = {"base-sha": self.base, "head-sha": self.head, "tools-ref": self.tools_sha}
+                result = self.run_native(inputs=inputs)
+                self.assertNotEqual(result["code"], 0, "missing reusable tool was silently skipped or replaced")
                 self.assertIsNone(result["trace"])
-                self.assertNotIn("caller fallback ran", result["stdout"])
+                self.assertFalse((result["workspace"] / "docs-drift-tools" / checker).exists())
 
     def test_native_head_policy_cannot_disable_target_base_mapping(self):
         for policy in [None, {"version": 1, "rules": []}]:

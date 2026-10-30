@@ -181,7 +181,8 @@ bash test_case_61df0b37_review_bakeoff.sh
 
 The existing shell regression suite discovers all `test_*.py`, including the new
 contract suite. `.github/workflows/eval-replay.yml` also runs the contract tests
-explicitly on relevant PRs and main pushes, making their producer visible to the
+explicitly on every PR, merge-group candidate and main push, so workflow-level
+path filters cannot suppress its check. This makes their producer visible to the
 orphan-suite gate without editing the shared CI workflow. It uses synthetic
 inputs, read-only repository permissions and a five-minute timeout. Tests
 use synthetic temporary inputs, not the private historical dataset. They include

@@ -3,13 +3,8 @@ name: Saved-output replay contracts
 on:
   push:
     branches: [main]
-    paths:
-      - 'eval/review-bakeoff/**'
-      - '.github/workflows/eval-replay.yml'
   pull_request:
-    paths:
-      - 'eval/review-bakeoff/**'
-      - '.github/workflows/eval-replay.yml'
+  merge_group:
 
 permissions:
   contents: read

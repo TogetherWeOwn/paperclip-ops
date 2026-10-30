@@ -1034,6 +1034,15 @@ jobs:
           python3 check_workflow_job_permissions.py
           python3 -m unittest -v test_check_workflow_job_permissions
 
+      - name: reusable behavioral workflow acceptance suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        env:
+          STATIC_LABEL_PYTHON: ${{ steps.static-label-python.outputs.python-path || '/usr/bin/python3' }}
+          PYTHONPATH: ${{ runner.temp }}/static-label-guard-deps
+        run: |
+          export PATH="$(dirname "$STATIC_LABEL_PYTHON"):$PATH"
+          python3 -B -m unittest discover -s templates/org-github/tests -p 'test_behavioral_workflow.py' -v
+
       # case_6bf2cca9. The review-routing contract is load-bearing for review-model
       # spend: a red router that CI never executes would silently misroute
       # risky diffs to `standard`. verify-fast.sh --parse-only never reaches

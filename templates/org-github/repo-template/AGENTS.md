@@ -15,10 +15,19 @@ Skills: `agent-experience` for anything agents consume; `<REPO SKILLS>`.
 6. Every change ships with a runnable check that proves it worked.
 7. An "agent-friendly" change is a hypothesis until a metric moves; name the metric.
 
+## Test behavior, not implementation
+
+Test observable claims and boundary inputs; name invariants before bounded,
+seeded property tests. Reproduce semantic counterexamples before treating regex
+matches as defects. Account for every expected case; skips, zero tests and
+bounded random samples are not exhaustive proof. Framework setup, reusable CI,
+completion evidence and rollback: [behavioral tests](docs/BEHAVIORAL-TESTS.md).
+
 ## Operator seeding note
 
 Destination: `repo-template/AGENTS.md` in the org `.github` repo, plus
 new-repo provisioning that copies it to the root of every new repo as
 `AGENTS.md` with `<REPO>`, `<FAST COMMAND>`, `<DEPLOY DOC>` and
-`<REPO SKILLS>` filled in. Rollback: stop seeding; already-seeded
-copies are ordinary repo files.
+`<REPO SKILLS>` filled in. Also copy `repo-template/BEHAVIORAL-TESTS.md`
+to the new repo's `docs/BEHAVIORAL-TESTS.md` so the map link resolves.
+Rollback: stop seeding; already-seeded copies are ordinary repo files.

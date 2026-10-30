@@ -1,0 +1,197 @@
+name: Behavioral tests (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      test-command:
+        description: Repo-owned command that runs tests and writes a fresh JUnit report.
+        required: true
+        type: string
+      setup-command:
+        description: Optional repo-owned dependency/toolchain setup command.
+        default: ''
+        type: string
+      report-path:
+        description: Repository-relative JUnit XML output; must not already exist.
+        default: behavioral-tests.xml
+        type: string
+      seed:
+        description: Reproducible decimal seed, from 0 through 2147483647.
+        default: '1729'
+        type: string
+      max-cases:
+        description: Property examples per invariant, from 1 through 1000.
+        default: '100'
+        type: string
+      expected-tests:
+        description: Optional exact number of JUnit testcases; empty means require at least one.
+        default: ''
+        type: string
+    outputs:
+      summary:
+        description: JSON completion counts and the configured property-test budget.
+        value: ${{ jobs.behavioral-tests.outputs.summary }}
+
+jobs:
+  behavioral-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      summary: ${{ steps.report.outputs.summary }}
+    env:
+      BEHAVIOR_TEST_SEED: ${{ inputs.seed }}
+      BEHAVIOR_TEST_MAX_CASES: ${{ inputs.max-cases }}
+      BEHAVIOR_TEST_EXPECTED_TESTS: ${{ inputs.expected-tests }}
+      BEHAVIOR_TEST_REPORT: ${{ inputs.report-path }}
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Validate configuration
+        id: config
+        shell: bash
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: |
+          python3 -I - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sys
+
+          def fail(code, message):
+              print(json.dumps({"schema": "behavioral-test-error.v1", "code": code,
+                                "message": message, "retryable": False,
+                                "next_action": "Correct the workflow inputs and rerun the tests."}))
+              sys.exit(1)
+
+          for key, low, high in (("BEHAVIOR_TEST_SEED", 0, 2147483647),
+                                 ("BEHAVIOR_TEST_MAX_CASES", 1, 1000),
+                                 ("BEHAVIOR_TEST_EXPECTED_TESTS", 1, 1000000)):
+              value = os.environ[key]
+              if key == "BEHAVIOR_TEST_EXPECTED_TESTS" and value == "":
+                  continue
+              if (len(value) > 10 or re.fullmatch(r"0|[1-9][0-9]*", value) is None
+                      or not low <= int(value) <= high):
+                  fail("invalid_budget", f"{key} must be a decimal integer in {low}..{high}.")
+          if not os.environ["TEST_COMMAND"].strip():
+              fail("empty_command", "test-command must run a real test suite.")
+          raw_path = os.environ["BEHAVIOR_TEST_REPORT"]
+          root = Path.cwd().resolve()
+          path = Path(raw_path)
+          if (not raw_path or path.is_absolute() or ".." in path.parts
+                  or ".git" in path.parts or path.resolve() == root
+                  or not path.resolve().is_relative_to(root)):
+              fail("invalid_report_path", "report-path must stay inside the caller repository, outside .git.")
+          if path.exists() or path.is_symlink():
+              fail("stale_report", "report-path already exists; use a fresh output path.")
+          print(json.dumps({"schema": "behavioral-test-budget.v1",
+                            "seed": int(os.environ["BEHAVIOR_TEST_SEED"]),
+                            "max_cases": int(os.environ["BEHAVIOR_TEST_MAX_CASES"])}))
+          PY
+
+      - name: Run behavioral tests
+        id: tests
+        shell: bash
+        env:
+          SETUP_COMMAND: ${{ inputs.setup-command }}
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$SETUP_COMMAND" ]]; then
+            bash -euo pipefail -c "$SETUP_COMMAND"
+          fi
+          # Setup must not supply the report in place of actually running tests.
+          if [[ -e "$BEHAVIOR_TEST_REPORT" || -L "$BEHAVIOR_TEST_REPORT" ]]; then
+            printf '%s\n' '{"schema":"behavioral-test-error.v1","code":"stale_report","retryable":false,"next_action":"Write JUnit output only from test-command."}'
+            exit 1
+          fi
+          bash -euo pipefail -c "$TEST_COMMAND"
+
+      - name: Verify completion report
+        id: report
+        if: ${{ !cancelled() && steps.config.outcome == 'success' && steps.tests.outcome != 'skipped' }}
+        shell: bash
+        env:
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+        run: |
+          python3 -I - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sys
+          import xml.etree.ElementTree as ET
+
+          def fail(code, message):
+              print(json.dumps({"schema": "behavioral-test-error.v1", "code": code,
+                                "message": message, "retryable": False,
+                                "next_action": "Fix the test run; produce a fresh, complete JUnit report."}))
+              sys.exit(1)
+
+          if os.environ.get("TEST_OUTCOME", "success") != "success":
+              fail("test_command_failed", "Setup or test-command exited unsuccessfully; the run is incomplete.")
+          path = Path(os.environ["BEHAVIOR_TEST_REPORT"])
+          root_path = Path.cwd().resolve()
+          try:
+              if path.is_symlink() or not path.resolve().is_relative_to(root_path):
+                  fail("invalid_report_path", "The report must be a regular file inside the repository.")
+              if not path.is_file():
+                  fail("missing_report", "The test command did not write a JUnit report.")
+              with path.open("rb") as stream:
+                  data = stream.read(1024 * 1024 + 1)
+          except OSError:
+              fail("unreadable_report", "The JUnit report could not be read.")
+          if not data or len(data) > 1024 * 1024:
+              fail("invalid_report_size", "JUnit report must contain 1..1048576 bytes.")
+          try:
+              root = ET.fromstring(data)
+          except ET.ParseError:
+              fail("malformed_report", "JUnit report is not well-formed XML.")
+          if root.tag not in ("testsuite", "testsuites"):
+              fail("invalid_report_shape", "JUnit root must be testsuite or testsuites.")
+          cases = list(root.iter("testcase"))
+          if not cases:
+              fail("zero_tests", "A successful command with zero testcases is incomplete.")
+          # Check actual elements, not only self-reported aggregate counters.
+          counts = {tag: sum(1 for case in cases if case.find(tag) is not None)
+                    for tag in ("failure", "error", "skipped")}
+          for suite in root.iter():
+              if suite.tag not in ("testsuite", "testsuites"):
+                  continue
+              for attr in ("tests", "failures", "errors", "skipped"):
+                  value = suite.get(attr)
+                  if value is None:
+                      continue
+                  if len(value) > 10 or re.fullmatch(r"0|[1-9][0-9]*", value) is None:
+                      fail("invalid_report_count", "JUnit counters must be nonnegative decimal integers.")
+                  count = int(value)
+                  if attr == "tests" and count != sum(1 for _ in suite.iter("testcase")):
+                      fail("incomplete_report", "JUnit declared and observed testcase counts differ.")
+                  if attr != "tests" and count:
+                      fail("incomplete_report", "JUnit reports failed, errored or skipped tests.")
+          if any(counts.values()):
+              fail("incomplete_report", "Every reported testcase must finish without failure, error or skip.")
+          expected = os.environ["BEHAVIOR_TEST_EXPECTED_TESTS"]
+          if expected and len(cases) != int(expected):
+              fail("unexpected_test_count", "Observed testcases do not match expected-tests exactly.")
+          summary = {"schema": "behavioral-test-summary.v1", "status": "passed",
+                     "seed": int(os.environ["BEHAVIOR_TEST_SEED"]),
+                     "max_cases": int(os.environ["BEHAVIOR_TEST_MAX_CASES"]),
+                     "tests": len(cases), "completed": len(cases),
+                     "failed": 0, "errors": 0, "skipped": 0,
+                     "expected_tests": int(expected) if expected else None}
+          encoded = json.dumps(summary, sort_keys=True)
+          print(encoded)
+          if os.environ.get("GITHUB_OUTPUT"):
+              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                  output.write(f"summary={encoded}\n")
+          if os.environ.get("GITHUB_STEP_SUMMARY"):
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+                  output.write(f"### Behavioral test completion\n\n```json\n{encoded}\n```\n")
+          PY

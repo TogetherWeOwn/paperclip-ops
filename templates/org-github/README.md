@@ -41,6 +41,7 @@ Operator applies these files there after this PR merges.
 | `tests/test_ci_policy.py` | `.github/scripts/test_ci_policy.py` (unit tests, run beside the lint) |
 | `pull-request-template/AX-BLOCK.md` | merged into `.github/pull_request_template.md` as a `## Agent Experience (AX)` section after `## Attestation` (see the file's Operator merge note) |
 | `repo-template/AGENTS.md` | `repo-template/AGENTS.md` (new-repo seed; provisioning copies it to each new repo root — see the file's seeding note) |
+| `repo-template/BEHAVIORAL-TESTS.md` | `repo-template/BEHAVIORAL-TESTS.md` (provisioning copies it to each new repo's `docs/BEHAVIORAL-TESTS.md`) |
 | `ax-lint/ax-lint.yml` | `.github/workflows/ax-lint.yml` (reusable `workflow_call`, advisory warn default) |
 | `ax-lint/ax_lint.py` | `ax-lint/ax_lint.py` (the lint the workflow checks out at the invoked ref) |
 | `ax-metrics/ax-metrics.yml` | PRIVATE ops repo `.github/workflows/ax-metrics.yml` (weekly schedule; cost/card data stays internal — see the file's header) |
@@ -67,6 +68,19 @@ Operator applies these files there after this PR merges.
 > to check the staged copy against a newer source head instead of the pin. The ruleset
 > payloads are never copied as files; a human org admin applies them with
 > the runbook (ruleset writes are 403 for the GitHub App).
+
+## Behavioral-test workflow adoption
+
+The canonical reusable workflow stays in this public repo at
+[`.github/workflows/reusable-behavioral-tests.yml`](../../.github/workflows/reusable-behavioral-tests.yml);
+there is no staged duplicate to synchronize. Seed the
+[behavioral-test contract](repo-template/BEHAVIORAL-TESTS.md) together with
+`AGENTS.md`. The contract documents seeded/bounded framework adapters, fresh
+JUnit completion evidence, exact expected-case accounting, caller pinning,
+existing `ci-ok` aggregation, live before/after metrics and rollback.
+Selecting the starter workflow does not install the guide or product tests.
+Existing TWO, Kofra and NNTune repositories adopt with a normal repo PR; this
+staged guidance is not proof that a product caller has run.
 
 ## Security-rule fixture verification
 

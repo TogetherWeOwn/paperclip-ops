@@ -6,7 +6,7 @@ from test_workflow_permissions_json_acceptance import CLIFixture, GOOD, MISSING
 
 class PermissionsCompanion(CLIFixture):
     def test_help_named_files_after_separator_are_checked_in_both_formats(self):
-        for name in ("--help", "-h"):
+        for name in ("--help", "-h", "--json"):
             for contents, exit_code, verdict in ((GOOD, 0, "pass"), (MISSING, 1, "fail")):
                 with self.subTest(name=name, verdict=verdict):
                     self.fixture(contents, name)

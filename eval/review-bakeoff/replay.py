@@ -36,8 +36,11 @@ def require(condition, code, detail):
 
 
 def canonical(value):
-    return (json.dumps(value, sort_keys=True, separators=(",", ":"),
-                       ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
+    try:
+        return (json.dumps(value, sort_keys=True, separators=(",", ":"),
+                           ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ContractError("invalid_json", "string is not UTF-8 encodable") from exc
 
 
 def digest(data):
@@ -61,7 +64,9 @@ def decode(data, name):
         return number
 
     try:
-        return json.loads(data, object_pairs_hook=pairs, parse_constant=constant, parse_float=finite)
+        value = json.loads(data, object_pairs_hook=pairs, parse_constant=constant, parse_float=finite)
+        canonical(value)
+        return value
     except (ValueError, UnicodeError) as exc:
         if isinstance(exc, ContractError):
             raise
@@ -143,7 +148,8 @@ def cases_contract(data):
         require(case["id"] not in cases, "duplicate_case", case["id"])
         ids = set()
         for defect in case["defects"]:
-            require(isinstance(defect, dict) and text(defect.get("id")) and text(defect.get("file"))
+            require(isinstance(defect, dict) and text(defect.get("id"))
+                    and defect["id"] not in ("invalid", "valid-other") and text(defect.get("file"))
                     and text(defect.get("severity")) and defect["severity"] in score.SEVERITY_RANK
                     and integer(defect.get("line_start")) and integer(defect.get("line_end"))
                     and 0 < defect["line_start"] <= defect["line_end"] and defect["id"] not in ids,
@@ -197,8 +203,7 @@ def holdout(cases, config):
             [{k: v for k, v in d.items() if k != "id"} for d in case["defects"]], key=canonical)
         keys = [("task", digest(canonical(task)))]
         if case["defects"]:
-            locations = sorted([{k: d[k] for k in ("file", "line_start", "line_end")}
-                                for d in case["defects"]], key=canonical)
+            locations = sorted({(d["file"], d["line_start"], d["line_end"]) for d in case["defects"]})
             keys.append(("label_locations", canonical(case.get("repo")), digest(canonical(locations))))
         meta = metadata.get(cid, {})
         if text(meta.get("related_group")):
@@ -265,15 +270,13 @@ def assemble(files, specs):
                             failed=result["review"] is None, generation_reproducibility="unknown",
                             missing_generation_evidence=["rendered_prompt", "provider_config", "historical_environment"]))
     require(rows, "empty_results", "at least one primary result is required")
-    by_key = dict(rows)
+    by_finding = {f"{key}#{i}": result for key, result in rows
+                  for i in range(len((result["review"] or {}).get("findings", [])))}
     for key, verdict in judgments.items():
-        stem, sep, index = key.rpartition("#")
-        require(sep and index.isdigit() and stem in by_key, "invalid_judgment", f"unknown finding: {key}")
-        result = by_key[stem]
-        findings = (result["review"] or {}).get("findings", [])
+        require(key in by_finding, "invalid_judgment", f"unknown finding: {key}")
+        result = by_finding[key]
         allowed = {"valid-other", "invalid"} | {d["id"] for d in cases[result["case_id"]]["defects"]}
-        require(int(index) < len(findings) and isinstance(verdict, str) and verdict in allowed,
-                "invalid_judgment", f"invalid verdict: {key}")
+        require(isinstance(verdict, str) and verdict in allowed, "invalid_judgment", f"invalid verdict: {key}")
     scores = (score.render(score.summarize(cases, rows, judgments)) + "\n").encode("utf-8")
     bindings = {path: digest(data) for path, data in sorted(files.items())
                 if path.startswith(("inputs/", "tool/"))}
@@ -377,7 +380,8 @@ def verify(root):
     config_contract(config)
     specs = []
     for record in manifest["results"]:
-        require(isinstance(record, dict) and all(text(record.get(k)) for k in ("key", "path", "source_path"))
+        require(isinstance(record, dict) and isinstance(record.get("key"), str) and bool(record["key"])
+                and all(text(record.get(k)) for k in ("path", "source_path"))
                 and record.get("role") in ("primary", "diagnostic"), "invalid_manifest", "invalid result descriptor")
         role, key, path = record["role"], record["key"], record["path"]
         expected = ("results/" if role == "primary" else "diagnostic/") + key + ".json"

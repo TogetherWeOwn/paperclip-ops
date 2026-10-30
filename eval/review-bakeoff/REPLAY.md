@@ -74,9 +74,11 @@ a role so legacy judgment keys remain unambiguous.
 
 Add an optional `artifacts.judgments` path for a JSON object mapping
 `<primary-result-stem>#<zero-based-finding-index>` to `valid-other`, `invalid` or
-a defect ID in that result's case. Omission freezes an explicit empty object.
-Unknown finding references and invalid verdicts refuse. Automatic location
-matches still take precedence, exactly as in the original scorer.
+a defect ID in that result's case. Indices use the scorer's canonical ASCII
+representation (`0`, `1`, …); aliases such as `00`, non-ASCII digits and out-of-range
+references refuse. Omission freezes an explicit empty object. Unknown finding
+references and invalid verdicts refuse. Automatic location matches still take
+precedence, exactly as in the original scorer.
 
 ## Task/scorer contract
 
@@ -85,6 +87,7 @@ match, model aggregation, retained failed-run denominators, and refusal of
 unknown cases/incomplete label shapes. Each case has a unique nonempty `id` and
 an explicit `defects` list. Each defect has a unique nonempty `id`, `file`, positive
 integer `line_start <= line_end`, and `minor`, `major` or `critical` severity.
+Defect IDs cannot be the reserved judgment tokens `invalid` or `valid-other`.
 An empty defects list represents the caller's explicit clean-case labels; it is
 not an inferred absence of defects.
 
@@ -119,9 +122,11 @@ For each case, optional `case_metadata` can declare:
   IDs and defect ordering), identical repository/head snapshots, and matching
   nonempty defect-location sets scoped by repository. The latter is deliberately
   conservative: changing descriptive text or severity cannot disguise related
-  labels. Repeated locations can quarantine distinct cases; this is not semantic
-  duplicate detection. Supply audited group provenance; unknown relationships
-  cannot be retrospectively certified by this heuristic.
+  labels. Location multiplicity is ignored: repeated labels at the same location
+  cannot disguise an identical location set. Repeated locations can quarantine
+  distinct cases; this is not semantic duplicate detection. Supply audited group
+  provenance; unknown relationships cannot be retrospectively certified by this
+  heuristic.
 - A group with prior exposure or dates on both sides of the cutoff is
   `contaminated`, partition `quarantine`, for **all** its cases/observations.
 - Missing dates/date sources, unknown exposure, or missing group provenance make
@@ -157,9 +162,11 @@ The output parent must already exist. The bundle contains:
 
 Sidecars are **outside** result directories, so legacy `*.json` enumeration never
 mistakes them for model outputs. Canonical JSON uses sorted keys, UTF-8, compact
-separators, a trailing newline and no nonfinite numbers. There is no generated
-wall-clock timestamp in canonical output. Identical frozen inputs and tool bytes
-produce identical bundle bytes. Python 3.10+ is required; record the actual Python
+separators, a trailing newline and no nonfinite numbers. Non-UTF-8-encodable JSON
+strings (including escaped lone surrogates) refuse with `invalid_json` rather than
+a traceback. Selected filename stems, including whitespace-only stems, round-trip
+unchanged in the manifest. There is no generated wall-clock timestamp in canonical
+output. Identical frozen inputs and tool bytes produce identical bundle bytes. Python 3.10+ is required; record the actual Python
 version and elapsed time in execution evidence, outside canonical output.
 
 Verification checks inventory and every hash, pins the executing tool/scorer,

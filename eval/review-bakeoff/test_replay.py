@@ -229,6 +229,142 @@ class Replay(unittest.TestCase):
         self.write("judgments.json", {"unknown#0": "invalid"})
         self.assert_error("invalid_judgment", self.build, self.root / "invalid-judgment")
 
+    def cli(self, *args):
+        return subprocess.run([sys.executable, "-B", str(Path(replay.__file__)), *map(str, args)],
+                              capture_output=True, text=True, check=False, timeout=20)
+
+    def cli_build(self, output):
+        self.write("config.json", self.config)
+        return self.cli("bundle", "--config", self.config_path, "--output", output)
+
+    def assert_cli_error(self, proc, code):
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertEqual(proc.stdout, "")
+        self.assertEqual(json.loads(proc.stderr)["error"], code)
+
+    def test_only_canonical_finding_indices_are_accepted(self):
+        self.write("results/ok.json", dict(result([finding("unmatched.ts", 999)]), rep=1))
+        self.config["artifacts"]["judgments"] = "judgments.json"
+        for i, index in enumerate(("00", "01", "٠", "０", "²", "-1", "1", "", "9" * 5000)):
+            with self.subTest(index=index[:20]):
+                self.write("judgments.json", {"ok#" + index: "d2"})
+                self.assert_cli_error(self.cli_build(self.root / f"index-{i}"), "invalid_judgment")
+
+    def test_manual_only_judgments_reach_summary_and_sidecars(self):
+        (self.results / "failed.json").unlink()
+        self.write("results/ok.json", result([finding("unmatched.ts", 999, "critical")]))
+        self.config["artifacts"]["judgments"] = "judgments.json"
+        for verdict, found, matched, invalid, other, recall, critical in (
+                ("d2", ["d2"], 1, 0, 0, "1/2 = 0.50", "0/1"),
+                ("invalid", [], 0, 1, 0, "0/2 = 0.00", "1/1"),
+                ("valid-other", [], 0, 0, 1, "0/2 = 0.00", "1/1")):
+            with self.subTest(verdict=verdict):
+                self.write("judgments.json", {"ok#0": verdict})
+                out = self.root / verdict
+                report = self.build(out)
+                self.assertEqual(replay.verify(out), report)
+                metrics = json.loads((out / "contracts/ok.manifest.json").read_text())["metrics"]
+                self.assertEqual({k: metrics[k] for k in ("found", "matched", "invalid", "valid_other", "unjudged")},
+                                 {"found": found, "matched": matched, "invalid": invalid,
+                                  "valid_other": other, "unjudged": 0})
+                cells = (out / "scores.md").read_text().splitlines()[2].split(" | ")
+                self.assertEqual(cells[3], recall)
+                self.assertEqual(cells[7], f"{matched}/1")
+                self.assertEqual(cells[11], critical)
+
+    def test_reserved_verdicts_cannot_be_defect_ids(self):
+        self.config["artifacts"]["judgments"] = "judgments.json"
+        self.write("results/ok.json", result([finding("unmatched.ts", 999)]))
+        for token in ("invalid", "valid-other"):
+            with self.subTest(token=token):
+                cases = copy.deepcopy(self.cases)
+                cases["cases"][0]["defects"][0]["id"] = token
+                self.write("cases.json", cases)
+                self.write("judgments.json", {"ok#0": token})
+                self.assert_cli_error(self.cli_build(self.root / token), "invalid_case")
+
+    def test_unicode_cli_contract_for_bundle_and_rehashed_verification(self):
+        self.build()
+        path = self.out / "inputs/cases.json"
+        manifest_path = self.out / "manifest.json"
+        original = json.loads(manifest_path.read_text())
+        for i, value in enumerate(("\ud800", "\udfff")):
+            with self.subTest(codepoint=ord(value)):
+                cases = copy.deepcopy(self.cases)
+                cases["cases"][0]["description"] = value
+                self.write("cases.json", cases)
+                self.assert_cli_error(self.cli_build(self.root / f"unicode-{i}"), "invalid_json")
+                path.write_bytes((self.source / "cases.json").read_bytes())
+                manifest = copy.deepcopy(original)
+                manifest["files"]["inputs/cases.json"] = replay.digest(path.read_bytes())
+                manifest_path.write_bytes(replay.canonical(manifest))
+                self.assert_cli_error(self.cli("verify", "--bundle", self.out), "invalid_json")
+        for i, value in enumerate(("ordinary text", "\U0001f600")):
+            cases = copy.deepcopy(self.cases)
+            cases["cases"][0]["description"] = value
+            self.write("cases.json", cases)
+            out = self.root / f"valid-unicode-{i}"
+            proc = self.cli_build(out)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(self.cli("verify", "--bundle", out).returncode, 0)
+
+    def assert_crossing_group(self, first, second):
+        self.write("cases.json", {"cases": [first, second]})
+        self.config["case_metadata"]["c2"] = dict(self.config["case_metadata"]["c1"],
+            observed_at="2026-01-01T23:59:59Z", related_group="other")
+        self.write("results/second.json", dict(result([]), case_id="c2"))
+        report = self.build()
+        expected = {"status": "contaminated", "partition": "quarantine",
+                    "reason": "prior_exposure_or_crossing_group", "group": ["c1", "c2"]}
+        self.assertEqual(report["holdout"], {"c1": expected, "c2": expected})
+        self.assertEqual(replay.verify(self.out), report)
+        for path in (self.out / "contracts").glob("*.manifest.json"):
+            self.assertEqual(json.loads(path.read_text())["holdout"], expected)
+
+    def test_empty_defect_tasks_group_without_location_or_declared_overlap(self):
+        first = dict(copy.deepcopy(CASE), defects=[])
+        second = dict(copy.deepcopy(first), id="c2")
+        self.assert_crossing_group(first, second)
+
+    def test_shared_snapshots_group_without_task_or_location_overlap(self):
+        first = dict(copy.deepcopy(CASE), repo="synthetic/repo", head_sha="snapshot", description="first")
+        second = dict(copy.deepcopy(first), id="c2", description="second")
+        for defect in second["defects"]:
+            defect["file"] = "different/" + defect["file"]
+        self.assert_crossing_group(first, second)
+
+    def test_repeated_location_labels_do_not_escape_grouping(self):
+        first = dict(copy.deepcopy(CASE), repo="synthetic/repo", description="first")
+        second = dict(copy.deepcopy(first), id="c2", description="second")
+        second["defects"].append(dict(second["defects"][0], id="d3"))
+        self.assert_crossing_group(first, second)
+
+    def test_whitespace_result_stem_round_trips(self):
+        (self.results / "ok.json").rename(self.results / " .json")
+        report = self.build()
+        self.assertEqual(replay.verify(self.out), report)
+        self.assertEqual(self.cli("verify", "--bundle", self.out).returncode, 0)
+        self.assertTrue((self.out / "contracts/ .manifest.json").is_file())
+
+    def test_numeric_boundaries_through_cli(self):
+        for field, values in (("score", ((-1, False), (6, False), (0, True), (5, True))),
+                              ("tokens", ((-1, False), (0, True), (2 ** 63 - 1, True), (2 ** 63, False)))):
+            for value, accepted in values:
+                with self.subTest(field=field, value=value):
+                    row = result([])
+                    if field == "score":
+                        row["review"]["score"] = value
+                    else:
+                        row["usage"] = {"input_tokens": value}
+                    self.write("results/ok.json", row)
+                    out = self.root / f"{field}-{value}"
+                    proc = self.cli_build(out)
+                    if accepted:
+                        self.assertEqual(proc.returncode, 0, proc.stderr)
+                        self.assertEqual(self.cli("verify", "--bundle", out).returncode, 0)
+                    else:
+                        self.assert_cli_error(proc, "invalid_result")
+
     def test_before_cutoff_is_train_and_timezone_equality_is_holdout(self):
         meta = self.config["case_metadata"]["c1"]
         meta["observed_at"] = "2026-01-01T23:59:59+00:00"

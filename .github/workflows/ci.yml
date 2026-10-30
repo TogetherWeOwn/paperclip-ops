@@ -981,6 +981,13 @@ jobs:
       # restoring a paid fallback, deleting the runner proof, or dropping the
       # clean checkout must turn this job red.
       #
+      - name: Cloudflare uptime monitor acceptance suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        working-directory: cloudflare-monitor
+        run: |
+          npm run check
+          npm test
+
       - name: self-hosted runner migration contract
         run: ./test_case_b2acfa5c_selfhosted_runner.sh
 

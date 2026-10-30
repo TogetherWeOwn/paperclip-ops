@@ -1,0 +1,10 @@
+{
+  "name": "cloudflare-uptime-monitor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/monitor.mjs && node --check src/worker.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": { "node": ">=24" }
+}

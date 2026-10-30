@@ -24,6 +24,8 @@ import statistics
 import sys
 from collections import defaultdict
 
+import hygiene
+
 SLACK = 15
 SEVERITY_RANK = {"minor": 1, "major": 2, "critical": 3}
 
@@ -109,7 +111,10 @@ def summarize(cases: dict[str, dict], results: list[tuple[str, dict]], judgments
         case = cases.get(res["case_id"])
         if case is None:
             continue
-        m = per_model[res["model"]]
+        model = res.get("model")
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError(f"{key}: model must be recorded")
+        m = per_model[model]
         s = score_result(res, case, judgments, key)
         for d in case["defects"]:
             kind = "diff-only" if d.get("detectability", "diff-only") == "diff-only" else "needs-context"
@@ -137,14 +142,16 @@ def summarize(cases: dict[str, dict], results: list[tuple[str, dict]], judgments
         total = sum(v for k, v in res.get("usage", {}).items() if k in ("input_tokens", "output_tokens"))
         if total:
             toks[res["model"]].append(total)
+    spreads = hygiene.repeat_spread(cases, results, judgments)
     for model, m in per_model.items():
         m["lat"] = lat[model]
         m["tokens"] = toks[model]
+        m.update(spreads[model])
     return per_model
 
 
 def render(per_model: dict) -> str:
-    cols = ["model", "runs", "failed", "recall (found/defects)", "recall 95% CI", "diff-only recall",
+    cols = ["model", "effort (requested)", "recall repeat spread", "reps", "runs", "failed", "recall (found/defects)", "recall 95% CI", "diff-only recall",
             "needs-context recall", "matched/findings", "precision (lower bound)", "severity exact",
             "false-pass 5/5", "critical missed", "lat p50 s", "lat p95 s", "tokens/review"]
     rows = ["| " + " | ".join(cols) + " |", "|" + " --- |" * len(cols)]
@@ -158,12 +165,16 @@ def render(per_model: dict) -> str:
 
     for model in sorted(per_model):
         m = per_model[model]
+        spread = m.get("recall_spread")
+        evidence = [model, m.get("effort") or "unrecorded",
+                    f"{spread:.4f}" if spread is not None else f"unmeasured: {m.get('reason', 'no repeat evidence')}",
+                    m.get("repeats", 0), int(m["runs"]), int(m["failed"])]
         if not m["defects"]:
-            rows.append(f"| {model} | {int(m['runs'])} | {int(m['failed'])} |" + " no defects |" + " |" * 11)
+            cells = evidence + ["no defects"] + ["n/a"] * (len(cols) - len(evidence) - 1)
+            rows.append("| " + " | ".join(str(c) for c in cells) + " |")
             continue
         lo, hi = wilson(int(m["found"]), int(m["defects"]))
-        cells = [
-            model, int(m["runs"]), int(m["failed"]),
+        cells = evidence + [
             f"{int(m['found'])}/{int(m['defects'])} = {m['found'] / m['defects']:.2f}",
             f"{lo:.2f}-{hi:.2f}", split(m, "diff-only"), split(m, "needs-context"),
             f"{int(m['matched'])}/{int(m['findings'])}",
@@ -190,7 +201,14 @@ def main(argv: list[str]) -> int:
     if not results:
         print("no results", file=sys.stderr)
         return 2
-    print(render(summarize(cases, results, judgments)))
+    try:
+        hygiene.validate_results(cases, results)
+    except ValueError as exc:
+        print(f"comparison rejected: {exc}", file=sys.stderr)
+        return 2
+    summary = summarize(cases, results, judgments)
+    print(render(summary))
+    print("\n" + hygiene.render_comparisons(summary))
     return 0
 
 

@@ -1219,6 +1219,51 @@ class RegenTest(unittest.TestCase):
         self.assertIn("archive ledger", s["fail_closed"])
         self.assertEqual(s["removed"], 0)
 
+    def test_apply_malformed_archive_ledger_aborts_with_empty_plan(self):
+        _, ws = self.make_run()
+        os.makedirs(os.path.join(self.tmp, "manifests"))
+        write(os.path.join(self.tmp, "manifests", "regen-strip-archive-records.tsv"),
+              "not\ta\tledger\n")
+        rc, s = self.run_main("--apply", "--max-remove", "0")
+        self.assertEqual(rc, 2)
+        self.assertIn("archive ledger", s["fail_closed"])
+        self.assertEqual((s["planned"], s["removed"]), (0, 0))
+        self.assertTrue(os.path.isdir(os.path.join(ws, "node_modules")))
+        self.assertTrue(os.path.isdir(os.path.join(ws, "target")))
+
+    def test_apply_malformed_archive_ledger_aborts_when_revalidation_refuses_every_candidate(self):
+        run, ws = self.make_run()
+        os.makedirs(os.path.join(self.tmp, "manifests"))
+        write(os.path.join(self.tmp, "manifests", "regen-strip-archive-records.tsv"),
+              "not\ta\tledger\n")
+        self.mutate_before_revalidation(run, lambda: self.db.__setitem__(RID, ("running", False, False)))
+        rc, s = self.run_main("--apply")
+        self.assertEqual(rc, 2)
+        self.assertIn("archive ledger", s["fail_closed"])
+        self.assertEqual(s["removed"], 0)
+        self.assertTrue(os.path.isdir(os.path.join(ws, "node_modules")))
+        self.assertTrue(os.path.isdir(os.path.join(ws, "target")))
+
+    def test_dry_run_malformed_archive_ledger_reports_pending_without_abort(self):
+        _, ws = self.make_run()
+        os.makedirs(os.path.join(self.tmp, "manifests"))
+        write(os.path.join(self.tmp, "manifests", "regen-strip-archive-records.tsv"),
+              "not\ta\tledger\n")
+        rc, s = self.run_main()
+        self.assertEqual(rc, 0)
+        self.assertIsNone(s["fail_closed"])
+        self.assertEqual(s["removed"], 0)
+        self.assertTrue(os.path.isdir(os.path.join(ws, "node_modules")))
+        self.assertTrue(os.path.isdir(os.path.join(ws, "target")))
+
+    def test_apply_empty_plan_with_missing_ledger_succeeds(self):
+        _, ws = self.make_run()
+        rc, s = self.run_main("--apply", "--max-remove", "0")
+        self.assertEqual((rc, s["planned"], s["removed"]), (0, 0, 0))
+        self.assertIsNone(s["fail_closed"])
+        self.assertTrue(os.path.isdir(os.path.join(ws, "node_modules")))
+        self.assertTrue(os.path.isdir(os.path.join(ws, "target")))
+
     def test_dry_run_reports_coverage_without_uploading(self):
         run, ws = self.make_run()
         rc, s = self.run_main()

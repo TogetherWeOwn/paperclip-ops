@@ -12,12 +12,14 @@ a case here will not complete it in the bot either.
 
 The key is read from an environment variable NAME given by --key-env and passed
 to the child only as OPENAI_API_KEY. It never appears in argv, a log or a result.
-Nothing here writes to the repo under test: each run gets its own detached
-worktree and an empty CODEX_HOME, both removed afterwards.
+Nothing here writes to the repo under test: the controller builds inline input
+from a detached worktree. The CLI runs in a separate Landlock-confined private
+directory with an empty CODEX_HOME; both directories are removed afterwards.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -30,6 +32,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ops" / "review_tier1"))
 import evidence_gate
+
+from hygiene import EFFORTS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROXY_BASE = "http://cliproxy:8317/v1"
@@ -78,6 +82,23 @@ def read_git_file(cwd: str, path: str, head_sha: str = "HEAD") -> str | None:
         if proc.returncode == 0 and b"\0" not in proc.stdout else None
 
 
+def read_git_blob_at(cwd: str, path: str, head_sha: str) -> str | None:
+    """Blob read pinned to an immutable head, for review context and evidence.
+
+    run_case must resolve files at the reviewed commit even if the worktree
+    HEAD moves mid-review, so the head is a required argument here rather
+    than an optional default. A non-bytes transport result fails closed to
+    None (unreadable -> the finding is withheld), never to a crash or a
+    guess. Behavior on real Git output is identical to read_git_file.
+    """
+    proc = subprocess.run(["git", "cat-file", "blob", f"{head_sha}:{path}"],
+                          cwd=cwd, capture_output=True)
+    out = proc.stdout
+    if proc.returncode != 0 or not isinstance(out, bytes) or b"\0" in out:
+        return None
+    return out.decode("utf-8", errors="replace")
+
+
 def number_lines(text: str) -> str:
     return "\n".join(f"{i:>5}  {line}" for i, line in enumerate(evidence_gate.source_lines(text), 1))
 
@@ -116,7 +137,10 @@ def codex_args(model: str, effort: str, schema: str, last_message: str) -> list[
         'model_providers.cliproxy.wire_api="responses"',
         f'model_reasoning_effort="{effort}"',
     ]
-    args = ["codex", "exec", "--ephemeral", "--ignore-user-config", "-s", "read-only", "--json",
+    if effort not in EFFORTS:
+        raise ValueError("reasoning effort must be explicitly pinned")
+    args = ["codex", "exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check",
+            "-s", "read-only", "--json",
             "--output-schema", schema, "-o", last_message, "-m", model]
     for item in cfg:
         args += ["-c", item]
@@ -224,33 +248,51 @@ def run_case(repo: str, case: dict, model: str, effort: str, key_env: str, timeo
         head = sh("git", "rev-parse", "HEAD", cwd=wt).strip()
         diff = sh("git", "show", "--format=", "--patch", head, cwd=wt)
         files = sh("git", "show", "--format=", "--name-only", head, cwd=wt).split()
-        context = build_context(lambda path: read_git_file(wt, path, head), files)
+        context = build_context(lambda path: read_git_blob_at(wt, path, head), files)
         prompt = build_prompt(template, case["title"], case.get("body", ""), files, diff, context)
-        last = os.path.join(scratch, "last.json")
-        env = {"PATH": os.environ["PATH"], "HOME": scratch, "CODEX_HOME": os.path.join(scratch, "ch"),
+        runtime = os.path.join(scratch, "runtime")
+        os.mkdir(runtime, mode=0o700)
+        last = os.path.join(runtime, "last.json")
+        schema = os.path.join(runtime, "output_schema.json")
+        shutil.copyfile(os.path.join(HERE, "output_schema.json"), schema)
+        env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"), "HOME": runtime,
+               "CODEX_HOME": os.path.join(runtime, "ch"), "TMPDIR": os.path.join(runtime, "tmp"),
                "OPENAI_API_KEY": key}
         os.makedirs(env["CODEX_HOME"])
+        os.mkdir(env["TMPDIR"], mode=0o700)
         started = time.time()
         timed_out = False
         try:
             proc = subprocess.run(
-                codex_args(model, effort, os.path.join(HERE, "output_schema.json"), last),
-                input=prompt, cwd=wt, env=env, capture_output=True, text=True,
+                [sys.executable, os.path.join(HERE, "isolation.py"), runtime, "--",
+                 *codex_args(model, effort, schema, last)],
+                input=prompt, cwd=runtime, env=env, capture_output=True, text=True,
                 errors="replace", timeout=timeout)
-            stdout, code = proc.stdout, proc.returncode
+            stdout, stderr, code = proc.stdout, proc.stderr, proc.returncode
         except subprocess.TimeoutExpired as exc:
             stdout, code, timed_out = (exc.stdout or b"").decode(errors="replace") \
                 if isinstance(exc.stdout, bytes) else (exc.stdout or ""), None, True
+            stderr = (exc.stderr or b"").decode(errors="replace") \
+                if isinstance(exc.stderr, bytes) else (exc.stderr or "")
         latency = round(time.time() - started, 1)
         events = parse_events(stdout)
         text = Path(last).read_text(encoding="utf-8") if os.path.exists(last) else ""
         review, parse_error = parse_review(text) if text else (None, "no final message")
+        if not text and stderr:
+            # A fail-closed launcher can exit before emitting any JSON events.
+            # Keep its reason, never the credential or terminal control bytes.
+            diagnostic = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", stderr.replace(key, "[REDACTED]"))
+            diagnostic = " ".join("".join(c if c.isprintable() else " " for c in diagnostic).split())
+            if diagnostic:
+                events["errors"].append(("launcher stderr: " + diagnostic)[:300])
         if review is not None:
-            gate = publish_gated_review(review, head, lambda path: read_git_file(wt, path, head))
+            gate = publish_gated_review(review, head, lambda path: read_git_blob_at(wt, path, head))
         else:
             gate = None
         return {
             "case_id": case["id"], "model": model, "effort": effort,
+            "input_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            "isolation": "landlock-v1",
             "latency_s": latency, "exit_code": code, "timed_out": timed_out,
             "usage": events["usage"], "errors": events["errors"],
             "prompt_chars": len(prompt), "review": review, "parse_error": parse_error,
@@ -268,13 +310,15 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--case", required=True, help="cases.json")
     ap.add_argument("--case-id", required=True)
     ap.add_argument("--model", required=True)
-    ap.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh"])
+    ap.add_argument("--effort", default="medium", choices=EFFORTS)
     ap.add_argument("--rep", type=int, default=1)
     ap.add_argument("--key-env", default="CLIPROXY_KEY_ENV_VALUE",
                     help="NAME of the environment variable holding the CLIProxy key")
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--out", required=True)
     args = ap.parse_args(argv)
+    if args.rep < 1:
+        ap.error("--rep must be a positive integer")
     cases = {c["id"]: c for c in json.load(open(args.case, encoding="utf-8"))["cases"]}
     if args.case_id not in cases:
         print(f"unknown case {args.case_id}", file=sys.stderr)
@@ -287,7 +331,9 @@ def main(argv: list[str]) -> int:
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(result, fh, indent=2)
     n = len(result["review"]["findings"]) if result["review"] else None
-    w = (result["evidence_gate"] or {}).get("refusal_count")
+    # The summary line tolerates results without gate metadata (the live
+    # run_case always records evidence_gate; stubbed results may predate it).
+    w = (result.get("evidence_gate") or {}).get("refusal_count")
     print(f"{args.case_id} {args.model} score={result['review']['score'] if result['review'] else None} "
           f"findings={n} withheld={w} latency={result['latency_s']}s tokens={result['usage']} -> {path}")
     return 0 if result["review"] else 1

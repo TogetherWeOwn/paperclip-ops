@@ -10,7 +10,9 @@ until its non-regenerable content is proven archived offsite through the
 retention owner's established batch tar.zst -> offsite:archives/<class>/<date>/
 -> re-download SHA256 verification -> manifest protocol (reference:
 retire-terminal-worktrees.py, host artifact SHA256 973c5dd0...). Runs without
-that proof keep every local path (refused `archive-unverified`).
+that proof keep every local path (refused `archive-unverified`). Apply validates
+the archive ledger before removal, even when no paths are eligible; malformed
+custody evidence aborts closed. Dry-run remains read-only and non-blocking.
 """
 import argparse
 import datetime as dt
@@ -732,7 +734,14 @@ def firing(args, mode):
             print(json.dumps({"mode": mode, "fail_closed": f"manifest not written: {exc}"}, sort_keys=True))
             return 2
     removed, refused, abort, ledger_error = 0, Counter(), None, None
-    if args.apply and plan:
+    if args.apply:
+        # Revalidation can refuse every candidate, so per-run archive checks
+        # alone cannot prove the firing's custody evidence is readable.
+        try:
+            load_archive_records()
+        except Unverifiable as exc:
+            abort = str(exc)
+    if args.apply and plan and not abort:
         removed, refused, abort = apply_plan(
             plan, idle_min, time.monotonic() + args.time_budget, failed, stamp)
         ledger_error = save_failed(failed)

@@ -71,7 +71,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--repo", required=True)
     ap.add_argument("--cases", required=True)
     ap.add_argument("--models", nargs="+", required=True)
-    ap.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh"])
+    ap.add_argument("--effort", default="medium", choices=run_review.EFFORTS)
     ap.add_argument("--rep", type=int, default=1)
     ap.add_argument("--key-env", required=True)
     ap.add_argument("--out", required=True)
@@ -79,6 +79,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--case-ids", nargs="*", help="restrict to these case ids")
     args = ap.parse_args(argv)
+    if args.rep < 1:
+        ap.error("--rep must be a positive integer")
     cases = json.load(open(args.cases, encoding="utf-8"))["cases"]
     if args.case_ids:
         cases = [c for c in cases if c["id"] in set(args.case_ids)]

@@ -258,16 +258,24 @@ class RunCaseEvidence(unittest.TestCase):
             raw = json.dumps({**GOOD, "findings": findings})
 
         def transport(args, **kw):
-            if args[0] != "codex":
+            argv = list(args)
+            if argv[:1] != ["codex"] and "codex" not in argv:
                 return real_run(args, **kw)
+            # The merged reviewer launches via isolation.py ([python,
+            # isolation.py, runtime, "--", codex, ...]) with the private
+            # runtime as cwd: emulate the model turn at the -o path and
+            # resolve the worktree from the prepare spy. Real Git calls
+            # (no exact "codex" element) still execute.
             if during_review is not None:
-                during_review(kw["cwd"])
-            Path(args[args.index("-o") + 1]).write_text(raw)
+                during_review(prepare_spy.call_args[0][2])
+            Path(argv[argv.index("-o") + 1]).write_text(raw)
             return subprocess.CompletedProcess(args, 0, stdout='{"type":"turn.completed",'
                                                '"usage":{"output_tokens":12}}\n', stderr="")
 
         with patch.dict(os.environ, {"BAKEOFF_FIXTURE_KEY": "offline-fixture-not-a-key"}), \
-                patch.object(rr.subprocess, "run", side_effect=transport):
+                patch.object(rr.subprocess, "run", side_effect=transport), \
+                patch.object(rr, "prepare_worktree",
+                             wraps=rr.prepare_worktree) as prepare_spy:
             return rr.run_case(str(self.repo), case or self.case, "fixture-model", "medium",
                                "BAKEOFF_FIXTURE_KEY", 5)
 
@@ -396,6 +404,106 @@ class RunCaseEvidence(unittest.TestCase):
         self.assertIn("not JSON", result["parse_error"])
         self.assertEqual(result["raw_final"], "not a review")
         self.assertEqual(result["usage"], {"output_tokens": 12})
+
+
+class LauncherErrors(unittest.TestCase):
+    """Real Git and saved CLI results; replace only the inference transport."""
+
+    def setUp(self):
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        (self.repo / "file.py").write_text("pass\n")
+        subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=fixture", "-c",
+                        "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], check=True)
+        head = subprocess.run(["git", "-C", str(self.repo), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        self.cases = self.root / "cases.json"
+        self.cases.write_text(json.dumps({"cases": [{"id": "fixture", "kind": "real",
+                                                    "head_sha": head, "title": "fixture"}]}))
+        self.key = "offline-secret-not-a-real-key"
+
+    def saved_result(self, stderr, *, stdout="", final=None, timeout=False):
+        import contextlib
+        import io
+        import os
+        import subprocess
+        from pathlib import Path
+        from unittest.mock import patch
+
+        real_run = subprocess.run
+
+        def transport(args, **kwargs):
+            if "codex" not in args:
+                return real_run(args, **kwargs)
+            if final is not None:
+                Path(args[args.index("-o") + 1]).write_text(final)
+            if timeout:
+                raise subprocess.TimeoutExpired(args, 1, output=stdout, stderr=stderr)
+            return subprocess.CompletedProcess(args, 0 if final else 1, stdout=stdout, stderr=stderr)
+
+        out = self.root / "results"
+        with patch.dict(os.environ, {"BAKEOFF_ERROR_TEST_KEY": self.key}), \
+                patch.object(rr.subprocess, "run", side_effect=transport), \
+                contextlib.redirect_stdout(io.StringIO()):
+            code = rr.main(["--repo", str(self.repo), "--case", str(self.cases),
+                            "--case-id", "fixture", "--model", "fixture", "--out", str(out),
+                            "--key-env", "BAKEOFF_ERROR_TEST_KEY"])
+        self.assertEqual(code, 0 if final else 1)
+        return json.loads((out / "fixture__fixture__medium__r1.json").read_text())
+
+    def test_refusal_reason_is_saved_without_a_final_message(self):
+        result = self.saved_result("isolation refused: Landlock ABI unavailable\n")
+        self.assertIsNone(result["review"])
+        self.assertEqual(result["parse_error"], "no final message")
+        self.assertEqual(result["exit_code"], 1)
+        self.assertIn("Landlock ABI unavailable", " ".join(result["errors"]))
+
+    def test_stderr_is_redacted_printable_and_bounded(self):
+        result = self.saved_result("\x1b[31misolation refused\x1b[0m\n" + self.key + "\x00\t" + "x" * 2000)
+        self.assertTrue(result["errors"], "launcher stderr must survive in saved errors")
+        error = result["errors"][-1]
+        self.assertIn("isolation refused", error)
+        self.assertIn("[REDACTED]", error)
+        self.assertNotIn(self.key, json.dumps(result))
+        self.assertTrue(error.isprintable())
+        self.assertNotIn("[31m", error)
+        self.assertLessEqual(len(error), 300)
+
+    def test_event_errors_and_usage_are_preserved(self):
+        result = self.saved_result("isolation refused: denied", stdout=(
+            '{"type":"error","message":"existing event error"}\n'
+            '{"type":"turn.completed","usage":{"output_tokens":12}}\n'))
+        self.assertEqual(result["errors"][0], "existing event error")
+        self.assertIn("denied", result["errors"][-1])
+        self.assertEqual(result["usage"], {"output_tokens": 12})
+
+    def test_empty_or_whitespace_stderr_does_not_create_an_error(self):
+        for stderr in ("", " \n\t"):
+            with self.subTest(stderr=stderr):
+                self.assertEqual(self.saved_result(stderr)["errors"], [])
+
+    def test_a_final_message_keeps_existing_stderr_handling(self):
+        result = self.saved_result("runtime warning", final=json.dumps({**GOOD, "findings": []}))
+        self.assertIsNotNone(result["review"])
+        self.assertIsNone(result["parse_error"])
+        self.assertEqual(result["errors"], [])
+
+    def test_timeout_stderr_is_saved_for_both_subprocess_output_types(self):
+        for stderr in (b"launcher timeout: denied", "launcher timeout: denied"):
+            with self.subTest(stderr=stderr):
+                result = self.saved_result(stderr, timeout=True)
+                self.assertTrue(result["timed_out"])
+                self.assertIsNone(result["exit_code"])
+                self.assertIn("launcher timeout: denied", " ".join(result["errors"]))
 
 
 if __name__ == "__main__":

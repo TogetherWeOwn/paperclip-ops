@@ -77,7 +77,8 @@ jobs:
         env:
           PYTHONPATH: ${{ runner.temp }}/public-ci-python
         run: |
-          python3 -m unittest discover -s .github/scripts -p 'test_pr_standards*.py'
+          python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
+          python3 -m unittest discover -s .github/scripts -p 'test_pr_standards_merge_group.py'
           python3 -m unittest discover -s .github/scripts -p 'test_ci_policy.py'
           python3 -m unittest discover -s .github/scripts -p 'test_action_pins.py'
           python3 -m unittest discover -s .github/scripts -p 'test_public_ci.py'

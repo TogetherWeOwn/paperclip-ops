@@ -36,7 +36,9 @@ for _key in [k for k in os.environ if k.startswith("GIT_")]:
 RID = "00000000-0000-4000-8000-000000000003"
 RID2 = "00000000-0000-4000-8000-000000000020"
 PY = sys.executable
-GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
+# Automatic maintenance must not write after the fixture has been backdated.
+GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+       "-c", "commit.gpgsign=false", "-c", "maintenance.auto=false"]
 REAL_DB_SNAPSHOT = tool.db_snapshot
 IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
 REAL_LIVE_REFS = tool.live_refs

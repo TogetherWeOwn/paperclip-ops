@@ -50,7 +50,7 @@ def probe_view():
 
 
 def git(cwd, *args):
-    subprocess.run([*GIT, *args], cwd=cwd, check=True, capture_output=True)
+    return subprocess.run([*GIT, *args], cwd=cwd, check=True, capture_output=True)
 
 
 def write(path, text="x\n"):
@@ -181,6 +181,13 @@ class RegenTest(unittest.TestCase):
             return original(rid, run_real, idle_min)
 
         self.patch(tool, "revalidate_run", side_effect=wrapper)
+
+    def test_fixture_git_disables_automatic_maintenance(self):
+        _, ws = self.make_run()
+        # Command-scoped isolation must override an enabled repository setting.
+        git(ws, "config", "--local", "maintenance.auto", "true")
+        result = git(ws, "config", "--type=bool", "--get", "maintenance.auto")
+        self.assertEqual(result.stdout, b"false\n")
 
     def test_dry_run_is_the_default_and_removes_nothing(self):
         _, ws = self.make_run()

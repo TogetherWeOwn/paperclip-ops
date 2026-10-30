@@ -15,7 +15,8 @@ import unittest
 from unittest.mock import patch
 
 from test_diagnostic_delta import (RepositoryFixture, SCRIPT, PRODUCER, BAD_SCRIPT,
-                                   POLICY, POLICY_VALUE, WORKFLOW_PATH, SCRIPT_RULE)
+                                   POLICY, POLICY_VALUE, WORKFLOW_POLICY, WORKFLOW_PATH,
+                                   SCRIPT_RULE)
 
 ROOT = Path(__file__).resolve().parent
 
@@ -352,6 +353,11 @@ class WorkflowScopeRefusal(RepositoryFixture):
     no variant can be re-admitted by a later parser change.
     """
 
+    def setUp(self):
+        super().setUp()
+        self.put(POLICY, json.dumps(WORKFLOW_POLICY))
+        self.base = self.commit()
+
     # One entry per previously-recognised or previously-mis-recognised form.
     VARIANTS = {
         "block-typed": "name: ship\non:\n  workflow_dispatch:\n    inputs:\n"
@@ -646,6 +652,11 @@ jobs:
 
 
 class DispatchCoverageRatchet(RepositoryFixture):
+    def setUp(self):
+        super().setUp()
+        self.put(POLICY, json.dumps(WORKFLOW_POLICY))
+        self.base = self.commit()
+
     def test_unsupported_shapes_never_become_clean(self):
         # These were unmeasurable because the scanner could not parse them.
         # They stay unmeasurable for the stronger reason: workflow YAML is not

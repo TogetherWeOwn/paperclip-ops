@@ -36,7 +36,9 @@ for _key in [k for k in os.environ if k.startswith("GIT_")]:
 RID = "00000000-0000-4000-8000-000000000003"
 RID2 = "00000000-0000-4000-8000-000000000020"
 PY = sys.executable
-GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
+# Automatic maintenance must not write after the fixture has been backdated.
+GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+       "-c", "commit.gpgsign=false", "-c", "maintenance.auto=false"]
 REAL_DB_SNAPSHOT = tool.db_snapshot
 IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
 REAL_LIVE_REFS = tool.live_refs
@@ -48,7 +50,7 @@ def probe_view():
 
 
 def git(cwd, *args):
-    subprocess.run([*GIT, *args], cwd=cwd, check=True, capture_output=True)
+    return subprocess.run([*GIT, *args], cwd=cwd, check=True, capture_output=True)
 
 
 def write(path, text="x\n"):
@@ -179,6 +181,13 @@ class RegenTest(unittest.TestCase):
             return original(rid, run_real, idle_min)
 
         self.patch(tool, "revalidate_run", side_effect=wrapper)
+
+    def test_fixture_git_disables_automatic_maintenance(self):
+        _, ws = self.make_run()
+        # Command-scoped isolation must override an enabled repository setting.
+        git(ws, "config", "--local", "maintenance.auto", "true")
+        result = git(ws, "config", "--type=bool", "--get", "maintenance.auto")
+        self.assertEqual(result.stdout, b"false\n")
 
     def test_dry_run_is_the_default_and_removes_nothing(self):
         _, ws = self.make_run()

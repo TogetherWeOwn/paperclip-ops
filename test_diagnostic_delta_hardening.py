@@ -125,6 +125,44 @@ class GitOutputLimits(unittest.TestCase):
             with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
                 self.assertEqual(gate.git(root, "ls-tree", limit=1024), b"x" * 1024)
 
+    def test_documented_git_deadline_is_pinned_at_thirty_seconds(self):
+        # The published collection bound, not an incidental literal: relaxing it
+        # silently buys an unbounded hang for every caller of the gate.
+        self.assertEqual(load_gate().GIT_TIMEOUT, 30)
+
+    def test_stalled_git_is_timed_out_and_reaped_with_open_or_closed_pipes(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            marker = root / "finished"
+            pid_file = root / "pid"
+            bindir = root / "bin"
+            bindir.mkdir()
+            fake = bindir / "git"
+            for close_pipes in (False, True):
+                with self.subTest(close_pipes=close_pipes):
+                    if marker.exists():
+                        marker.unlink()
+                    fake.write_text(
+                        "#!/usr/bin/env python3\n"
+                        "import os, time\nfrom pathlib import Path\n"
+                        f"Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+                        + ("os.close(1); os.close(2)\n" if close_pipes else "")
+                        + "time.sleep(10)\n"
+                        f"Path({str(marker)!r}).touch()\n")
+                    fake.chmod(0o755)
+                    start = time.monotonic()
+                    with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
+                        with patch.object(gate, "GIT_TIMEOUT", 0.5):
+                            with self.assertRaises(gate.Unmeasurable) as error:
+                                gate.git(root, "ls-tree")
+                    self.assertEqual(error.exception.code, "git_timeout")
+                    self.assertTrue(error.exception.retryable)
+                    self.assertLess(time.monotonic() - start, 5)
+                    self.assertFalse(marker.exists(), "Stalled Git must be killed before it finishes")
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(int(pid_file.read_text()), 0)
+
 
 class CollectorTimeouts(unittest.TestCase):
     def test_stalled_producer_is_reaped_with_open_or_closed_pipes(self):
@@ -307,9 +345,13 @@ class WildcardAncestors(RepositoryFixture):
 
 class QuotedDispatchContainers(RepositoryFixture):
     @staticmethod
-    def quoted(container, typed):
-        dispatch_line = '"workflow_dispatch":' if container == "workflow_dispatch" else "workflow_dispatch:"
-        inputs_line = '"inputs":' if container == "inputs" else "inputs:"
+    def quoted(container, typed, quote='"'):
+        name = "workflow_dispatch" if container == "workflow_dispatch" else "inputs"
+        quoted = f"{quote}{name}{quote}:"
+        # Only the container under test is quoted; the others stay bare so the
+        # block recognition path being exercised is unambiguous.
+        dispatch_line = quoted if container == "workflow_dispatch" else "workflow_dispatch:"
+        inputs_line = quoted if container == "inputs" else "inputs:"
         text = (f"name: ship\non:\n  {dispatch_line}\n    {inputs_line}\n"
                 "      target:\n        description: deployment target\n")
         return text + ("        type: string\n" if typed else "")
@@ -321,6 +363,19 @@ class QuotedDispatchContainers(RepositoryFixture):
                 self.base = self.commit()
                 self.assert_counts(self.check(0, head=self.base), 0, 0, 0, 0)
                 self.put(WORKFLOW_PATH, self.quoted(container, False))
+                self.assert_counts(self.check(1), 0, 1, 1, 0)
+
+    def test_single_quoted_inputs_block_preserves_typed_and_untyped_classification(self):
+        # Block-recognition regex, not the inline fallback: a bare
+        # workflow_dispatch with a single-quoted `inputs:` key must still be
+        # parsed as a real block, so dropping single-quote support there cannot
+        # silently reclassify a typed input as clean or an untyped one as unknown.
+        for quote in ("'", '"'):
+            with self.subTest(quote=quote):
+                self.put(WORKFLOW_PATH, self.quoted("inputs", True, quote=quote))
+                self.base = self.commit()
+                self.assert_counts(self.check(0, head=self.base), 0, 0, 0, 0)
+                self.put(WORKFLOW_PATH, self.quoted("inputs", False, quote=quote))
                 self.assert_counts(self.check(1), 0, 1, 1, 0)
 
     def test_quoted_outer_on_inline_nonempty_inputs_are_unmeasurable(self):
@@ -366,6 +421,99 @@ class QuotedDispatchContainers(RepositoryFixture):
         self.assertEqual(self.check(2)["code"], "unsupported_coverage")
 
 
+class DispatchProducerBoundaries(unittest.TestCase):
+    def scan(self, workflow):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "AGENTS.md").write_text("# map\n")
+            path = root / WORKFLOW_PATH
+            path.parent.mkdir(parents=True)
+            path.write_text(workflow)
+            result = subprocess.run([sys.executable, str(PRODUCER), "--root", str(root),
+                                     "--mode", "warn", "--json"],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return json.loads(result.stdout)
+
+    def test_non_event_mappings_and_run_scalar_are_not_events(self):
+        report = self.scan('''name: test
+on: push
+env:
+  "on": workflow_dispatch
+  workflow_dispatch:
+    inputs:
+      wrong:
+        description: data
+jobs:
+  build:
+    steps:
+      - run: |
+          cat <<'EOF'
+          on:
+            workflow_dispatch:
+              inputs:
+                fake:
+                  description: data
+          EOF
+''')
+        self.assertEqual(report["findings"], [])
+        self.assertEqual(report["coverage"], {"skipped": [], "unknown": []})
+
+    def test_description_scalar_does_not_supply_type(self):
+        for description in ("|\n          type: string", ">-\n          type: choice",
+                            '"description\n          type: string\n          end"'):
+            with self.subTest(description=description):
+                report = self.scan("on:\n  workflow_dispatch:\n    inputs:\n"
+                                   "      target:\n        description: " + description + "\n")
+                self.assertEqual([f["rule_id"] for f in report["findings"]],
+                                 ["dispatch-inputs/untyped"])
+                self.assertEqual(report["coverage"]["unknown"], [])
+
+    def test_unsupported_types_and_event_aliases_are_unknown(self):
+        cases = (
+            "on:\n  workflow_dispatch:\n    inputs:\n      target:\n        type: |\n          choice\n",
+            "on:\n  workflow_dispatch:\n    inputs:\n      target:\n        type: >-\n          choice\n",
+            "on:\n  workflow_dispatch:\n    inputs:\n      target:\n        type: *kind\n",
+            'on:\n  workflow_dispatch:\n    inputs:\n      target:\n        type: "ch\\u006fice"\n',
+            'on:\n  workflow_dispatch:\n    inputs:\n      target:\n        type: "multi\n          line"\n',
+            '"o\\u006e":\n  workflow_dispatch:\n    inputs: {}\n',
+            'on:\n  "workflow_\\u0064ispatch":\n    inputs: {}\n',
+            "on: *events\n",
+            "on: [push, *events]\n",
+            'on: {"workflow_\\u0064ispatch": {}}\n',
+            "on:\n  workflow_dispatch: *dispatch\n",
+            "on:\n  workflow_dispatch:\n    inputs: *inputs\n",
+            "on:\n  <<: *events\n",
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                report = self.scan(text)
+                self.assertTrue(report["coverage"]["unknown"], report)
+
+    def test_literal_quoted_containers_and_choice_controls(self):
+        for quote in ("'", '"'):
+            with self.subTest(quote=quote):
+                prefix = (f"{quote}on{quote}:\n  {quote}workflow_dispatch{quote}:\n"
+                          f"    {quote}inputs{quote}:\n      target:\n")
+                report = self.scan(prefix + "        type: choice\n")
+                self.assertEqual([f["rule_id"] for f in report["findings"]],
+                                 ["dispatch-inputs/choice-without-options"])
+                report = self.scan(prefix + "        type: choice\n        options:\n          - one\n")
+                self.assertEqual(report["findings"], [])
+                self.assertEqual(report["coverage"]["unknown"], [])
+
+
+class DispatchCoverageRatchet(RepositoryFixture):
+    def test_unsupported_shapes_never_become_clean(self):
+        for text in ("on: *events\n",
+                     '"o\\u006e":\n  workflow_dispatch: {}\n',
+                     "on:\n  workflow_dispatch:\n    inputs:\n"
+                     "      target:\n        type: |\n          choice\n"):
+            with self.subTest(text=text):
+                self.put(WORKFLOW_PATH, text)
+                self.assertEqual(self.check(2)["code"], "unsupported_coverage")
+
+
 class IntegrationContract(unittest.TestCase):
     def test_reusable_workflow_artifact_name_is_caller_selectable_without_overwrite(self):
         import yaml
@@ -401,7 +549,9 @@ class IntegrationContract(unittest.TestCase):
         step, = [s for s in workflow["jobs"]["diagnostic-delta"]["steps"]
                  if s.get("name") == "Validate immutable inputs"]
         cases = (({"base-sha": "a" * 40, "head-sha": "b" * 40, "tools-ref": "c" * 40}, 0),
-                 ({"base-sha": "a" * 64, "head-sha": "b" * 64, "tools-ref": "c" * 40}, 0),
+                 ({"base-sha": "a" * 64, "head-sha": "b" * 64, "tools-ref": "c" * 40}, 1),
+                 ({"base-sha": "a" * 64, "head-sha": "b" * 40, "tools-ref": "c" * 40}, 1),
+                 ({"base-sha": "a" * 40, "head-sha": "b" * 64, "tools-ref": "c" * 40}, 1),
                  ({"base-sha": "a" * 64, "head-sha": "b" * 64, "tools-ref": "c" * 64}, 1),
                  ({"base-sha": "a" * 40, "head-sha": "b" * 40, "tools-ref": "c" * 64}, 1))
         for inputs, expected in cases:
@@ -426,6 +576,164 @@ class IntegrationContract(unittest.TestCase):
             self.assertTrue(path.endswith(".json"), path)
             resolved.add(path)
         self.assertEqual(len(resolved), 2, "Distinct workspaces must not share one report path")
+
+
+class ScopeAndOfflineBoundary(RepositoryFixture):
+    def test_subdirectory_repo_argument_and_default_cwd_keep_root_policy(self):
+        self.put("scripts/new.sh", BAD_SCRIPT)
+        head = self.commit()
+        report = self.check(1, head=head, repo=self.root / "scripts")
+        self.assert_counts(report, 0, 1, 1, 0)
+        result = subprocess.run([sys.executable, "-I", "-B", str(SCRIPT),
+                                 "--base", self.base, "--head", head],
+                                cwd=self.root / "scripts", env=self.env,
+                                capture_output=True, text=True, timeout=45)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["counts"]["new"], 1)
+
+    def test_recursive_glob_covers_direct_and_nested_children_but_star_does_not(self):
+        for pattern, expected in (("scripts/**/*.sh", 2), ("scripts/*.sh", 1)):
+            with self.subTest(pattern=pattern):
+                self.put(POLICY, json.dumps({**POLICY_VALUE, "include": [pattern]}))
+                base = self.commit()
+                self.put("scripts/run.sh", BAD_SCRIPT)
+                self.put("scripts/sub/run.sh", BAD_SCRIPT)
+                head = self.commit()
+                report = self.check(1, base=base, head=head)
+                self.assert_counts(report, 0, expected, expected, 0)
+                self.assertEqual({x["path"] for x in report["new"]},
+                                 {"scripts/run.sh", "scripts/sub/run.sh"} if expected == 2
+                                 else {"scripts/run.sh"})
+                (self.root / "scripts/run.sh").unlink()
+                (self.root / "scripts/sub/run.sh").unlink()
+                self.commit()
+
+    def test_glob_components_and_zero_directory_double_star(self):
+        gate = load_gate()
+        for path, pattern, expected in (
+            ("run.sh", "**/*.sh", True),
+            ("scripts/run.sh", "scripts/**/run.sh", True),
+            ("scripts/a/b/run.sh", "scripts/**/run.sh", True),
+            ("scripts/a/b/run.sh", "scripts/*/run.sh", False),
+            ("scripts/x/run.py", "scripts/?/run.[ps][yh]", True),
+            ("scripts/xy/run.py", "scripts/?/run.[ps][yh]", False),
+            ("scripts/run.sh", "Scripts/**/*.sh", False),
+            ("scripts/run.sh", "scripts/*", True),
+            ("scripts/a/run.sh", "scripts/*", False),
+        ):
+            with self.subTest(path=path, pattern=pattern):
+                self.assertEqual(gate.matches(path, [pattern]), expected)
+
+    def test_missing_promisor_blob_cannot_fetch_when_old_git_ignores_lazy_guard(self):
+        import shutil
+        self.put("scripts/remote.sh", BAD_SCRIPT)
+        head = self.commit()
+        oid = self.git("rev-parse", head + ":scripts/remote.sh")
+        remote = Path(self.tmp.name) / "remote.git"
+        self.git("clone", "-q", "--bare", str(self.root), str(remote))
+        self.git("config", "core.repositoryformatversion", "1")
+        self.git("config", "extensions.partialClone", "origin")
+        self.git("config", "remote.origin.url", remote.as_uri())
+        self.git("config", "remote.origin.promisor", "true")
+        self.git("config", "protocol.file.allow", "always")
+        blob = self.root / ".git/objects" / oid[:2] / oid[2:]
+        blob.unlink()
+        objects = set((self.root / ".git/objects").rglob("*"))
+        # Emulate the missing environment guard on older Git, not an old binary.
+        # All transport targets are local temporary fixtures; no network is used.
+        # Resolve only the OS search path, before inserting the fixture shim.
+        # A managed launcher found on inherited PATH can delegate back to this
+        # shim and recursively spawn processes instead of executing Git.
+        found = shutil.which("git", path=os.defpath)
+        self.assertIsNotNone(found, "The offline fixture requires system Git")
+        real_git = str(Path(found).resolve(strict=True))
+        bindir = Path(self.tmp.name) / "old-git"
+        bindir.mkdir()
+        wrapper = bindir / "git"
+        wrapper.write_text(f"#!{sys.executable}\nimport os, sys\n"
+                           "if os.environ.get('AX_FIXTURE_GIT_ACTIVE') == '1':\n"
+                           "    sys.exit('recursive fixture Git invocation refused')\n"
+                           "os.environ['AX_FIXTURE_GIT_ACTIVE'] = '1'\n"
+                           f"os.environ['PATH'] = {os.defpath!r}\n"
+                           "os.environ.pop('GIT_NO_LAZY_FETCH', None)\n"
+                           f"os.execv({real_git!r}, [{real_git!r}, *sys.argv[1:]])\n")
+        wrapper.chmod(0o755)
+        self.assertNotEqual(wrapper.resolve(), Path(real_git))
+        self.env["PATH"] = f"{bindir}:{self.env['PATH']}"
+        # Exercise the refusal without causing recursive processes. Each probe
+        # has its own short deadline, independent of the gate's Git timeout.
+        recursive = subprocess.run([str(wrapper), "--version"],
+                                   env={**self.env, "AX_FIXTURE_GIT_ACTIVE": "1"},
+                                   capture_output=True, text=True, timeout=3)
+        self.assertNotEqual(recursive.returncode, 0)
+        self.assertIn("recursive fixture Git invocation refused", recursive.stderr)
+        version = subprocess.run([str(wrapper), "--version"], env=self.env,
+                                 capture_output=True, text=True, timeout=3)
+        self.assertEqual(version.returncode, 0, version.stderr)
+        self.assertTrue(version.stdout.startswith("git version "), version.stdout)
+        report = self.check(2, head=head)
+        # Git may either fail the command or print an unavailable size in the
+        # tree row. Both are unmeasurable; neither may hydrate the object.
+        self.assertIn(report["code"], ("git_failed", "invalid_tree"))
+        self.assertEqual(set((self.root / ".git/objects").rglob("*")), objects,
+                         "Measurement must not hydrate any missing object")
+        # Control: the promisor is genuinely usable without the transport fence.
+        self.assertEqual(self.git("cat-file", "-p", oid), BAD_SCRIPT.strip())
+        self.assertEqual(self.check(1, head=head)["counts"]["new"], 1)
+
+
+class OuterCollectorTimeout(unittest.TestCase):
+    def test_stopped_collector_cannot_leave_producer_running_after_outer_timeout(self):
+        import signal
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pid_file = root / "pids"
+            marker = root / "finished"
+            producer = root / "producer.py"
+            producer.write_text(
+                "import os, signal, time\nfrom pathlib import Path\n"
+                f"Path({str(pid_file)!r}).write_text(f'{{os.getpid()}} {{os.getppid()}}')\n"
+                "os.kill(os.getppid(), signal.SIGSTOP)\n"
+                "time.sleep(10)\n"
+                f"Path({str(marker)!r}).touch()\n")
+            real_run = subprocess.run
+
+            def short_deadline(*args, **kwargs):
+                self.assertLessEqual(kwargs["timeout"], 30)
+                return real_run(*args, **{**kwargs, "timeout": 2})
+
+            pids = []
+            start = time.monotonic()
+            try:
+                with patch.object(gate, "PRODUCER", producer), \
+                        patch.object(subprocess, "run", side_effect=short_deadline):
+                    with self.assertRaises(gate.Unmeasurable) as error:
+                        gate.scan(root, ["**"], {})
+                self.assertEqual(error.exception.code, "producer_timeout")
+                self.assertTrue(error.exception.retryable)
+                self.assertLess(time.monotonic() - start, 5)
+                pids = [int(value) for value in pid_file.read_text().split()]
+                # An orphan may await init's reap, but it must no longer execute.
+                for pid in pids:
+                    proc = Path(f"/proc/{pid}/stat")
+                    for _ in range(50):
+                        if not proc.exists() or proc.read_text().rsplit(")", 1)[1].split()[0] == "Z":
+                            break
+                        time.sleep(0.01)
+                    else:
+                        self.fail(f"Process {pid} survived outer collector timeout")
+                self.assertFalse(marker.exists())
+            finally:
+                if pid_file.exists():
+                    pids = [int(value) for value in pid_file.read_text().split()]
+                for pid in pids:
+                    if pid in (os.getpid(), os.getppid()):
+                        continue
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
 
 if __name__ == "__main__":

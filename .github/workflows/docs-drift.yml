@@ -35,24 +35,44 @@ jobs:
     env:
       BASE_SHA: ${{ inputs.base-sha || github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
       HEAD_SHA: ${{ inputs.head-sha || github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
-      TOOLS_REF: ${{ inputs.tools-ref }}
+      TOOLS_REF: ${{ inputs.tools-ref || github.workflow_sha }}
+      TOOLS_REPOSITORY: ${{ inputs.head-sha != '' && 'TogetherWeOwn/paperclip-ops' || github.repository }}
       CALL_INPUTS: ${{ toJSON(inputs) }}
       REUSABLE_CALL: ${{ inputs.head-sha != '' }}
+      EVENT_NAME: ${{ github.event_name }}
+      PUSH_HEAD_SHA: ${{ github.sha }}
     steps:
       - name: Validate immutable inputs
         shell: bash
         run: |
-          python3 - <<'PY'
+          python3 -I - <<'PY'
           import json, os, re
-          values = {name: os.environ[name] for name in ("BASE_SHA", "HEAD_SHA")}
+          values = {name: os.environ[name] for name in ("BASE_SHA", "HEAD_SHA", "TOOLS_REF")}
           call_inputs = json.loads(os.environ["CALL_INPUTS"])
           if call_inputs:
               # Validate raw call inputs: empty required values must not fall
               # through to the native-event SHA expressions above.
               values = {name: call_inputs.get(key, "") for name, key in
                         (("BASE_SHA", "base-sha"), ("HEAD_SHA", "head-sha"), ("TOOLS_REF", "tools-ref"))}
+          else:
+              # Validate the event's raw SHAs too: an empty PR/merge-group head
+              # must not be rescued by github.sha (a different comparison).
+              with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as event_file:
+                  event = json.load(event_file)
+              event_name = os.environ["EVENT_NAME"]
+              if event_name == "pull_request":
+                  pr = event.get("pull_request", {})
+                  base, head = pr.get("base", {}).get("sha", ""), pr.get("head", {}).get("sha", "")
+              elif event_name == "merge_group":
+                  group = event.get("merge_group", {})
+                  base, head = group.get("base_sha", ""), group.get("head_sha", "")
+              elif event_name == "push":
+                  base, head = event.get("before", ""), os.environ["PUSH_HEAD_SHA"]
+              else:
+                  raise SystemExit("EVENT_NAME: use a supported native event or explicit workflow_call inputs")
+              values.update(BASE_SHA=base, HEAD_SHA=head)
           for name, value in values.items():
-              if not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", value):
+              if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", value):
                   raise SystemExit(f"{name}: provide a full lowercase commit SHA, not a branch or expression")
           PY
       - name: Check out the caller history
@@ -62,17 +82,22 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           path: caller
-      - name: Check out pinned checker for reusable calls
-        if: env.REUSABLE_CALL == 'true'
+      - name: Check out immutable checker
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: TogetherWeOwn/paperclip-ops
-          ref: ${{ inputs.tools-ref }}
+          repository: ${{ env.TOOLS_REPOSITORY }}
+          ref: ${{ env.TOOLS_REF }}
           persist-credentials: false
           path: docs-drift-tools
       - name: Check mapped documentation changes
         working-directory: caller
         shell: bash
         env:
-          CHECKER: ${{ env.REUSABLE_CALL == 'true' && '../docs-drift-tools/scripts/quality-gates/docs_drift.py' || 'scripts/quality-gates/docs_drift.py' }}
-        run: python3 "$CHECKER" --base "$BASE_SHA" --head "$HEAD_SHA"
+          CHECKER: ../docs-drift-tools/scripts/quality-gates/docs_drift.py
+        run: |
+          python3 -I - <<'PY'
+          import json, os, sys
+          print(json.dumps({"schema": "docs-drift.tools.v1", **{name.lower(): os.environ[name] for name in
+                            ("BASE_SHA", "HEAD_SHA", "TOOLS_REPOSITORY", "TOOLS_REF", "REUSABLE_CALL")}}, sort_keys=True), file=sys.stderr)
+          PY
+          python3 "$CHECKER" --base "$BASE_SHA" --head "$HEAD_SHA"

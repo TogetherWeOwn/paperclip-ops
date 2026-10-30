@@ -47,8 +47,6 @@ SCRIPT_EXTENSIONS = (".sh", ".bash", ".py")
 FLAG_RE = re.compile(r"--[a-zA-Z][a-zA-Z0-9-]*")
 SHEBANG_RE = re.compile(r"^#!")
 
-KEY_RE_TEMPLATE = r"^\s*(['\"]?)%s\1\s*:"
-
 MACHINE_FLAGS = ("--json", "--dry-run")
 
 
@@ -430,18 +428,87 @@ def _strip_comment(line):
     return "".join(out)
 
 
-def _key_present(block_lines, key):
-    return any(re.match(KEY_RE_TEMPLATE % re.escape(key), _strip_comment(ln))
-               for ln in block_lines)
+def _dispatch_code_lines(lines):
+    """Mask block and multiline quoted scalar content, retaining line numbers.
+
+    This is deliberately not a YAML parser. Only scalar headers in mapping
+    values and sequence items are recognized; unsupported event shapes are
+    reported separately rather than inferred from scalar text.
+    """
+    result = []
+    block_indent = None
+    quote = None
+    for line in lines:
+        indent = _indent_of(line)
+        if block_indent is not None:
+            if not line.strip() or indent > block_indent:
+                result.append("")
+                continue
+            block_indent = None
+        if quote is not None:
+            result.append("")
+            # YAML double quotes use backslash escapes; single quotes double.
+            pos = 0
+            while pos < len(line):
+                if quote == '"' and line[pos] == "\\":
+                    pos += 2
+                elif line[pos:pos + 2] == "''" and quote == "'":
+                    pos += 2
+                elif line[pos] == quote:
+                    quote = None
+                    break
+                else:
+                    pos += 1
+            continue
+        code = _strip_comment(line).rstrip()
+        result.append(code)
+        value = re.match(r"^\s*(?:[^:#]+:\s*|-\s+)(.*)$", code)
+        if not value:
+            continue
+        scalar = value.group(1).strip()
+        if re.fullmatch(r"[|>](?:[+-]?[1-9]?|[1-9][+-]?)", scalar):
+            block_indent = indent
+        elif scalar.startswith(("'", '"')):
+            q = scalar[0]
+            pos = 1
+            while pos < len(scalar):
+                if q == '"' and scalar[pos] == "\\":
+                    pos += 2
+                elif q == "'" and scalar[pos:pos + 2] == "''":
+                    pos += 2
+                elif scalar[pos] == q:
+                    break
+                else:
+                    pos += 1
+            else:
+                quote = q
+    return result
 
 
-def _key_scalar(block_lines, key):
-    for ln in block_lines:
-        code = _strip_comment(ln)
-        match = re.match(KEY_RE_TEMPLATE % re.escape(key) + r"\s*(.*)$", code)
-        if match:
-            return match.group(2).strip().strip("'\"")
-    return ""
+def _dispatch_children(code_lines, parent, end):
+    """Return immediate child line indexes and the parent's block end."""
+    indent = _indent_of(code_lines[parent])
+    stop = parent + 1
+    while stop < end and (not code_lines[stop].strip()
+                          or _indent_of(code_lines[stop]) > indent):
+        stop += 1
+    indexes = [i for i in range(parent + 1, stop) if code_lines[i].strip()]
+    if not indexes:
+        return [], stop
+    child_indent = min(_indent_of(code_lines[i]) for i in indexes)
+    return [i for i in indexes if _indent_of(code_lines[i]) == child_indent], stop
+
+
+def _dispatch_key(code, key):
+    return re.match(r"^\s*(['\"]?)" + re.escape(key) + r"\1\s*:\s*(.*)$", code)
+
+
+def _dispatch_ambiguous_key(code):
+    # An escaped quoted key might decode to a significant key. Merge keys
+    # can import one indirectly. Neither is interpreted by this scanner.
+    return bool(re.match(r'^\s*"[^"]*\\', code)
+                or re.match(r"^\s*'[^']*''", code)
+                or re.match(r"^\s*<<\s*:", code))
 
 
 def check_dispatch_inputs(root):
@@ -500,133 +567,123 @@ def _scan_dispatch(relpath, lines):
     findings = []
     skipped = []
     unknown = []
-    i, total = 0, len(lines)
-    while i < total:
-        line = lines[i]
-        code = _strip_comment(line).rstrip()
-        on_match = re.match(r"^\s*(['\"]?)on\1\s*:\s*(.*)$", code)
-        if on_match and on_match.group(2).strip() \
-                and "workflow_dispatch" in code:
-            skipped.append(_coverage(
-                relpath, i + 1, "skipped",
-                "inline `on:` form names workflow_dispatch; "
-                "inputs not parsed"))
-            i += 1
+    code = _dispatch_code_lines(lines)
+    total = len(code)
+
+    def uncertain(index, reason):
+        unknown.append(_coverage(relpath, index + 1, "unknown", reason))
+
+    def ambiguous(index):
+        if _dispatch_ambiguous_key(code[index]):
+            uncertain(index, "escaped or merged mapping key is unsupported")
+            return True
+        return False
+
+    # Only a root-level `on` mapping is an event declaration. In particular,
+    # `on` under env, and workflow-looking text in run scalars, are data.
+    for on in range(total):
+        if not code[on].strip() or _indent_of(code[on]) != 0:
             continue
-        match = re.match(r"^(\s*)(['\"]?)workflow_dispatch\2\s*:\s*(.*)$", code)
+        if ambiguous(on):
+            continue
+        match = _dispatch_key(code[on], "on")
         if not match:
-            i += 1
             continue
-        if match.group(3).strip():
-            skipped.append(_coverage(
-                relpath, i + 1, "skipped",
-                "inline workflow_dispatch form; inputs not parsed"))
-            i += 1
+        value = match.group(2).strip()
+        if value:
+            if (value.startswith(("*", "&", "!", "|", ">"))
+                    or (value.startswith(("{", "[")) and
+                        ("\\" in value or re.search(r"(?:^|[\s\[,{:])[*&]", value)))):
+                uncertain(on, "unsupported `on:` value; events not parsed")
+            elif "workflow_dispatch" in value:
+                skipped.append(_coverage(
+                    relpath, on + 1, "skipped",
+                    "inline `on:` form names workflow_dispatch; inputs not parsed"))
             continue
-        base_indent = _indent_of(line)
-        i += 1
-        # Collect the workflow_dispatch block, then find `inputs:` in it.
-        block_start = i
-        while i < total and (not lines[i].strip()
-                             or lines[i].lstrip().startswith("#")
-                             or _indent_of(lines[i]) > base_indent):
-            i += 1
-        block = lines[block_start:i]
-        inputs_at = [k for k, ln in enumerate(block)
-                     if re.match(r"^\s*(['\"]?)inputs\1\s*:\s*(#.*)?$", _strip_comment(ln).rstrip())]
-        if not inputs_at:
-            for k, ln in enumerate(block):
-                junk = re.match(r"^\s*(['\"]?)inputs\1\s*:\s*(.*)$",
-                                _strip_comment(ln).rstrip())
-                if not junk:
-                    continue
-                rest = junk.group(2).strip()
-                if rest in ("{}", "[]"):
-                    skipped.append(_coverage(
-                        relpath, block_start + k + 1, "skipped",
-                        "workflow_dispatch inputs use an inline empty "
-                        "form; nothing to type-check"))
-                else:
-                    unknown.append(_coverage(
-                        relpath, block_start + k + 1, "unknown",
-                        "workflow_dispatch inputs use an unsupported "
-                        "shape (anchors, aliases, or flow mappings); "
-                        "inputs not type-checked"))
-                break
-            continue
-        inputs_indent = _indent_of(block[inputs_at[0]])
-        rest = block[inputs_at[0] + 1:]
-        # Input entries are the shallowest indented lines under `inputs:`.
-        child_indents = [_indent_of(ln) for ln in rest
-                         if ln.strip() and not ln.lstrip().startswith("#")
-                         and _indent_of(ln) > inputs_indent]
-        if not child_indents:
-            continue
-        entry_indent = min(child_indents)
-        entries = []
-        current = None
-        for lineno_offset, ln in enumerate(rest):
-            if not ln.strip() or ln.lstrip().startswith("#"):
-                if current is not None:
-                    current[2].append(ln)
+        events, on_end = _dispatch_children(code, on, total)
+        for event in events:
+            if ambiguous(event):
                 continue
-            if _indent_of(ln) <= inputs_indent:
-                break
-            name_match = re.match(r"^\s*([A-Za-z0-9_.-]+)\s*:\s*(#.*)?$", _strip_comment(ln).rstrip())
-            if _indent_of(ln) == entry_indent and name_match:
-                entry_lineno = (block_start + inputs_at[0] + 1
-                                + lineno_offset + 1)
-                current = (name_match.group(1), entry_lineno, [ln])
-                entries.append(current)
-            elif _indent_of(ln) == entry_indent and re.match(
-                    r"^\s*[A-Za-z0-9_.-]+\s*:", _strip_comment(ln)):
-                unknown.append(_coverage(
-                    relpath,
-                    block_start + inputs_at[0] + 1 + lineno_offset + 1,
-                    "unknown",
-                    "workflow_dispatch input entry uses an unsupported "
-                    "flow style; entry not type-checked"))
-                # Its child lines must not be absorbed by the prior entry.
-                current = None
-            elif _indent_of(ln) == entry_indent:
-                # Quoted names (`"second":`) and any other shape
-                # neither pattern recognizes: unknown, never silently
-                # dropped; reset so their children can't be absorbed
-                # into the previous entry.
-                unknown.append(_coverage(
-                    relpath,
-                    block_start + inputs_at[0] + 1 + lineno_offset + 1,
-                    "unknown",
-                    "workflow_dispatch input entry uses an unrecognized "
-                    "shape (quoted name or flow style); entry not "
-                    "type-checked"))
-                current = None
-            elif current is not None and _indent_of(ln) > entry_indent:
-                current[2].append(ln)
-        for entry_name, entry_lineno, entry_lines in entries:
-            evidence = lines[entry_lineno - 1].strip()
-            if not _key_present(entry_lines, "type"):
-                findings.append(_finding(
-                    "dispatch-inputs", relpath,
-                    f"workflow_dispatch input '{entry_name}' has no type",
-                    line=entry_lineno,
-                    rule_id="dispatch-inputs/untyped",
-                    evidence=evidence,
-                    remediation=f"Declare `type:` (string, choice, "
-                                f"boolean, number, environment) for "
-                                f"workflow_dispatch input '{entry_name}'."))
-            elif _key_scalar(entry_lines, "type") == "choice" \
-                    and not _key_present(entry_lines, "options"):
-                findings.append(_finding(
-                    "dispatch-inputs", relpath,
-                    f"workflow_dispatch choice input '{entry_name}' "
-                    "lists no options",
-                    line=entry_lineno,
-                    rule_id="dispatch-inputs/choice-without-options",
-                    evidence=evidence,
-                    remediation=f"Add an `options:` list to "
-                                f"workflow_dispatch choice input "
-                                f"'{entry_name}'."))
+            match = _dispatch_key(code[event], "workflow_dispatch")
+            if not match:
+                if code[event].lstrip().startswith(("-", "*", "&")) and (
+                        "workflow_dispatch" in code[event] or "*" in code[event]
+                        or "&" in code[event]):
+                    uncertain(event, "unsupported event sequence or alias")
+                continue
+            value = match.group(2).strip()
+            if value:
+                if value.startswith(("*", "&", "!", "|", ">")):
+                    uncertain(event, "unsupported workflow_dispatch value")
+                else:
+                    skipped.append(_coverage(
+                        relpath, event + 1, "skipped",
+                        "inline workflow_dispatch form; inputs not parsed"))
+                continue
+            dispatch_children, dispatch_end = _dispatch_children(code, event, on_end)
+            for inputs in dispatch_children:
+                if ambiguous(inputs):
+                    continue
+                match = _dispatch_key(code[inputs], "inputs")
+                if not match:
+                    continue
+                value = match.group(2).strip()
+                if value:
+                    if value in ("{}", "[]"):
+                        skipped.append(_coverage(
+                            relpath, inputs + 1, "skipped",
+                            "workflow_dispatch inputs use an inline empty "
+                            "form; nothing to type-check"))
+                    else:
+                        uncertain(inputs, "workflow_dispatch inputs use an unsupported "
+                                  "shape (anchors, aliases, or flow mappings); "
+                                  "inputs not type-checked")
+                    continue
+                entries, inputs_end = _dispatch_children(code, inputs, dispatch_end)
+                for entry in entries:
+                    name_match = re.match(r"^\s*([A-Za-z0-9_.-]+)\s*:\s*$", code[entry])
+                    if not name_match:
+                        uncertain(entry, "workflow_dispatch input entry uses an unsupported "
+                                  "shape (quoted name or flow style); entry not type-checked")
+                        continue
+                    name = name_match.group(1)
+                    properties, _ = _dispatch_children(code, entry, inputs_end)
+                    type_value = None
+                    options = False
+                    unsupported = False
+                    for prop in properties:
+                        if ambiguous(prop):
+                            unsupported = True
+                            continue
+                        type_match = _dispatch_key(code[prop], "type")
+                        if type_match:
+                            type_value = type_match.group(2).strip()
+                            if (not type_value or type_value.startswith(("|", ">", "*", "&", "!", "{", "["))
+                                    or "\\" in type_value or "''" in type_value
+                                    or (type_value.startswith(("'", '"')) and
+                                        (len(type_value) < 2 or type_value[-1] != type_value[0]))):
+                                uncertain(prop, "unsupported workflow_dispatch input type value")
+                                unsupported = True
+                        if _dispatch_key(code[prop], "options"):
+                            options = True
+                    if unsupported:
+                        continue
+                    evidence = lines[entry].strip()
+                    if type_value is None:
+                        findings.append(_finding(
+                            "dispatch-inputs", relpath,
+                            f"workflow_dispatch input '{name}' has no type",
+                            line=entry + 1, rule_id="dispatch-inputs/untyped",
+                            evidence=evidence,
+                            remediation=f"Declare `type:` (string, choice, boolean, "
+                                        f"number, environment) for workflow_dispatch input '{name}'."))
+                    elif type_value.strip("'\"") == "choice" and not options:
+                        findings.append(_finding(
+                            "dispatch-inputs", relpath,
+                            f"workflow_dispatch choice input '{name}' lists no options",
+                            line=entry + 1, rule_id="dispatch-inputs/choice-without-options",
+                            evidence=evidence,
+                            remediation=f"Add an `options:` list to workflow_dispatch choice input '{name}'."))
     return findings, skipped, unknown
 
 

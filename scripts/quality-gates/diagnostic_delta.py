@@ -21,6 +21,9 @@ MAX_REPORT = 1024 * 1024
 MAX_SOURCE = 1024 * 1024
 MAX_TOTAL = 32 * 1024 * 1024
 MAX_PATHS = 10000
+# Documented outer bound for each Git collection subprocess; the pinned AX
+# collector keeps its own 25-second inner deadline beneath this one.
+GIT_TIMEOUT = 30
 RULES = {
     "agents-map/missing": "agents-map",
     "agents-map/oversize": "agents-map",
@@ -79,8 +82,9 @@ def git(repo, *args, input=None, limit=16 * 1024 * 1024):
     # spooling an unbounded listing to temporary storage before refusing it.
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_NO_LAZY_FETCH="1",
+               GIT_ALLOW_PROTOCOL="", GIT_TERMINAL_PROMPT="0",
                GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + GIT_TIMEOUT
     try:
         process = subprocess.Popen(["git", "-C", str(repo), *args],
                                    stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
@@ -148,7 +152,7 @@ def git(repo, *args, input=None, limit=16 * 1024 * 1024):
 
 
 def tree_at(repo, sha):
-    raw = git(repo, "ls-tree", "-r", "-l", "-z", sha)
+    raw = git(repo, "ls-tree", "--full-tree", "-r", "-l", "-z", sha)
     entries = {}
     try:
         for row in raw.split(b"\0"):
@@ -216,7 +220,19 @@ def policy_at(repo, tree):
 
 
 def matches(path, patterns):
-    return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
+    parts = path.split("/")
+    for pattern in patterns:
+        positions = {0}
+        for component in pattern.split("/"):
+            if component == "**":
+                # A whole ** component consumes zero or more directories.
+                positions = set(range(min(positions), len(parts) + 1)) if positions else set()
+            else:
+                positions = {i + 1 for i in positions if i < len(parts)
+                             and fnmatch.fnmatchcase(parts[i], component)}
+        if len(parts) in positions:
+            return True
+    return False
 
 
 def scope_ancestor(path, patterns):
@@ -336,15 +352,36 @@ def validate_report(raw, patterns, sources):
 
 
 def scan(root, patterns, sources):
+    # The collector announces its session before spawning the producer. Both
+    # stay in that group, so even a stopped collector cannot strand the producer
+    # when subprocess.run enforces the outer deadline and kills only its child.
+    read_fd, write_fd = os.pipe()
+    os.set_blocking(read_fd, False)
     try:
         result = subprocess.run([sys.executable, "-I", "-B",
                                  str(Path(__file__).with_name("capture_ax_report.py")),
                                  str(PRODUCER), "--root", str(root), "--mode", "warn", "--json"],
-                                capture_output=True, timeout=30)
+                                capture_output=True, timeout=30, start_new_session=True,
+                                pass_fds=(write_fd,),
+                                env={**os.environ, "AX_COLLECTOR_SUPERVISOR_FD": str(write_fd)})
     except subprocess.TimeoutExpired as exc:
         raise Unmeasurable("producer_timeout", "Reduce scope or retry on a healthy runner.", True) from exc
     except OSError as exc:
         raise Unmeasurable("producer_unavailable", "Restore the pinned AX-lint producer and Python runtime.") from exc
+    finally:
+        os.close(write_fd)
+        try:
+            try:
+                group = os.read(read_fd, 32)
+            except BlockingIOError:
+                group = b""
+            if group.isdigit() and int(group) > 1:
+                try:
+                    os.killpg(int(group), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        finally:
+            os.close(read_fd)
     if result.returncode == 3:
         refuse("producer_output_limit", "Reduce scope: producer stdout is limited to 1 MiB and stderr to 64 KiB.")
     if result.returncode == 124:

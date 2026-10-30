@@ -19,10 +19,10 @@ OUTPUT_LIMIT = 3
 TIMED_OUT = 124
 
 
-def capture(command):
+def capture(command, supervised=False):
     deadline = time.monotonic() + TIMEOUT
     with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          start_new_session=True) as process:
+                          start_new_session=not supervised) as process:
         try:
             buffers = {"stdout": bytearray(), "stderr": bytearray()}
             with selectors.DefaultSelector() as selector:
@@ -52,14 +52,25 @@ def capture(command):
             # impersonate an output-limit or timeout result.
             return 0 if code == 0 else 1
         finally:
-            # Also stop descendants that may still hold a pipe after the direct
-            # child exits. Reap before leaving Popen's context on every path.
+            # Standalone capture owns its group; supervised capture shares the
+            # collector's session so the outer checker also kills descendants.
+            # Reap the direct child before returning either way.
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                if supervised:
+                    process.kill()
+                else:
+                    os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             process.wait()
 
 
 if __name__ == "__main__":
-    raise SystemExit(capture([sys.executable, "-I", "-B", *sys.argv[1:]]))
+    arguments = sys.argv[1:]
+    supervisor_fd = os.environ.pop("AX_COLLECTOR_SUPERVISOR_FD", None)
+    supervised = supervisor_fd is not None
+    if supervised:
+        fd = int(supervisor_fd)
+        os.write(fd, str(os.getpgrp()).encode("ascii"))
+        os.close(fd)
+    raise SystemExit(capture([sys.executable, "-I", "-B", *arguments], supervised=supervised))

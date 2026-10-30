@@ -215,6 +215,12 @@ function firstNumber(record2, fields) {
 function toolRejection(error, extra = {}) {
   return { ok: false, error, ...extra };
 }
+function usageRejection(error, nextAction) {
+  return { error, data: toolRejection(error, { retryable: false, next_action: nextAction }) };
+}
+function unknownLaneResult() {
+  return usageRejection("unknown_lane", "use a lane id from the persisted lane index");
+}
 function resolveConfig(raw) {
   const r = asRecord(raw);
   return {
@@ -345,9 +351,11 @@ function isStale(observedAt, staleAfterSeconds, nowMs) {
   if (!Number.isFinite(observedMs)) return true;
   return nowMs - observedMs > staleAfterSeconds * 1e3;
 }
-async function laneSummary(read, config, nowMs) {
+async function readLaneIndex(read) {
   const storedIndex = await read(STATE_KEYS.laneIndex);
-  const lanes = Array.isArray(storedIndex) ? storedIndex.filter((l) => typeof l === "string") : [];
+  return Array.isArray(storedIndex) ? [...new Set(storedIndex.filter((l) => typeof l === "string" && l.trim().length > 0))] : [];
+}
+async function laneSummary(read, config, nowMs, lanes) {
   const laneSnapshots = {};
   let accountsCooling = 0;
   for (const laneFile of lanes) {
@@ -520,8 +528,7 @@ function createPlugin() {
           }
         }
         if (config.laneFiles.length > 0) {
-          const storedIndex = await ctx.state.get(key(companyId, STATE_KEYS.laneIndex));
-          const knownLanes = Array.isArray(storedIndex) ? storedIndex.filter((l) => typeof l === "string") : [];
+          const knownLanes = await readLaneIndex((stateKey) => ctx.state.get(key(companyId, stateKey)));
           await ctx.state.set(
             key(companyId, STATE_KEYS.laneIndex),
             [.../* @__PURE__ */ new Set([...knownLanes, ...lanesStored])].sort()
@@ -670,8 +677,22 @@ function createPlugin() {
         TOOL_NAMES.getProviderUsage,
         {
           displayName: "Get provider usage",
-          description: "Read the most recently persisted CLIProxy usage/cooldown state. Read-only; consults stored history, never calls CLIProxy.",
-          parametersSchema: { type: "object", required: ["companyId"] }
+          description: "Read the most recently persisted CLIProxy usage state: per-provider success/failed counters, current cooldown status, and per-model capacity windows, each flagged stale when older than the freshness budget. Optionally select one persisted lane to return only that lane's stored history; provider snapshots and modelUsage keep their existing scope. Stored history only \u2014 not serving readiness or an admission decision. Read-only; consults stored history, never calls CLIProxy.",
+          parametersSchema: {
+            type: "object",
+            required: ["companyId"],
+            properties: {
+              companyId: { type: "string", description: "Company whose CLIProxy history applies" },
+              provider: {
+                type: "string",
+                description: "Optional. One exact provider key from the persisted provider index (`providers` in an unfiltered call, e.g. claude or codex). Omit to return every provider observed so far. Invalid keys are rejected as unknown_provider."
+              },
+              lane: {
+                type: "string",
+                description: "Optional. One exact lane id from the persisted lane index \u2014 an entry in `lanes` from an unfiltered call (e.g. claude.json). Omit to return every persisted lane. Unknown ids are rejected as unknown_lane; a provider name is not a lane id."
+              }
+            }
+          }
         },
         async (params) => {
           const input = asRecord(params);
@@ -680,12 +701,45 @@ function createPlugin() {
             return { error: "companyId is required", data: toolRejection("companyId is required") };
           if (!isConfiguredCompany(companyId))
             return { error: "company is not configured", data: toolRejection("company is not configured") };
+          const rejectLane = async (reason) => {
+            try {
+              await ctx.metrics.write("cliproxy_insight.lane_selection_refused", 1, { companyId, reason });
+            } catch {
+            }
+            return unknownLaneResult();
+          };
+          const selectedLane = input.lane;
+          if (selectedLane !== void 0 && (typeof selectedLane !== "string" || selectedLane.trim().length === 0)) {
+            return rejectLane("invalid_shape");
+          }
+          const requested = input.provider;
+          if (requested !== void 0 && (typeof requested !== "string" || requested.trim().length === 0)) {
+            return usageRejection("unknown_provider", "use a provider key from the persisted provider index");
+          }
           const config = resolveConfig(await ctx.config.get(companyId));
           if (!isConfiguredCompany(companyId))
             return { error: "company is not configured", data: toolRejection("company is not configured") };
           const nowMs = Date.now();
-          const requested = typeof input.provider === "string" ? input.provider : null;
-          const providers = requested ? [requested] : await readProviderIndex(companyId);
+          const readState = (stateKey) => ctx.state.get(key(companyId, stateKey));
+          const indexedLanes = await readLaneIndex(readState);
+          if (!isConfiguredCompany(companyId))
+            return { error: "company is not configured", data: toolRejection("company is not configured") };
+          if (typeof selectedLane === "string" && !indexedLanes.includes(selectedLane)) {
+            return rejectLane("unknown_id");
+          }
+          const indexedProviders = await readProviderIndex(companyId);
+          if (!isConfiguredCompany(companyId))
+            return { error: "company is not configured", data: toolRejection("company is not configured") };
+          if (typeof requested === "string" && !indexedProviders.includes(requested)) {
+            return usageRejection("unknown_provider", "use a provider key from the persisted provider index");
+          }
+          const providers = typeof requested === "string" ? [requested] : indexedProviders;
+          const lane = await laneSummary(
+            readState,
+            config,
+            nowMs,
+            typeof selectedLane === "string" ? [selectedLane] : indexedLanes
+          );
           const snapshots = {};
           for (const provider of providers) {
             const record2 = await ctx.state.get(
@@ -695,11 +749,6 @@ function createPlugin() {
           }
           const modelUsage = asRecord(await ctx.state.get(key(companyId, STATE_KEYS.modelUsage)));
           const hasModelUsage = Object.keys(modelUsage).length > 0;
-          const lane = await laneSummary(
-            (stateKey) => ctx.state.get(key(companyId, stateKey)),
-            config,
-            nowMs
-          );
           return {
             data: {
               version: PLUGIN_VERSION,
@@ -823,10 +872,12 @@ function createPlugin() {
       }
       const modelUsage = asRecord(await context.state.get(scope(STATE_KEYS.modelUsage)));
       const hasModelUsage = Object.keys(modelUsage).length > 0;
+      const readRouteState = (stateKey) => context.state.get(scope(stateKey));
       const lane = await laneSummary(
-        (stateKey) => context.state.get(scope(stateKey)),
+        readRouteState,
         config,
-        nowMs
+        nowMs,
+        await readLaneIndex(readRouteState)
       );
       return {
         status: 200,

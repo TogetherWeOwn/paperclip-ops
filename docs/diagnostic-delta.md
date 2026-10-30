@@ -9,10 +9,17 @@ YAML/shell parser. No scanned code or generators execute during measurement.
 
 ## Local check
 
-The checker requires Python 3.10+, Git and POSIX process groups (the hosted
-workflow uses Linux), with no installed Python packages or network.
+The checker requires Python 3.10+, Git 2.29+ and POSIX process groups (the hosted
+workflow uses Linux), with no installed Python packages or network. It refuses
+all Git transport protocols, including on versions predating `GIT_NO_LAZY_FETCH`;
+missing objects in a partial clone are errors, never hydrated during measurement.
+`--repo` may name any existing subdirectory of the checkout: policy lookup and
+snapshot enumeration always use the full repository tree.
 The offline workflow tests additionally need PyYAML; use the repository
-[verification environment](../README.md#verification).
+[verification environment](../README.md#verification). The old-Git fixture shim
+resolves an absolute system Git binary before changing `PATH`, refuses recursive
+entry, and gives its direct probes three-second deadlines. It does not delegate
+through an inherited Git launcher or use credentials for fixture repositories.
 
 ```sh
 python3 scripts/quality-gates/diagnostic_delta.py --repo <tree> --base <full-base-sha> --head <full-head-sha>
@@ -68,7 +75,10 @@ object:
 ```
 
 `version` must be `1`, `producer` must be `"ax-lint"`, and `include` is a list
-of 1 to 64 repository-relative globs where `**` matches nested paths. Unknown
+of 1 to 64 repository-relative globs. `*`, `?` and character classes match within
+one path component, never across `/`; a whole `**` component matches zero or
+more directories. Thus `scripts/**/*.sh` covers both `scripts/run.sh` and
+`scripts/sub/run.sh`, while `scripts/*.sh` covers only direct children. Unknown
 fields, producers, versions, invalid paths and non-string globs fail closed.
 
 - Load policy and scope from the **supplied base snapshot**, not from head.
@@ -87,9 +97,13 @@ fields, producers, versions, invalid paths and non-string globs fail closed.
   stderr; the first excess byte kills and reaps the producer, returning
   `producer_output_limit`. Git subprocess output is collected under the same
   discipline (per-call stdout limit, 64 KiB of stderr, kill and reap on the
-  first excess byte), never spooled unbounded to temporary storage first. Its
-  inner deadline is 25 seconds, leaving cleanup
-  time within the outer 30-second deadline. These collection bounds do not
+  first excess byte), never spooled unbounded to temporary storage first. Both
+  bounds are pinned constants in the checker: `GIT_TIMEOUT` (30 seconds) is the
+  outer Git deadline and the collector's inner deadline is 25 seconds, leaving
+  cleanup time within it. The collector announces its process group before
+  starting the producer; the checker terminates that entire group on every
+  return, including an outer timeout while the collector is stopped. Standalone
+  collector calls retain their own producer-group cleanup. These collection bounds do not
   bound memory used internally by the trusted producer to construct its JSON.
   Policy size is at most 64 KiB and
   each glob at most 256 characters. Oversized inputs are unmeasurable, not clean.
@@ -111,16 +125,17 @@ modules. Expand coverage only where a real diagnostic contract exists.
 ## Reusable CI
 
 `.github/workflows/diagnostic-delta.yml` exposes a `workflow_call` interface
-with required `base-sha`/`head-sha` inputs (full lowercase commit SHAs in the
-caller repository's object format) and a `tools-ref` input (a full lowercase
-40-character commit SHA of this SHA-1 tooling repository, the only length the
-pinned checkout action treats as a commit rather than a named ref), plus an
+with required `base-sha`/`head-sha` inputs (full lowercase 40-character SHA-1
+commit SHAs) and a `tools-ref` input (a full lowercase 40-character commit SHA of
+this SHA-1 tooling repository), plus an
 optional `artifact-name` input (default
 `diagnostic-delta-report`). It also exposes `workflow_dispatch` with the same inputs so a real
 Actions run can produce evidence at exact SHAs. There is deliberately no push
 trigger: native push events have no trusted caller-supplied base snapshot to
 measure against. For dispatch runs, the provided base snapshot is the
-documented trust contract for that run.
+documented trust contract for that run. Both checkout steps are SHA-1-only:
+64-character caller SHAs are rejected before checkout. SHA-256 repositories
+remain supported by the local checker, not by this hosted workflow.
 
 Reusable callers pin both
 `uses: TogetherWeOwn/paperclip-ops/.github/workflows/diagnostic-delta.yml@<full-sha>`

@@ -152,7 +152,7 @@ var manifest = {
     {
       name: TOOL_NAMES.getProviderUsage,
       displayName: "Get provider usage",
-      description: "Read the most recently persisted CLIProxy usage state: per-provider success/failed counters, cooldown history, and per-model capacity windows, each flagged stale when older than the freshness budget. Read-only; consults stored history, never calls CLIProxy.",
+      description: "Read the most recently persisted CLIProxy usage state: per-provider success/failed counters, current cooldown status, and per-model capacity windows, each flagged stale when older than the freshness budget. Optionally select one persisted lane to return only that lane's stored history; provider snapshots and modelUsage keep their existing scope. Stored history only \u2014 not serving readiness or an admission decision. Read-only; consults stored history, never calls CLIProxy.",
       parametersSchema: {
         type: "object",
         required: ["companyId"],
@@ -160,7 +160,11 @@ var manifest = {
           companyId: { type: "string", description: "Company whose CLIProxy history applies" },
           provider: {
             type: "string",
-            description: "Optional. One provider key as published by the lane (e.g. claude, codex, codex-spark, kimi, opencode-go). Omit to return every provider observed so far."
+            description: "Optional. One exact provider key from the persisted provider index (`providers` in an unfiltered call, e.g. claude or codex). Omit to return every provider observed so far. Invalid keys are rejected as unknown_provider."
+          },
+          lane: {
+            type: "string",
+            description: "Optional. One exact lane id from the persisted lane index \u2014 an entry in `lanes` from an unfiltered call (e.g. claude.json). Omit to return every persisted lane. Unknown ids are rejected as unknown_lane; a provider name is not a lane id."
           }
         }
       }

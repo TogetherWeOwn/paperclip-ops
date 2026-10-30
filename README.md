@@ -91,6 +91,8 @@ including opt-in JSON outcomes, incomplete-check diagnostics and exit boundaries
 For the required-check producer audit, see the
 [required-check audit outcomes](docs/ci-required-checks.md), including the
 versioned JSON envelope for unmeasurable offline inputs and exit boundaries.
+For PR conventions and this repository's native squash queue, see the
+[standards input and history contract](docs/pr-standards.md).
 
 For native skill versions, reusable examples and isolated pinned-version tests,
 see the [versioned skill fixture procedure](docs/versioned-skill-fixtures.md).

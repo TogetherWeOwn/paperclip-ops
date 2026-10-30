@@ -63,6 +63,8 @@ jobs:
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          # Native squash-group validation needs the complete base-to-head chain.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Restore pinned toolkit test dependencies
@@ -76,6 +78,7 @@ jobs:
           PYTHONPATH: ${{ runner.temp }}/public-ci-python
         run: |
           python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
+          python3 -m unittest discover -s .github/scripts -p 'test_pr_standards_merge_group.py'
           python3 -m unittest discover -s .github/scripts -p 'test_ci_policy.py'
           python3 -m unittest discover -s .github/scripts -p 'test_action_pins.py'
           python3 -m unittest discover -s .github/scripts -p 'test_public_ci.py'

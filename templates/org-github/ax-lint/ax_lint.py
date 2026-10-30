@@ -92,23 +92,34 @@ def check_agents_map(root):
     return []
 
 
-def _is_script_candidate(root, relpath, fullname):
+def _script_candidate(root, relpath, fullname):
+    """Classify one file. Returns ``(is_candidate, read_error)``.
+
+    ``read_error`` is the ``OSError`` from a failed probe read (or from
+    listing the directory), which the caller must report as unknown
+    coverage. It is never ``False`` for a file the scan could not open:
+    a lost read would otherwise become a clean scan.
+    """
     # Any exact `test`/`tests` directory segment marks a harness (root or
     # nested); lookalikes such as `mytests/` or `contest.sh` still scan.
     parent_dirs = relpath.split(os.sep)[:-1]
     if "test" in parent_dirs or "tests" in parent_dirs:
-        return False
+        return False, None
     name = os.path.basename(relpath)
     if name.startswith("test_") or name.startswith("test-"):
-        return False
+        return False, None
     if not (os.access(fullname, os.X_OK) or relpath.endswith(SCRIPT_EXTENSIONS)):
-        return False
+        return False, None
     try:
         with open(fullname, encoding="utf-8", errors="replace") as fh:
             first = fh.readline()
-    except OSError:
-        return False
-    return bool(SHEBANG_RE.match(first))
+    except OSError as exc:
+        return False, exc
+    return bool(SHEBANG_RE.match(first)), None
+
+
+def _is_script_candidate(root, relpath, fullname):
+    return _script_candidate(root, relpath, fullname)[0]
 
 
 def _flag_literal(flag):
@@ -358,30 +369,47 @@ def _first_flag_evidence(text):
     return None, None
 
 
-def check_script_surface(root):
-    """Flag-taking scripts offer --json or --dry-run (AX1/AX4).
+def _script_scan_all(root):
+    """Scan scripts for AX1/AX4 and report every source it could not read.
 
-    A script "takes flags" when its text mentions any ``--long-flag``.
-    Scripts with no long flags are not CLIs and are skipped. Support is
-    certified only by advertised top-level evidence (see
-    :func:`_certified_surface_flags`); incidental mentions warn instead
-    of silently passing. Test scripts are skipped: they are harnesses,
-    not agent surfaces.
+    Returns ``(findings, unknown)``. A file the scan cannot open yields an
+    ``unknown`` coverage entry tied to the same walk that produces
+    findings, so a lost read can never look like a clean scan. A failed
+    directory listing is reported the same way rather than silently
+    truncating the walk.
     """
-    findings = []
-    for dirpath, dirnames, filenames in os.walk(root):
+    findings, unknown = [], []
+
+    def unreadable(path, exc):
+        unknown.append(_coverage(
+            path, None, "unknown",
+            f"source read failed ({exc.strerror or exc.__class__.__name__}); "
+            "the scan could not inspect this file"))
+
+    for dirpath, dirnames, filenames in os.walk(root, onerror=lambda exc: unreadable(
+            os.path.relpath(exc.filename, root) if exc.filename else ".", exc)):
         dirnames[:] = sorted(d for d in dirnames if d not in EXCLUDE_DIRS)
         for name in sorted(filenames):
             fullname = os.path.join(dirpath, name)
-            if not os.path.isfile(fullname) or os.path.islink(fullname):
+            staged = os.path.relpath(fullname, root)
+            try:
+                if not os.path.isfile(fullname) or os.path.islink(fullname):
+                    continue
+            except OSError as exc:
+                unreadable(staged, exc)
                 continue
-            relpath = os.path.relpath(fullname, root)
-            if not _is_script_candidate(root, relpath, fullname):
+            relpath = staged
+            candidate, read_error = _script_candidate(root, relpath, fullname)
+            if read_error is not None:
+                unreadable(relpath, read_error)
+                continue
+            if not candidate:
                 continue
             try:
                 with open(fullname, encoding="utf-8", errors="replace") as fh:
                     text = fh.read()
-            except OSError:
+            except OSError as exc:
+                unreadable(relpath, exc)
                 continue
             flags = set(FLAG_RE.findall(text))
             if not flags:
@@ -399,7 +427,20 @@ def check_script_surface(root):
                             "preview to the CLI and advertise it in a "
                             "`# usage:` line (e.g. "
                             "`# usage: tool --target X --json`)."))
-    return findings
+    return findings, unknown
+
+
+def check_script_surface(root):
+    """Flag-taking scripts offer --json or --dry-run (AX1/AX4).
+
+    A script "takes flags" when its text mentions any ``--long-flag``.
+    Scripts with no long flags are not CLIs and are skipped. Support is
+    certified only by advertised top-level evidence (see
+    :func:`_certified_surface_flags`); incidental mentions warn instead
+    of silently passing. Test scripts are skipped: they are harnesses,
+    not agent surfaces.
+    """
+    return _script_scan_all(root)[0]
 
 
 def _indent_of(line):
@@ -526,16 +567,21 @@ def check_dispatch_inputs(root):
 
 
 def coverage(root):
-    """Skipped/unsupported shapes the scan examined but did not clear.
+    """Sources the scan examined but could not clear.
 
-    Returns ``{"skipped": [...], "unknown": [...]}``; each entry names
-    the ``path``, ``line`` and ``reason``. ``skipped`` holds recognized
-    shapes with nothing to check (inline ``workflow_dispatch``/``on:``
-    forms); ``unknown`` holds shapes the indentation scan cannot parse
-    (anchors, aliases, flow mappings). Always present in ``--json``,
-    empty when the tree has no such shapes.
+    Returns ``{"skipped": [...], "unknown": [...]}``; each entry names the
+    ``path``, ``line`` and ``reason``. ``unknown`` holds both shapes the
+    workflow scan cannot parse (anchors, aliases, flow mappings) and every
+    file the scan could not read, so a lost read is reported rather than
+    dropped. Always present in ``--json``, empty when the tree has neither.
+
+    Kept as a standalone helper for direct callers; :func:`scan_all` is the
+    single-scan path ``main`` uses so findings and coverage cannot come from
+    different walks.
     """
     _, skipped, unknown = _dispatch_scan_all(root)
+    unknown.extend(_script_scan_all(root)[1])
+    unknown.sort(key=lambda entry: (entry["path"], entry["line"] or 0, entry["reason"]))
     return {"skipped": skipped, "unknown": unknown}
 
 
@@ -546,7 +592,14 @@ def _dispatch_scan_all(root):
     workflows = os.path.join(root, ".github", "workflows")
     if not os.path.isdir(workflows):
         return findings, skipped, unknown
-    for name in sorted(os.listdir(workflows)):
+    try:
+        names = sorted(os.listdir(workflows))
+    except OSError as exc:
+        unknown.append(_coverage(
+            os.path.relpath(workflows, root), None, "unknown",
+            f"workflow directory listing failed ({exc.strerror or exc.__class__.__name__})"))
+        return findings, skipped, unknown
+    for name in names:
         if not name.endswith((".yml", ".yaml")):
             continue
         path = os.path.join(workflows, name)
@@ -554,7 +607,11 @@ def _dispatch_scan_all(root):
         try:
             with open(path, encoding="utf-8", errors="replace") as fh:
                 lines = fh.read().splitlines()
-        except OSError:
+        except OSError as exc:
+            unknown.append(_coverage(
+                relpath, None, "unknown",
+                f"workflow read failed ({exc.strerror or exc.__class__.__name__}); "
+                "the scan could not inspect this workflow"))
             continue
         found, skip, unk = _scan_dispatch(relpath, lines)
         findings.extend(found)
@@ -687,12 +744,25 @@ def _scan_dispatch(relpath, lines):
     return findings, skipped, unknown
 
 
+def scan_all(root):
+    """One scan producing findings and coverage from the same walk.
+
+    Reporting the two separately lets a second walk disagree with the one
+    that produced findings. A file this scan could not read appears in
+    ``unknown`` and never as a silent pass.
+    """
+    findings = list(check_agents_map(root))
+    script_findings, script_unknown = _script_scan_all(root)
+    findings.extend(script_findings)
+    workflow_findings, skipped, workflow_unknown = _dispatch_scan_all(root)
+    findings.extend(workflow_findings)
+    unknown = workflow_unknown + script_unknown
+    unknown.sort(key=lambda entry: (entry["path"], entry["line"] or 0, entry["reason"]))
+    return findings, {"skipped": skipped, "unknown": unknown}
+
+
 def lint(root):
-    findings = []
-    findings.extend(check_agents_map(root))
-    findings.extend(check_script_surface(root))
-    findings.extend(check_dispatch_inputs(root))
-    return findings
+    return scan_all(root)[0]
 
 
 def main(argv=None):
@@ -727,12 +797,12 @@ def main(argv=None):
                         help="emit the report as JSON")
     args = parser.parse_args(argv)
     root = os.path.abspath(args.root)
-    findings = lint(root)
+    findings, coverage = scan_all(root)
     summary = {"findings": len(findings), "mode": args.mode}
     if args.json:
         print(json.dumps({"tool": "ax-lint", "mode": args.mode,
                           "root": root, "findings": findings,
-                          "coverage": coverage(root),
+                          "coverage": coverage,
                           "summary": summary}, indent=2))
     else:
         for item in findings:

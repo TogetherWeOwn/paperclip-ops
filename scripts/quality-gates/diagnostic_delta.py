@@ -31,6 +31,15 @@ RULES = {
     "dispatch-inputs/untyped": "dispatch-inputs",
     "dispatch-inputs/choice-without-options": "dispatch-inputs",
 }
+# Workflow YAML is supported as the CI execution wrapper, never as a
+# diagnostic input. Scope decisions refuse it on path selection, before any
+# dispatch recognition: a refused input is unmeasurable, not clean.
+WORKFLOW_SUFFIXES = (".yml", ".yaml")
+
+WORKFLOW_SCOPE_ACTION = (
+    "Narrow the policy include globs to shell/Python sources; workflow YAML "
+    "is not a supported diagnostic input in this slice and must not be "
+    "scoped as one.")
 # Keep the producer's documented exclusions explicit, not silently certified.
 EXCLUDED = {".git", "node_modules", "vendor", ".venv", "venv", "__pycache__",
             ".tox", "target", "dist", "build", ".mypy_cache", ".pytest_cache", ".ax-source"}
@@ -253,7 +262,21 @@ def scope_ancestor(path, patterns):
     return False
 
 
+def scoped_workflows(tree, patterns):
+    """Workflow/YAML paths the policy selects, whatever their tree mode.
+
+    Every mode is refused, not only regular files: a symlink, gitlink or
+    unusual mode that resolves to a workflow is still a workflow diagnostic
+    input the policy asked to measure.
+    """
+    return sorted(path for path in tree
+                  if path.endswith(WORKFLOW_SUFFIXES) and matches(path, patterns))
+
+
 def snapshot(repo, tree, patterns, root):
+    # Refuse workflow inputs before selecting or materializing anything: a
+    # refused diagnostic input must never be silently filtered, reported
+    # clean, or grandfathered because both snapshots share its syntax.
     selected = {}
     for path, entry in tree.items():
         regular = entry[:2] in ((b"100644", b"blob"), (b"100755", b"blob"))
@@ -420,12 +443,20 @@ def check(repo, base, head):
               "status": "not_configured" if patterns is None else "clean"}
     if patterns is None:
         return report
+    head_tree = tree_at(repo, head)
+    refused = {"base": scoped_workflows(base_tree, patterns),
+               "head": scoped_workflows(head_tree, patterns)}
+    if any(refused.values()):
+        report.update(status="unmeasurable", code="unsupported_coverage",
+                      next_action=WORKFLOW_SCOPE_ACTION, retryable=False,
+                      refused=refused)
+        return report
     with tempfile.TemporaryDirectory(prefix="ax-delta-") as tmp:
         base_root, head_root = Path(tmp) / "base", Path(tmp) / "head"
         base_root.mkdir()
         head_root.mkdir()
         base_source = snapshot(repo, base_tree, patterns, base_root)
-        head_source = snapshot(repo, tree_at(repo, head), patterns, head_root)
+        head_source = snapshot(repo, head_tree, patterns, head_root)
         before, base_coverage = scan(base_root, patterns, base_source)
         after, head_coverage = scan(head_root, patterns, head_source)
     new, resolved = after - before, before - after

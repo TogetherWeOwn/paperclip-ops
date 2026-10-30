@@ -50,7 +50,9 @@ An identity is `{rule_id, path, subject}`:
   `script-surface/no-json-or-dry-run` findings.
 - `subject` is `"input:<exact-name>"` for `dispatch-inputs/*` findings, where
   the name comes from the supported evidence key, never from remediation
-  prose.
+  prose. Workflow paths are refused before this applies (see the scope rules
+  below), so dispatch identities are retained producer behaviour, not a
+  measurable scoped input in this slice.
 - `path` is a canonical relative POSIX path: absolute paths, `.`/`..`/empty
   segments, backslashes and case folding are rejected, never normalised away.
 
@@ -88,6 +90,21 @@ fields, producers, versions, invalid paths and non-string globs fail closed.
 - Only recognised empty inline dispatch skips may remain explicit `skipped`
   coverage. Unsupported inputs and unknown or unreadable in-scope coverage are
   `unmeasurable`, even when unchanged between snapshots.
+- **Workflow YAML is not a supported diagnostic input.** Any `*.yml`/`*.yaml`
+  path the policy selects — in the base snapshot, the candidate, or both —
+  makes the run `unmeasurable` (exit 2, code `unsupported_coverage`) before
+  anything is parsed. The refusal names each selecting snapshot under
+  `refused`, so a workflow present in both trees is refused as well rather than
+  grandfathered. The refusal is by path, not by syntax: no workflow form is
+  recognised, so no form can be re-admitted by a later parser change.
+  Workflow YAML *as the CI wrapper* (`.github/workflows/diagnostic-delta.yml`)
+  is unaffected; only workflow YAML *as a measured input* is refused.
+  To measure workflow policy, narrow this slice's scope deliberately in a
+  further decision rather than adding partial YAML parsing.
+- A source read that fails during the producer's own scan — shebang/candidate
+  detection or the text read that feeds findings — is reported as `unknown`
+  coverage with a reason, and the ratchet therefore fails the run. A read
+  failure never becomes `clean` and never becomes an empty coverage list.
 - The complete producer report, including coverage and summary, is validated;
   unknown rules, unsafe identities and oversized reports fail closed. The
   checker caps JSON reports and individual source files at 1 MiB, total scoped
@@ -113,10 +130,8 @@ fields, producers, versions, invalid paths and non-string globs fail closed.
   or certified. Possible ancestors are judged against the complete path
   components before a pattern's first wildcard component, so replacing
   `scripts/pkg-one` with a symlink or gitlink under a `scripts/pkg-*/**`
-  scope is refused, not reported as resolved debt. Quoted
-  `"on"` / `"workflow_dispatch"` / `"inputs"` container keys are recognised
-  dispatch containers, never silently cleared. Its ordinary test-file and non-CLI
-  exclusions still apply.
+  scope is refused, not reported as resolved debt. Its ordinary test-file and
+  non-CLI exclusions still apply.
 
 The initial policy covers only this checker's own directory
 (`scripts/quality-gates/**`). It does not claim to cover all repository

@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import patch
 
 from test_diagnostic_delta import (RepositoryFixture, SCRIPT, PRODUCER, BAD_SCRIPT,
-                                   POLICY, POLICY_VALUE, WORKFLOW_PATH)
+                                   POLICY, POLICY_VALUE, WORKFLOW_PATH, SCRIPT_RULE)
 
 ROOT = Path(__file__).resolve().parent
 
@@ -343,82 +343,224 @@ class WildcardAncestors(RepositoryFixture):
         self.assertEqual(report["code"], "unsupported_source")
 
 
-class QuotedDispatchContainers(RepositoryFixture):
-    @staticmethod
-    def quoted(container, typed, quote='"'):
-        name = "workflow_dispatch" if container == "workflow_dispatch" else "inputs"
-        quoted = f"{quote}{name}{quote}:"
-        # Only the container under test is quoted; the others stay bare so the
-        # block recognition path being exercised is unambiguous.
-        dispatch_line = quoted if container == "workflow_dispatch" else "workflow_dispatch:"
-        inputs_line = quoted if container == "inputs" else "inputs:"
-        text = (f"name: ship\non:\n  {dispatch_line}\n    {inputs_line}\n"
-                "      target:\n        description: deployment target\n")
-        return text + ("        type: string\n" if typed else "")
+class WorkflowScopeRefusal(RepositoryFixture):
+    """Workflow YAML is refused as a diagnostic input, whatever its syntax.
 
-    def test_quoted_containers_do_not_silently_clear_untyped_inputs(self):
-        for container in ("workflow_dispatch", "inputs"):
-            with self.subTest(container=container):
-                self.put(WORKFLOW_PATH, self.quoted(container, True))
-                self.base = self.commit()
-                self.assert_counts(self.check(0, head=self.base), 0, 0, 0, 0)
-                self.put(WORKFLOW_PATH, self.quoted(container, False))
-                self.assert_counts(self.check(1), 0, 1, 1, 0)
+    The scope decision refutes every workflow form by refusing the path, not
+    by recognising the form. These cases therefore assert one uniform exit-2
+    outcome across the syntax variants an earlier producer tried to parse, so
+    no variant can be re-admitted by a later parser change.
+    """
 
-    def test_single_quoted_inputs_block_preserves_typed_and_untyped_classification(self):
-        # Block-recognition regex, not the inline fallback: a bare
-        # workflow_dispatch with a single-quoted `inputs:` key must still be
-        # parsed as a real block, so dropping single-quote support there cannot
-        # silently reclassify a typed input as clean or an untyped one as unknown.
-        for quote in ("'", '"'):
-            with self.subTest(quote=quote):
-                self.put(WORKFLOW_PATH, self.quoted("inputs", True, quote=quote))
-                self.base = self.commit()
-                self.assert_counts(self.check(0, head=self.base), 0, 0, 0, 0)
-                self.put(WORKFLOW_PATH, self.quoted("inputs", False, quote=quote))
-                self.assert_counts(self.check(1), 0, 1, 1, 0)
+    # One entry per previously-recognised or previously-mis-recognised form.
+    VARIANTS = {
+        "block-typed": "name: ship\non:\n  workflow_dispatch:\n    inputs:\n"
+                       "      target:\n        description: t\n        type: string\n",
+        "block-untyped": "name: ship\non:\n  workflow_dispatch:\n    inputs:\n"
+                         "      target:\n        description: t\n",
+        "quoted-containers": 'name: ship\non:\n  "workflow_dispatch":\n    "inputs":\n'
+                             "      target:\n        description: t\n",
+        "single-quoted-inputs": "name: ship\non:\n  workflow_dispatch:\n    'inputs':\n"
+                                "      target:\n        description: t\n",
+        "quoted-outer-on": 'name: ship\n"on":\n  workflow_dispatch:\n    inputs:\n'
+                           "      target:\n        description: t\njobs: {}\n",
+        "inline-empty": "name: ship\non:\n  workflow_dispatch:\n    inputs: {}\n",
+        "inline-nonempty": "on:\n  workflow_dispatch:\n    inputs: {target: {description: x}}\n",
+        "utf8-bom": "\ufeffon:\n  workflow_dispatch:\n    inputs:\n"
+                    "      target:\n        description: t\n",
+        "uniform-root-indent": "  name: ship\n  on:\n    workflow_dispatch:\n"
+                               "      inputs:\n        target:\n          description: t\n",
+        "multiline-flow": "on: {\n  workflow_dispatch: {inputs: {target: {description: x}}}\n  }\n",
+        "explicit-key-node": "on:\n  workflow_dispatch:\n    ? inputs\n    :\n"
+                             "      target:\n        description: t\n",
+        "anchored-key": "on:\n  workflow_dispatch:\n    &k inputs:\n"
+                        "      target:\n        description: t\n",
+        "hash-in-plain-scalar": "on: {push: {branches: [feature#1]}, workflow_dispatch: "
+                                "{inputs: {target: {description: x}}}}\n",
+        "next-line-scalar": "on:\n  workflow_dispatch:\n    inputs:\n      target:\n"
+                            "        description:\n          \"Choose target\n"
+                            "        type: string\n        done\"\n",
+        "anchored-block-run": "on:\n  workflow_dispatch:\n    inputs:\n      target:\n"
+                              "        description: t\njobs:\n  b:\n    steps:\n"
+                              "      - run: &shell |\n          echo \"stage: 'ready\"\n",
+        "empty-function": "",
+    }
 
-    def test_quoted_outer_on_inline_nonempty_inputs_are_unmeasurable(self):
-        for label, outer in (("bare", "on"), ("double", '"on"'), ("single", "'on'")):
-            with self.subTest(outer=label):
-                self.put(WORKFLOW_PATH,
-                         f"name: ship\n{outer}: {{workflow_dispatch: "
-                         "{inputs: {target: {description: x}}}}}\njobs: {}\n")
-                self.assertEqual(self.check(2)["code"], "unsupported_coverage")
-
-    def test_quoted_outer_on_block_untyped_input_is_a_finding(self):
-        self.put(WORKFLOW_PATH,
-                 'name: ship\n"on":\n  workflow_dispatch:\n    inputs:\n'
-                 "      target:\n        description: deployment target\njobs: {}\n")
-        self.assert_counts(self.check(1), 0, 1, 1, 0)
-
-    def test_quoted_empty_containers_are_clean_with_exact_retained_skips(self):
-        cases = (
-            ('on:\n  workflow_dispatch:\n    "inputs": {}\n', 3,
-             "workflow_dispatch inputs use an inline empty form; nothing to type-check"),
-            ("on:\n  workflow_dispatch:\n    'inputs': {}\n", 3,
-             "workflow_dispatch inputs use an inline empty form; nothing to type-check"),
-            ('on:\n  "workflow_dispatch": {}\n', 2,
-             "inline workflow_dispatch form; inputs not parsed"),
-            ("on:\n  'workflow_dispatch': {}\n", 2,
-             "inline workflow_dispatch form; inputs not parsed"),
-        )
-        for text, line, reason in cases:
-            with self.subTest(text=text):
+    def test_every_workflow_variant_is_unmeasurable_not_clean(self):
+        for label, text in self.VARIANTS.items():
+            with self.subTest(variant=label):
                 self.put(WORKFLOW_PATH, text)
-                self.base = self.commit()
-                report = self.check(0, head=self.base)
-                self.assert_counts(report, 0, 0, 0, 0)
-                expected = [{"path": WORKFLOW_PATH, "line": line,
-                             "category": "skipped", "reason": reason}]
-                for side in ("base", "head"):
-                    self.assertEqual(report["coverage"][side]["skipped"], expected)
-                    self.assertEqual(report["coverage"][side]["unknown"], [])
+                report = self.check(2)
+                self.assertEqual(report["code"], "unsupported_coverage", report)
+                self.assertIn(WORKFLOW_PATH, report["refused"]["head"])
 
-    def test_quoted_nonempty_inline_inputs_are_not_certified(self):
-        self.put(WORKFLOW_PATH,
-                 'on:\n  workflow_dispatch:\n    "inputs": {target: {description: x}}\n')
-        self.assertEqual(self.check(2)["code"], "unsupported_coverage")
+    def test_base_only_workflow_refuses_even_when_the_head_removes_it(self):
+        # Policy comes from the base, so a workflow in the base scope alone
+        # refuses; deleting it in the candidate cannot buy a clean verdict.
+        self.put(WORKFLOW_PATH, self.VARIANTS["block-untyped"])
+        self.base = self.commit()
+        self.git("rm", "-q", WORKFLOW_PATH)
+        report = self.check(2)
+        self.assertEqual(report["refused"], {"base": [WORKFLOW_PATH], "head": []})
+
+    def test_head_only_workflow_refuses_even_when_the_base_was_clean(self):
+        # The base carries the workflow-capable policy but no workflow file,
+        # so only the candidate introduces the refused input.
+        self.base = self.commit()
+        self.put(WORKFLOW_PATH, self.VARIANTS["utf8-bom"])
+        report = self.check(2)
+        self.assertEqual(report["refused"], {"base": [], "head": [WORKFLOW_PATH]})
+
+    def test_workflow_present_in_both_snapshots_still_refuses(self):
+        # The grandfathered-syntax case the decision names explicitly: sharing
+        # syntax with the base is not a licence to measure it.
+        self.put(WORKFLOW_PATH, self.VARIANTS["block-untyped"])
+        self.base = self.commit()
+        report = self.check(2, head=self.base)
+        self.assertEqual(report["refused"], {"base": [WORKFLOW_PATH], "head": [WORKFLOW_PATH]})
+
+    def test_refusal_precedes_parsing_and_reports_no_counts(self):
+        # A refused snapshot must not report findings it never measured; a
+        # clean-but-unparsed workflow must not look like successful coverage.
+        self.put(WORKFLOW_PATH, self.VARIANTS["inline-empty"])
+        report = self.check(2)
+        for key in ("counts", "new", "resolved", "coverage"):
+            self.assertNotIn(key, report, "A refused run must not report a measurement")
+        self.assertFalse(report["retryable"], report)
+
+    def test_yaml_suffix_is_refused_in_both_spellings(self):
+        # Fresh fixture per spelling: a leftover workflow from the previous
+        # subtest would otherwise be the one named in the refusal.
+        for name in (".github/workflows/ship.yml", ".github/workflows/ship.yaml"):
+            with self.subTest(name=name):
+                self.setUp()
+                self.put(name, self.VARIANTS["block-untyped"])
+                report = self.check(2)
+                self.assertEqual(report["refused"]["head"], [name])
+
+
+def producer_report_failing_open(root, blocked, *, every_read=False):
+    """Run the real producer with ``open`` failing for *blocked*.
+
+    Runs in a separate interpreter so the patch never leaks into the test
+    process. ``every_read`` fails both the candidate probe and the text read;
+    otherwise only the first read (the probe) fails and the second succeeds.
+    """
+    root, blocked = str(root), str(blocked)
+    script = f"""
+import builtins, io, json, runpy, sys
+root, blocked, every = {root!r}, {blocked!r}, {str(every_read)!r}
+real_open = builtins.open
+seen = {{"blocked_reads": 0, "reads": 0}}
+
+def guarded_open(file, *a, **k):
+    path = str(file)
+    if path.startswith(blocked):
+        seen["reads"] += 1
+        if every or seen["reads"] == 1:
+            seen["blocked_reads"] += 1
+            raise PermissionError(13, "Permission denied", path)
+    return real_open(file, *a, **k)
+
+builtins.open = guarded_open
+sys.argv = ["ax_lint.py", "--root", root, "--mode", "warn", "--json"]
+buffer = io.StringIO()
+stdout, sys.stdout = sys.stdout, buffer
+status = 0
+try:
+    runpy.run_path({str(PRODUCER)!r}, run_name="__main__")
+except SystemExit as exit_status:
+    status = exit_status.code or 0
+finally:
+    sys.stdout = stdout
+sys.stderr.write(buffer.getvalue())
+sys.stdout.write(buffer.getvalue())
+raise SystemExit(status)
+"""
+    result = subprocess.run([sys.executable, "-I", "-B", "-c", script],
+                            capture_output=True, text=True, timeout=30)
+    return result
+
+
+def failing_producer_scan(gate, blocked):
+    """Replace the gate's producer call with the real producer, one read lost.
+
+    Returns the gate's own ``(identities, coverage)`` shape by reusing its
+    real validator, so the injected failure travels the production path from
+    report bytes to refusal. *gate* is the already-loaded module: loading it
+    again would define a second ``Unmeasurable`` class that callers cannot
+    catch.
+    """
+    def scan(root, patterns, sources):
+        result = producer_report_failing_open(root, Path(root) / blocked, every_read=True)
+        assert result.returncode == 0, result.stderr
+        return gate.validate_report(result.stdout, patterns, sources)
+    return scan
+
+
+class ReadFailuresFailMeasurement(RepositoryFixture):
+    """A lost source read is unknown coverage, never a clean scan.
+
+    The checker materializes its snapshot with fixed 0644/0755 modes, so a
+    chmod cannot reproduce the review's I/O failure end to end. The producer
+    is therefore driven directly with ``open`` failing for one scoped script,
+    which is the real scan path that used to ``return False`` / ``continue``.
+    """
+
+    def test_real_producer_reports_unreadable_script_as_unknown_coverage(self):
+        self.put("scripts/deploy.sh", BAD_SCRIPT)
+        blocked = self.put("scripts/blocked.sh", BAD_SCRIPT)
+        result = producer_report_failing_open(self.root, blocked, every_read=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+
+        # The readable defect is still measured; the lost read is reported.
+        self.assertEqual([(f["rule_id"], f["path"]) for f in report["findings"]],
+                         [(SCRIPT_RULE, "scripts/deploy.sh")])
+        unknown = report["coverage"]["unknown"]
+        self.assertEqual([entry["path"] for entry in unknown], ["scripts/blocked.sh"])
+        self.assertEqual(unknown[0]["category"], "unknown")
+        self.assertTrue(unknown[0]["reason"].strip(),
+                        "A lost read must carry a reason, not a blank coverage entry")
+
+    def test_unreadable_candidate_detection_is_unknown_not_skipped(self):
+        # Shebang/candidate detection is its own read. Failing it must not make
+        # the file look like a non-candidate that was cleanly excluded: it is
+        # reported unknown, and the ratchet then refuses the whole measurement.
+        # The file is deliberately not scanned after the failed probe; issuing
+        # a second read would contradict the first and could silently disagree.
+        blocked = self.put("scripts/blocked.sh", BAD_SCRIPT)
+        result = producer_report_failing_open(self.root, blocked)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual([entry["path"] for entry in report["coverage"]["unknown"]],
+                         ["scripts/blocked.sh"], report)
+        self.assertEqual([f["path"] for f in report["findings"]], [],
+                         "An unmeasurable file must not also be reported as a finding")
+
+    def test_read_failure_inside_the_ratchet_is_unmeasurable_not_clean(self):
+        # End to end through the real environment precedence: the base scan
+        # reports unknown coverage for an in-scope unreadable script, and the
+        # ratchet refuses with unsupported_coverage rather than reporting a
+        # clean delta with empty coverage (the defect in the 3/5 review).
+        self.put(POLICY, json.dumps(dict(POLICY_VALUE, include=["AGENTS.md", "scripts/**"])))
+        self.put("scripts/deploy.sh", BAD_SCRIPT)
+        self.base = self.commit()
+        gate = load_gate()
+        with patch.object(gate, "PRODUCER", PRODUCER), \
+                patch.object(gate, "scan", failing_producer_scan(gate, "scripts/deploy.sh")):
+            with self.assertRaises(gate.Unmeasurable) as error:
+                gate.check(self.root, self.base, self.base)
+        self.assertEqual(error.exception.code, "unsupported_coverage")
+        self.assertIn("Rewrite unsupported scoped inputs", error.exception.next_action)
+
+    def test_readable_scope_stays_clean(self):
+        # Control: the same fixture without a lost read measures clean, so the
+        # refusal above is caused by the read failure alone.
+        self.put(POLICY, json.dumps(dict(POLICY_VALUE, include=["AGENTS.md", "scripts/**"])))
+        self.base = self.commit()
+        report = self.check(0, head=self.base)
+        self.assert_counts(report, 0, 0, 0, 0)
 
 
 class DispatchProducerBoundaries(unittest.TestCase):
@@ -505,13 +647,19 @@ jobs:
 
 class DispatchCoverageRatchet(RepositoryFixture):
     def test_unsupported_shapes_never_become_clean(self):
+        # These were unmeasurable because the scanner could not parse them.
+        # They stay unmeasurable for the stronger reason: workflow YAML is not
+        # a supported diagnostic input at all, so no shape can be re-admitted
+        # by a future parser improvement.
         for text in ("on: *events\n",
                      '"o\\u006e":\n  workflow_dispatch: {}\n',
                      "on:\n  workflow_dispatch:\n    inputs:\n"
                      "      target:\n        type: |\n          choice\n"):
             with self.subTest(text=text):
                 self.put(WORKFLOW_PATH, text)
-                self.assertEqual(self.check(2)["code"], "unsupported_coverage")
+                report = self.check(2)
+                self.assertEqual(report["code"], "unsupported_coverage", report)
+                self.assertEqual(report["refused"]["head"], [WORKFLOW_PATH])
 
 
 class IntegrationContract(unittest.TestCase):

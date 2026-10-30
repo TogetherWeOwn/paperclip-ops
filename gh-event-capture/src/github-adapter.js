@@ -249,8 +249,9 @@ function normalizeCheck(node) {
 // concurrency cancel) when the SAME producer started a later attempt on this
 // head that completed passing. Only that evidence is dropped before the
 // conservative merge; genuine failures, the latest attempt's own
-// cancellation, unknown producers and distinct producers keep the merge
-// exactly as before. Attempt order is the start time, not completion: a
+// cancellation, unknown producers and distinct producers retain conservative
+// precedence: a retained cancellation cannot become passing. Attempt order
+// is the start time, not completion: a
 // body-reading check that started earlier linted an older PR body even if
 // it happened to finish late.
 function supersededCancelled(check, checks) {
@@ -264,8 +265,12 @@ function supersededCancelled(check, checks) {
 
 function readinessChecks(checks) {
   const effective = checks.filter((check) => !supersededCancelled(check, checks))
+  // An unsuperseded cancellation waits alongside pending, ABOVE passing:
+  // only the provenance guard above may let a pass replace a cancellation.
+  // Genuine failures must still outrank both, never be masked as pending.
   const rank = (check) => check.status !== 'completed' ? 1
-    : ['success', 'neutral', 'skipped'].includes(check.conclusion) ? 0 : 2
+    : ['success', 'neutral', 'skipped'].includes(check.conclusion) ? 0
+    : check.conclusion === 'cancelled' ? 1 : 2
   const byName = new Map()
   for (const check of effective) {
     const prior = byName.get(check.name)

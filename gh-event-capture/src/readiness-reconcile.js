@@ -86,6 +86,7 @@ function reviewScoreFor(snapshot, checks) {
   const status = String(review.status ?? '').toLowerCase()
   if (status !== 'completed') return null
   const conclusion = String(review.conclusion ?? '').toLowerCase()
+  if (conclusion === 'cancelled') return null
   if (conclusion === 'success' || conclusion === 'neutral' || conclusion === 'skipped') return '5/5'
   if (typeof review.conclusion === 'string' && review.conclusion.length > 0) return 'see check'
   return null

@@ -3,6 +3,8 @@
 
 Run: python3 -B -m unittest discover -s .github/scripts -p test_pr_standards_merge_group.py
 """
+from contextlib import redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -10,6 +12,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+
+import pr_standards as ps
 
 
 SCRIPT = Path(__file__).resolve().with_name("pr_standards.py")
@@ -279,6 +284,69 @@ class NativeSquashGroup(unittest.TestCase):
         self.assert_rejects(self.run_cli(GITHUB_EVENT_PATH=None, PR_STANDARDS_MODE="warn"))
         self.assert_rejects(self.run_cli(GITHUB_SHA=self.base, PR_STANDARDS_MODE="warn"))
 
+    def test_replacement_object_cannot_hide_invalid_queued_squash(self):
+        self.set_queue("Update first queued squash", "fix(ci): valid queued tip (#8)")
+        original = self.git("rev-parse", "HEAD^").stdout.strip()
+        replacement = self.commit("fix(ci): replacement looks valid (#7)", parents=(self.base,))
+        self.git("replace", original, replacement)
+        self.assertEqual("fix(ci): replacement looks valid (#7)",
+                         self.git("show", "-s", "--format=%s", original).stdout.strip())
+        self.assertEqual("Update first queued squash",
+                         self.git("--no-replace-objects", "show", "-s", "--format=%s",
+                                  original).stdout.strip())
+        self.assert_rejects(self.run_cli())
+
+    def assert_native_git_boundary(self, key, expected):
+        real_run = subprocess.run
+        self.addCleanup(os.chdir, Path.cwd())
+        os.chdir(self.repo)
+        # Neither absent guards nor inherited permissive values may mask removal.
+        inherited_guards = {
+            "GIT_NO_LAZY_FETCH": "0",
+            "GIT_ALLOW_PROTOCOL": "file",
+            "GIT_TERMINAL_PROMPT": "1",
+        }
+        for inherited in ({}, inherited_guards):
+            with self.subTest(inherited=inherited):
+                env = dict(self.process_env, EVENT="merge_group",
+                           GITHUB_EVENT_NAME="merge_group", GITHUB_EVENT_PATH=str(self.event_path),
+                           GITHUB_SHA=self.head, GITHUB_WORKSPACE=str(self.repo),
+                           GITHUB_REPOSITORY="TogetherWeOwn/paperclip-ops",
+                           REPO_PRIVATE="false", PR_STANDARDS_MODE="error")
+                for name in inherited_guards:
+                    env.pop(name, None)
+                env.update(inherited)
+                calls = []
+
+                def run_git(command, **kwargs):
+                    self.assertEqual("git", command[0])
+                    actual = kwargs.get("timeout") if key == "timeout" else kwargs.get("env", {}).get(key)
+                    self.assertEqual(expected, actual, f"{key} missing from native Git call: {command}")
+                    calls.append(command)
+                    # Keep the local dependency bounded even under timeout mutants.
+                    return real_run(command, **dict(kwargs, timeout=10))
+
+                output = io.StringIO()
+                with mock.patch.dict(os.environ, env, clear=True), redirect_stdout(output), \
+                        mock.patch.object(ps.subprocess, "run", side_effect=run_git):
+                    result = ps.main()
+                self.assertEqual(0, result, output.getvalue())
+                self.assertIn("PR conventions OK", output.getvalue())
+                self.assertNotIn("::error ", output.getvalue())
+                self.assertGreaterEqual(len(calls), 4)
+
+    def test_native_git_disables_lazy_fetch_on_every_command(self):
+        self.assert_native_git_boundary("GIT_NO_LAZY_FETCH", "1")
+
+    def test_native_git_disallows_protocols_on_every_command(self):
+        self.assert_native_git_boundary("GIT_ALLOW_PROTOCOL", "")
+
+    def test_native_git_disables_terminal_prompts_on_every_command(self):
+        self.assert_native_git_boundary("GIT_TERMINAL_PROMPT", "0")
+
+    def test_native_git_bounds_every_command_with_timeout(self):
+        self.assert_native_git_boundary("timeout", 10)
+
     def test_empty_base_to_head_range_is_an_error(self):
         self.set_queue()
         self.assert_rejects(self.run_cli())
@@ -360,6 +428,22 @@ class NativeSquashGroup(unittest.TestCase):
     def test_generated_merge_subject_is_not_skipped_before_valid_tip(self):
         self.set_queue("Merge branch 'first'", "fix(ci): valid queued tip (#8)")
         self.assert_rejects(self.run_cli())
+
+    def test_native_generated_revert_tip_is_rejected_in_both_modes(self):
+        self.set_queue('Revert "previous change"')
+        for mode in ("warn", "error"):
+            with self.subTest(mode=mode):
+                result = self.run_cli(PR_STANDARDS_MODE=mode)
+                self.assert_rejects(result)
+                self.assertIn("::error title=Commit on main::", result.stdout)
+
+    def test_native_generated_revert_is_not_skipped_before_valid_tip_in_both_modes(self):
+        self.set_queue('Revert "previous change"', "fix(ci): valid queued tip (#8)")
+        for mode in ("warn", "error"):
+            with self.subTest(mode=mode):
+                result = self.run_cli(PR_STANDARDS_MODE=mode)
+                self.assert_rejects(result)
+                self.assertIn("::error title=Commit on main::", result.stdout)
 
     def test_full_non_tip_squash_message_uses_existing_public_reference_severity(self):
         internal_ref = "-".join(("TOG", "999999991"))

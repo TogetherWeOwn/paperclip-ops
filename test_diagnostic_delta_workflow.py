@@ -56,9 +56,17 @@ class DiagnosticDeltaWorkflow(unittest.TestCase):
         (self.workspace / "caller").mkdir()
 
     def expression(self, value, contexts):
-        if not value.startswith("${{"):
+        if "${{" not in value:
             return value
-        expression = value.removeprefix("${{").removesuffix("}}").strip()
+        self.assertEqual(value.count("${{"), 1, "Only one expression is supported in offline harness: " + value)
+        match = re.fullmatch(r"(.*?)\$\{\{(.*?)\}\}(.*)", value, re.DOTALL)
+        self.assertIsNotNone(match, "Unsupported expression in offline harness: " + value)
+        prefix, expression, suffix = match.groups()
+        if prefix or suffix:
+            resolved = self.expression("${{" + expression + "}}", contexts)
+            rendered = str(resolved).lower() if isinstance(resolved, bool) else str(resolved)
+            return prefix + rendered + suffix
+        expression = expression.strip()
         if expression == "toJSON(inputs)":
             return json.dumps(contexts["inputs"])
         # Only the sibling workflow's simple expression subset. Reject new
@@ -106,15 +114,18 @@ class DiagnosticDeltaWorkflow(unittest.TestCase):
             self.assertLess(self.steps.index(self.validator), self.steps.index(step))
         self.assertLess(self.steps.index(self.tools), self.steps.index(self.checker))
         for length in (40, 64):
-            values = {"base-sha": "a" * length, "head-sha": "b" * length, "tools-ref": "c" * length}
+            values = {"base-sha": "a" * length, "head-sha": "b" * length, "tools-ref": "c" * 40}
             context = self.contexts(values)
             result = self.run_step(self.validator, context)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(context["env"]["BASE_SHA"], "a" * length)
             self.assertEqual(context["env"]["HEAD_SHA"], "b" * length)
-            self.assertEqual(context["env"]["TOOLS_REF"], "c" * length)
+            self.assertEqual(context["env"]["TOOLS_REF"], "c" * 40)
             self.assertEqual(self.expression(self.caller["with"]["ref"], context), "b" * length)
-            self.assertEqual(self.expression(self.tools["with"]["ref"], context), "c" * length)
+            self.assertEqual(self.expression(self.tools["with"]["ref"], context), "c" * 40)
+        values = {"base-sha": "a" * 64, "head-sha": "b" * 64, "tools-ref": "c" * 64}
+        result = self.run_step(self.validator, self.contexts(values))
+        self.assertNotEqual(result.returncode, 0, "A 64-character tools-ref is not a pinned checkout commit")
 
     def test_empty_missing_mutable_or_injected_input_cannot_fall_back_to_event(self):
         marker = self.workspace / "executed"

@@ -31,6 +31,10 @@ window_start/window_end demonstrably matching the report window;
 bare totals, mismatching windows, and unsupported periods withhold
 the ratio. Truncated or failed issue scans withhold the escalation
 metric instead of yielding an ordinary complete-population value.
+Schema 3 adds independently versioned metric contracts (unit, row grain,
+time and missing/zero semantics). Capped/inconclusive first-commit samples
+are partial, not valid complete-population rates. These are collection-time
+check states, never proof of a historical first-push result.
 """
 
 import argparse
@@ -41,8 +45,111 @@ import os
 import sys
 import urllib.parse
 import urllib.request
+from typing import Literal, NotRequired, TypedDict
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+
+class SourceWindow(TypedDict):
+    start: str
+    end: str
+    days: int | None
+
+
+class GitHubRow(TypedDict):
+    repo: str
+    merged_prs: int
+    truncated: bool
+    first_commit_states: list[str | None]
+
+
+class MetricContract(TypedDict):
+    id: str
+    version: int
+    unit: str
+    row_grain: str
+    time_semantics: str
+    zero_semantics: str
+    null_semantics: str
+
+
+class MetricObservation(TypedDict):
+    value: int | float | None
+    definition: str
+    provenance: str
+    validity: Literal["valid", "withheld", "partial", "unavailable"]
+    reason_code: str
+    reason: str
+    next_action: str
+    completeness: Literal["complete", "partial", "unknown"]
+    source_window: SourceWindow | None
+    numerator: int | float | None
+    denominator: int | float | None
+    numerator_source: str
+    denominator_source: str
+    counts: NotRequired[dict[str, int]]
+
+
+class MetricResult(MetricObservation):
+    contract: MetricContract
+
+
+class Report(TypedDict):
+    tool: str
+    schema_version: int
+    window_days: int
+    window_start: str
+    window_end: str
+    repos: list[GitHubRow]
+    merged_prs_total: int
+    issues_truncated: bool
+    metrics: dict[str, MetricResult]
+
+
+# Semantic versions are per metric, independent of the report envelope version.
+# Keep the descriptors flat so returning a copy isolates consumer mutations.
+METRIC_CONTRACTS: dict[str, MetricContract] = {
+    "first_push_green_rate": {
+        "id": "first_push_green_rate",
+        "version": 1,
+        "unit": "fraction",
+        "row_grain": "repository_pull_request",
+        "time_semantics": (
+            "Merged since the window_start calendar date (no upper query "
+            "bound); first-commit check state at collection, not a historical "
+            "first-push verdict."),
+        "zero_semantics": "No successes among conclusive sampled PR states.",
+        "null_semantics": "No conclusive sampled PR states; ratio undefined.",
+    },
+    "tokens_per_merged_pr": {
+        "id": "tokens_per_merged_pr",
+        "version": 1,
+        "unit": "tokens_per_pull_request",
+        "row_grain": "company_token_total_per_repository_pull_request",
+        "time_semantics": (
+            "Company cost window must match report start/end calendar dates, "
+            "not exact instants; denominator uses the GitHub merged-date "
+            "lower bound, not per-PR token attribution."),
+        "zero_semantics": "Verified zero tokens with a positive PR denominator.",
+        "null_semantics": (
+            "Missing/invalid tokens, unverified cost window or zero merged PRs; "
+            "see validity and reason_code."),
+    },
+    "escalations_per_100_cards": {
+        "id": "escalations_per_100_cards",
+        "version": 1,
+        "unit": "blocked_cards_per_100_touched_cards",
+        "row_grain": "company_issue",
+        "time_semantics": (
+            "Current blocked state of issues whose updatedAt string is at "
+            "least window_start (no upper bound); snapshot proxy, not a "
+            "count of escalation events."),
+        "zero_semantics": "Complete nonempty touched population has no blocked cards.",
+        "null_semantics": (
+            "Missing/incomplete scan or empty touched population; see validity "
+            "and reason_code."),
+    },
+}
 
 MAX_PRS_PER_REPO = 30
 MAX_ISSUE_PAGES = 5
@@ -288,9 +395,9 @@ def _looks_like_failure(reason):
 def _metric(value, definition, provenance, *, validity, reason_code,
             reason="", next_action="", completeness="complete",
             source_window=None, numerator=None, denominator=None,
-            numerator_source="", denominator_source="", counts=None):
+            numerator_source="", denominator_source="", counts=None) -> MetricObservation:
     """One metric with its legacy keys plus the validity envelope."""
-    metric = {
+    metric: MetricObservation = {
         "value": value,
         "definition": definition,
         "provenance": provenance,
@@ -378,22 +485,34 @@ def _verify_cost_window(evidence, report_start, report_end):
     return "unverified", period
 
 
-def _green_metric(states, merged_total, report_window):
-    """first_push_green_rate with its validity envelope."""
+def _green_metric(states: list[str | None], merged_total: int,
+                  report_window: SourceWindow, *, truncated: bool = False
+                  ) -> MetricObservation:
+    """Qualify the conclusive sample, never imply full-population coverage."""
     definition = ("merged PRs green on their first commit / merged PRs "
                   "with any commit status or check run (v0 proxy for "
                   "first-attempt success)")
     provenance = "github commit status + check runs"
     known = [s for s in states if s in ("success", "failure", "error")]
+    counts = {"merged_prs": merged_total, "sampled_prs": len(states),
+              "conclusive_prs": len(known)}
+    partial = truncated or len(known) != merged_total
     if known:
         green = sum(1 for s in known if s == "success")
-        return _metric(green / len(known), definition, provenance,
-                       validity="valid", reason_code="ok",
-                       completeness="complete",
-                       source_window=dict(report_window),
-                       numerator=green, denominator=len(known),
-                       numerator_source=provenance,
-                       denominator_source=provenance)
+        return _metric(
+            green / len(known), definition, provenance,
+            validity="partial" if partial else "valid",
+            reason_code="sample_partial" if partial else "ok",
+            reason=("conclusive first-commit states do not establish "
+                    "complete merged-PR coverage" if partial else ""),
+            next_action=("treat the value as a sample; collect conclusive "
+                         "states for all merged PRs before comparing "
+                         "full-population rates" if partial else ""),
+            completeness="partial" if partial else "complete",
+            source_window=dict(report_window),
+            numerator=green, denominator=len(known),
+            numerator_source=provenance, denominator_source=provenance,
+            counts=counts)
     if not merged_total:
         return _metric(None, definition, provenance,
                        validity="withheld", reason_code="no_prs",
@@ -407,14 +526,14 @@ def _green_metric(states, merged_total, report_window):
                        denominator_source=provenance)
     return _metric(None, definition, provenance,
                    validity="withheld", reason_code="no_evidence",
-                   reason="no commit-status or check-run evidence "
-                          "for merged PRs",
+                   reason="no conclusive commit-status or check-run "
+                          "evidence for merged PRs",
                    next_action="check github status access, then re-run",
-                   completeness="complete",
+                   completeness="unknown",
                    source_window=dict(report_window),
                    numerator=0, denominator=0,
                    numerator_source=provenance,
-                   denominator_source=provenance)
+                   denominator_source=provenance, counts=counts)
 
 
 def _tokens_metric(cost_tokens, cost_evidence, merged_total, report_window,
@@ -647,9 +766,10 @@ def _escalations_metric(issues, window_start, report_window,
                    denominator_source=den_source)
 
 
-def build_report(github_rows, cost_tokens, issues, window_start, window_days,
+def build_report(github_rows: list[GitHubRow], cost_tokens, issues,
+                 window_start: str, window_days: int,
                  paperclip_reason=None, issues_truncated=False,
-                 cost_evidence=None, issues_reason=_UNSET):
+                 cost_evidence=None, issues_reason=_UNSET) -> Report:
     """Assemble the report dict from fetched (or fixture) data.
 
     `issues_reason` is the issue-scan failure reason; left unset it falls
@@ -660,8 +780,23 @@ def build_report(github_rows, cost_tokens, issues, window_start, window_days,
     merged_total = sum(r["merged_prs"] for r in github_rows)
     states = [s for r in github_rows for s in r["first_commit_states"]]
     window_end = _window_end_iso(window_start, window_days)
-    report_window = {"start": window_start, "end": window_end,
-                     "days": window_days}
+    report_window: SourceWindow = {"start": window_start, "end": window_end,
+                                   "days": window_days}
+    observations = {
+        "first_push_green_rate": _green_metric(
+            states, merged_total, report_window,
+            truncated=any(r.get("truncated", False) for r in github_rows)),
+        "tokens_per_merged_pr": _tokens_metric(
+            cost_tokens, cost_evidence, merged_total, report_window,
+            paperclip_reason),
+        "escalations_per_100_cards": _escalations_metric(
+            issues, window_start, report_window, scan_reason,
+            issues_truncated),
+    }
+    metrics: dict[str, MetricResult] = {
+        name: {**observation, "contract": METRIC_CONTRACTS[name].copy()}
+        for name, observation in observations.items()
+    }
     return {
         "tool": "ax-metrics",
         "schema_version": SCHEMA_VERSION,
@@ -671,16 +806,7 @@ def build_report(github_rows, cost_tokens, issues, window_start, window_days,
         "repos": github_rows,
         "merged_prs_total": merged_total,
         "issues_truncated": issues_truncated,
-        "metrics": {
-            "first_push_green_rate": _green_metric(
-                states, merged_total, report_window),
-            "tokens_per_merged_pr": _tokens_metric(
-                cost_tokens, cost_evidence, merged_total, report_window,
-                paperclip_reason),
-            "escalations_per_100_cards": _escalations_metric(
-                issues, window_start, report_window, scan_reason,
-                issues_truncated),
-        },
+        "metrics": metrics,
     }
 
 
@@ -799,8 +925,21 @@ def main(argv=None):
                "partial\n"
                "  scans. Consume reason_code, never prose.\n"
                "\n"
+               "metric contracts (schema 3):\n"
+               "  every metric has contract {id, version, unit, row_grain,\n"
+               "  time_semantics, zero_semantics, null_semantics}; version\n"
+               "  is per metric, independent of schema_version. Units are\n"
+               "  fraction, tokens_per_pull_request and\n"
+               "  blocked_cards_per_100_touched_cards.\n"
+               "  A capped/inconclusive green-rate sample has validity\n"
+               "  partial, reason_code sample_partial, and counts\n"
+               "  {merged_prs, sampled_prs, conclusive_prs}. No conclusive\n"
+               "  states means null/no_evidence with unknown completeness.\n"
+               "  First-commit checks are collection-time snapshots, not\n"
+               "  historical first-push verdicts. See ax-metrics/README.md.\n"
+               "\n"
                "report schema example:\n"
-               "  {\"tool\": \"ax-metrics\", \"schema_version\": 2,\n"
+               "  {\"tool\": \"ax-metrics\", \"schema_version\": 3,\n"
                "   \"window_start\": ..., \"window_end\": ..., "
                "\"metrics\":\n"
                "   {\"tokens_per_merged_pr\": {\"value\": 500.0,\n"

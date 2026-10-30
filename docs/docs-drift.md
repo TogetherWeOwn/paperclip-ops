@@ -27,6 +27,42 @@ cannot redirect `--repo` to a different repository.
 The report carries immutable base/head/merge-base/policy SHAs and measured
 `changed_paths` and `checked_rules`. Zero checked rules is not a coverage claim.
 
+## Explain mode
+
+Add `--explain` to cite which changed docs satisfy each triggered rule:
+
+```sh
+python3 scripts/quality-gates/docs_drift.py --base <full-target-sha> --head <full-pr-head-sha> --explain
+```
+
+Without `--explain`, stdout is exactly the `docs-drift.v1` object above:
+same keys, values and exit codes. With it, a normal report (`clean`,
+`finding` or `not_configured`) gains exactly one extra top-level key,
+`explanations`; every other value and the exit code is identical to the
+default invocation on the same base/head. `explanations` holds one record
+per triggered (checked) rule, in base-policy rule order, each with exactly:
+
+- `rule`: the existing stable rule ID (same spelling as `findings[].rule`);
+- `matched_source_paths`: sorted, duplicate-free changed paths matching the
+  rule's source patterns, including deleted and renamed-away source paths;
+- `qualifying_doc_paths`: sorted, duplicate-free paths qualifying for this
+  rule under the existing predicate — added or content-modified regular
+  files matching the rule's doc patterns and not its source patterns;
+- `status`: `satisfied` iff `qualifying_doc_paths` is non-empty, else
+  `missing`.
+
+`len(explanations) == checked_rules`. `missing` records correspond
+one-for-one to `findings` (same rule, and `findings[].paths` equals
+`matched_source_paths`); a `satisfied` rule never has a finding. Both come
+from the same single evaluated path sets and predicate as the verdict, not a
+second evaluator. Zero triggered rules yields `explanations: []` (never a
+coverage claim); a missing base policy yields `not_configured` with
+`explanations: []`. An `unmeasurable` refusal keeps exit 2 and invents no
+satisfied evidence. Output carries only paths, rule IDs and the existing
+commit identities — never file bodies or subprocess output. Explanations
+prove accompaniment only, never semantic accuracy or generated-file
+freshness.
+
 Fetch complete common history before running. Missing objects, unrelated history,
 multiple merge bases, malformed base policy and 30-second Git command timeouts
 are errors, never clean passes. Each invocation allows at most 100000 changed
@@ -66,25 +102,61 @@ slash, empty path segment, `.` or `..` segment, or NUL is allowed.
 - Review policy expansions/relaxations normally. This is a development-quality
   check, not a security boundary against PRs that replace the checker/workflow.
 
-The initial local policy covers this checker, its workflow and its policy, mapped
-to this page. It does not claim to cover all repository modules. Expand mappings
-only where a real source-to-doc contract exists; avoid broad unrelated-doc bypasses.
+The local policy has these exact-path contracts:
+
+| Rule ID | Source paths | Required documentation |
+|---|---|---|
+| `docs-drift` | `scripts/quality-gates/docs_drift.py`, `.github/workflows/docs-drift.yml`, `.docs-drift.json` | `docs/docs-drift.md` |
+| `capacity-evidence-contract` | `coolify_capacity_headroom.sh`, `coolify_capacity_headroom.py` | `docs/capacity-evidence.md` |
+| `trace-correlation-contract` | `ops/paperclip/trace_correlator.py` | `docs/trace-correlation.md` |
+
+Run the local check above with full target/head SHAs. New mappings enforce only
+after merge, when present in the supplied target's policy. Accompaniment is not
+semantic correctness, capacity admission, deployment authorization or evidence
+freshness. Checking the trace source's documentation does not make the correlator
+an execution/transport gate; its report and exit status must never admit or refuse
+work. This policy does not cover all repository modules. Expand mappings only
+where a real source-to-doc contract exists; avoid broad unrelated-doc bypasses.
 
 ## Reusable CI
 
 `.github/workflows/docs-drift.yml` runs here on PRs, main pushes and merge groups.
-These native events use their own checkout's checker, including in forks or
-renamed copies; repository identity does not select the checker.
+The caller is checked out at the comparison head with complete history. The
+checker is **always a separate checkout**: native events use `github.repository`
+at `github.workflow_sha` (the immutable event-associated workflow revision),
+including in forks or renamed copies. For `pull_request` this may be the PR merge
+commit; for `merge_group` it is the merge-group revision. These revisions may
+contain proposed checker changes: they are not an independently reviewed main
+revision. The comparison PR head is not selected directly as the tools ref and
+may predate the checker. The workflow revision must contain the checker. Missing
+tools fail the job, never fall back to caller files or skip.
+
 Reusable callers, including this same repository, use its `workflow_call`
 interface with `base-sha`, `head-sha` and `tools-ref`. Pin both
 `uses: TogetherWeOwn/paperclip-ops/.github/workflows/docs-drift.yml@<full-sha>`
-and `tools-ref` to the **same reviewed paperclip-ops commit**. The workflow checks
-out the caller at head with complete history, and the checker separately at
-`tools-ref` for every reusable call. Raw call inputs are validated before checkout;
-empty or mutable inputs fail rather than falling back to event SHAs or local tools.
-For PR callers pass `github.event.pull_request.base.sha` and
+and `tools-ref` to the **same reviewed paperclip-ops commit**. Every reusable call
+checks out the canonical paperclip-ops checker at `tools-ref`, not the caller's
+workflow revision. Full lowercase SHAs, including native workflow provenance,
+are validated before any checkout. Raw call inputs and native event SHAs are
+validated too: empty or mutable values cannot fall back to different event
+SHAs or tools. For PR callers pass `github.event.pull_request.base.sha` and
 `github.event.pull_request.head.sha`; other events must supply their own real
-comparison SHAs. No arbitrary commands, generators or auto-fixes are executed.
+comparison SHAs. Native raw event fields are read from the runner's
+`GITHUB_EVENT_PATH` file, not serialized into a job environment value, so large
+valid push metadata does not exceed the per-string process environment limit.
+
+The checker still runs **in the caller directory**, so diffs and policy come from
+caller history; the policy snapshot remains the supplied target/base commit,
+not the tools checkout or PR policy. Stdout remains the single checker JSON
+report. The inline validation and provenance interpreters use Python isolated
+mode; the caller directory and Python environment cannot supply their imports.
+Stderr includes a `docs-drift.tools.v1` provenance object with exact base/head,
+tools repository/ref and reusable-call mode. For hosted verification,
+record the run/job URL, this provenance and the checker's policy/merge-base SHAs,
+`changed_paths`, `checked_rules` and findings; a green job alone is not coverage.
+Rerunning an old failed run uses that run's old workflow revision, not this repair;
+verify on a genuine new native event instead. No arbitrary commands, generators
+or auto-fixes are executed.
 
 Both checkouts disable persisted credentials; permissions are only `contents:
 read`. Do not inherit secrets. No host actions, package installs, production

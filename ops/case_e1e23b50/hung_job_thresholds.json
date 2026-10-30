@@ -21,6 +21,7 @@
     "ci-ok": 5,
     "Failure log drain": 10,
     "Live public-fork disclosure audit": 15,
+    "disclosure-audit": 15,
     "public-safety": 5,
     "docs-verdict": 5,
     "docs-drift": 3,
@@ -37,6 +38,8 @@
     "prod-clone rehearsal": 45,
     "schema drift gate": 10,
     "readiness-sweep": 5,
-    "quality-gates": 9
+    "quality-gates": 9,
+    "acceptance": 5,
+    "diagnostic-delta": 5
   }
 }

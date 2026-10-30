@@ -85,10 +85,25 @@ export const manifest: PaperclipPluginManifestV1 = {
 
   tools: [
     {
+      name: TOOL_NAMES.getCollectorEvidence,
+      displayName: "Get collector evidence",
+      description:
+        "Read company-scoped aggregate snapshot counts and JSON byte lengths for a bounded observation window, without provider identities or raw records. Missing lifecycle and diagnostic instrumentation remain unavailable. Never polls or changes the collector.",
+      parametersSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["companyId"],
+        properties: {
+          companyId: { type: "string", minLength: 1 },
+          windowSeconds: { type: "integer", minimum: 60, maximum: 86400, default: 3600 },
+        },
+      },
+    },
+    {
       name: TOOL_NAMES.getProviderUsage,
       displayName: "Get provider usage",
       description:
-        "Read the most recently persisted CLIProxy usage state: per-provider success/failed counters, cooldown history, and per-model capacity windows, each flagged stale when older than the freshness budget. Read-only; consults stored history, never calls CLIProxy.",
+        "Read the most recently persisted CLIProxy usage state: per-provider success/failed counters, current cooldown status, and per-model capacity windows, each flagged stale when older than the freshness budget. Optionally select one persisted lane to return only that lane's stored history; provider snapshots and modelUsage keep their existing scope. Stored history only — not serving readiness or an admission decision. Read-only; consults stored history, never calls CLIProxy.",
       parametersSchema: {
         type: "object",
         required: ["companyId"],
@@ -97,7 +112,12 @@ export const manifest: PaperclipPluginManifestV1 = {
           provider: {
             type: "string",
             description:
-              "Optional. One provider key as published by the lane (e.g. claude, codex, codex-spark, kimi, opencode-go). Omit to return every provider observed so far.",
+              "Optional. One exact provider key from the persisted provider index (`providers` in an unfiltered call, e.g. claude or codex). Omit to return every provider observed so far. Invalid keys are rejected as unknown_provider.",
+          },
+          lane: {
+            type: "string",
+            description:
+              "Optional. One exact lane id from the persisted lane index — an entry in `lanes` from an unfiltered call (e.g. claude.json). Omit to return every persisted lane. Unknown ids are rejected as unknown_lane; a provider name is not a lane id.",
           },
         },
       },

@@ -20,6 +20,11 @@ on:
         description: Full paperclip-ops commit SHA, pinned alongside the workflow ref
         required: true
         type: string
+      artifact-name:
+        description: Report artifact name; must be unique per invocation within one workflow run
+        required: false
+        default: diagnostic-delta-report
+        type: string
   workflow_dispatch:
     inputs:
       base-sha:
@@ -33,6 +38,11 @@ on:
       tools-ref:
         description: Full paperclip-ops commit SHA, pinned alongside the workflow ref
         required: true
+        type: string
+      artifact-name:
+        description: Report artifact name; must be unique per invocation within one workflow run
+        required: false
+        default: diagnostic-delta-report
         type: string
 
 permissions:
@@ -49,22 +59,26 @@ jobs:
       HEAD_SHA: ${{ inputs.head-sha }}
       TOOLS_REF: ${{ inputs.tools-ref }}
       CALL_INPUTS: ${{ toJSON(inputs) }}
-      REPORT_PATH: /tmp/diagnostic-delta-report.json
+      REPORT_PATH: ${{ github.workspace }}/diagnostic-delta-report.json
     steps:
       - name: Validate immutable inputs
         shell: bash
         run: |
           python3 - <<'PY'
           import json, os, re
-          values = {name: os.environ[name] for name in ("BASE_SHA", "HEAD_SHA")}
+          values = {name: os.environ[name] for name in ("BASE_SHA", "HEAD_SHA", "TOOLS_REF")}
           call_inputs = json.loads(os.environ["CALL_INPUTS"])
           if call_inputs:
               # Validate raw call inputs: empty required values must not fall
               # through to the native-event SHA expressions above.
               values = {name: call_inputs.get(key, "") for name, key in
                         (("BASE_SHA", "base-sha"), ("HEAD_SHA", "head-sha"), ("TOOLS_REF", "tools-ref"))}
+          # Both pinned checkout steps support SHA-1 only. The local checker
+          # also supports SHA-256, but this hosted interface must reject it
+          # before checkout rather than misrouting a 64-hex value as a ref.
+          patterns = {name: r"[0-9a-f]{40}" for name in values}
           for name, value in values.items():
-              if not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", value):
+              if not re.fullmatch(patterns[name], value):
                   raise SystemExit(f"{name}: provide a full lowercase commit SHA, not a branch or expression")
           PY
       - name: Check out the caller history
@@ -92,6 +106,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: diagnostic-delta-report
+          name: ${{ inputs.artifact-name }}
           path: ${{ env.REPORT_PATH }}
           if-no-files-found: error

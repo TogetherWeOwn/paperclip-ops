@@ -25,6 +25,13 @@ retained integration workflows still need an exact-head compatibility pass after
 the private-data extraction; a passing secret scan is not a claim that every
 legacy suite passes or that this is a production-ready release.
 
+## Agent entry point
+
+Agents: start with [AGENTS.md](AGENTS.md) for the source/ownership map, safe
+verification-mode selection, and native planning, single-doer delivery and
+versioned-fixture navigation. Detailed procedures remain in the linked docs;
+this source map does not install tooling or establish runtime adoption.
+
 ## Safety checks
 
 `.gitleaks.toml` extends the scanner's default rules. Its exceptions require both
@@ -64,13 +71,39 @@ For the external, alert-only workspace sync-back size observer, see the
 [byte measurement and alert contract](docs/workspace-sync-back-signal.md).
 It does not instrument transport or authorize host installation.
 
+For the offline card/run/PR/head/deploy trace correlator, see the
+[evidence, join and SLO contract](docs/trace-correlation.md).
+It reads caller-assembled evidence only and authorizes no host action.
+
+For the pure offline adapter from a pinned secret-scan outcome to a
+native finding payload (or a refusal), see the
+[scanner finding adapter contract](docs/scanner-finding-adapter.md).
+It holds no credential, makes no network calls, and authorizes no live
+or automated invocation.
+
 For source-to-documentation accompaniment in pull requests, see the portable
 [documentation drift gate](docs/docs-drift.md), including its JSON contract,
 base-policy trust model and reusable CI interface.
 
+For offline CI-wiring checks, see the [orphan-suite CLI contract](docs/orphan-suites.md),
+including opt-in JSON outcomes, incomplete-check diagnostics and exit boundaries.
+
+For the required-check producer audit, see the
+[required-check audit outcomes](docs/ci-required-checks.md), including the
+versioned JSON envelope for unmeasurable offline inputs and exit boundaries.
+
 For native skill versions, reusable examples and isolated pinned-version tests,
 see the [versioned skill fixture procedure](docs/versioned-skill-fixtures.md).
 It adds no runtime registry, host automation or skill-assignment authority.
+
+For passive all-attempt cost per delivered outcome and trace diagnostics, see the
+[Trace and Outcome Costs plugin](plugins/trace-cost-analytics/README.md). It analyzes
+caller-supplied native snapshots without collecting data or changing routing.
+
+For one policy across plan, build, and review phases, see the
+[role, provider, and rubric coherence procedure](docs/role-provider-rubric-coherence.md).
+It scopes guidance to role and phase, keeps task policy provider-independent,
+and cites a single pinned rubric in every phase.
 
 | Tool |
 | --- |
@@ -151,6 +184,13 @@ It adds no runtime registry, host automation or skill-assignment authority.
 | `warn_first_inventory.py` |
 | `websearch_lane_probe.py` |
 
+## Planning depth
+
+Use [right-sized planning](docs/right-sized-planning.md) to bound a reviewable
+slice, choose preparation by risk/coupling, and record prototypes, investment
+reviews and followups in native task fields. It supplements existing acceptance
+criteria and anti-goals; publishing the guide is not company instruction rollout.
+
 ## Native delivery workflow
 
 Use the [single-doer delivery contract](docs/single-doer-delivery.md) for reusable
@@ -175,10 +215,34 @@ a new admission gate; source publication does not establish live adoption.
 
 ## Verification
 
-Run the fast tier with `make verify-fast` (`make verify-fast-parse` for the
-parse gate only). To inspect suite scope and prerequisites without running or
-preparing anything, use `make verify-fast-plan` (offline, read-only;
-`scripts/verify-fast.sh --plan --json`).
+Choose a mode before executing. `make verify-fast` runs the fast tier and may
+restore toolkit files or install pinned TypeScript dependencies; it is **not
+read-only**. `make verify-fast-parse` executes only the parse gate and can write
+and remove bytecode caches; it is not a dry run either.
+
+For offline, read-only discovery with the shipped inventory, use:
+
+```sh
+bash scripts/verify-fast.sh --help
+bash scripts/verify-fast.sh --list --json
+bash scripts/verify-fast.sh --plan --json
+bash scripts/verify-fast.sh --parse-only --plan --json
+```
+
+`make verify-fast-plan` runs the same JSON planner, but Make also echoes its
+recipe; use the direct script when parsing stdout. `--dry-run` aliases `--plan`.
+List/plan inspect local prerequisites without running suites or preparing
+packages. A plan exits successfully even with missing prerequisites: inspect
+individual `prerequisites[].ready`, not just the exit code or
+`preparation.required`. Use stable suite `id` and `command` fields from
+[scripts/verify-fast-inventory.json](scripts/verify-fast-inventory.json) to locate
+a focused check; no suite-selector execution flag is shipped.
+
+`bash scripts/verify-fast.sh --no-prepare` refuses missing prerequisites with
+exit 3 and guidance, but otherwise **executes** the tier without dependency
+preparation. Default execution can prepare TypeScript and toolkit content, not
+the Python environment below. Fixture tests are not staging/live checks or
+runtime installation evidence.
 
 The code-nav suite needs PyYAML. On a clean Linux x86_64 installation, prepare
 an isolated Python 3.12 environment outside the checkout, then run the fast tier

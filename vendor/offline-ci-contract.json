@@ -347,7 +347,13 @@
     "capacity evidence and CLI refusal contract:1",
     "workspace sync-back signal acceptance suite:1",
     "workspace sync-back signal regression suite:1",
-    "Dispatch sweep failure visibility acceptance:1"
+    "trace correlator suite:1",
+    "Dispatch sweep failure visibility acceptance:1",
+    "native runner coverage classifier suite:1",
+    "AX metric contract suites:1",
+    "scanner finding adapter suite:1",
+    "shell-substitution JSON acceptance:1",
+    "public-comment hygiene JSON suite:1"
   ],
   "retained": [
     {
@@ -387,7 +393,7 @@
     },
     {
       "name": "required checks all have a producing job",
-      "definition_sha256": "8bd1a7d11d818588f4405eab15260f3b256d1bdcdb8701448336e4b8ec1ceeba",
+      "definition_sha256": "fe00bedfc53531ea36934925b53985fbbe0c2c2a127462dc1fa9e06ec82ac487",
       "id": "required checks all have a producing job:1"
     },
     {
@@ -542,7 +548,7 @@
     },
     {
       "name": "review reconciler and ops guard suites",
-      "definition_sha256": "28a647c5d010f9181946c361a7ccc840295d1b6a6b580178f5dce7b69c9b1e38",
+      "definition_sha256": "e2b6a42d8e1ed099307c9e7bf0ca6c745f25cb9a025a187f3ef103599497ebf6",
       "id": "review reconciler and ops guard suites:1"
     },
     {
@@ -797,7 +803,7 @@
     },
     {
       "name": "admitted-PR closeout ledger suite",
-      "definition_sha256": "b7e419931e56f55a7963e2de7b56de99e96d1f138766df81cf386a139c323a9b",
+      "definition_sha256": "4ed7bfeb9025d95f6c6e43f00d3163685e2867de589cc2e265a82138795a2423",
       "id": "admitted-PR closeout ledger suite:1"
     },
     {
@@ -1137,7 +1143,7 @@
     },
     {
       "name": "upstream gate suite",
-      "definition_sha256": "ae3f835b5784ed15538f80799239607aeb04408bef5be0bac64b07cfd69b00e2",
+      "definition_sha256": "5983572846e08fb27c4edd216a7e186e8d9afbbe35ec10553d45aab96711e2b1",
       "id": "upstream gate suite:1"
     },
     {
@@ -1162,7 +1168,7 @@
     },
     {
       "name": "fork-disclosure author classifier + token placement (case_092cd51d gate, offline half)",
-      "definition_sha256": "31f5d1a990e90c3e71b04af16d13f22ecca105c074cf5172e5887965fa75068f",
+      "definition_sha256": "ad73b4174058f7bc34b1400e0102fd2274dd9dcece6c5950906e3ba53c7d1a94",
       "id": "fork-disclosure author classifier + token placement (case_092cd51d gate, offline half):1"
     },
     {
@@ -1377,7 +1383,7 @@
     },
     {
       "name": "Dispatch suite",
-      "definition_sha256": "f77c0e5e2065e28f94fb2fcc5438dde44750922692c94da53f87a2073bc3ec3a",
+      "definition_sha256": "89e920ad54e6c6de01e5ff1a139c708ef1a61635aed4217411308242f6b77d97",
       "id": "Dispatch suite:1"
     },
     {
@@ -1752,7 +1758,7 @@
     },
     {
       "name": "migration safety gates suites",
-      "definition_sha256": "8d8bb4965903d1323d089f05c915279ebf0734329327f252ceb0e101e647f886",
+      "definition_sha256": "83e449237e15e4bbc84ddac3a3a08c98d8231e3c57e4bf4626fdf9a73cfd955f",
       "id": "migration safety gates suites:1"
     },
     {
@@ -1787,7 +1793,7 @@
     },
     {
       "name": "quality-gate helper suites",
-      "definition_sha256": "eff2ed20e1d4d438acec4567c8f59687ae4d72049050fa12122563c0a3021b65",
+      "definition_sha256": "f6ad186363255e2037c3e5a175fa58363e10d496754780f45586226820954e53",
       "id": "quality-gate helper suites:1"
     },
     {
@@ -1867,7 +1873,7 @@
     },
     {
       "name": "orphan-suite ratchet fixtures suite",
-      "definition_sha256": "6a78bd74cf80ae987f05bdf0de08f83fd58cbc9b94d89517c714db382c093835",
+      "definition_sha256": "030caee89c9f36d35e1fe2b39ce82c64f1f119c58eb91c2ed5c0f3b9854f86dd",
       "id": "orphan-suite ratchet fixtures suite:1"
     },
     {
@@ -1922,12 +1928,12 @@
     },
     {
       "name": "sdlc review-carry suite",
-      "definition_sha256": "4cc0a1b7421746981ba556684ba8d20bc0d9d06de46e69d5c78b33a48b763100",
+      "definition_sha256": "70f94e0b4d568835cb2600270017d3e7d380d97f3465e7ffa9983f9fa0407a3e",
       "id": "sdlc review-carry suite:1"
     },
     {
       "name": "verify-fast plan suites",
-      "definition_sha256": "ccae99dd825dc4bf6449a0a726f92e4d36d5e1be401694a5ce2c09f289526fb7",
+      "definition_sha256": "5f9c441672b046560c8a87264067baf15263a0ecbeaa4116bf0a7f0ced3f27a2",
       "id": "verify-fast plan suites:1"
     },
     {
@@ -1961,9 +1967,39 @@
       "id": "workspace sync-back signal regression suite:1"
     },
     {
+      "name": "trace correlator suite",
+      "definition_sha256": "970ea2be13fd1d0c9b2503d02aa6725f3f9ac47d4b883cf246d600c17cc4dd9f",
+      "id": "trace correlator suite:1"
+    },
+    {
       "name": "Dispatch sweep failure visibility acceptance",
       "definition_sha256": "2e075d5605362d844521a3a225c3fe04047c80fcf2aa0917997553221ccdfa29",
       "id": "Dispatch sweep failure visibility acceptance:1"
+    },
+    {
+      "name": "native runner coverage classifier suite",
+      "definition_sha256": "c688f1fbbcb023b3afd8dd80c8821306741f9060c3b1185833d6b0dcf68d142b",
+      "id": "native runner coverage classifier suite:1"
+    },
+    {
+      "name": "AX metric contract suites",
+      "definition_sha256": "ceff81cd977e688ef434a02945f04141390fe205df5b1f5b7df9e29a15826707",
+      "id": "AX metric contract suites:1"
+    },
+    {
+      "name": "scanner finding adapter suite",
+      "definition_sha256": "4f4a5cf1feedf498eef207f0182f3bd6f000d29feaad0cab376b65d19baa5100",
+      "id": "scanner finding adapter suite:1"
+    },
+    {
+      "name": "shell-substitution JSON acceptance",
+      "definition_sha256": "335f88370d859cfd2908fe5ea77a41d6a03b8cc8ca84ccbcabeca304a04042d8",
+      "id": "shell-substitution JSON acceptance:1"
+    },
+    {
+      "name": "public-comment hygiene JSON suite",
+      "definition_sha256": "60125ad01be83d0c4323b4495f6a94511b5edc43583305b1bb20a1987ede42bf",
+      "id": "public-comment hygiene JSON suite:1"
     }
   ],
   "removed": [

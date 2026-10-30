@@ -15,6 +15,7 @@ import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
 import type { PluginContext, PluginJobContext } from "@paperclipai/plugin-sdk";
 
 import { validateSecretRefShape } from "./config/secret-ref.js";
+import { collectorEvidence } from "./collector-evidence.js";
 import {
   DEFAULT_LANE_FILES,
   JOB_KEYS,
@@ -73,6 +74,20 @@ function firstNumber(record: Record<string, unknown>, fields: readonly string[])
  */
 function toolRejection(error: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return { ok: false, error, ...extra };
+}
+
+function usageRejection(error: string, nextAction: string): { error: string; data: Record<string, unknown> } {
+  return { error, data: toolRejection(error, { retryable: false, next_action: nextAction }) };
+}
+
+/**
+ * The stable rejection for a present-but-invalid `lane` selector. Fixed
+ * strings only: the supplied value is never echoed and no lane data — not
+ * even the index — rides along, so a rejected call cannot leak lane records.
+ * Callers learn valid ids from an unfiltered call's `lanes` array.
+ */
+function unknownLaneResult(): { error: string; data: Record<string, unknown> } {
+  return usageRejection("unknown_lane", "use a lane id from the persisted lane index");
 }
 
 function resolveConfig(raw: unknown): ResolvedConfig {
@@ -381,6 +396,19 @@ export function isStale(observedAt: unknown, staleAfterSeconds: number, nowMs: n
 }
 
 /**
+ * The persisted lane index — the only source of valid lane ids. A `lane`
+ * selector is checked for exact membership here before any lane snapshot is
+ * read, so a state key is never constructed from unvalidated input and a
+ * selected call never reads another lane's state.
+ */
+async function readLaneIndex(read: (stateKey: string) => Promise<unknown>): Promise<string[]> {
+  const storedIndex = await read(STATE_KEYS.laneIndex);
+  return Array.isArray(storedIndex)
+    ? [...new Set(storedIndex.filter((l): l is string => typeof l === "string" && l.trim().length > 0))]
+    : [];
+}
+
+/**
  * The lane half of both read surfaces (agent tool and `usage-summary` route),
  * written once so the two cannot drift — a consumer that sees a cooldown on one
  * surface and not the other is worse than one that sees it on neither.
@@ -388,17 +416,16 @@ export function isStale(observedAt: unknown, staleAfterSeconds: number, nowMs: n
  * Cooldown is evaluated at READ time, not carried from the poll: a snapshot
  * persisted while an account was cooling must stop reporting a cooldown once
  * that instant passes, even if no poll has run since.
+ *
+ * Reads exactly `lanes` — the caller passes the full index, or the single
+ * index-validated selection — and counts `accountsCooling` over that subset.
  */
 async function laneSummary(
   read: (stateKey: string) => Promise<unknown>,
   config: ResolvedConfig,
   nowMs: number,
+  lanes: string[],
 ): Promise<{ lanes: string[]; laneSnapshots: Record<string, unknown>; accountsCooling: number }> {
-  const storedIndex = await read(STATE_KEYS.laneIndex);
-  const lanes = Array.isArray(storedIndex)
-    ? storedIndex.filter((l): l is string => typeof l === "string")
-    : [];
-
   const laneSnapshots: Record<string, unknown> = {};
   let accountsCooling = 0;
 
@@ -627,10 +654,7 @@ export function createPlugin() {
         if (config.laneFiles.length > 0) {
           // Union with what we have seen before, same rule as the provider
           // index: a lane missing from one publish is not evidence it is gone.
-          const storedIndex = await ctx.state.get(key(companyId, STATE_KEYS.laneIndex));
-          const knownLanes = Array.isArray(storedIndex)
-            ? storedIndex.filter((l): l is string => typeof l === "string")
-            : [];
+          const knownLanes = await readLaneIndex((stateKey) => ctx.state.get(key(companyId, stateKey)));
           await ctx.state.set(
             key(companyId, STATE_KEYS.laneIndex),
             [...new Set([...knownLanes, ...lanesStored])].sort(),
@@ -758,14 +782,78 @@ export function createPlugin() {
         }
       };
 
+      // ---- scoped aggregate evidence (no producer strings) -------------
+      ctx.tools.register(
+        TOOL_NAMES.getCollectorEvidence,
+        {
+          displayName: "Get collector evidence",
+          description: "Read bounded aggregate snapshot evidence without raw provider or lane records.",
+          parametersSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["companyId"],
+            properties: {
+              companyId: { type: "string", minLength: 1 },
+              windowSeconds: { type: "integer", minimum: 60, maximum: 86400, default: 3600 },
+            },
+          },
+        },
+        async (params, runCtx) => {
+          const input = asRecord(params);
+          const companyId = typeof input.companyId === "string" ? input.companyId : "";
+          const windowSeconds = input.windowSeconds === undefined ? 3600 : input.windowSeconds;
+          if (!companyId || !Number.isInteger(windowSeconds) ||
+              typeof windowSeconds !== "number" || windowSeconds < 60 || windowSeconds > 86400 ||
+              Object.keys(input).some((name) => name !== "companyId" && name !== "windowSeconds")) {
+            return { error: "invalid_evidence_request", data: toolRejection("invalid_evidence_request") };
+          }
+          if (runCtx.companyId !== companyId || !isConfiguredCompany(companyId)) {
+            return { error: "company is not configured", data: toolRejection("company is not configured") };
+          }
+          try {
+            const config = resolveConfig(await ctx.config.get(companyId));
+            if (!isConfiguredCompany(companyId)) {
+              return { error: "company is not configured", data: toolRejection("company is not configured") };
+            }
+            const data = await collectorEvidence(
+              (stateKey) => ctx.state.get(key(companyId, stateKey)),
+              companyId, windowSeconds, Date.now(), config,
+            );
+            if (!isConfiguredCompany(companyId)) {
+              return { error: "company is not configured", data: toolRejection("company is not configured") };
+            }
+            return { data };
+          } catch {
+            // State/config errors can contain identities and paths too.
+            return { error: "evidence_unavailable", data: toolRejection("evidence_unavailable") };
+          }
+        },
+      );
+
       // ---- agent tool: get_provider_usage -----------------------------
       ctx.tools.register(
         TOOL_NAMES.getProviderUsage,
         {
           displayName: "Get provider usage",
           description:
-            "Read the most recently persisted CLIProxy usage/cooldown state. Read-only; consults stored history, never calls CLIProxy.",
-          parametersSchema: { type: "object", required: ["companyId"] },
+            "Read the most recently persisted CLIProxy usage state: per-provider success/failed counters, current cooldown status, and per-model capacity windows, each flagged stale when older than the freshness budget. Optionally select one persisted lane to return only that lane's stored history; provider snapshots and modelUsage keep their existing scope. Stored history only — not serving readiness or an admission decision. Read-only; consults stored history, never calls CLIProxy.",
+          parametersSchema: {
+            type: "object",
+            required: ["companyId"],
+            properties: {
+              companyId: { type: "string", description: "Company whose CLIProxy history applies" },
+              provider: {
+                type: "string",
+                description:
+                  "Optional. One exact provider key from the persisted provider index (`providers` in an unfiltered call, e.g. claude or codex). Omit to return every provider observed so far. Invalid keys are rejected as unknown_provider.",
+              },
+              lane: {
+                type: "string",
+                description:
+                  "Optional. One exact lane id from the persisted lane index — an entry in `lanes` from an unfiltered call (e.g. claude.json). Omit to return every persisted lane. Unknown ids are rejected as unknown_lane; a provider name is not a lane id.",
+              },
+            },
+          },
         },
         async (params) => {
           const input = asRecord(params);
@@ -775,12 +863,57 @@ export function createPlugin() {
           if (!isConfiguredCompany(companyId))
             return { error: "company is not configured", data: toolRejection("company is not configured") };
 
+          const rejectLane = async (reason: "invalid_shape" | "unknown_id") => {
+            try {
+              await ctx.metrics.write("cliproxy_insight.lane_selection_refused", 1, { companyId, reason });
+            } catch {
+              // A failed metric must not expose an exception or change the safe rejection.
+            }
+            return unknownLaneResult();
+          };
+          // Selector shape is validated after the company fence and before
+          // any state read. Only exact membership in the persisted index
+          // can turn either value into a state key. A provider name is never
+          // inferred to be a lane id; omitted/undefined selectors stay unfiltered.
+          const selectedLane = input.lane;
+          if (
+            selectedLane !== undefined &&
+            (typeof selectedLane !== "string" || selectedLane.trim().length === 0)
+          ) {
+            return rejectLane("invalid_shape");
+          }
+          const requested = input.provider;
+          if (requested !== undefined && (typeof requested !== "string" || requested.trim().length === 0)) {
+            return usageRejection("unknown_provider", "use a provider key from the persisted provider index");
+          }
+
           const config = resolveConfig(await ctx.config.get(companyId));
           if (!isConfiguredCompany(companyId))
             return { error: "company is not configured", data: toolRejection("company is not configured") };
           const nowMs = Date.now();
-          const requested = typeof input.provider === "string" ? input.provider : null;
-          const providers = requested ? [requested] : await readProviderIndex(companyId);
+          const readState = (stateKey: string) => ctx.state.get(key(companyId, stateKey));
+
+          // Resolve the lane before provider/model reads, so a rejected lane
+          // reads its index only — never another lane's snapshot.
+          const indexedLanes = await readLaneIndex(readState);
+          if (!isConfiguredCompany(companyId))
+            return { error: "company is not configured", data: toolRejection("company is not configured") };
+          if (typeof selectedLane === "string" && !indexedLanes.includes(selectedLane)) {
+            return rejectLane("unknown_id");
+          }
+          const indexedProviders = await readProviderIndex(companyId);
+          if (!isConfiguredCompany(companyId))
+            return { error: "company is not configured", data: toolRejection("company is not configured") };
+          if (typeof requested === "string" && !indexedProviders.includes(requested)) {
+            return usageRejection("unknown_provider", "use a provider key from the persisted provider index");
+          }
+          const providers = typeof requested === "string" ? [requested] : indexedProviders;
+          const lane = await laneSummary(
+            readState,
+            config,
+            nowMs,
+            typeof selectedLane === "string" ? [selectedLane] : indexedLanes,
+          );
 
           const snapshots: Record<string, unknown> = {};
           for (const provider of providers) {
@@ -794,11 +927,6 @@ export function createPlugin() {
 
           const modelUsage = asRecord(await ctx.state.get(key(companyId, STATE_KEYS.modelUsage)));
           const hasModelUsage = Object.keys(modelUsage).length > 0;
-          const lane = await laneSummary(
-            (stateKey) => ctx.state.get(key(companyId, stateKey)),
-            config,
-            nowMs,
-          );
 
           return {
             data: {
@@ -956,10 +1084,12 @@ export function createPlugin() {
 
       const modelUsage = asRecord(await context.state.get(scope(STATE_KEYS.modelUsage)));
       const hasModelUsage = Object.keys(modelUsage).length > 0;
+      const readRouteState = (stateKey: string) => context!.state.get(scope(stateKey));
       const lane = await laneSummary(
-        (stateKey) => context!.state.get(scope(stateKey)),
+        readRouteState,
         config,
         nowMs,
+        await readLaneIndex(readRouteState),
       );
 
       return {

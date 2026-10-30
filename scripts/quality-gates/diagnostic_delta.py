@@ -7,9 +7,12 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 POLICY = ".diagnostic-delta.json"
 PRODUCER = Path(__file__).resolve().parents[2] / "templates/org-github/ax-lint/ax_lint.py"
@@ -18,6 +21,9 @@ MAX_REPORT = 1024 * 1024
 MAX_SOURCE = 1024 * 1024
 MAX_TOTAL = 32 * 1024 * 1024
 MAX_PATHS = 10000
+# Documented outer bound for each Git collection subprocess; the pinned AX
+# collector keeps its own 25-second inner deadline beneath this one.
+GIT_TIMEOUT = 30
 RULES = {
     "agents-map/missing": "agents-map",
     "agents-map/oversize": "agents-map",
@@ -71,26 +77,82 @@ def json_value(raw, limit, code):
 def git(repo, *args, input=None, limit=16 * 1024 * 1024):
     # No replace objects, caller Git environment, global config, shell, filters,
     # checkout hooks or working-tree reads. Blob bytes come straight from Git.
+    # Collection is byte-bounded while Git runs (stdout: limit, stderr:
+    # 64 KiB): the first excess byte kills and reaps the process instead of
+    # spooling an unbounded listing to temporary storage before refusing it.
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_NO_LAZY_FETCH="1",
+               GIT_ALLOW_PROTOCOL="", GIT_TERMINAL_PROMPT="0",
                GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    deadline = time.monotonic() + GIT_TIMEOUT
     try:
-        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as error:
-            result = subprocess.run(["git", "-C", str(repo), *args], input=input,
-                                    stdout=output, stderr=error, timeout=30, env=env)
-            output.seek(0)
-            raw = output.read(limit + 1)
-    except subprocess.TimeoutExpired as exc:
-        raise Unmeasurable("git_timeout", "Retry with complete history on a healthy runner.", True) from exc
+        process = subprocess.Popen(["git", "-C", str(repo), *args],
+                                   stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   env=env, start_new_session=True)
     except OSError as exc:
         raise Unmeasurable("git_unavailable", "Install Git and select a readable repository.") from exc
-    if result.returncode or len(raw) > limit:
+    overflow = False
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    try:
+        pending = memoryview(input) if input else None
+        if input is not None and not input:
+            process.stdin.close()
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ, ("stdout", limit))
+            selector.register(process.stderr, selectors.EVENT_READ, ("stderr", 64 * 1024))
+            if pending is not None:
+                os.set_blocking(process.stdin.fileno(), False)
+                selector.register(process.stdin, selectors.EVENT_WRITE, ("stdin", 0))
+            while selector.get_map() and not overflow:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise Unmeasurable("git_timeout", "Retry with complete history on a healthy runner.", True)
+                for key, _ in selector.select(remaining):
+                    name, cap = key.data
+                    if name == "stdin":
+                        try:
+                            pending = pending[os.write(key.fd, pending[:65536]):]
+                        except BlockingIOError:
+                            continue
+                        except OSError:
+                            pending = memoryview(b"")
+                        if not pending:
+                            selector.unregister(key.fileobj)
+                            process.stdin.close()
+                        continue
+                    chunk = os.read(key.fd, min(65536, cap - len(buffers[name]) + 1))
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                    elif len(buffers[name]) + len(chunk) > cap:
+                        overflow = True
+                    else:
+                        buffers[name].extend(chunk)
+        if overflow:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        try:
+            returncode = process.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired as exc:
+            raise Unmeasurable("git_timeout", "Retry with complete history on a healthy runner.", True) from exc
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+    if overflow or returncode:
         refuse("git_failed", "Fetch the exact commits; keep the source within the documented snapshot limits.")
-    return raw
+    return bytes(buffers["stdout"])
 
 
 def tree_at(repo, sha):
-    raw = git(repo, "ls-tree", "-r", "-l", "-z", sha)
+    raw = git(repo, "ls-tree", "--full-tree", "-r", "-l", "-z", sha)
     entries = {}
     try:
         for row in raw.split(b"\0"):
@@ -158,13 +220,34 @@ def policy_at(repo, tree):
 
 
 def matches(path, patterns):
-    return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
+    parts = path.split("/")
+    for pattern in patterns:
+        positions = {0}
+        for component in pattern.split("/"):
+            if component == "**":
+                # A whole ** component consumes zero or more directories.
+                positions = set(range(min(positions), len(parts) + 1)) if positions else set()
+            else:
+                positions = {i + 1 for i in positions if i < len(parts)
+                             and fnmatch.fnmatchcase(parts[i], component)}
+        if len(parts) in positions:
+            return True
+    return False
 
 
 def scope_ancestor(path, patterns):
     # Conservatively refuse symlink/submodule ancestors of wildcard scopes.
+    # Only complete path components before the first wildcard component are
+    # fixed: scripts/pkg-*/** fixes scripts/, so a symlink or gitlink that
+    # replaces scripts/pkg-one is a possible scoped ancestor to refuse,
+    # never resolved debt to certify.
     for pattern in patterns:
-        prefix = re.split(r"[*?\[]", pattern, maxsplit=1)[0].rstrip("/")
+        parts = []
+        for part in pattern.split("/"):
+            if any(char in part for char in "*?["):
+                break
+            parts.append(part)
+        prefix = "/".join(parts)
         if not prefix or path == prefix or prefix.startswith(path + "/") or path.startswith(prefix + "/"):
             return True
     return False
@@ -211,7 +294,7 @@ def empty_skip(entry, sources):
     line = lines[entry["line"] - 1]
     # Only explicitly empty forms are measurable omissions. Never accept a
     # nonempty inline input merely because the advisory producer calls it skipped.
-    return bool(re.fullmatch(r"\s*(?:inputs|workflow_dispatch)\s*:\s*(?:\{\}|\[\])\s*(?:#.*)?", line))
+    return bool(re.fullmatch(r"\s*(['\"]?)(?:inputs|workflow_dispatch)\1\s*:\s*(?:\{\}|\[\])\s*(?:#.*)?", line))
 
 
 def validate_report(raw, patterns, sources):
@@ -269,13 +352,40 @@ def validate_report(raw, patterns, sources):
 
 
 def scan(root, patterns, sources):
+    # The collector announces its session before spawning the producer. Both
+    # stay in that group, so even a stopped collector cannot strand the producer
+    # when subprocess.run enforces the outer deadline and kills only its child.
+    read_fd, write_fd = os.pipe()
+    os.set_blocking(read_fd, False)
     try:
-        result = subprocess.run([sys.executable, "-I", "-B", str(PRODUCER), "--root", str(root),
-                                 "--mode", "warn", "--json"], capture_output=True, timeout=30)
+        result = subprocess.run([sys.executable, "-I", "-B",
+                                 str(Path(__file__).with_name("capture_ax_report.py")),
+                                 str(PRODUCER), "--root", str(root), "--mode", "warn", "--json"],
+                                capture_output=True, timeout=30, start_new_session=True,
+                                pass_fds=(write_fd,),
+                                env={**os.environ, "AX_COLLECTOR_SUPERVISOR_FD": str(write_fd)})
     except subprocess.TimeoutExpired as exc:
         raise Unmeasurable("producer_timeout", "Reduce scope or retry on a healthy runner.", True) from exc
     except OSError as exc:
         raise Unmeasurable("producer_unavailable", "Restore the pinned AX-lint producer and Python runtime.") from exc
+    finally:
+        os.close(write_fd)
+        try:
+            try:
+                group = os.read(read_fd, 32)
+            except BlockingIOError:
+                group = b""
+            if group.isdigit() and int(group) > 1:
+                try:
+                    os.killpg(int(group), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        finally:
+            os.close(read_fd)
+    if result.returncode == 3:
+        refuse("producer_output_limit", "Reduce scope: producer stdout is limited to 1 MiB and stderr to 64 KiB.")
+    if result.returncode == 124:
+        raise Unmeasurable("producer_timeout", "Reduce scope or retry on a healthy runner.", True)
     if result.returncode:
         refuse("producer_failed", "Inspect the pinned producer failure; do not treat missing output as a clean scan.")
     return validate_report(result.stdout, patterns, sources)
@@ -288,9 +398,21 @@ def identity_list(values):
 def check(repo, base, head):
     if not SHA.fullmatch(base) or not SHA.fullmatch(head):
         refuse("invalid_sha", "Provide full lowercase 40- or 64-character commit SHAs, not refs.")
+    # A hex-looking name is not an immutable object: the length must match
+    # this repository's object format and each value must be the exact full
+    # object ID it resolves to, never a ref or an abbreviation.
+    expected = {b"sha1": 40, b"sha256": 64}.get(git(repo, "rev-parse", "--show-object-format").strip())
+    if expected is None or len(base) != expected or len(head) != expected:
+        refuse("invalid_sha", "Provide full commit SHAs in this repository's object format, not refs or abbreviations.")
     for sha in (base, head):
-        if git(repo, "cat-file", "-t", sha).strip() != b"commit":
-            refuse("invalid_commit", "Supply commit objects, not blobs, tags or trees.")
+        try:
+            resolved = git(repo, "rev-parse", "--verify", sha + "^{commit}").strip()
+        except Unmeasurable as exc:
+            if exc.code != "git_failed":
+                raise
+            refuse("invalid_sha", "Provide exact full commit object IDs, not refs, abbreviations, blobs, tags or trees.")
+        if resolved != sha.encode():
+            refuse("invalid_sha", "Provide exact full commit object IDs, not refs, abbreviations, blobs, tags or trees.")
     base_tree = tree_at(repo, base)
     patterns = policy_at(repo, base_tree)
     report = {"schema": "diagnostic-delta.v1", "producer": "ax-lint", "base_sha": base,
@@ -341,6 +463,7 @@ def main(argv=None):
         report = {"schema": "diagnostic-delta.v1", "status": "unmeasurable", "code": exc.code,
                   "next_action": exc.next_action, "retryable": exc.retryable}
     report.update(checker_sha256=fingerprint(Path(__file__).resolve()),
+                  collector_sha256=fingerprint(Path(__file__).with_name("capture_ax_report.py")),
                   producer_sha256=fingerprint(PRODUCER))
     print(json.dumps(report, sort_keys=True))
     return {"unmeasurable": 2, "finding": 1}.get(report["status"], 0)

@@ -38,6 +38,7 @@ function validateSecretRefShape(value, path) {
 }
 
 // src/constants.ts
+var PLUGIN_ID = "togetherweown.cliproxy-insight";
 var PLUGIN_VERSION = "0.3.1";
 var SEED_PROVIDER_ORDER = [
   "claude",
@@ -51,7 +52,9 @@ var SEED_PROVIDER_ORDER = [
 ];
 var TOOL_NAMES = {
   /** Read-only: current usage/cooldown state for one or all providers. */
-  getProviderUsage: "get_provider_usage"
+  getProviderUsage: "get_provider_usage",
+  /** Counts-only evidence; never returns provider or lane records. */
+  getCollectorEvidence: "get_collector_evidence"
 };
 var ROUTE_KEYS = {
   usageSummary: "usage-summary"
@@ -105,20 +108,118 @@ var REQUEST_RATE_FIELDS = {
 };
 var SUPPORTED_SCHEMA_VERSION = 1;
 
+// src/collector-evidence.ts
+var MAX_PROVIDERS = 64;
+var MAX_LANES = 32;
+function record(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function index(value, limit) {
+  if (value === null || value === void 0) return null;
+  if (!Array.isArray(value) || value.length > limit || value.some((item) => typeof item !== "string" || item.length === 0 || item.length > 128)) {
+    throw new Error("invalid_evidence_index");
+  }
+  return [...new Set(value)];
+}
+async function summarize(read, keys, startMs, endMs) {
+  if (keys === null) return null;
+  let missing = 0;
+  let outsideWindow = 0;
+  let invalidTimestamp = 0;
+  let snapshots = 0;
+  let jsonBytes = 0;
+  for (const key of keys) {
+    const value = await read(key);
+    if (value === null || value === void 0) {
+      missing += 1;
+      continue;
+    }
+    const snapshot = record(value);
+    const polledMs = typeof snapshot.polledAt === "string" ? Date.parse(snapshot.polledAt) : NaN;
+    if (!Number.isFinite(polledMs)) {
+      invalidTimestamp += 1;
+      continue;
+    }
+    if (polledMs < startMs || polledMs > endMs) {
+      outsideWindow += 1;
+      continue;
+    }
+    snapshots += 1;
+    jsonBytes += new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  }
+  return { indexed: keys.length, snapshots, jsonBytes, missing, outsideWindow, invalidTimestamp };
+}
+async function collectorEvidence(read, companyId, windowSeconds, nowMs, settings) {
+  const providers = index(await read(STATE_KEYS.providerIndex), MAX_PROVIDERS);
+  const lanes = index(await read(STATE_KEYS.laneIndex), MAX_LANES);
+  const startMs = nowMs - windowSeconds * 1e3;
+  const providerSnapshots = await summarize(
+    read,
+    providers?.map(STATE_KEYS.provider) ?? null,
+    startMs,
+    nowMs
+  );
+  const laneSnapshots = await summarize(
+    read,
+    lanes?.map(STATE_KEYS.lane) ?? null,
+    startMs,
+    nowMs
+  );
+  const modelSnapshot = await summarize(read, [STATE_KEYS.modelUsage], startMs, nowMs);
+  return {
+    schemaVersion: 1,
+    companyId,
+    pluginId: PLUGIN_ID,
+    pluginVersion: PLUGIN_VERSION,
+    generatedAt: new Date(nowMs).toISOString(),
+    qualification: "partial",
+    deployedArtifactId: null,
+    installedLifecycle: null,
+    settingsSource: "resolved_running_worker_config",
+    settings: {
+      pollingEnabled: settings.pollingEnabled,
+      staleAfterSeconds: settings.staleAfterSeconds,
+      maxCooldownEventsPerProvider: settings.maxCooldownEventsPerProvider,
+      diagnosticSampleRate: null,
+      diagnosticRetentionSeconds: null,
+      diagnosticRedactionPolicy: null
+    },
+    snapshotWindow: {
+      start: new Date(startMs).toISOString(),
+      end: new Date(nowMs).toISOString(),
+      semantics: "current_snapshots_with_polledAt_in_window_not_event_history",
+      byteSemantics: "utf8_json_snapshot_values_excluding_state_keys_and_storage_overhead",
+      providerSnapshots,
+      laneSnapshots,
+      modelSnapshot
+    },
+    diagnosticEvents: null,
+    diagnosticInputBytes: null,
+    droppedSelfOriginEvents: null,
+    redactedFields: null
+  };
+}
+
 // src/worker.ts
 var DEFAULT_BASE_URL = "https://host-a965dd17.example.invalid/telemetry/cliproxy";
 function asRecord(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
-function firstNumber(record, fields) {
+function firstNumber(record2, fields) {
   for (const field of fields) {
-    const value = record[field];
+    const value = record2[field];
     if (typeof value === "number" && Number.isFinite(value)) return value;
   }
   return null;
 }
 function toolRejection(error, extra = {}) {
   return { ok: false, error, ...extra };
+}
+function usageRejection(error, nextAction) {
+  return { error, data: toolRejection(error, { retryable: false, next_action: nextAction }) };
+}
+function unknownLaneResult() {
+  return usageRejection("unknown_lane", "use a lane id from the persisted lane index");
 }
 function resolveConfig(raw) {
   const r = asRecord(raw);
@@ -176,13 +277,13 @@ function extractProviderRecords(body, polledAt) {
   const records = [];
   for (const [provider, value] of Object.entries(source)) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-    const record = value;
+    const record2 = value;
     records.push({
       provider,
       polledAt,
       observedAt,
-      success: firstNumber(record, REQUEST_RATE_FIELDS.success),
-      failed: firstNumber(record, REQUEST_RATE_FIELDS.failed),
+      success: firstNumber(record2, REQUEST_RATE_FIELDS.success),
+      failed: firstNumber(record2, REQUEST_RATE_FIELDS.failed),
       raw: value
     });
   }
@@ -200,9 +301,9 @@ function cooldownReason(raw) {
   if (r.serviceable === false) return "not_serviceable";
   return null;
 }
-function firstString(record, fields) {
+function firstString(record2, fields) {
   for (const field of fields) {
-    const value = record[field];
+    const value = record2[field];
     if (typeof value === "string" && value.length > 0) return value;
   }
   return null;
@@ -222,8 +323,8 @@ function extractLaneDocument(body, laneFile, polledAt) {
     records
   };
 }
-function laneCooldown(record, nowMs) {
-  const r = asRecord(record);
+function laneCooldown(record2, nowMs) {
+  const r = asRecord(record2);
   const nested = asRecord(r.cooldown);
   const until = firstString(r, LANE_COOLDOWN_FIELDS) ?? (typeof nested.until === "string" ? nested.until : null);
   if (until) {
@@ -240,8 +341,8 @@ function laneCooldown(record, nowMs) {
   }
   return null;
 }
-function laneAccountId(record, laneFile) {
-  const lane = record.lane;
+function laneAccountId(record2, laneFile) {
+  const lane = record2.lane;
   return typeof lane === "string" && lane.length > 0 ? lane : laneFile.replace(/\.json$/i, "");
 }
 function isStale(observedAt, staleAfterSeconds, nowMs) {
@@ -250,9 +351,11 @@ function isStale(observedAt, staleAfterSeconds, nowMs) {
   if (!Number.isFinite(observedMs)) return true;
   return nowMs - observedMs > staleAfterSeconds * 1e3;
 }
-async function laneSummary(read, config, nowMs) {
+async function readLaneIndex(read) {
   const storedIndex = await read(STATE_KEYS.laneIndex);
-  const lanes = Array.isArray(storedIndex) ? storedIndex.filter((l) => typeof l === "string") : [];
+  return Array.isArray(storedIndex) ? [...new Set(storedIndex.filter((l) => typeof l === "string" && l.trim().length > 0))] : [];
+}
+async function laneSummary(read, config, nowMs, lanes) {
   const laneSnapshots = {};
   let accountsCooling = 0;
   for (const laneFile of lanes) {
@@ -261,14 +364,14 @@ async function laneSummary(read, config, nowMs) {
       laneSnapshots[laneFile] = null;
       continue;
     }
-    const accounts = (snapshot.records ?? []).map((record) => {
-      const cooldown = laneCooldown(record, nowMs);
+    const accounts = (snapshot.records ?? []).map((record2) => {
+      const cooldown = laneCooldown(record2, nowMs);
       if (cooldown) accountsCooling += 1;
       return {
-        account: laneAccountId(record, laneFile),
-        health: typeof record.health === "string" ? record.health : null,
+        account: laneAccountId(record2, laneFile),
+        health: typeof record2.health === "string" ? record2.health : null,
         cooldown,
-        record
+        record: record2
       };
     });
     laneSnapshots[laneFile] = {
@@ -319,8 +422,8 @@ function createPlugin() {
       };
       const orderProviders = (providers) => {
         const rank = (p) => {
-          const index = SEED_PROVIDER_ORDER.indexOf(p);
-          return index === -1 ? SEED_PROVIDER_ORDER.length : index;
+          const index2 = SEED_PROVIDER_ORDER.indexOf(p);
+          return index2 === -1 ? SEED_PROVIDER_ORDER.length : index2;
         };
         return [...new Set(providers)].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
       };
@@ -398,12 +501,12 @@ function createPlugin() {
             snapshot
           );
           const previousByAccount = /* @__PURE__ */ new Map();
-          for (const record of previous?.records ?? []) {
-            previousByAccount.set(laneAccountId(record, laneFile), record);
+          for (const record2 of previous?.records ?? []) {
+            previousByAccount.set(laneAccountId(record2, laneFile), record2);
           }
-          for (const record of snapshot.records) {
-            const accountId = laneAccountId(record, laneFile);
-            const cooldown = laneCooldown(record, nowMs);
+          for (const record2 of snapshot.records) {
+            const accountId = laneAccountId(record2, laneFile);
+            const cooldown = laneCooldown(record2, nowMs);
             if (cooldown) accountsCooling += 1;
             const previousCooldown = laneCooldown(previousByAccount.get(accountId), nowMs);
             const isTransition = !!cooldown && (!previousCooldown || previousCooldown.until !== cooldown.until || previousCooldown.reason !== cooldown.reason);
@@ -415,7 +518,7 @@ function createPlugin() {
               at: polledAt,
               provider: accountId,
               reason: cooldown.reason,
-              raw: { laneFile, until: cooldown.until, health: record.health ?? null }
+              raw: { laneFile, until: cooldown.until, health: record2.health ?? null }
             });
             await ctx.state.set(eventKey, events.slice(0, config.maxCooldownEventsPerProvider));
             await ctx.activity.log({
@@ -425,8 +528,7 @@ function createPlugin() {
           }
         }
         if (config.laneFiles.length > 0) {
-          const storedIndex = await ctx.state.get(key(companyId, STATE_KEYS.laneIndex));
-          const knownLanes = Array.isArray(storedIndex) ? storedIndex.filter((l) => typeof l === "string") : [];
+          const knownLanes = await readLaneIndex((stateKey) => ctx.state.get(key(companyId, stateKey)));
           await ctx.state.set(
             key(companyId, STATE_KEYS.laneIndex),
             [.../* @__PURE__ */ new Set([...knownLanes, ...lanesStored])].sort()
@@ -454,28 +556,28 @@ function createPlugin() {
           const { records } = extractProviderRecords(rates.body, polledAt);
           const seen = orderProviders(records.map((r) => r.provider));
           let changed = 0;
-          for (const record of records) {
-            const stateKey = key(companyId, STATE_KEYS.provider(record.provider));
+          for (const record2 of records) {
+            const stateKey = key(companyId, STATE_KEYS.provider(record2.provider));
             const previous = await ctx.state.get(stateKey);
-            const next = { schemaVersion: 1, ...record };
+            const next = { schemaVersion: 1, ...record2 };
             if (JSON.stringify(previous?.raw) !== JSON.stringify(next.raw)) changed += 1;
             await ctx.state.set(stateKey, next);
-            const reason = cooldownReason(record.raw);
+            const reason = cooldownReason(record2.raw);
             const previousReason = cooldownReason(previous?.raw);
             if (reason && reason !== previousReason) {
-              const eventKey = key(companyId, STATE_KEYS.cooldownEvents(record.provider));
+              const eventKey = key(companyId, STATE_KEYS.cooldownEvents(record2.provider));
               const existing = await ctx.state.get(eventKey);
               const events = Array.isArray(existing) ? existing : [];
-              events.unshift({ at: polledAt, provider: record.provider, reason, raw: record.raw });
+              events.unshift({ at: polledAt, provider: record2.provider, reason, raw: record2.raw });
               await ctx.state.set(eventKey, events.slice(0, config.maxCooldownEventsPerProvider));
               await ctx.activity.log({
                 companyId,
-                message: `CLIProxy insight: ${record.provider} entered cooldown (${reason})`
+                message: `CLIProxy insight: ${record2.provider} entered cooldown (${reason})`
               });
             }
           }
-          const index = orderProviders([...await readProviderIndex(companyId), ...seen]);
-          await ctx.state.set(key(companyId, STATE_KEYS.providerIndex), index);
+          const index2 = orderProviders([...await readProviderIndex(companyId), ...seen]);
+          await ctx.state.set(key(companyId, STATE_KEYS.providerIndex), index2);
           await ctx.metrics.write("cliproxy_insight.providers_observed", seen.length, { companyId });
           if (changed > 0) {
             await ctx.activity.log({
@@ -526,11 +628,71 @@ function createPlugin() {
         }
       };
       ctx.tools.register(
+        TOOL_NAMES.getCollectorEvidence,
+        {
+          displayName: "Get collector evidence",
+          description: "Read bounded aggregate snapshot evidence without raw provider or lane records.",
+          parametersSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["companyId"],
+            properties: {
+              companyId: { type: "string", minLength: 1 },
+              windowSeconds: { type: "integer", minimum: 60, maximum: 86400, default: 3600 }
+            }
+          }
+        },
+        async (params, runCtx) => {
+          const input = asRecord(params);
+          const companyId = typeof input.companyId === "string" ? input.companyId : "";
+          const windowSeconds = input.windowSeconds === void 0 ? 3600 : input.windowSeconds;
+          if (!companyId || !Number.isInteger(windowSeconds) || typeof windowSeconds !== "number" || windowSeconds < 60 || windowSeconds > 86400 || Object.keys(input).some((name) => name !== "companyId" && name !== "windowSeconds")) {
+            return { error: "invalid_evidence_request", data: toolRejection("invalid_evidence_request") };
+          }
+          if (runCtx.companyId !== companyId || !isConfiguredCompany(companyId)) {
+            return { error: "company is not configured", data: toolRejection("company is not configured") };
+          }
+          try {
+            const config = resolveConfig(await ctx.config.get(companyId));
+            if (!isConfiguredCompany(companyId)) {
+              return { error: "company is not configured", data: toolRejection("company is not configured") };
+            }
+            const data = await collectorEvidence(
+              (stateKey) => ctx.state.get(key(companyId, stateKey)),
+              companyId,
+              windowSeconds,
+              Date.now(),
+              config
+            );
+            if (!isConfiguredCompany(companyId)) {
+              return { error: "company is not configured", data: toolRejection("company is not configured") };
+            }
+            return { data };
+          } catch {
+            return { error: "evidence_unavailable", data: toolRejection("evidence_unavailable") };
+          }
+        }
+      );
+      ctx.tools.register(
         TOOL_NAMES.getProviderUsage,
         {
           displayName: "Get provider usage",
-          description: "Read the most recently persisted CLIProxy usage/cooldown state. Read-only; consults stored history, never calls CLIProxy.",
-          parametersSchema: { type: "object", required: ["companyId"] }
+          description: "Read the most recently persisted CLIProxy usage state: per-provider success/failed counters, current cooldown status, and per-model capacity windows, each flagged stale when older than the freshness budget. Optionally select one persisted lane to return only that lane's stored history; provider snapshots and modelUsage keep their existing scope. Stored history only \u2014 not serving readiness or an admission decision. Read-only; consults stored history, never calls CLIProxy.",
+          parametersSchema: {
+            type: "object",
+            required: ["companyId"],
+            properties: {
+              companyId: { type: "string", description: "Company whose CLIProxy history applies" },
+              provider: {
+                type: "string",
+                description: "Optional. One exact provider key from the persisted provider index (`providers` in an unfiltered call, e.g. claude or codex). Omit to return every provider observed so far. Invalid keys are rejected as unknown_provider."
+              },
+              lane: {
+                type: "string",
+                description: "Optional. One exact lane id from the persisted lane index \u2014 an entry in `lanes` from an unfiltered call (e.g. claude.json). Omit to return every persisted lane. Unknown ids are rejected as unknown_lane; a provider name is not a lane id."
+              }
+            }
+          }
         },
         async (params) => {
           const input = asRecord(params);
@@ -539,26 +701,54 @@ function createPlugin() {
             return { error: "companyId is required", data: toolRejection("companyId is required") };
           if (!isConfiguredCompany(companyId))
             return { error: "company is not configured", data: toolRejection("company is not configured") };
+          const rejectLane = async (reason) => {
+            try {
+              await ctx.metrics.write("cliproxy_insight.lane_selection_refused", 1, { companyId, reason });
+            } catch {
+            }
+            return unknownLaneResult();
+          };
+          const selectedLane = input.lane;
+          if (selectedLane !== void 0 && (typeof selectedLane !== "string" || selectedLane.trim().length === 0)) {
+            return rejectLane("invalid_shape");
+          }
+          const requested = input.provider;
+          if (requested !== void 0 && (typeof requested !== "string" || requested.trim().length === 0)) {
+            return usageRejection("unknown_provider", "use a provider key from the persisted provider index");
+          }
           const config = resolveConfig(await ctx.config.get(companyId));
           if (!isConfiguredCompany(companyId))
             return { error: "company is not configured", data: toolRejection("company is not configured") };
           const nowMs = Date.now();
-          const requested = typeof input.provider === "string" ? input.provider : null;
-          const providers = requested ? [requested] : await readProviderIndex(companyId);
+          const readState = (stateKey) => ctx.state.get(key(companyId, stateKey));
+          const indexedLanes = await readLaneIndex(readState);
+          if (!isConfiguredCompany(companyId))
+            return { error: "company is not configured", data: toolRejection("company is not configured") };
+          if (typeof selectedLane === "string" && !indexedLanes.includes(selectedLane)) {
+            return rejectLane("unknown_id");
+          }
+          const indexedProviders = await readProviderIndex(companyId);
+          if (!isConfiguredCompany(companyId))
+            return { error: "company is not configured", data: toolRejection("company is not configured") };
+          if (typeof requested === "string" && !indexedProviders.includes(requested)) {
+            return usageRejection("unknown_provider", "use a provider key from the persisted provider index");
+          }
+          const providers = typeof requested === "string" ? [requested] : indexedProviders;
+          const lane = await laneSummary(
+            readState,
+            config,
+            nowMs,
+            typeof selectedLane === "string" ? [selectedLane] : indexedLanes
+          );
           const snapshots = {};
           for (const provider of providers) {
-            const record = await ctx.state.get(
+            const record2 = await ctx.state.get(
               key(companyId, STATE_KEYS.provider(provider))
             );
-            snapshots[provider] = record ? { ...record, stale: isStale(record.observedAt, config.staleAfterSeconds, nowMs) } : null;
+            snapshots[provider] = record2 ? { ...record2, stale: isStale(record2.observedAt, config.staleAfterSeconds, nowMs) } : null;
           }
           const modelUsage = asRecord(await ctx.state.get(key(companyId, STATE_KEYS.modelUsage)));
           const hasModelUsage = Object.keys(modelUsage).length > 0;
-          const lane = await laneSummary(
-            (stateKey) => ctx.state.get(key(companyId, stateKey)),
-            config,
-            nowMs
-          );
           return {
             data: {
               version: PLUGIN_VERSION,
@@ -675,17 +865,19 @@ function createPlugin() {
       const providers = Array.isArray(stored) ? stored.filter((p) => typeof p === "string") : [];
       const snapshots = {};
       for (const provider of providers) {
-        const record = await context.state.get(
+        const record2 = await context.state.get(
           scope(STATE_KEYS.provider(provider))
         );
-        snapshots[provider] = record ? { ...record, stale: isStale(record.observedAt, config.staleAfterSeconds, nowMs) } : null;
+        snapshots[provider] = record2 ? { ...record2, stale: isStale(record2.observedAt, config.staleAfterSeconds, nowMs) } : null;
       }
       const modelUsage = asRecord(await context.state.get(scope(STATE_KEYS.modelUsage)));
       const hasModelUsage = Object.keys(modelUsage).length > 0;
+      const readRouteState = (stateKey) => context.state.get(scope(stateKey));
       const lane = await laneSummary(
-        (stateKey) => context.state.get(scope(stateKey)),
+        readRouteState,
         config,
-        nowMs
+        nowMs,
+        await readLaneIndex(readRouteState)
       );
       return {
         status: 200,

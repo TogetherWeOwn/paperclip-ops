@@ -981,13 +981,6 @@ jobs:
       # restoring a paid fallback, deleting the runner proof, or dropping the
       # clean checkout must turn this job red.
       #
-      - name: Cloudflare uptime monitor acceptance suite
-        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
-        working-directory: cloudflare-monitor
-        run: |
-          npm run check
-          npm test
-
       - name: self-hosted runner migration contract
         run: ./test_case_b2acfa5c_selfhosted_runner.sh
 
@@ -6465,6 +6458,27 @@ jobs:
           fi
           echo "public-owned freeze guard: clean"
 
+  # The monitor suite is lightweight and offline; drafts must not hide its
+  # failures behind the skipped heavy suites.
+  monitor-acceptance:
+    name: Cloudflare monitor acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Check monitor syntax and offline acceptance, including drafts
+        working-directory: cloudflare-monitor
+        run: |
+          npm run check
+          npm test
+
   # case_d5bc7950 (CI standard, case_6b39c80f rule 3): one required aggregator.
   # `ci-ok` passes when every needed job succeeded or was skipped, and fails
   # when any needed job failed or was cancelled. Branch protection requires
@@ -6492,6 +6506,7 @@ jobs:
       - privilege-suites
       - suites
       - private-mutation-gates
+      - monitor-acceptance
     # `!cancelled()`, not `always()`: always() ignores cancellation, so a
     # superseded run's ci-ok stays queued on the saturated isolated pool and
     # holds the PR concurrency group for the new head (review case_13d22ce3).

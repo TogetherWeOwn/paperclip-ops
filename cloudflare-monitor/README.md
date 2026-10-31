@@ -104,6 +104,27 @@ npm run check
 npm test
 ```
 
+### Offline transport contract
+
+Production accepts only Discord webhook URLs; do not relax that allowlist for
+fixtures. Offline acceptance tests may use an entirely fabricated Discord-shaped
+destination (numeric placeholder ID and an obvious `example-only` token) **only**
+with an injected transport and a global network-denial stub installed before
+loading the runtime. This exception applies to the destination's required API
+shape, not to monitored targets: HTTP/TLS target fixtures still use reserved
+example domains. No real webhook, credential or network request is permitted.
+Webhook receipts are injected JSON objects with numeric string message IDs;
+Discord's `wait=true` query must be handled by the stub.
+
+Tests must retain rejection coverage for non-Discord destinations. Invalid
+private-address/suffix cases are offline validation inputs, not inventory or
+probe destinations; construct those inputs from explicit fixture components so
+publication checks do not mistake them for actual endpoints. Do not exempt test
+files from the public-safety scanner.
+
+A lightweight CI job runs these checks even on draft PRs and is included in
+`ci-ok`; a draft's skipped heavy suites are not monitor acceptance evidence.
+
 Deployment must use the merged, CI-green, independently reviewed exact source
 through the repository's deploy workflow. Use pinned Wrangler **4.156.0**; account
 selection is private via `CLOUDFLARE_ACCOUNT_ID`. No account ID is committed.

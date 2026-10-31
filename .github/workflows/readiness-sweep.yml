@@ -78,7 +78,10 @@ name: Readiness Sweep
 # READINESS_READ_ONLY=1, telling the sweep to reconcile as would-act everywhere
 # instead of erroring per PR (PR forks) or writing from a fork-timed wake
 # (workflow_run forks). Jobs from any other context run with the full job
-# permissions and may act on any enabled PR.
+# permissions and may act on an enabled PR only when its own head is in the
+# same repository: every pass scans all open PRs, so the reconciler also
+# refuses writes per PR from the snapshot's head provenance (cross-repository
+# or unknown logs as would-act), whatever event triggered the pass.
 #
 # CONCURRENCY. Exactly two queues: fork (read-only) and base (write-capable).
 # The group keys ONLY on fork/read-only separation — never on the event name —

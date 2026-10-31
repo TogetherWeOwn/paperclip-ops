@@ -78,6 +78,8 @@ function pullRequest({ draft = true, nodes = baseChecks(), pushedDate = null, oi
     mergeStateStatus: 'CLEAN', baseRefName: 'main', autoMergeRequest: null,
     author: { __typename: 'User', login: 'fixture-author' },
     baseRepository: { nameWithOwner: repository },
+    isCrossRepository: false, headRepository: { nameWithOwner: repository },
+    headRepositoryOwner: { login: repository.split('/')[0] },
     labels: { nodes: [], pageInfo: { hasNextPage: false } },
     commits: commits ?? { nodes: [{ commit: { oid, pushedDate,
       statusCheckRollup: rollup === undefined
@@ -251,6 +253,41 @@ test('a real push time passes through the readiness reader without error', async
   const snapshot = await adapter.getReadinessSnapshot(repository, 7, { nowMs: NOW })
   assert.equal(snapshot.headSha, HEAD)
   assert.equal(snapshot.checks.length, REQUIRED.length)
+})
+
+test('readiness reader reports head provenance and fails closed on a missing or contradictory read', async () => {
+  const read = async (overrides) => {
+    const adapter = adapterOver(githubDouble({ pr: pullRequest({ overrides }) }))
+    return adapter.getReadinessSnapshot(repository, 7, { nowMs: NOW })
+  }
+  const same = await read({})
+  assert.equal(same.crossRepository, false)
+  assert.equal(same.headRepositoryOwner, repository.split('/')[0])
+  const fork = await read({ isCrossRepository: true, headRepository: { nameWithOwner: 'someone/fork' },
+    headRepositoryOwner: { login: 'someone' } })
+  assert.equal(fork.crossRepository, true)
+  assert.equal(fork.headRepositoryOwner, 'someone')
+  // A deleted fork has no head repository; GitHub still flags it cross-repository.
+  assert.equal((await read({ isCrossRepository: true, headRepository: null, headRepositoryOwner: null })).crossRepository, true)
+  // Unknown is null, never a guess: a dropped flag, a non-boolean, or a
+  // "same-repository" flag whose head repository names somewhere else.
+  for (const overrides of [{ isCrossRepository: undefined }, { isCrossRepository: null },
+    { isCrossRepository: 'false' }, { headRepository: null },
+    { headRepository: { nameWithOwner: 'someone/fork' } }]) {
+    const snapshot = await read(overrides)
+    assert.equal(snapshot.crossRepository, null, JSON.stringify(overrides))
+  }
+})
+
+test('a cross-repository head read through the real adapter takes no write', async () => {
+  const double = githubDouble({ pr: pullRequest({ draft: false,
+    overrides: { isCrossRepository: true, headRepository: { nameWithOwner: 'someone/fork' } } }) })
+  const { reconciler, bodies, transitions } = reconcilerOver(double)
+  const { records, counters } = await reconciler.runReconcile({ references: [{ repository, number: 7 }] })
+  assert.equal(records[0].decision, 'would-act')
+  assert.match(records[0].reason, /\+cross-repository$/)
+  assert.deepEqual([bodies, transitions, double.writes], [[], [], []])
+  assert.equal(counters.acted, 0)
 })
 
 test('readiness reader keeps a null rollup as "no checks yet", not a failed read', async () => {

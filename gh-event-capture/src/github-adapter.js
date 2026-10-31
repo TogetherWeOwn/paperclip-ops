@@ -49,6 +49,7 @@ const SNAPSHOT_QUERY = `query BridgeCloseoutSnapshot($owner: String!, $name: Str
       autoMergeRequest { enabledAt }
       author { __typename login }
       baseRepository { nameWithOwner }
+      isCrossRepository headRepository { nameWithOwner } headRepositoryOwner { login }
       labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
       commits(last: 10) {
         nodes { commit {
@@ -335,6 +336,16 @@ function normalizeSnapshot(pr, repository, number, nowMs, readiness = false) {
   // rather than "no block". Never defaulted to '' here: an empty string would
   // read as a body without a block and earn a write every pass.
   const body = typeof pr.body === 'string' ? pr.body : null
+  // Head provenance is readiness-only and never throws: the reconciler refuses
+  // every write unless this is exactly false, so a dropped or contradictory
+  // read lands as null (would-act) rather than a lost snapshot. Same-repository
+  // needs both GitHub's flag and the head repository naming this repository; a
+  // deleted fork has a null head repository and stays cross-repository.
+  const headRepository = pr.headRepository?.nameWithOwner
+  const crossRepository = typeof pr.isCrossRepository !== 'boolean' ? null
+    : pr.isCrossRepository ? true
+      : headRepository === repository ? false : null
+  const headRepositoryOwner = typeof pr.headRepositoryOwner?.login === 'string' ? pr.headRepositoryOwner.login : null
   return {
     repository, number, headSha: pr.headRefOid, baseRef: pr.baseRefName,
     state: pr.state === 'OPEN' ? 'open' : 'closed', merged: pr.merged, draft: pr.isDraft,
@@ -344,7 +355,7 @@ function normalizeSnapshot(pr, repository, number, nowMs, readiness = false) {
     mergeableState: pr.mergeStateStatus.toLowerCase(),
     reviewDecision: pr.reviewDecision, headPushedMs, nowMs,
     checks: readiness ? readinessChecks(checks) : checks,
-    ...(readiness ? { snapshotFacts: {
+    ...(readiness ? { crossRepository, headRepositoryOwner, snapshotFacts: {
       headPushTime: headPushedMs === null ? 'null' : 'present',
       repeatedNames: [...counts.values()].filter((count) => count > 1).length,
       repeatedEntries: checks.length - counts.size,

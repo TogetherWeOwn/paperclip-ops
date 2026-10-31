@@ -598,7 +598,7 @@ jobs:
           set -euo pipefail
           # The runner image decides the server major (16 on 24.04, 18 on 26.04),
           # so take the newest installed one instead of hard-coding a version.
-          PGBIN="$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -n 1)"
+          PGBIN="$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -n 1 || true)"
           if [[ -z "$PGBIN" || ! -x "$PGBIN/initdb" ]]; then
             echo "::error::no PostgreSQL server binaries under /usr/lib/postgresql" >&2
             exit 1

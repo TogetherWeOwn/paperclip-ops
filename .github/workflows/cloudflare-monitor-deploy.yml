@@ -1,0 +1,201 @@
+name: Cloudflare monitor deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Monitor environment
+        type: choice
+        options: [staging, production]
+        required: true
+      operation:
+        description: Deploy reviewed source or restore a recorded version
+        type: choice
+        options: [deploy, rollback]
+        required: true
+      source_sha:
+        description: Reviewed merge SHA (current main for deploy; recorded source for rollback)
+        type: string
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: cloudflare-monitor-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: cloudflare-monitor-${{ inputs.target }}
+    permissions:
+      contents: read
+      checks: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Verify exact source, review and free-plan admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TARGET: ${{ inputs.target }}
+          OPERATION: ${{ inputs.operation }}
+          STAGING_VERIFIED_SHA: ${{ vars.MONITOR_STAGING_VERIFIED_SHA }}
+          ROLLBACK_RECORD_JSON: ${{ secrets.MONITOR_ROLLBACK_RECORD_JSON }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PLAN_READ_TOKEN: ${{ secrets.MONITOR_PLAN_READ_TOKEN }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, re, urllib.request
+
+          def require(condition, code):
+              if not condition:
+                  raise SystemExit(code)
+
+          def get(url, token):
+              request = urllib.request.Request(url, headers={
+                  'Authorization': 'Bearer ' + token,
+                  'Accept': 'application/vnd.github+json',
+                  'User-Agent': 'Cloudflare-Monitor-Release',
+              })
+              try:
+                  with urllib.request.urlopen(request, timeout=20) as response:
+                      return json.load(response)
+              except Exception:
+                  # Provider error bodies can contain private identifiers.
+                  raise SystemExit('release_admission_api_failed') from None
+
+          sha = os.environ['SOURCE_SHA']
+          require(re.fullmatch('[a-f0-9]{40}', sha), 'source_sha_invalid')
+          target, operation = os.environ['TARGET'], os.environ['OPERATION']
+          require(target in ('staging', 'production') and operation in ('deploy', 'rollback'), 'invalid_operation')
+          if operation == 'rollback':
+              try:
+                  record = json.loads(os.environ['ROLLBACK_RECORD_JSON'])
+              except Exception:
+                  raise SystemExit('rollback_record_required') from None
+              require(isinstance(record, dict) and set(record) == {'sourceSha', 'versionId'}
+                      and record['sourceSha'] == sha and isinstance(record['versionId'], str)
+                      and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', record['versionId']), 'rollback_record_mismatch')
+          else:
+              require(sha == os.environ['GITHUB_SHA'], 'source_sha_mismatch')
+              if target == 'production':
+                  require(os.environ['STAGING_VERIFIED_SHA'] == sha, 'staging_delivery_evidence_required')
+
+          root = 'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          def checks(revision):
+              data = get(root + '/commits/' + revision + '/check-runs?filter=latest&per_page=100', token)
+              require(isinstance(data.get('check_runs'), list) and data.get('total_count', 101) <= 100, 'incomplete_checks')
+              latest = {}
+              for check in sorted(data['check_runs'], key=lambda c: c['id'], reverse=True):
+                  latest.setdefault((check['name'], check['app']['slug']), check)
+              return latest
+
+          def passed(data, name, app='github-actions'):
+              check = data.get((name, app), {})
+              require(check.get('status') == 'completed' and check.get('conclusion') == 'success', 'required_check_not_green')
+              return check
+
+          passed(checks(sha), 'ci-ok')
+          pulls = get(root + '/commits/' + sha + '/pulls?per_page=100', token)
+          require(isinstance(pulls, list) and len(pulls) < 100, 'incomplete_pull_inventory')
+          merged = [p for p in pulls if p.get('merged_at') and p.get('merge_commit_sha') == sha
+                    and p['base']['ref'] == 'main' and p['base']['repo']['full_name'] == os.environ['GITHUB_REPOSITORY']]
+          require(len(merged) == 1, 'reviewed_merge_required')
+          pull = merged[0]
+          require(not any(label['name'].lower() == 'hold' for label in pull['labels']), 'release_on_hold')
+          reviewed_head = pull['head']['sha']
+          data = checks(reviewed_head)
+          for name in ('ci-ok', 'pr-lint', 'public-safety'):
+              passed(data, name)
+          review = passed(data, 'Paperclip Review', 'togetherweown-reviewer')
+          output = review.get('output') or {}
+          require(output.get('title', '').strip() == '5/5' and reviewed_head in output.get('summary', ''), 'exact_head_review_required')
+
+          account, plan_token = os.environ['CLOUDFLARE_ACCOUNT_ID'], os.environ['PLAN_READ_TOKEN']
+          require(re.fullmatch('[a-f0-9]{32}', account) and plan_token, 'plan_read_capability_required')
+          billing = get('https://api.cloudflare.com/client/v4/accounts/' + account + '/subscriptions', plan_token)
+          subscriptions = billing.get('result')
+          require(billing.get('success') is True and isinstance(subscriptions, list), 'plan_inventory_invalid')
+          info = billing.get('result_info') or {}
+          require(info.get('total_count', len(subscriptions)) == len(subscriptions)
+                  and info.get('total_pages', 1) <= 1, 'plan_inventory_incomplete')
+          workers = [s for s in subscriptions if s.get('state') not in ('Cancelled', 'Expired', 'Failed')
+                     and 'workers' in json.dumps(s.get('rate_plan', {})).lower()]
+          def explicit_free(subscription):
+              plan = subscription.get('rate_plan') or {}
+              named_free = (plan.get('id') in ('workers_free', 'workers-free')
+                            or plan.get('public_name', '').strip().casefold() == 'workers free')
+              components = subscription.get('component_values', [])
+              return (named_free and subscription.get('price') == 0 and not plan.get('is_contract')
+                      and isinstance(components, list) and all(c.get('price') == 0 for c in components))
+          require(workers and all(explicit_free(s) for s in workers), 'workers_free_not_established')
+          print('Release admission passed; no deployment has occurred yet.')
+          PY
+      - name: Offline monitor checks
+        working-directory: cloudflare-monitor
+        run: |
+          npm run check
+          npm test
+      - name: Deploy or roll back without publishing private provider output
+        working-directory: cloudflare-monitor
+        env:
+          TARGET: ${{ inputs.target }}
+          OPERATION: ${{ inputs.operation }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          MONITOR_SECRETS_JSON: ${{ secrets.MONITOR_SECRETS_JSON }}
+          ROLLBACK_RECORD_JSON: ${{ secrets.MONITOR_ROLLBACK_RECORD_JSON }}
+          WRANGLER_SEND_METRICS: 'false'
+        run: |
+          set -euo pipefail
+          umask 077
+          private_dir="$(mktemp -d)"
+          trap 'rm -rf "$private_dir"' EXIT
+          export WRANGLER_LOG_PATH="$private_dir/wrangler.log"
+          export SECRETS_PATH="$private_dir/secrets.json"
+          [[ -n "$CLOUDFLARE_API_TOKEN" ]] || { printf '%s\n' 'deploy_capability_required'; exit 1; }
+          config=wrangler.staging.toml
+          [[ "$TARGET" != production ]] || config=wrangler.toml
+          if [[ "$OPERATION" == deploy ]]; then
+            node --input-type=module <<'JS'
+          import { writeFileSync } from 'node:fs';
+          import { validateConfig } from './src/monitor.mjs';
+          try {
+            const secrets = JSON.parse(process.env.MONITOR_SECRETS_JSON);
+            const required = ['MONITOR_CONFIG', 'ALERT_WEBHOOK_URL', 'CF_CERTIFICATES_READ_TOKEN'];
+            if (process.env.TARGET === 'staging') required.push('DRILL_TOKEN');
+            if (Object.keys(secrets).sort().join() !== required.sort().join()
+                || required.some(key => typeof secrets[key] !== 'string' || !secrets[key])) throw new Error();
+            validateConfig(JSON.parse(secrets.MONITOR_CONFIG));
+            if (process.env.TARGET === 'staging' && secrets.DRILL_TOKEN.length < 32) throw new Error();
+            writeFileSync(process.env.SECRETS_PATH, JSON.stringify(secrets), { mode: 0o600 });
+          } catch {
+            console.error('monitor_secret_config_invalid');
+            process.exit(1);
+          }
+          JS
+            if ! npm exec --yes --package wrangler@4.156.0 -- wrangler deploy --config "$config" \
+                --secrets-file "$SECRETS_PATH" --message "source=$SOURCE_SHA" >"$private_dir/provider.log" 2>&1; then
+              printf '%s\n' 'monitor_deploy_failed; inspect through authorized private provider access'
+              exit 1
+            fi
+          else
+            rollback_version="$(node -e 'process.stdout.write(JSON.parse(process.env.ROLLBACK_RECORD_JSON).versionId)')"
+            if ! npm exec --yes --package wrangler@4.156.0 -- wrangler rollback "$rollback_version" \
+                --config "$config" --yes --message "recorded rollback; source=$SOURCE_SHA" >"$private_dir/provider.log" 2>&1; then
+              printf '%s\n' 'monitor_rollback_failed; inspect through authorized private provider access'
+              exit 1
+            fi
+          fi
+          printf '%s\n' 'Provider command completed. Verify version, bindings, cron, health and delivery privately; this is not coverage proof.'

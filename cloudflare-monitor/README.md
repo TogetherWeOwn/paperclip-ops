@@ -131,6 +131,59 @@ selection is private via `CLOUDFLARE_ACCOUNT_ID`. No account ID is committed.
 The two configs create separate workers, object namespaces and state. Production
 uses `wrangler.toml`; staging uses `wrangler.staging.toml`.
 
+### Repository release workflow
+
+`.github/workflows/cloudflare-monitor-deploy.yml` is manual and default-branch
+only. It never deploys on pull requests. Dispatch with `target`, `operation` and
+`source_sha`; do not put private identifiers or evidence links in public inputs.
+Deploy requires the exact current main commit, its green `ci-ok`, and its merged
+PR's head with green `ci-ok`, `pr-lint`, `public-safety` and the native exact-head
+5/5 review. A HOLD still forbids dispatch. Rollback instead requires a previously
+recorded version/source pair and rechecks that source's CI/review; unrelated new
+main CI cannot authorize or substitute a rollback artifact.
+
+Provision these environment-scoped bindings through authorized secret management
+for `cloudflare-monitor-staging` and `cloudflare-monitor-production`:
+
+| Deployment binding | Purpose |
+| --- | --- |
+| Secret `CLOUDFLARE_ACCOUNT_ID` | Account selection; never a committed identifier |
+| Secret `CLOUDFLARE_API_TOKEN` | Authorized deployment credential; never installed in the runtime |
+| Secret `MONITOR_PLAN_READ_TOKEN` | Billing Read solely for free-plan admission; never installed in the runtime |
+| Secret `MONITOR_SECRETS_JSON` | JSON object containing exactly the required runtime secret bindings above; staging additionally includes `DRILL_TOKEN`, production must not |
+| Secret `MONITOR_ROLLBACK_RECORD_JSON` | Previously verified `{"sourceSha":"<reviewed merge SHA>","versionId":"<Worker version UUID>"}` for that environment |
+| Variable `MONITOR_STAGING_VERIFIED_SHA` | Production only: set to the merge SHA after privately recording staging version, actual delivery/recovery receipts, deduplication, CPU/quota and rollback proof |
+
+The staging marker and rollback record are evidence pointers maintained by the
+authorized release owner, **not** approvals or evidence produced by a green
+workflow. Never set them before the underlying facts are verified. On a first
+deploy no rollback record exists; do not invent one. Record the first-deploy
+containment limitation below. Later, preserve the current verified version/source
+pair as the rollback baseline **before** deploying a replacement. Provisioning
+new scoped credentials needs its existing authorization; this workflow neither
+mints nor rotates credentials. Redeployment installs only the already-authorized
+runtime bindings, never unrelated application tokens.
+
+Admission performs read-only subscription discovery and fails closed unless it
+finds explicit, zero-price Workers Free records with no priced components or
+contract. An absent, incomplete, unknown or paid plan, or denied Billing Read,
+is a STOP: absence of a paid subscription is not proof of free eligibility.
+The gate is conservative; a different provider schema requires reviewed gate
+work plus provider evidence, not a manual skip. OAuth connections may be unable
+to call this endpoint even when Workers tools work.
+
+Pinned Wrangler deploys with a mode-0600 JSON secrets file under the ephemeral
+runner's temporary directory; JSON avoids dotenv expansion. Raw provider output,
+Worker URLs and version identifiers are not published in workflow logs or
+artifacts. The file/logs are removed on exit. Retrieve version/configuration and
+provider errors privately with authorized native tools; failed commands are not
+silently successful. Do not rerun a deploy workflow as CI triage.
+
+A successful provider command is **not** health, cron, runtime CPU, rollback or
+alert-delivery proof. This workflow does not inject faults or mark staging
+verified. Its production gate remains closed until the separate staging evidence
+is recorded. Follow the sequence below before enabling passive production checks.
+
 Before production:
 
 1. Confirm free-plan admission and authorized secret provisioning. Record current

@@ -30,6 +30,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import sys
 
 AGENTS_BUDGET_LINES = 120
@@ -92,7 +93,7 @@ def check_agents_map(root):
     return []
 
 
-def _script_candidate(root, relpath, fullname):
+def _script_candidate(root, relpath, fullname, mode=None):
     """Classify one file. Returns ``(is_candidate, read_error)``.
 
     ``read_error`` is the ``OSError`` from a failed probe read (or from
@@ -108,9 +109,13 @@ def _script_candidate(root, relpath, fullname):
     name = os.path.basename(relpath)
     if name.startswith("test_") or name.startswith("test-"):
         return False, None
-    if not (os.access(fullname, os.X_OK) or relpath.endswith(SCRIPT_EXTENSIONS)):
-        return False, None
     try:
+        if mode is None:
+            mode = os.lstat(fullname).st_mode
+        # Git's executable bit is source metadata. Effective X_OK also depends
+        # on noexec mounts, which must not change a source-only measurement.
+        if not stat.S_ISREG(mode) or not (mode & 0o111 or relpath.endswith(SCRIPT_EXTENSIONS)):
+            return False, None
         with open(fullname, encoding="utf-8", errors="replace") as fh:
             first = fh.readline()
     except OSError as exc:
@@ -393,13 +398,14 @@ def _script_scan_all(root):
             fullname = os.path.join(dirpath, name)
             staged = os.path.relpath(fullname, root)
             try:
-                if not os.path.isfile(fullname) or os.path.islink(fullname):
-                    continue
+                mode = os.lstat(fullname).st_mode
             except OSError as exc:
                 unreadable(staged, exc)
                 continue
+            if not stat.S_ISREG(mode):
+                continue
             relpath = staged
-            candidate, read_error = _script_candidate(root, relpath, fullname)
+            candidate, read_error = _script_candidate(root, relpath, fullname, mode)
             if read_error is not None:
                 unreadable(relpath, read_error)
                 continue
@@ -469,7 +475,7 @@ def _strip_comment(line):
     return "".join(out)
 
 
-def _dispatch_code_lines(lines):
+def _dispatch_code_lines(lines, unsupported=None):
     """Mask block and multiline quoted scalar content, retaining line numbers.
 
     This is deliberately not a YAML parser. Only scalar headers in mapping
@@ -507,6 +513,13 @@ def _dispatch_code_lines(lines):
         if not value:
             continue
         scalar = value.group(1).strip()
+        if re.match(r"(?:&\S+|!\S+)\s+[|>]", scalar):
+            # Do not let unsupported scalar decorations turn shell text into
+            # YAML quote state and hide a later real event. Refuse this shape
+            # rather than extending the advisory scanner's YAML grammar.
+            if unsupported is not None:
+                unsupported.append((len(result) - 1, "decorated block scalar is unsupported"))
+            return result + [""] * (len(lines) - len(result))
         if re.fullmatch(r"[|>](?:[+-]?[1-9]?|[1-9][+-]?)", scalar):
             block_indent = indent
         elif scalar.startswith(("'", '"')):
@@ -624,11 +637,23 @@ def _scan_dispatch(relpath, lines):
     findings = []
     skipped = []
     unknown = []
-    code = _dispatch_code_lines(lines)
+    unsupported = []
+    code = _dispatch_code_lines(lines, unsupported)
     total = len(code)
 
     def uncertain(index, reason):
         unknown.append(_coverage(relpath, index + 1, "unknown", reason))
+
+    if lines and lines[0].startswith("\ufeff"):
+        uncertain(0, "BOM-prefixed workflow root is unsupported; use a BOM-free document")
+    for index, reason in unsupported:
+        uncertain(index, reason)
+    root_lines = [i for i, line in enumerate(code) if line.strip()
+                  and line.strip() not in ("---", "...") and not line.lstrip().startswith("%")]
+    if root_lines and min(_indent_of(code[i]) for i in root_lines) > 0:
+        uncertain(root_lines[0], "indented workflow root is unsupported; use a column-zero root mapping")
+    if unknown:
+        return findings, skipped, unknown
 
     def ambiguous(index):
         if _dispatch_ambiguous_key(code[index]):
@@ -791,8 +816,8 @@ def main(argv=None):
                         help="repository root to lint (default: .)")
     parser.add_argument("--mode", choices=("warn", "error"), default="warn",
                         help="warn prints findings and exits 0 "
-                             "(advisory); error exits 1 when any finding "
-                             "exists (default: warn)")
+                             "(advisory); error exits 1 for findings or unknown "
+                             "coverage (default: warn)")
     parser.add_argument("--json", action="store_true",
                         help="emit the report as JSON")
     args = parser.parse_args(argv)
@@ -810,9 +835,16 @@ def main(argv=None):
             if item["line"] is not None:
                 where += f":{item['line']}"
             print(f"{where}: [{item['check']}] {item['message']}")
-        print(f"ax-lint: {len(findings)} finding(s) "
+        for category, entries in coverage.items():
+            for item in entries:
+                where = item["path"]
+                if item["line"] is not None:
+                    where += f":{item['line']}"
+                print(f"{where}: [coverage/{category}] {item['reason']}")
+        print(f"ax-lint: {len(findings)} finding(s), "
+              f"{len(coverage['unknown'])} unknown source(s) "
               f"(mode={args.mode}, advisory)")
-    if args.mode == "error" and findings:
+    if args.mode == "error" and (findings or coverage["unknown"]):
         return 1
     return 0
 

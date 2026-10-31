@@ -101,10 +101,12 @@ fields, producers, versions, invalid paths and non-string globs fail closed.
   is unaffected; only workflow YAML *as a measured input* is refused.
   To measure workflow policy, narrow this slice's scope deliberately in a
   further decision rather than adding partial YAML parsing.
-- A source read that fails during the producer's own scan — shebang/candidate
-  detection or the text read that feeds findings — is reported as `unknown`
-  coverage with a reason, and the ratchet therefore fails the run. A read
-  failure never becomes `clean` and never becomes an empty coverage list.
+- A source read or metadata operation that fails during the producer's own
+  scan — shebang/candidate detection, `lstat`, or the text read that feeds
+  findings — is reported as `unknown` coverage with a reason. Failed directory
+  listings also refuse measurement when the directory contains a selected
+  snapshot source, even if the ancestor itself does not match the policy.
+  A failure never becomes `clean` or an empty coverage list.
 - The complete producer report, including coverage and summary, is validated;
   unknown rules, unsafe identities and oversized reports fail closed. The
   checker caps JSON reports and individual source files at 1 MiB, total scoped
@@ -130,12 +132,23 @@ fields, producers, versions, invalid paths and non-string globs fail closed.
   or certified. Possible ancestors are judged against the complete path
   components before a pattern's first wildcard component, so replacing
   `scripts/pkg-one` with a symlink or gitlink under a `scripts/pkg-*/**`
-  scope is refused, not reported as resolved debt. Its ordinary test-file and
-  non-CLI exclusions still apply.
+  scope is refused, not reported as resolved debt. Executable scripts are
+  classified from preserved mode bits, not mount-dependent execution access;
+  noexec storage cannot exempt an extensionless script. Exclusive file creation
+  and an exact round-trip path inventory refuse case/Unicode aliases with
+  `unsupported_projection` rather than overwriting or renaming Git identities.
+  Its ordinary test-file and non-CLI exclusions still apply.
 
 The initial policy covers only this checker's own directory
 (`scripts/quality-gates/**`). It does not claim to cover all repository
 modules. Expand coverage only where a real diagnostic contract exists.
+
+The standalone AX producer remains independently consumable. Its text output
+also names skipped/unknown coverage; `--mode error` fails for findings **or
+unknown coverage**, while `--mode warn` stays advisory. BOM-prefixed or uniformly
+indented workflow roots and decorated block scalars are explicitly unknown,
+not silently clear and not newly supported YAML. This does not admit any YAML
+input to the comparator: its path-based refusal remains unconditional.
 
 ## Reusable CI
 
@@ -148,15 +161,18 @@ optional `artifact-name` input (default
 Actions run can produce evidence at exact SHAs. There is deliberately no push
 trigger: native push events have no trusted caller-supplied base snapshot to
 measure against. For dispatch runs, the provided base snapshot is the
-documented trust contract for that run. Both checkout steps are SHA-1-only:
+documented trust contract for that run. All checkout steps are SHA-1-only:
 64-character caller SHAs are rejected before checkout. SHA-256 repositories
 remain supported by the local checker, not by this hosted workflow.
 
 Reusable callers pin both
 `uses: TogetherWeOwn/paperclip-ops/.github/workflows/diagnostic-delta.yml@<full-sha>`
 and `tools-ref` to the **same reviewed paperclip-ops commit**. The workflow
-checks out the caller at head with complete history, and the checker
-separately at `tools-ref`. Raw call inputs are validated before checkout;
+first checks out the exact caller base into `caller/`, then checks out head
+with complete history in that same repository, retaining the base objects.
+This explicitly obtains bases reachable only through a PR ref, not just ordinary
+branch/tag history. The checker is checked out separately at `tools-ref`.
+Raw call inputs are validated before any checkout;
 empty or mutable inputs fail rather than falling back to event SHAs or local
 tools. The hosted job runs the pinned checker only, never caller-supplied
 scripts: a caller-local checker copy is ignored even when present. The JSON
@@ -169,7 +185,7 @@ than once in a single workflow run (including through a matrix) must pass a
 distinct `artifact-name` for each invocation, or the later upload fails
 instead of replacing the earlier comparison's evidence.
 
-Both checkouts disable persisted credentials; permissions are only `contents:
+All three checkouts disable persisted credentials; permissions are only `contents:
 read`. Do not inherit secrets. No host actions, package installs, production
 access or branch-protection edits are needed. The new job fails on
 findings/errors; repositories choose separately whether to require that check

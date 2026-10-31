@@ -895,5 +895,242 @@ class OuterCollectorTimeout(unittest.TestCase):
                         pass
 
 
+def load_producer():
+    spec = importlib.util.spec_from_file_location("ax_retained_scan", PRODUCER)
+    producer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(producer)
+    return producer
+
+
+class RetainedSourceBoundaries(RepositoryFixture):
+    def scoped_head(self, name="deploy.sh", executable=False):
+        self.put(POLICY, json.dumps({**POLICY_VALUE, "include": ["scripts/quality-gates/**"]}))
+        self.base = self.commit()
+        path = self.put("scripts/quality-gates/" + name, BAD_SCRIPT)
+        if executable:
+            path.chmod(0o755)
+        return self.commit()
+
+    def test_noexec_mount_does_not_hide_git_executable_source(self):
+        head = self.scoped_head("deploy", executable=True)
+        gate = load_gate()
+        self.assertEqual(gate.check(self.root, self.base, head)["counts"]["new"], 1)
+        # Classification is metadata-only even when effective execution is denied.
+        producer = load_producer()
+        with patch.object(producer.os, "access", return_value=False):
+            findings, unknown = producer._script_scan_all(self.root)
+        self.assertEqual([f["path"] for f in findings], ["scripts/quality-gates/deploy"])
+        self.assertEqual(unknown, [])
+
+    def test_actual_noexec_projection_preserves_new_identity(self):
+        noexec = Path("/dev/shm")
+        if not noexec.is_dir():
+            self.skipTest("No provisioned noexec temporary storage")
+        real_temporary = tempfile.TemporaryDirectory
+        with real_temporary(dir=noexec, prefix="ax-noexec-control-") as tmp:
+            control = Path(tmp) / "control"
+            control.write_text(BAD_SCRIPT)
+            control.chmod(0o755)
+            if os.access(control, os.X_OK):
+                self.skipTest("Provisioned temporary storage is executable")
+        head = self.scoped_head("deploy", executable=True)
+        gate = load_gate()
+        with patch.object(gate.tempfile, "TemporaryDirectory",
+                          side_effect=lambda **kw: real_temporary(dir=noexec, **kw)):
+            report = gate.check(self.root, self.base, head)
+        self.assertEqual(report["status"], "finding")
+        self.assertEqual(report["counts"]["new"], 1)
+
+    def test_real_scan_metadata_and_ancestor_failures_refuse_measurement(self):
+        head = self.scoped_head()
+        gate, producer = load_gate(), load_producer()
+        self.assertEqual(gate.check(self.root, self.base, head)["counts"]["new"], 1)
+        for fault in ("stat", "ancestor"):
+            with self.subTest(fault=fault):
+                observed = []
+
+                def scan(root, patterns, sources):
+                    real_stat, real_lstat, real_scandir = os.stat, os.lstat, os.scandir
+                    blocked = root / ("scripts/quality-gates/deploy.sh" if fault == "stat" else "scripts")
+
+                    def guarded(real):
+                        def call(path, *args, **kwargs):
+                            if root.name == "head" and os.fspath(path) == str(blocked):
+                                observed.append(str(path))
+                                raise OSError(5, "fixture source metadata/listing failure", str(path))
+                            return real(path, *args, **kwargs)
+                        return call
+
+                    output = io.StringIO()
+                    with patch.object(os, "stat", guarded(real_stat) if fault == "stat" else real_stat), \
+                            patch.object(os, "lstat", guarded(real_lstat) if fault == "stat" else real_lstat), \
+                            patch.object(os, "scandir", guarded(real_scandir) if fault == "ancestor" else real_scandir), \
+                            redirect_stdout(output):
+                        self.assertEqual(producer.main(["--root", str(root), "--mode", "warn", "--json"]), 0)
+                    return gate.validate_report(output.getvalue(), patterns, sources)
+
+                with patch.object(gate, "scan", scan):
+                    with self.assertRaises(gate.Unmeasurable) as error:
+                        gate.check(self.root, self.base, head)
+                self.assertTrue(observed, "Exercise the real scan's failing metadata/listing boundary")
+                self.assertEqual(error.exception.code, "unsupported_coverage")
+
+    def test_unrelated_unknown_directory_does_not_expand_selected_scope(self):
+        gate = load_gate()
+        report = {"tool": "ax-lint", "mode": "warn", "root": ".", "findings": [],
+                  "summary": {"findings": 0, "mode": "warn"},
+                  "coverage": {"skipped": [], "unknown": [
+                      {"path": "elsewhere", "line": None, "category": "unknown", "reason": "unreadable"}]}}
+        self.assertEqual(gate.validate_report(json.dumps(report), ["scripts/quality-gates/**"],
+                                             {"scripts/quality-gates/run.sh": b""}),
+                         (set(), {"skipped": [], "unknown": []}))
+
+
+class HostedBaseAvailability(RepositoryFixture):
+    def test_pr_only_base_is_fetched_explicitly_before_head_history(self):
+        import yaml
+        steps = yaml.load((ROOT / ".github/workflows/diagnostic-delta.yml").read_text(),
+                          Loader=yaml.BaseLoader)["jobs"]["diagnostic-delta"]["steps"]
+        callers = [s for s in steps if s.get("with", {}).get("path") == "caller"]
+        self.assertEqual([s["with"]["ref"] for s in callers],
+                         ["${{ env.BASE_SHA }}", "${{ env.HEAD_SHA }}"])
+        for step in callers:
+            self.assertEqual(step["with"]["persist-credentials"], "false")
+        private_base = self.git("commit-tree", self.base + "^{tree}", "-p", self.base,
+                                "-m", "Independent PR-only base")
+        self.put("scripts/new.sh", BAD_SCRIPT)
+        head = self.commit()
+        remote = Path(self.tmp.name) / "remote.git"
+        self.git("clone", "-q", "--bare", str(self.root), str(remote))
+        self.git("--git-dir=" + str(remote), "update-ref", "refs/pull/17/head", private_base)
+        caller = Path(self.tmp.name) / "caller"
+        caller.mkdir()
+
+        def git(*args):
+            return subprocess.check_output(["/usr/bin/git", "-C", str(caller), *args],
+                                           env=self.env, text=True, stderr=subprocess.STDOUT,
+                                           timeout=10).strip()
+
+        git("init", "-q")
+        git("remote", "add", "origin", remote.as_uri())
+        # Same branch/tag refspec boundary as checkout's fetch-depth=0, not a
+        # claim that this local fixture executes the hosted checkout action.
+        history = ("+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*")
+        git("fetch", "--no-tags", "origin", *history)
+        with self.assertRaises(subprocess.CalledProcessError):
+            git("cat-file", "-e", private_base + "^{commit}")
+        # The wrapper first requests base by exact OID, then updates head in
+        # the same object database. No credential needs to remain persisted.
+        git("fetch", "--no-tags", "--depth=1", "origin", private_base)
+        git("fetch", "--no-tags", "--unshallow", "origin", *history)
+        git("checkout", "--detach", head)
+        report = load_gate().check(caller, private_base, head)
+        self.assertEqual(report["status"], "finding")
+        self.assertEqual(report["counts"]["new"], 1)
+        self.assertEqual(report["base_sha"], private_base)
+
+
+class StandaloneIncompleteCoverage(unittest.TestCase):
+    def test_unsupported_roots_and_scalar_decorations_are_unknown_not_clean(self):
+        from test_diagnostic_delta import WORKFLOW_VARIANTS
+        producer = load_producer()
+        for name in ("bom", "indented_root", "anchored_block_scalar"):
+            with self.subTest(name=name):
+                found, skipped, unknown = producer._scan_dispatch(
+                    WORKFLOW_PATH, WORKFLOW_VARIANTS[name].splitlines())
+                self.assertEqual(found, [])
+                self.assertEqual(skipped, [])
+                self.assertTrue(unknown, "Unsupported syntax must not silently clear standalone callers")
+                self.assertTrue(all(entry["path"] == WORKFLOW_PATH and entry["reason"] for entry in unknown))
+        found, skipped, unknown = producer._scan_dispatch(WORKFLOW_PATH,
+            "on:\n  workflow_dispatch:\n    inputs:\n      target:\n        description: destination\n".splitlines())
+        self.assertEqual([item["rule_id"] for item in found], ["dispatch-inputs/untyped"])
+        self.assertEqual((skipped, unknown), ([], []))
+
+    def test_listing_failure_is_visible_and_error_mode_fails_in_both_formats(self):
+        producer = load_producer()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "AGENTS.md").write_text("# map\n")
+            workflows = root / ".github/workflows"
+            workflows.mkdir(parents=True)
+            real_listdir = os.listdir
+            observed = []
+
+            def denied(path):
+                if os.fspath(path) == str(workflows):
+                    observed.append(str(path))
+                    raise PermissionError(13, "fixture workflow listing denied", str(path))
+                return real_listdir(path)
+
+            for mode in ("warn", "error"):
+                for machine in (False, True):
+                    with self.subTest(mode=mode, machine=machine):
+                        output = io.StringIO()
+                        with patch.object(os, "listdir", denied), redirect_stdout(output):
+                            result = producer.main(["--root", str(root), "--mode", mode]
+                                                   + (["--json"] if machine else []))
+                        self.assertEqual(result, int(mode == "error"))
+                        if machine:
+                            report = json.loads(output.getvalue())
+                            self.assertEqual(report["findings"], [])
+                            self.assertEqual([item["path"] for item in report["coverage"]["unknown"]],
+                                             [".github/workflows"])
+                        else:
+                            self.assertIn("[coverage/unknown]", output.getvalue())
+                            self.assertIn("workflow directory listing failed", output.getvalue())
+            self.assertEqual(len(observed), 4)
+
+
+class ProjectionIdentityBoundaries(unittest.TestCase):
+    def test_file_alias_cannot_overwrite_a_distinct_git_identity(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tree = {name: SourceLimits.entry(len(BAD_SCRIPT))
+                    for name in ("scripts/A.sh", "scripts/a.sh")}
+            sources = {name: BAD_SCRIPT.encode() for name in tree}
+            real_open, real_chmod = Path.open, Path.chmod
+            names = {}
+
+            def alias(path):
+                return names.setdefault(str(path).casefold(), path)
+
+            def opened(path, *args, **kwargs):
+                return real_open(alias(path), *args, **kwargs)
+
+            def chmod(path, *args, **kwargs):
+                return real_chmod(alias(path), *args, **kwargs)
+
+            # Controlled equivalent, not a native case-insensitive filesystem.
+            with patch.object(gate, "blobs", return_value=sources), \
+                    patch.object(Path, "open", opened), patch.object(Path, "chmod", chmod):
+                with self.assertRaises(gate.Unmeasurable) as error:
+                    gate.snapshot(root, tree, ["scripts/**"], root)
+            self.assertEqual(error.exception.code, "unsupported_projection")
+            self.assertEqual((root / "scripts/A.sh").read_bytes(), BAD_SCRIPT.encode())
+
+    def test_round_trip_inventory_refuses_directory_aliases(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tree = {name: SourceLimits.entry(0) for name in ("scripts/A/x.sh", "scripts/a/y.sh")}
+            with patch.object(gate, "blobs", return_value={name: b"" for name in tree}), \
+                    patch.object(gate.os, "walk", return_value=[(str(root / "scripts/A"), [], ["x.sh", "y.sh"])]):
+                with self.assertRaises(gate.Unmeasurable) as error:
+                    gate.snapshot(root, tree, ["scripts/**"], root)
+            self.assertEqual(error.exception.code, "unsupported_projection")
+
+    def test_case_distinct_sources_remain_distinct_on_supported_storage(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sources = {"scripts/A.sh": b"upper", "scripts/a.sh": b"lower"}
+            tree = {name: SourceLimits.entry(len(raw)) for name, raw in sources.items()}
+            with patch.object(gate, "blobs", return_value=sources):
+                self.assertEqual(gate.snapshot(root, tree, ["scripts/**"], root), sources)
+            self.assertEqual({name: (root / name).read_bytes() for name in sources}, sources)
+
+
 if __name__ == "__main__":
     unittest.main()

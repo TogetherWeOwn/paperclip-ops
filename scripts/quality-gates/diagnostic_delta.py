@@ -297,9 +297,24 @@ def snapshot(repo, tree, patterns, root):
         except UnicodeError as exc:
             raise Unmeasurable("unreadable_source", "Use UTF-8 text for scoped source files.") from exc
         target = root / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(raw)
-        target.chmod(0o755 if selected[path][0] == b"100755" else 0o644)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Exclusive creation prevents case/normalization aliases from
+            # overwriting a distinct Git identity on the runner filesystem.
+            with target.open("xb") as stream:
+                stream.write(raw)
+            target.chmod(0o755 if selected[path][0] == b"100755" else 0o644)
+        except OSError as exc:
+            raise Unmeasurable("unsupported_projection", "Use readable temporary storage preserving distinct Git paths and modes.") from exc
+    # Directory aliases can merge without a file collision (A/x, a/y).
+    # Verify the round trip rather than assuming the filesystem preserves names.
+    def unreadable(exc):
+        raise Unmeasurable("unsupported_projection", "Use readable temporary storage preserving distinct Git paths and modes.") from exc
+    projected = {str((Path(directory) / name).relative_to(root))
+                 for directory, _, names in os.walk(root, onerror=unreadable)
+                 for name in names}
+    if projected != set(source):
+        refuse("unsupported_projection", "Use temporary storage preserving every exact Git path, including case and Unicode.")
     return source
 
 
@@ -356,6 +371,8 @@ def validate_report(raw, patterns, sources):
         if matches(path, patterns):
             identities.add(identity)
     coverage = {"skipped": [], "unknown": []}
+    source_ancestors = {"/".join(parts[:i]) for source in sources
+                        for parts in [source.split("/")] for i in range(1, len(parts))}
     for category in coverage:
         entries = report["coverage"][category]
         if not isinstance(entries, list):
@@ -366,9 +383,9 @@ def validate_report(raw, patterns, sources):
                     or not isinstance(entry["reason"], str) or not entry["reason"].strip()):
                 refuse("invalid_coverage", "Supply located coverage entries with known categories and a nonempty reason.")
             path = safe_path(entry["path"])
-            if matches(path, patterns):
+            if matches(path, patterns) or path in source_ancestors:
                 if category == "unknown" or not empty_skip(entry, sources):
-                    refuse("unsupported_coverage", "Rewrite unsupported scoped inputs into the documented block mapping or explicit empty form.")
+                    refuse("unsupported_coverage", "Rewrite unsupported scoped inputs or restore readable source files and ancestor directories; incomplete coverage cannot be measured.")
                 coverage[category].append(entry)
     coverage["skipped"].sort(key=lambda entry: (entry["path"], entry["line"] or 0, entry["reason"]))
     return identities, coverage

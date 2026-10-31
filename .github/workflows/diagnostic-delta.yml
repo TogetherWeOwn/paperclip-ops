@@ -81,6 +81,16 @@ jobs:
               if not re.fullmatch(patterns[name], value):
                   raise SystemExit(f"{name}: provide a full lowercase commit SHA, not a branch or expression")
           PY
+      # Fetch the independently supplied base explicitly: full branch/tag
+      # history at HEAD does not include every commit reachable via a PR ref.
+      # The following same-repository checkout retains these local objects.
+      - name: Check out the exact caller base
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.BASE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: caller
       - name: Check out the caller history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

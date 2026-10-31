@@ -62,7 +62,10 @@ trap 'rm -rf "$PRIVATE_DIR"' EXIT
 PRIVATE_GATE="$PRIVATE_DIR/deploy-window-manifest.py"
 # Read the handoff path once, through a non-blocking descriptor, and copy it only if
 # that descriptor is a regular file: a FIFO would block `cp` forever. A missing handoff
-# copy is left missing, so the drift check reports it as such.
+# copy is left missing, so the drift check reports it as such. The copy takes the mode
+# captured from the same descriptor, with the owner execute bit set only if the
+# operator could execute the handoff file, so the drift check's executable test and
+# mode describe the bytes that were copied.
 #   exit 0 copied   3 missing   4 not a regular file   other: could not copy
 copy_rc=0
 python3 -I - "$HOST_GATE" "$PRIVATE_GATE" <<'PY' || copy_rc=$?
@@ -72,11 +75,22 @@ try:
     fd = os.open(src, os.O_RDONLY | os.O_NONBLOCK)
 except FileNotFoundError:
     sys.exit(3)
-if not stat.S_ISREG(os.fstat(fd).st_mode):
+st = os.fstat(fd)
+if not stat.S_ISREG(st.st_mode):
     sys.exit(4)
+mode = stat.S_IMODE(st.st_mode) & 0o777
+if os.geteuid() == 0:
+    can_exec = bool(mode & 0o111)
+elif st.st_uid == os.geteuid():
+    can_exec = bool(mode & stat.S_IXUSR)
+elif st.st_gid in {os.getegid(), *os.getgroups()}:
+    can_exec = bool(mode & stat.S_IXGRP)
+else:
+    can_exec = bool(mode & stat.S_IXOTH)
 with os.fdopen(fd, "rb") as f:
     with open(dst, "xb") as out:
         shutil.copyfileobj(f, out)
+os.chmod(dst, (mode & ~stat.S_IXUSR) | stat.S_IRUSR | (stat.S_IXUSR if can_exec else 0))
 PY
 case "$copy_rc" in
   0|3) ;;
@@ -89,8 +103,7 @@ esac
 
 printf '== step 1/2: is the gate the operator runs the gate that was reviewed?\n\n'
 # Deliberately NOT `|| true`: a red here must stop the window.
-if ! HOST_COPY="$PRIVATE_GATE" HOST_COPY_LABEL="$HOST_GATE" HOST_MODE_PATH="$HOST_GATE" \
-    "$DRIFT_CHECK"; then
+if ! HOST_COPY="$PRIVATE_GATE" HOST_COPY_LABEL="$HOST_GATE" "$DRIFT_CHECK"; then
   printf '\nREFUSING to run the window gate: the copy on this host is not the reviewed one.\n'
   printf 'Sync it as instructed above, then re-run this script.\n'
   exit 1

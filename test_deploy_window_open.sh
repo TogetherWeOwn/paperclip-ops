@@ -160,6 +160,10 @@ REAL_PYTHON="$(command -v python3)"
 cat > "$E2E/shim/python3" <<EOF
 #!/usr/bin/env bash
 if [ -n "\${SWAP_IN:-}" ] && [ "\${2:-}" != - ]; then cp "\$SWAP_IN" "$HANDOFF/deploy-window-manifest.py"; fi
+if [ -n "\${MODE_AFTER_COPY:-}" ] && [ "\${2:-}" = - ]; then
+  rc=0; "$REAL_PYTHON" "\$@" || rc=\$?
+  chmod "\$MODE_AFTER_COPY" "$HANDOFF/deploy-window-manifest.py"; exit "\$rc"
+fi
 exec "$REAL_PYTHON" "\$@"
 EOF
 chmod +x "$E2E/shim/python3"
@@ -241,8 +245,8 @@ output="$(run_e2e 1 --)"
 rmdir "$HANDOFF/deploy-window-manifest.py"
 pass 'a FIFO or directory at the handoff path is refused without blocking'
 
-# The executable bit and mode are read from the handoff file, not from the private
-# copy: the copy is created without an executable bit, under the operator's umask.
+# The executable bit and mode are captured from the descriptor the bytes were read
+# from, not from the operator's umask and not from the handoff path at check time.
 reset_handoff
 output="$(E2E_UMASK=077 run_e2e 0 --)"
 [[ "$output" == *'mode 755'* ]] || fail "PASS line does not report the handoff file mode: $output"
@@ -251,6 +255,13 @@ output="$(run_e2e 1 --)"
 [[ "$output" == *"handoff copy is not executable: $HANDOFF/deploy-window-manifest.py"* ]] ||
   fail "non-executable handoff file not refused by its path: $output"
 [[ ! -e "$E2E/gate.log" ]] || fail 'gate ran from a non-executable handoff file'
-pass 'executable bit and mode are checked on the handoff file'
+chmod 755 "$HANDOFF/deploy-window-manifest.py"
+output="$(run_e2e 0 MODE_AFTER_COPY=644 --)"
+[[ "$output" == *'mode 755'* ]] || fail "PASS line does not report the copied mode: $output"
+chmod 644 "$HANDOFF/deploy-window-manifest.py"
+output="$(run_e2e 1 MODE_AFTER_COPY=755 --)"
+[[ "$output" == *'handoff copy is not executable'* ]] ||
+  fail "mode changed after the copy decided the verdict: $output"
+pass 'executable bit and mode are checked on the handoff file as copied'
 
 printf 'PASS: deploy window wrapper contract\n'

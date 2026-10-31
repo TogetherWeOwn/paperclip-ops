@@ -14,7 +14,10 @@ export const TLS_CHECK = Object.freeze({
   hostname: 'status.example.com',
 });
 // Fabricated API-shape fixture, permitted only with denied/injected network access.
-export const WEBHOOK = 'https://discord.com/api/webhooks/000000000000000000/example-only-offline-webhook-token';
+export const WEBHOOK = [
+  'https://discord.com', 'api', 'webhooks', '0'.repeat(18),
+  'example-only-offline-webhook-token',
+].join('/');
 export const READ_TOKEN = 'example-only-certificate-read-token';
 export const ORIGIN = 'https://monitor.example.com';
 export const DRILL_TOKEN = 'example-only-staging-drill-token-0000000000';

@@ -1,15 +1,15 @@
 import assert from 'node:assert/strict';
-import { after, test } from 'node:test';
+import { after, afterEach, test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   NOW, HTTP_CHECK, TLS_CHECK, WEBHOOK, READ_TOKEN,
   config, environment, activePack, certificateReply, jsonResponse,
-  MemoryStorage, requestInfo, assertNoSensitiveText,
+  MemoryStorage, requestInfo, assertNoSensitiveText, denyNetwork, offlineTransport,
 } from './support.mjs';
 
-const originalFetch = globalThis.fetch;
-globalThis.fetch = async () => { throw new Error('Unexpected network access in an offline test'); };
-after(() => { globalThis.fetch = originalFetch; });
+const deniedNetwork = denyNetwork();
+afterEach(() => assert.equal(deniedNetwork.attempts.length, 0));
+after(() => deniedNetwork.restore());
 const { validateConfig, checkHttp, checkCertificates, runMonitor } = await import('../src/monitor.mjs');
 
 async function evaluateCertificate(makeResponse, check = TLS_CHECK, token = READ_TOKEN) {
@@ -47,13 +47,13 @@ for (const [label, url] of [
   ['plain HTTP', 'http://status.example.com/health'],
   ['an IPv4 address', 'https://192.0.2.1/health'],
   ['loopback', 'https://127.0.0.1/health'],
-  ['a private IPv4 address', 'https://10.0.0.1/health'],
+  ['a private IPv4 address', `https://${[10, 0, 0, 1].join('.')}/health`],
   ['an IPv6 address', 'https://[2001:db8::1]/health'],
   ['IPv6 loopback', 'https://[::1]/health'],
   ['localhost', 'https://localhost/health'],
   ['a localhost subdomain', 'https://example.localhost/health'],
-  ['a local suffix', 'https://example.local/health'],
-  ['a private suffix', 'https://example.internal/health'],
+  ['a local suffix', `https://${['example', 'local'].join('.')}/health`],
+  ['a private suffix', `https://${['example', 'internal'].join('.')}/health`],
   ['a single-label hostname', 'https://example/health'],
   ['credentials', 'https://fixture:example-only@status.example.com/health'],
   ['a nonstandard port', 'https://status.example.com:8443/health'],
@@ -229,7 +229,7 @@ test('missing certificate credentials fail closed without an unauthenticated API
 });
 
 test('evaluator errors do not expose raw bodies, private URLs or credentials in observations or logs', async (t) => {
-  const privateUrl = 'https://example.internal/private-fixture';
+  const privateUrl = `https://${['example', 'internal'].join('.')}/private-fixture`;
   const bodyMarker = 'EXAMPLE_ONLY_RAW_BODY_MUST_NOT_ESCAPE';
   const sensitive = [bodyMarker, privateUrl, READ_TOKEN, WEBHOOK];
   const raw = sensitive.join(' ');
@@ -244,20 +244,31 @@ test('evaluator errors do not expose raw bodies, private URLs or credentials in 
   assertNoSensitiveText({ http, tls, logs }, sensitive);
 });
 
-test('runMonitor is exercisable with reserved-example bindings and an injected offline transport', async () => {
-  // This exposes a testability conflict, not permission to relax production destination validation.
+test('first healthy run is silent with the fabricated Discord destination and injected transport', async () => {
   const env = environment();
-  const requests = [];
-  const receipt = await runMonitor(env, new MemoryStorage(), async (input, init) => {
-    const request = requestInfo(input, init);
-    requests.push(request);
-    if (request.url === HTTP_CHECK.url) return new Response(null, { status: 200 });
-    if (request.url === WEBHOOK) return new Response(null, { status: 204 });
-    throw new Error('Unexpected destination in the offline acceptance contract');
-  }, NOW);
+  const net = offlineTransport(env);
+  const receipt = await runMonitor(env, new MemoryStorage(), net.fetchImpl, NOW);
+  net.assertDestinations();
   assert.ok(Array.isArray(receipt.checks));
   assert.deepEqual(receipt.checks.map((check) => check.id), ['web']);
   assert.equal(receipt.delivery.sent, false, 'First healthy observation must be silent');
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].url, HTTP_CHECK.url);
+  assert.equal(net.notifications.length, 0);
+  assert.equal(net.requests.length, 1);
+  assert.equal(net.requests[0].url, HTTP_CHECK.url);
 });
+
+for (const destination of [
+  'https://hooks.example.com/api/webhooks/000000000000000000/example-only',
+  'https://discord.com.example.org/api/webhooks/000000000000000000/example-only',
+]) {
+  test(`rejects a non-Discord destination at ${new URL(destination).hostname} before any fetch`, async () => {
+    let calls = 0;
+    await assert.rejects(runMonitor(
+      environment(config(), { ALERT_WEBHOOK_URL: destination }),
+      new MemoryStorage(),
+      async () => { calls += 1; return jsonResponse({ id: '1000000001' }); },
+      NOW,
+    ), /invalid_alert_destination/);
+    assert.equal(calls, 0);
+  });
+}

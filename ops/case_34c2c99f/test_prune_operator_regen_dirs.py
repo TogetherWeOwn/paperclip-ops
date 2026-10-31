@@ -7,6 +7,7 @@ Run: python3 ops/case_34c2c99f/test_prune_operator_regen_dirs.py
 """
 import contextlib
 import fcntl
+import glob
 import hashlib
 import io
 import json
@@ -1240,10 +1241,17 @@ def free_port():
         return s.getsockname()[1]
 
 
+def newest_pg_bin():
+    """The runner image decides the server major (16 on 24.04, 18 on 26.04)."""
+    found = sorted(glob.glob("/usr/lib/postgresql/*/bin"),
+                   key=lambda p: int(p.split("/")[-2]) if p.split("/")[-2].isdigit() else -1)
+    return found[-1] if found else "/usr/lib/postgresql/16/bin"
+
+
 class RegenSqlPostgresTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        pg_bin = os.environ.get("REGEN_PG_BIN", "/usr/lib/postgresql/16/bin")
+        pg_bin = os.environ.get("REGEN_PG_BIN") or newest_pg_bin()
         cls.tools = {name: os.path.join(pg_bin, name) for name in ("initdb", "pg_ctl", "psql")}
         if not all(os.path.exists(path) for path in cls.tools.values()):
             message = f"PostgreSQL binaries not found in {pg_bin}"

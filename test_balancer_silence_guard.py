@@ -36,6 +36,9 @@ GAP_ROWS = """\
 """
 
 AFTER_GAP_NOW = "2026-10-04T17:45:00+00:00"  # ~15 min after the last row
+# Python 3.14 bounds json nesting by the real C stack, not the recursion
+# limit: 10,000 levels now parse. A million still raises RecursionError.
+DEEP = 1_000_000
 
 
 def healthy_rows(end, count=30, step_min=1):
@@ -222,7 +225,7 @@ class Unmeasurable(GuardCase):
         """json raises RecursionError outside ValueError; the line is skipped,
         not fatal. Nesting is far above the interpreter limit."""
         end = datetime(2026, 10, 5, 5, 0, tzinfo=timezone.utc)
-        nested = "[" * 10000 + "]" * 10000 + "\n"
+        nested = "[" * DEEP + "]" * DEEP + "\n"
         log = self.write_log(nested + healthy_rows(end))
         rc = self.run_guard("--log", log, "--state", self.write_state(),
                             "--now", end.isoformat())
@@ -233,7 +236,7 @@ class Unmeasurable(GuardCase):
     def test_deeply_nested_state_file_does_not_change_the_verdict(self):
         """read_state never raises: a hostile state file is context-only."""
         log = self.write_log(GAP_ROWS)
-        nested = "[" * 10000 + "]" * 10000
+        nested = "[" * DEEP + "]" * DEEP
         rc = self.run_guard("--log", log, "--state", self.write_state(nested),
                             "--now", AFTER_GAP_NOW)
         self.assertEqual(rc, 1)
@@ -343,7 +346,7 @@ class Retirement(GuardCase):
         """A marker nested past the recursion limit is ignored evidence:
         STALE stands and the guard does not crash."""
         log = self.write_log(GAP_ROWS)
-        nested = "[" * 10000 + "]" * 10000
+        nested = "[" * DEEP + "]" * DEEP
         rc = self.run_guard("--log", log, "--state", self.write_state(),
                             "--now", AFTER_GAP_NOW,
                             "--retirement-file", self.write_marker(nested))

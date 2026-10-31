@@ -940,7 +940,9 @@ class RegenTest(unittest.TestCase):
 
     def test_process_running_a_binary_from_the_folder_keeps_the_run(self):
         run, ws = self.make_run()
-        exe = os.path.join(ws, "target", "debug", "sleeper")
+        # The copy keeps the name "sleep": on Ubuntu 26.04 /bin/sleep is the
+        # uutils multicall binary, which picks the utility from its own name.
+        exe = os.path.join(ws, "target", "debug", "sleep")
         shutil.copy("/bin/sleep", exe)
         backdate(run)
         proc = subprocess.Popen([exe, "120"], cwd=self.tmp)

@@ -185,7 +185,7 @@ class RegenTest(unittest.TestCase):
     def test_fixture_git_disables_automatic_maintenance(self):
         _, ws = self.make_run()
         # Command-scoped isolation must override an enabled repository setting.
-        git(ws, "config", "--local", "maintenance.auto", "true")
+        git(ws, "config", "--local", "--replace-all", "maintenance.auto", "true")
         result = git(ws, "config", "--type=bool", "--get", "maintenance.auto")
         self.assertEqual(result.stdout, b"false\n")
 

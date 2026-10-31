@@ -21,9 +21,11 @@ python3 -I eval_devin.py freeze-manifest --workdir "$W" --round r1-early
 ```
 
 `--since` must be in the past. Use the previous round's `snapshot_started_at`
-(from its `metrics.json`), so consecutive rounds cover every review exactly once.
-For the first round, use the moment the change under test landed on main. A
-cutoff later than every review collects an empty round.
+(from its `metrics.json`) so consecutive rounds leave no gap. The cutoff is
+inclusive, and reviews posted while the previous round was collecting can appear
+in both rounds: compare rounds by finding key, never by adding their counts. For
+the first round, use the moment the change under test landed on main. A cutoff
+later than every review collects an empty round.
 
 Layout of `$W`:
 

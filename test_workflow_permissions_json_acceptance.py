@@ -2,7 +2,8 @@
 """Independent, immutable CLI acceptance for workflow-permission JSON output.
 
 Run: python3 -B -m unittest -v test_workflow_permissions_json_acceptance
-Requires the repository's already-pinned PyYAML; never installs dependencies.
+Requires Git on the parent PATH and the repository's already-pinned PyYAML;
+never installs dependencies.
 
 The v1 wire contract is fixed here before implementation:
   schema_version: 1 (integer, not bool)
@@ -28,7 +29,7 @@ entrypoint parses argv, reads fixtures, analyzes YAML and renders every verdict.
 Child-only Python audit hooks deny writes, network and process launches even via
 absolute paths. A poison PATH provides a second process boundary; all denied
 attempts are recorded. These are regression fences, not a hostile-code sandbox.
-No implementation or existing test/helper is changed by this deliverable.
+No checker implementation or existing test/helper call signature is changed.
 """
 
 import hashlib
@@ -95,16 +96,17 @@ else:
 
 
 def checkout_state():
-    """Observe the real checkout using local Git only, outside the child fence."""
-    git = shutil.which("git", path="/usr/bin:/bin")
+    """Requires Git on the parent PATH; observe outside the poison child fence."""
+    git = shutil.which("git")
     if git is None:
-        raise RuntimeError("local git required for checkout-before/after evidence")
+        raise RuntimeError("git on parent PATH required for checkout-before/after evidence")
     env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
     parts = []
     for args in (("status", "--porcelain=v1", "--untracked-files=all"),
-                 ("diff", "--binary", "HEAD")):
+                 ("diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD")):
         result = subprocess.run(
-            [git, *args], cwd=ROOT, env=env, capture_output=True, timeout=15, check=True,
+            [git, "-c", "core.fsmonitor=false", *args], cwd=ROOT, env=env,
+            capture_output=True, timeout=15, check=True,
         )
         parts.append(result.stdout)
     paths = [CHECKER, Path(__file__), ROOT / "test_check_workflow_job_permissions.py"]

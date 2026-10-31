@@ -38,6 +38,13 @@
 # ORDER IS THE WHOLE POINT: check first, then run. Running first would take advice from
 # unreviewed bytes before learning they were unreviewed.
 #
+# CHECK AND RUN THE SAME BYTES: the handoff directory is shared and writable by other
+# accounts, so the path is only read once. Its bytes are copied into a fresh private
+# `mktemp -d` directory (mode 0700), the drift check verifies THAT copy, and the copy is
+# what runs. A later change at the handoff path cannot alter what was checked. The copy
+# runs under `python3 -I`, so neither its directory, the working directory, user site
+# packages nor PYTHON* variables shape its imports. The copy is removed on exit.
+#
 #   exit 0  handoff copy is the reviewed gate AND the window is READY
 #   exit 1  drift in the gate itself, or the window is not READY
 #   exit 2  could not evaluate
@@ -50,9 +57,18 @@ HOST_GATE="/paperclip/operator-handoff/deploy-window-manifest.py"
 
 [ -x "$DRIFT_CHECK" ] || { printf 'ERROR: drift check missing or not executable: %s\n' "$DRIFT_CHECK"; exit 2; }
 
+PRIVATE_DIR="$(mktemp -d)" || { printf 'ERROR: could not create a private directory for the gate\n'; exit 2; }
+trap 'rm -rf "$PRIVATE_DIR"' EXIT
+PRIVATE_GATE="$PRIVATE_DIR/deploy-window-manifest.py"
+# A missing handoff copy is left missing, so the drift check reports it as such.
+if [ -e "$HOST_GATE" ] && ! cp -- "$HOST_GATE" "$PRIVATE_GATE"; then
+  printf 'ERROR: could not copy the handoff gate into a private directory: %s\n' "$HOST_GATE"
+  exit 2
+fi
+
 printf '== step 1/2: is the gate the operator runs the gate that was reviewed?\n\n'
 # Deliberately NOT `|| true`: a red here must stop the window.
-if ! "$DRIFT_CHECK"; then
+if ! HOST_COPY="$PRIVATE_GATE" HOST_COPY_LABEL="$HOST_GATE" "$DRIFT_CHECK"; then
   printf '\nREFUSING to run the window gate: the copy on this host is not the reviewed one.\n'
   printf 'Sync it as instructed above, then re-run this script.\n'
   exit 1
@@ -60,7 +76,7 @@ fi
 
 printf '\n== step 2/2: does the window itself verify?\n\n'
 rc=0
-python3 "$HOST_GATE" "$@" || rc=$?
+python3 -I "$PRIVATE_GATE" "$@" || rc=$?
 
 if [ "$rc" -eq 0 ]; then
   printf '\nWINDOW OPEN: the gate is the reviewed one and every staged card verified.\n'

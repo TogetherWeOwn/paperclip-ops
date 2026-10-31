@@ -7,8 +7,8 @@ Uses PyYAML, already used by the existing org-template suite. No GitHub calls.
 Minimal integration contract: .github/workflows/diagnostic-delta.yml exposes
 workflow_call inputs base-sha/head-sha/tools-ref (required strings), job
 'diagnostic-delta', a 'Validate immutable inputs' run step before checkouts,
-job env BASE_SHA/HEAD_SHA/TOOLS_REF plus CALL_INPUTS=toJSON(inputs), caller
-checkout at caller/, trusted tooling checkout at diagnostic-delta-tools/.
+job env BASE_SHA/HEAD_SHA/TOOLS_REF plus CALL_INPUTS=toJSON(inputs), exact BASE
+then HEAD checkouts sharing caller/, pinned tooling at diagnostic-delta-tools/.
 The checker run step supplies CHECKER pointing at the pinned script. REPORT_PATH
 is a job env workspace-absolute JSON artifact path. Retain it with always() even
 on failure, never mask checker exit status. The caller NEVER supplies a script.
@@ -46,8 +46,10 @@ class DiagnosticDeltaWorkflow(unittest.TestCase):
         self.assertEqual(len(self.validators), 1, "One pre-checkout immutable-input validator is required")
         self.validator = self.validators[0]
         self.checkouts = [s for s in self.steps if s.get("uses", "").startswith("actions/checkout@")]
-        self.assertEqual(len(self.checkouts), 2, "Separate caller history and pinned tooling checkouts")
-        self.caller, = [s for s in self.checkouts if s.get("with", {}).get("path") == "caller"]
+        self.assertEqual(len(self.checkouts), 3, "Acquire exact base, caller head and pinned tooling separately")
+        callers = [s for s in self.checkouts if s.get("with", {}).get("path") == "caller"]
+        self.assertEqual(len(callers), 2, "Both caller snapshots must share the same object database")
+        self.base_checkout, self.caller = callers
         self.tools, = [s for s in self.checkouts if s.get("with", {}).get("path") == "diagnostic-delta-tools"]
         self.checker, = [s for s in self.steps if "CHECKER" in s.get("env", {})]
         self.tmp = tempfile.TemporaryDirectory(prefix="delta-workflow-")
@@ -113,6 +115,8 @@ class DiagnosticDeltaWorkflow(unittest.TestCase):
         for step in self.checkouts:
             self.assertLess(self.steps.index(self.validator), self.steps.index(step))
         self.assertLess(self.steps.index(self.tools), self.steps.index(self.checker))
+        self.assertEqual(self.checkouts, [self.base_checkout, self.caller, self.tools],
+                         "Exact base acquisition must precede head and separate pinned tooling")
         values = {"base-sha": "a" * 40, "head-sha": "b" * 40, "tools-ref": "c" * 40}
         context = self.contexts(values)
         result = self.run_step(self.validator, context)
@@ -120,6 +124,7 @@ class DiagnosticDeltaWorkflow(unittest.TestCase):
         self.assertEqual(context["env"]["BASE_SHA"], "a" * 40)
         self.assertEqual(context["env"]["HEAD_SHA"], "b" * 40)
         self.assertEqual(context["env"]["TOOLS_REF"], "c" * 40)
+        self.assertEqual(self.expression(self.base_checkout["with"]["ref"], context), "a" * 40)
         self.assertEqual(self.expression(self.caller["with"]["ref"], context), "b" * 40)
         self.assertEqual(self.expression(self.tools["with"]["ref"], context), "c" * 40)
         for base_length, head_length in ((64, 40), (40, 64), (64, 64)):
@@ -132,6 +137,76 @@ class DiagnosticDeltaWorkflow(unittest.TestCase):
                 values = {"base-sha": "a" * base_length, "head-sha": "b" * head_length, "tools-ref": "c" * 64}
                 result = self.run_step(self.validator, self.contexts(values))
                 self.assertNotEqual(result.returncode, 0, "A 64-character tools-ref is not a pinned checkout commit")
+
+    def test_pr_only_base_survives_head_update_in_the_same_object_database(self):
+        # Characterize the declared Git fetch boundary, not a hosted checkout
+        # action: ordinary branch/tag history need not contain the requested base.
+        env = {"PATH": os.environ["PATH"], "HOME": self.tmp.name,
+               "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+               "GIT_TERMINAL_PROMPT": "0", "GIT_ALLOW_PROTOCOL": "file"}
+
+        def git(repo, *args, check=True):
+            result = subprocess.run(["git", *args], cwd=repo, env=env,
+                                    capture_output=True, text=True, timeout=10)
+            if check:
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result
+
+        seed = self.workspace / "seed"
+        remote = self.workspace / "remote.git"
+        head_only = self.workspace / "head-only"
+        for directory in (seed, remote, head_only):
+            directory.mkdir()
+        git(remote, "init", "--bare", "-q")
+        git(seed, "init", "-q", "--initial-branch=main")
+        git(seed, "config", "user.name", "Fixture")
+        git(seed, "config", "user.email", "fixture@example.invalid")
+        (seed / "README.md").write_text("common root\n")
+        git(seed, "add", "README.md")
+        attribution = "\n\nCo-Authored-By: Paperclip <noreply@paperclip.ing>"
+        git(seed, "commit", "-qm", "test: common fixture" + attribution)
+        common = git(seed, "rev-parse", "HEAD").stdout.strip()
+        tree = git(seed, "rev-parse", "HEAD^{tree}").stdout.strip()
+        base = git(seed, "commit-tree", tree, "-p", common, "-m",
+                   "test: independent base fixture" + attribution).stdout.strip()
+        (seed / "README.md").write_text("caller head\n")
+        git(seed, "commit", "-qam", "test: head fixture" + attribution)
+        head = git(seed, "rev-parse", "HEAD").stdout.strip()
+        git(seed, "push", "-q", remote.as_uri(), base + ":refs/pull/7/head",
+            head + ":refs/heads/main")
+        self.assertEqual(git(remote, "rev-parse", "refs/pull/7/head").stdout.strip(), base)
+        branch_refs = ("+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*")
+        git(head_only, "init", "-q")
+        git(head_only, "remote", "add", "origin", remote.as_uri())
+        git(head_only, "fetch", "--no-tags", "origin", *branch_refs)
+        self.assertEqual(git(head_only, "cat-file", "-e", head + "^{commit}").returncode, 0)
+        self.assertNotEqual(git(head_only, "cat-file", "-e", base + "^{commit}", check=False).returncode, 0,
+                            "Fixture base must be absent from ordinary branch/tag history")
+
+        context = self.contexts({"base-sha": base, "head-sha": head, "tools-ref": "c" * 40})
+        validation = self.run_step(self.validator, context)
+        self.assertEqual(validation.returncode, 0, validation.stderr)
+        base_path = self.workspace / self.expression(self.base_checkout["with"]["path"], context)
+        head_path = self.workspace / self.expression(self.caller["with"]["path"], context)
+        self.assertEqual(base_path, head_path)
+        base_ref = self.expression(self.base_checkout["with"]["ref"], context)
+        head_ref = self.expression(self.caller["with"]["ref"], context)
+        git(base_path, "init", "-q")
+        git(base_path, "remote", "add", "origin", remote.as_uri())
+        git(base_path, "fetch", "--no-tags", "--depth=" + self.base_checkout["with"]["fetch-depth"],
+            "origin", base_ref)
+        git(base_path, "checkout", "-q", "--detach", base_ref)
+        self.assertEqual(git(base_path, "rev-parse", "HEAD").stdout.strip(), base)
+        object_database = git(base_path, "rev-parse", "--absolute-git-dir").stdout.strip()
+        self.assertEqual(git(base_path, "rev-parse", "--is-shallow-repository").stdout.strip(), "true")
+        self.assertEqual(self.caller["with"]["fetch-depth"], "0")
+        git(head_path, "fetch", "--no-tags", "--unshallow", "origin", *branch_refs)
+        git(head_path, "checkout", "-q", "--detach", head_ref)
+        self.assertEqual(git(head_path, "rev-parse", "--absolute-git-dir").stdout.strip(), object_database)
+        self.assertEqual(git(head_path, "rev-parse", "HEAD").stdout.strip(), head)
+        self.assertEqual((head_path / "README.md").read_text(), "caller head\n")
+        for commit in (base, head):
+            self.assertEqual(git(head_path, "cat-file", "-t", commit).stdout.strip(), "commit")
 
     def test_empty_missing_mutable_or_injected_input_cannot_fall_back_to_event(self):
         marker = self.workspace / "executed"
@@ -162,6 +237,7 @@ class DiagnosticDeltaWorkflow(unittest.TestCase):
                 self.assertRegex(step["uses"], r"^[\w./-]+@[0-9a-f]{40}$")
         for step in self.checkouts:
             self.assertEqual(step["with"]["persist-credentials"], "false")
+        self.assertEqual(self.base_checkout["with"]["fetch-depth"], "1")
         self.assertEqual(self.caller["with"]["fetch-depth"], "0")
         self.assertEqual(self.tools["with"]["repository"], "TogetherWeOwn/paperclip-ops")
 

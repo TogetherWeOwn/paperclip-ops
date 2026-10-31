@@ -580,6 +580,18 @@ function assertComboBody(verbName) {
         throw new VerbError(`${verbName} requires each "models" entry to be an object.`, 400);
       }
       refuseUnknownKeys(verbName, member, COMBO_MEMBER_KEYS, `models[${index}]`);
+      // An unpinned leg lets OmniRoute choose the connection, possibly one
+      // another company configured. Pinning is what makes resources.js able to
+      // check the leg, so it is required, not optional.
+      if (typeof member.connectionId !== "string" || member.connectionId.length === 0) {
+        throw new VerbError(
+          `${verbName} requires "connectionId" on models[${index}]; an unpinned leg cannot be checked against your company's connections.`,
+          400,
+        );
+      }
+      if (member.kind !== undefined && member.kind !== "model") {
+        throw new VerbError(`${verbName} accepts only kind "model" legs; models[${index}] has kind ${JSON.stringify(member.kind)}.`, 400);
+      }
     }
   };
 }

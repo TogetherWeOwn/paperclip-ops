@@ -1273,3 +1273,32 @@ test("the adoption config is pinned to safe ids per resource class", () => {
     assert.equal(entry.items.pattern, "^[A-Za-z0-9_.-]{1,128}$");
   }
 });
+
+test("every combo leg must pin a connection, so the binding check cannot be skipped", () => {
+  // An unpinned leg lets OmniRoute choose the connection, which could be one
+  // another company configured. Pinning is what makes the leg checkable.
+  for (const name of ["combos.create", "combos.update"]) {
+    for (const leg of [
+      { kind: "model", model: "m" },
+      { kind: "model", model: "m", connectionId: "" },
+      { kind: "model", model: "m", connectionId: 7 },
+    ]) {
+      assert.throws(
+        () => buildRequest(resolveVerb(name), { params: { id: "c" }, body: { models: [leg] } }),
+        (error) => error instanceof VerbError && error.status === 400 && /connectionId/.test(error.message),
+        `${name} ${JSON.stringify(leg)}`,
+      );
+    }
+  }
+});
+
+test("a combo leg must be a model leg", () => {
+  // Any other kind could route through something that is not bound here.
+  assert.throws(
+    () =>
+      buildRequest(resolveVerb("combos.create"), {
+        body: { name: "x", models: [{ kind: "combo", model: "other", connectionId: "conn-a" }] },
+      }),
+    (error) => error instanceof VerbError && error.status === 400 && /kind/.test(error.message),
+  );
+});

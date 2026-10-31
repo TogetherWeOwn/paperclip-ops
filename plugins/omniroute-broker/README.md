@@ -231,7 +231,7 @@ the propose path and the approve path.
 | `providers.create` | `provider`, `name`, `isActive`, `priority`, `providerSpecificData` |
 | `providers.update` | `name`, `isActive`, `priority`, `providerSpecificData` (no `provider`: re-typing a connection moves its stored key to another upstream) |
 | `providers.set-priority` | `priority` |
-| `combos.create` / `combos.update` | `name`, `description`, `strategy`, `models`, `enabled`; each `models[]` leg `kind`, `model`, `providerId`, `connectionId`, `weight` |
+| `combos.create` / `combos.update` | `name`, `description`, `strategy`, `models`, `enabled`; each `models[]` leg `kind`, `model`, `providerId`, `connectionId`, `weight`. Every leg must pin a `connectionId` (an unpinned leg lets OmniRoute choose a connection, which binding could not check), and `kind` may only be `model` |
 | `mappings.create` | see the mapping guard below |
 | every `*.delete` | no body |
 

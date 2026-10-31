@@ -60,15 +60,37 @@ HOST_GATE="/paperclip/operator-handoff/deploy-window-manifest.py"
 PRIVATE_DIR="$(mktemp -d)" || { printf 'ERROR: could not create a private directory for the gate\n'; exit 2; }
 trap 'rm -rf "$PRIVATE_DIR"' EXIT
 PRIVATE_GATE="$PRIVATE_DIR/deploy-window-manifest.py"
-# A missing handoff copy is left missing, so the drift check reports it as such.
-if [ -e "$HOST_GATE" ] && ! cp -- "$HOST_GATE" "$PRIVATE_GATE"; then
-  printf 'ERROR: could not copy the handoff gate into a private directory: %s\n' "$HOST_GATE"
-  exit 2
-fi
+# Read the handoff path once, through a non-blocking descriptor, and copy it only if
+# that descriptor is a regular file: a FIFO would block `cp` forever. A missing handoff
+# copy is left missing, so the drift check reports it as such.
+#   exit 0 copied   3 missing   4 not a regular file   other: could not copy
+copy_rc=0
+python3 -I - "$HOST_GATE" "$PRIVATE_GATE" <<'PY' || copy_rc=$?
+import os, shutil, stat, sys
+src, dst = sys.argv[1:3]
+try:
+    fd = os.open(src, os.O_RDONLY | os.O_NONBLOCK)
+except FileNotFoundError:
+    sys.exit(3)
+if not stat.S_ISREG(os.fstat(fd).st_mode):
+    sys.exit(4)
+with os.fdopen(fd, "rb") as f:
+    with open(dst, "xb") as out:
+        shutil.copyfileobj(f, out)
+PY
+case "$copy_rc" in
+  0|3) ;;
+  4) printf 'FAIL: handoff copy is not a regular file: %s\n' "$HOST_GATE"
+     printf '\nREFUSING to run the window gate: there is no gate file to verify.\n'
+     exit 1 ;;
+  *) printf 'ERROR: could not copy the handoff gate into a private directory: %s\n' "$HOST_GATE"
+     exit 2 ;;
+esac
 
 printf '== step 1/2: is the gate the operator runs the gate that was reviewed?\n\n'
 # Deliberately NOT `|| true`: a red here must stop the window.
-if ! HOST_COPY="$PRIVATE_GATE" HOST_COPY_LABEL="$HOST_GATE" "$DRIFT_CHECK"; then
+if ! HOST_COPY="$PRIVATE_GATE" HOST_COPY_LABEL="$HOST_GATE" HOST_MODE_PATH="$HOST_GATE" \
+    "$DRIFT_CHECK"; then
   printf '\nREFUSING to run the window gate: the copy on this host is not the reviewed one.\n'
   printf 'Sync it as instructed above, then re-run this script.\n'
   exit 1

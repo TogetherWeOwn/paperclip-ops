@@ -218,7 +218,7 @@ mutant drop-drift-comparison \
 
 # Drop the executable-bit assertion: the operator invokes the handoff copy directly.
 mutant drop-exec-check \
-  '[ -x "$HOST_COPY" ] || fail "handoff copy is not executable' \
+  '[ -x "$HOST_MODE_PATH" ] || fail "handoff copy is not executable' \
   'true || fail "handoff copy is not executable' \
   not-executable || rc=1
 

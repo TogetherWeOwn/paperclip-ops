@@ -75,6 +75,9 @@ HOST_COPY="${HOST_COPY:-/paperclip/operator-handoff/deploy-window-manifest.py}"
 # deploy_window_open.sh checks a private copy of the handoff file, so messages name the
 # handoff path the operator syncs. HOST_COPY_LABEL changes wording only, never a verdict.
 HOST_COPY_LABEL="${HOST_COPY_LABEL:-$HOST_COPY}"
+# The private copy is owned by the operator and its mode follows their umask, so the
+# executable bit and the reported mode are read from the handoff path itself.
+HOST_MODE_PATH="${HOST_MODE_PATH:-$HOST_COPY}"
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 fail() { printf 'FAIL: %s\n' "$1"; exit "${2:-1}"; }
@@ -131,9 +134,9 @@ if [ "$ref_sha" != "$host_sha" ]; then
 fi
 
 # The operator invokes it directly, so a lost executable bit is a real breakage.
-[ -x "$HOST_COPY" ] || fail "handoff copy is not executable: $HOST_COPY_LABEL" 1
+[ -x "$HOST_MODE_PATH" ] || fail "handoff copy is not executable: $HOST_COPY_LABEL" 1
 
 printf 'PASS: handoff copy matches the reviewed gate pinned at %s:%s\n' \
   "${PINNED_REV:0:12}" "$PINNED_PATH"
 printf '      sha256 %s, blob %s, mode %s\n' \
-  "${ref_sha:0:16}" "${PINNED_BLOB:0:12}" "$(stat -c '%a' "$HOST_COPY")"
+  "${ref_sha:0:16}" "${PINNED_BLOB:0:12}" "$(stat -c '%a' "$HOST_MODE_PATH")"

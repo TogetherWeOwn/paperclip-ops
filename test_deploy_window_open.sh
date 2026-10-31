@@ -153,12 +153,13 @@ for mod in json os stat; do
   printf 'open("%s", "w").write("imported")\n' "$E2E/planted.$mod" > "$HANDOFF/$mod.py"
 done
 
-# A python3 shim that, when the wrapper starts the gate, swaps the handoff file for
-# other bytes first: the latest possible moment after the drift check passed.
+# A python3 shim that, when the wrapper starts the gate (not its `python3 -I -` copy
+# step), swaps the handoff file for other bytes first: the latest possible moment after
+# the drift check passed.
 REAL_PYTHON="$(command -v python3)"
 cat > "$E2E/shim/python3" <<EOF
 #!/usr/bin/env bash
-if [ -n "\${SWAP_IN:-}" ]; then cp "\$SWAP_IN" "$HANDOFF/deploy-window-manifest.py"; fi
+if [ -n "\${SWAP_IN:-}" ] && [ "\${2:-}" != - ]; then cp "\$SWAP_IN" "$HANDOFF/deploy-window-manifest.py"; fi
 exec "$REAL_PYTHON" "\$@"
 EOF
 chmod +x "$E2E/shim/python3"
@@ -166,14 +167,17 @@ chmod +x "$E2E/shim/python3"
 run_e2e() { # expected-exit [env assignments...] -- [args...]
   local expected="$1" output rc
   shift
+  local mask="${E2E_UMASK:-022}"
   local -a envs=()
   while [[ "$#" -gt 0 && "$1" != '--' ]]; do envs+=("$1"); shift; done
   shift
   rm -f "$E2E/gate.log"
   set +e
   # -u BASH_ENV: a startup file that resets PATH would bypass the shim below.
-  output="$(cd "$HANDOFF" && env -u BASH_ENV GATE_LOG="$E2E/gate.log" PATH="$E2E/shim:$PATH" \
-    PYTHONPATH="$HANDOFF" "${envs[@]}" "$E2E/repo/deploy_window_open.sh" "$@" 2>&1)"
+  # timeout: a wrapper that blocks on the handoff path fails here instead of hanging.
+  output="$(cd "$HANDOFF" && umask "$mask" && env -u BASH_ENV GATE_LOG="$E2E/gate.log" \
+    PATH="$E2E/shim:$PATH" PYTHONPATH="$HANDOFF" "${envs[@]}" \
+    timeout 30 "$E2E/repo/deploy_window_open.sh" "$@" 2>&1)"
   rc=$?
   set -e
   [[ "$rc" -eq "$expected" ]] || fail "expected exit $expected, got $rc; output: $output"
@@ -221,5 +225,32 @@ output="$(run_e2e 1 --)"
   fail "missing handoff copy not reported by its path: $output"
 [[ ! -e "$E2E/gate.log" ]] || fail 'gate ran with no handoff copy'
 pass 'drift and a missing handoff copy refuse and name the handoff path'
+
+# Only a regular file is copied: a FIFO or directory at the handoff path is refused
+# without blocking, and the gate does not run.
+mkfifo "$HANDOFF/deploy-window-manifest.py"
+output="$(run_e2e 1 --)"
+[[ "$output" == *"not a regular file: $HANDOFF/deploy-window-manifest.py"* ]] ||
+  fail "FIFO at the handoff path not refused: $output"
+[[ ! -e "$E2E/gate.log" ]] || fail 'gate ran from a FIFO'
+rm -f "$HANDOFF/deploy-window-manifest.py"
+mkdir "$HANDOFF/deploy-window-manifest.py"
+output="$(run_e2e 1 --)"
+[[ "$output" == *"not a regular file: $HANDOFF/deploy-window-manifest.py"* ]] ||
+  fail "directory at the handoff path not refused: $output"
+rmdir "$HANDOFF/deploy-window-manifest.py"
+pass 'a FIFO or directory at the handoff path is refused without blocking'
+
+# The executable bit and mode are read from the handoff file, not from the private
+# copy: the copy is created without an executable bit, under the operator's umask.
+reset_handoff
+output="$(E2E_UMASK=077 run_e2e 0 --)"
+[[ "$output" == *'mode 755'* ]] || fail "PASS line does not report the handoff file mode: $output"
+chmod 644 "$HANDOFF/deploy-window-manifest.py"
+output="$(run_e2e 1 --)"
+[[ "$output" == *"handoff copy is not executable: $HANDOFF/deploy-window-manifest.py"* ]] ||
+  fail "non-executable handoff file not refused by its path: $output"
+[[ ! -e "$E2E/gate.log" ]] || fail 'gate ran from a non-executable handoff file'
+pass 'executable bit and mode are checked on the handoff file'
 
 printf 'PASS: deploy window wrapper contract\n'

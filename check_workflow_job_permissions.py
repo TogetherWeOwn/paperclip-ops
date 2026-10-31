@@ -33,10 +33,30 @@ import os
 import sys
 from pathlib import Path
 
-try:
-    import yaml
-except ImportError:  # Fail closed without a traceback; see main().
-    yaml = None
+def _load_yaml():
+    """(module, reason): the parser, or None plus why it is unusable.
+
+    A missing PyYAML is not the only way initialization can fail: an installed
+    but unreadable module, an incompatible shadow package or a partial build
+    raises something other than ImportError. Every such case must reach the
+    documented exit-2 `yaml_parser_unavailable` envelope instead of a
+    traceback that looks like a conclusive exit-1 finding. The module is only
+    accepted when the node API this checker relies on actually loaded, so an
+    incompatible shadow package cannot fail later while matching exceptions.
+    """
+    try:
+        import yaml as module
+    except Exception as exc:  # Missing, unreadable, or broken at import time.
+        return None, exc
+    required = ("compose", "YAMLError", "MappingNode", "ScalarNode")
+    missing = [name for name in required if not hasattr(module, name)]
+    if missing:
+        return None, ImportError(
+            "incompatible yaml module: missing " + ", ".join(missing))
+    return module, None
+
+
+yaml, _PARSER_ERROR = _load_yaml()
 
 RULE_ID = "workflow.job_permissions.required"
 MISSING_CODE = "missing_job_permissions"
@@ -214,6 +234,23 @@ def default_files():
                   + glob.glob(os.path.join(directory, "*.yaml")))
 
 
+def _utf8_path(path):
+    """Recover a true UTF-8 filename from surrogate-escaped argv text.
+
+    Under an ASCII filesystem locale Python decodes argv bytes with
+    `surrogateescape`, so `workflow-ü.yml` arrives as lone surrogates and
+    `json.dumps` emits `\\udcc3\\udcbc`, which a normal consumer turns into
+    replacement characters that cannot reopen the file. The original bytes
+    are recoverable (`fsencode`), so a name that really is valid UTF-8 is
+    restored here and reported exactly as it exists on disk. Genuinely
+    non-UTF-8 names are left as the caller passed them.
+    """
+    try:
+        return os.fsencode(path).decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return path
+
+
 def _structured_error(code, file):
     retryable, next_action = ERROR_SPECS[code]
     return {"code": code, "file": file, "retryable": retryable,
@@ -291,8 +328,9 @@ def main(argv=None):
         return emit(*_report("inconclusive", 0, 0, [],
                              [_structured_error("no_workflow_inputs", None)]))
     if yaml is None:
+        reason = f": {_PARSER_ERROR}" if _PARSER_ERROR else ""
         prose_lines = [
-            f"{path}: error: {path}: YAML parser unavailable (PyYAML not installed)"
+            f"{path}: error: {path}: YAML parser unavailable{reason}"
             for path in files
         ] + ["workflow job permissions: INCONCLUSIVE (a file could not be read)"]
         return emit(*_report("inconclusive", 0, len(files), [],
@@ -303,7 +341,7 @@ def main(argv=None):
         found, error, code = _check_file_detailed(path)
         if error:
             prose_lines.append(f"{path}: error: {error}")
-            errors.append(_structured_error(code, path))
+            errors.append(_structured_error(code, _utf8_path(path)))
             broken = True
             continue
         total += 1
@@ -312,7 +350,7 @@ def main(argv=None):
                                f"`permissions:` block (declare `{{}}` where the job "
                                f"needs no token scopes, else exactly the scopes it needs)")
             findings.append({"rule_id": RULE_ID, "code": MISSING_CODE,
-                             "file": path, "job": name, "line": lineno,
+                             "file": _utf8_path(path), "job": name, "line": lineno,
                              "retryable": False,
                              "next_action": MISSING_NEXT_ACTION})
             bad += 1

@@ -61,8 +61,10 @@ Contract fields:
   `yaml_parser_unavailable`, `no_workflow_inputs`, `invalid_arguments`.
   Global errors carry `file: null`.
 
-Paths are reported exactly as passed (spaces and Unicode survive); codes
-and ordering never depend on parser display text.
+Paths are reported so that a consumer can reopen them: spaces and Unicode
+survive, and a UTF-8 filename passed under an ASCII filesystem locale is
+reported in its real on-disk form rather than as surrogate escapes.
+Codes and ordering never depend on parser display text.
 
 ## Recovery
 
@@ -74,7 +76,8 @@ python3 check_workflow_job_permissions.py --json
 ```
 
 A `yaml_parser_unavailable` result means the pinned PyYAML requirement is
-not installed in that environment; install the repository's pinned
+not usable in that environment — not installed, unreadable, or an
+incompatible module shadowing it; install the repository's pinned
 requirements with the normal verification setup, then rerun the same
 command. Never treat exit 2 as pass, and never edit workflows with this
 tool: it only reports.

@@ -1032,7 +1032,7 @@ jobs:
       - name: explicit workflow job permissions gate
         run: |
           python3 check_workflow_job_permissions.py
-          python3 -m unittest -v test_check_workflow_job_permissions
+          python3 -B -m unittest -v test_check_workflow_job_permissions test_workflow_permissions_json_acceptance test_workflow_permissions_companion
 
       # case_6bf2cca9. The review-routing contract is load-bearing for review-model
       # spend: a red router that CI never executes would silently misroute

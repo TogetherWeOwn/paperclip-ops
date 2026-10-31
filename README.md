@@ -116,7 +116,7 @@ and cites a single pinned rubric in every phase.
 | `bridge_row_inventory.py` |
 | `capture_host_evidence.sh` |
 | `capture_host_render.sh` |
-| `check_workflow_job_permissions.py` |
+| `check_workflow_job_permissions.py` ([structured output contract](docs/workflow-permissions.md)) |
 | `case_8abb7523-measure.mjs` |
 | `ci_dark_steps.sh` |
 | `ci_failure_drain.sh` |

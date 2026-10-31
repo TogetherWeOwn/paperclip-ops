@@ -106,6 +106,10 @@ export const VERBS = Object.freeze({
   },
 
   // ── Single approval: the responsible agent, proven by holding the issue.
+  // SINGLE is the floor for a body of plain fields only. Each of these verbs
+  // has a body allowlist (`BODY_CONSTRAINTS` below), endpoint fields escalate
+  // to DUAL, and a credential field is refused at every class. An `:id` must
+  // name a resource bound to the caller's company (resources.js).
   "providers.create": {
     method: "POST",
     path: "/api/providers",
@@ -236,6 +240,61 @@ export function touchesPaidTraffic(value, depth = 0) {
   return false;
 }
 
+/**
+ * Body keys that say WHERE a provider sends traffic, and so where OmniRoute
+ * sends the credential it stores for that provider.
+ *
+ * A partial PUT keeps the stored key. Re-pointing the upstream of an existing
+ * provider therefore hands that key to the new host, which makes an endpoint
+ * change at least as consequential as a paid-traffic change. Same one-way
+ * tripwire: presence anywhere in the body escalates to DUAL.
+ *
+ * `providerSpecificData` is listed whole because its contents are per-provider
+ * and are where OmniRoute keeps `baseUrl`. The name pattern catches the
+ * spellings an allowlisted object may carry inside it.
+ */
+export const ENDPOINT_KEYS = Object.freeze(["providerSpecificData"]);
+export const ENDPOINT_KEY_PATTERN = /(url|uri|host|endpoint|proxy|apibase|origin|domain|address)/i;
+
+/** Recursively test whether any endpoint-bearing key appears anywhere in the body. */
+export function touchesEndpoint(value, depth = 0) {
+  if (depth > 8 || value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some((item) => touchesEndpoint(item, depth + 1));
+  for (const [key, nested] of Object.entries(value)) {
+    if (ENDPOINT_KEYS.includes(key) || ENDPOINT_KEY_PATTERN.test(key)) return true;
+    if (touchesEndpoint(nested, depth + 1)) return true;
+  }
+  return false;
+}
+
+/**
+ * Body keys that carry a credential. Refused on every verb, at every approval
+ * class: a credential in a body would sit in plugin state as a pending proposal
+ * and be shown to the approver, and the broker exists so that credentials do not
+ * travel through agents. Setting or rotating an upstream key stays an operator
+ * action.
+ */
+export const CREDENTIAL_KEY_PATTERN = /(key|token|secret|passw|credential|authori[sz]ation|^auth$|cookie|^headers?$)/i;
+
+/** Return the path of the first credential-named key in the body, or null. */
+export function findCredentialKey(value, path = "", depth = 0) {
+  if (depth > 8 || value === null || typeof value !== "object") return null;
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      const found = findCredentialKey(item, `${path}[${index}]`, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  for (const [key, nested] of Object.entries(value)) {
+    const here = path ? `${path}.${key}` : key;
+    if (CREDENTIAL_KEY_PATTERN.test(key)) return here;
+    const found = findCredentialKey(nested, here, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
 /** Look up a verb by exact name. Unknown verbs are refused, never forwarded. */
 export function resolveVerb(name) {
   if (typeof name !== "string" || name.length === 0) {
@@ -277,6 +336,16 @@ export function classifyApproval(verb, body) {
 
   if (verb.approval === APPROVAL.DUAL) {
     return { approval: APPROVAL.DUAL, escalated: false, reason: "verb is declared dual-approval" };
+  }
+
+  if (touchesEndpoint(body)) {
+    return {
+      approval: APPROVAL.DUAL,
+      escalated: true,
+      reason:
+        "request body sets an upstream endpoint field, which decides where the provider's stored credential is sent " +
+        `(${ENDPOINT_KEYS.join(", ")}, or a key matching ${ENDPOINT_KEY_PATTERN})`,
+    };
   }
 
   if (touchesPaidTraffic(body)) {
@@ -437,13 +506,103 @@ export function assertMappingCreate(body) {
   return body;
 }
 
-/** Verb name -> body validator. Absent means the verb declares no extra constraint. */
+/**
+ * Updatable top-level keys per provider/combo verb. Deny-by-default: a key
+ * absent here is refused, not forwarded. Shapes are taken from the operator
+ * script this broker replaces (omniroute/case_31532730-register-cliproxy.sh).
+ *
+ * `provider` is accepted on create and NOT on update: re-typing an existing
+ * connection carries its stored key to a different upstream. Credential keys
+ * (`apiKey`, …) appear in no list; `assertNoCredential` refuses them anyway, with
+ * a clearer message.
+ */
+export const BODY_KEYS = Object.freeze({
+  "providers.create": Object.freeze(["provider", "name", "isActive", "priority", "providerSpecificData"]),
+  "providers.update": Object.freeze(["name", "isActive", "priority", "providerSpecificData"]),
+  "providers.set-priority": Object.freeze(["priority"]),
+  "combos.create": Object.freeze(["name", "description", "strategy", "models", "enabled"]),
+  "combos.update": Object.freeze(["name", "description", "strategy", "models", "enabled"]),
+  "providers.delete": Object.freeze([]),
+  "combos.delete": Object.freeze([]),
+  "mappings.delete": Object.freeze([]),
+});
+
+/** Keys of one combo leg (`models[]`). Same deny-by-default rule. */
+export const COMBO_MEMBER_KEYS = Object.freeze(["kind", "model", "providerId", "connectionId", "weight"]);
+
+function refuseUnknownKeys(verbName, object, allowed, where = "") {
+  const unknown = Object.keys(object).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) {
+    const scope = where ? ` in ${where}` : "";
+    const accepted = allowed.length > 0 ? `only ${allowed.join(", ")}` : "no body";
+    throw new VerbError(
+      `${verbName} accepts ${accepted}${scope}; refusing unknown key(s): ${unknown.join(", ")}.`,
+      400,
+    );
+  }
+}
+
+/** Refuse a credential-named key anywhere in the body, at every approval class. */
+export function assertNoCredential(verbName, body) {
+  const found = findCredentialKey(body);
+  if (found) {
+    throw new VerbError(
+      `${verbName} refuses credential field "${found}". The broker does not carry upstream credentials ` +
+        "at any approval level; setting or rotating a provider key is an operator action.",
+      403,
+    );
+  }
+}
+
+function keysOnly(verbName) {
+  return (body) => refuseUnknownKeys(verbName, body, BODY_KEYS[verbName]);
+}
+
+function assertProviderBody(verbName) {
+  return (body) => {
+    refuseUnknownKeys(verbName, body, BODY_KEYS[verbName]);
+    const psd = body.providerSpecificData;
+    if (psd !== undefined && (psd === null || typeof psd !== "object" || Array.isArray(psd))) {
+      throw new VerbError(`${verbName} requires "providerSpecificData" to be an object when present.`, 400);
+    }
+  };
+}
+
+function assertComboBody(verbName) {
+  return (body) => {
+    refuseUnknownKeys(verbName, body, BODY_KEYS[verbName]);
+    if (body.models === undefined) return;
+    if (!Array.isArray(body.models)) {
+      throw new VerbError(`${verbName} requires "models" to be an array when present.`, 400);
+    }
+    for (const [index, member] of body.models.entries()) {
+      if (member === null || typeof member !== "object" || Array.isArray(member)) {
+        throw new VerbError(`${verbName} requires each "models" entry to be an object.`, 400);
+      }
+      refuseUnknownKeys(verbName, member, COMBO_MEMBER_KEYS, `models[${index}]`);
+    }
+  };
+}
+
+/**
+ * Verb name -> body validator. EVERY mutating verb has one; `assertVerbConstraints`
+ * refuses a mutating verb that does not, so a verb added later without an
+ * allowlist fails closed instead of forwarding whatever it is given.
+ */
 const BODY_CONSTRAINTS = Object.freeze({
+  "providers.create": assertProviderBody("providers.create"),
+  "providers.update": assertProviderBody("providers.update"),
+  "providers.set-priority": keysOnly("providers.set-priority"),
+  "providers.delete": keysOnly("providers.delete"),
+  "combos.create": assertComboBody("combos.create"),
+  "combos.update": assertComboBody("combos.update"),
+  "combos.delete": keysOnly("combos.delete"),
   "mappings.create": assertMappingCreate,
+  "mappings.delete": keysOnly("mappings.delete"),
 });
 
 /**
- * Apply a verb's declared body constraint, if it has one.
+ * Apply a verb's declared body constraint.
  *
  * Called from `buildRequest`, deliberately: `buildRequest` is on BOTH the propose
  * path and the approve path, so a constraint cannot be dodged by getting a body
@@ -452,7 +611,11 @@ const BODY_CONSTRAINTS = Object.freeze({
  */
 export function assertVerbConstraints(verb, body) {
   const check = BODY_CONSTRAINTS[verb.name];
-  if (check) check(body ?? {});
+  if (!check) {
+    throw new VerbError(`Verb "${verb.name}" declares no body allowlist; refusing to forward its body.`, 500);
+  }
+  assertNoCredential(verb.name, body ?? {});
+  check(body ?? {});
   return body;
 }
 
@@ -506,4 +669,5 @@ export default {
   buildRequest,
   assertVerbConstraints,
   assertMappingCreate,
+  assertNoCredential,
 };

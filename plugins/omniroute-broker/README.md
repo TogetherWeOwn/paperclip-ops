@@ -192,7 +192,7 @@ contained neither "claude" nor "anthropic".
 | Verb | Upstream | Approval |
 |---|---|---|
 | `providers.list` / `providers.get` / `combos.list` / `models.list` / `mappings.list` | `GET` | **none** (ungated, scrubbed) |
-| `providers.create` / `providers.update` / `combos.create` / `combos.update` | `POST`/`PUT` | **single** — the responsible agent |
+| `providers.create` / `providers.update` / `combos.create` / `combos.update` | `POST`/`PUT` | **single** — the responsible agent; **two keys** if the body sets an endpoint field |
 | `providers.delete` / `combos.delete` / `providers.set-priority` | `DELETE`/`PUT` | **two keys** |
 | `mappings.create` / `mappings.delete` | `POST`/`DELETE` | **two keys** + a body guard |
 
@@ -210,6 +210,62 @@ escalated single → dual. It matches on **key presence, not value** — disabli
 the provider that currently serves paid traffic is exactly as consequential as
 enabling one. Like case_2963068b's Claude tripwire it is one-way: it can only ever
 require **more** approval, never less.
+
+**The endpoint tripwire.** A partial `PUT` keeps a provider's stored upstream
+key, so the fields that say where a provider sends traffic also decide where
+that key is sent. Any body carrying `providerSpecificData` (where OmniRoute keeps
+`baseUrl`), or any key at any depth matching `ENDPOINT_KEY_PATTERN` (`url`,
+`host`, `endpoint`, `proxy`, `apiBase`, `origin`, …), is escalated single → dual.
+Same one-way rule.
+
+### Body allowlists
+
+Every mutating verb declares the body keys it accepts (`BODY_KEYS`,
+`COMBO_MEMBER_KEYS`, `MAPPING_BODY_KEYS` in `dist/verbs.js`). An unknown key is a
+`400`, never forwarded, and a mutating verb with no allowlist fails closed with a
+`500`. Like the mapping guard, the check runs in `buildRequest`, so it covers both
+the propose path and the approve path.
+
+| Verb | Accepted keys |
+|---|---|
+| `providers.create` | `provider`, `name`, `isActive`, `priority`, `providerSpecificData` |
+| `providers.update` | `name`, `isActive`, `priority`, `providerSpecificData` (no `provider`: re-typing a connection moves its stored key to another upstream) |
+| `providers.set-priority` | `priority` |
+| `combos.create` / `combos.update` | `name`, `description`, `strategy`, `models`, `enabled`; each `models[]` leg `kind`, `model`, `providerId`, `connectionId`, `weight` |
+| `mappings.create` | see the mapping guard below |
+| every `*.delete` | no body |
+
+**Credential fields are refused at every approval class** (`403`). Any key at any
+depth matching `CREDENTIAL_KEY_PATTERN` (`apiKey`, `token`, `secret`, `password`,
+`headers`, …) stops the request. A credential in a body would sit in plugin
+state as a pending proposal and be shown to the approver. Setting or rotating an
+upstream key stays an operator action (`omniroute/*.sh`).
+
+### Resource binding: an id must belong to the caller's company
+
+`ownership.js` proves the caller holds **its own issue**. It says nothing about
+the id in the request, and the management credential spans every company on the
+box. So `dist/resources.js` requires every id a mutating call names to be
+**bound to the caller's company**:
+
+- the `:id` of every update, priority change and delete;
+- each `models[].connectionId` in a combo body, so a combo cannot take a leg on
+  another company's connection;
+- `comboId` in a `mappings.create` body, so a mapping cannot route traffic into
+  another company's combo.
+
+An id is bound when this company **created it through the broker** (recorded in
+plugin state as `binding:<resource>:<id>` with the company id, issue and agent,
+after the create succeeds; released on delete) or when an operator lists it
+in this company's `adoptedResourceIds` config. Everything else is a `403`,
+including an id the broker has never seen, and the refusal does not say whether
+the id exists. The stored record's own `companyId` is compared, so the check does
+not rely on state scoping alone. The check runs when a call is proposed and again
+when it is approved.
+
+If a create's response carries no readable id, the new resource stays
+**unbound**: the broker will not touch it until an operator adopts it. That is
+the closed direction. Reads are not bound; they are ungated and scrubbed.
 
 ### Mapping verbs — why they are tighter than combos
 
@@ -235,6 +291,7 @@ with no opt-out flag**:
 | No `*` or `?` in `pattern` | OmniRoute glob-matches case-insensitively, so one `*` can capture ids nobody enumerated — including ids that do not exist yet. |
 | `pattern` must not match `/(claude\|sonnet\|opus\|haiku\|fable\|mythos\|prism)/i` | Matched on **family**, not on the substring `claude`: case_570ada89 was a bypass a `claude` check cleared, and 14 `aug/` ids contain no `claude` at all. `mythos` and `prism` are **not** family words — see the structural-limit note below for why they are enumerated, and why quoting this rule without them (as this table did until case_dd779b5c) understates the guard. |
 | `priority` must be an explicit integer | The route defaults it to `0`. Mappings resolve `priority DESC`, so an omitted priority silently loses to every existing mapping — a routing decision nobody made. |
+| `comboId` must be bound to the caller's company | Enforced by `resources.js`, not the body guard. A combo from case_05be2d4e's phase 5 qualifies if this company created it through the broker; one created by `apply.sh` must be listed in `adoptedResourceIds.combo` first. |
 
 The guard is wired into `buildRequest()`, **not** into the operate handler, because
 `buildRequest` is on both the propose and the approve path. Wiring it into the
@@ -379,10 +436,12 @@ never touches the secret.
 1. host          auth:"agent" + assertCompanyAccess      (cross-company)
 2. ownership.js  assignee + status + run lock            (who / when)
 3. verbs.js      verb lookup + approval classification   (what)
+   resources.js   every named id bound to caller's company (which)
 4. approvals.js  second key, if the class demands one    (how many)
 5. audit.js      preflight — PROVE the log writable      (before anything)
 6. omniroute.js  resolve credential, issue the call      (the only mutation)
 7. audit.js      commit — loud if it fails after (6)
+   resources.js   bind a created id / release a deleted one
 8. redact.js     scrub whatever comes back
 ```
 
@@ -392,6 +451,9 @@ never touches the secret.
 |---|---|
 | The caller supplies no method and no path | Otherwise the broker is the management key with extra steps, and `/api/keys/:id/reveal` is reachable. |
 | Unknown verb ⇒ `404`, never a pass-through | Deny-by-default. Exact equality, no prefix matching. |
+| Unknown body key ⇒ `400`; credential key ⇒ `403` at any class | The caller chooses the values of declared fields, never which fields exist, and never carries an upstream credential. |
+| An endpoint field ⇒ two keys | A partial update keeps the stored key, so re-pointing a provider's upstream decides where that key goes. |
+| A mutating call may only name ids bound to the caller's company | The management credential spans every company; holding your own issue is not authority over another company's provider, combo or mapping. |
 | The credential is resolved once, as late as possible, and rides in a header | Never in a URL, never in state, never in an error message. |
 | **Nothing is shelled out** | The call is `ctx.http.fetch`, so the key never lands in `/proc/<pid>/cmdline` — the case_3d790dcb class. It is also why case_2963068b's shell CLI needed a `0600 curl --config` file; a plugin must not reintroduce that problem. |
 | A transport error's message is never echoed | The caught error can quote `init`, which holds the `Authorization` header. Only the error *name* propagates. |
@@ -447,7 +509,13 @@ staged copy whose `dist/` fingerprint the calibration command above matched.
    curl -s -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
      "$PAPERCLIP_API_URL/api/plugins/omniroute-broker/api/whoami?companyId=$PAPERCLIP_COMPANY_ID"
    ```
-4. Then `providers.list` (read, scrubbed), then the case_31532730 `providers.create`.
+4. Then `providers.list` (read, scrubbed).
+5. Resources created outside the broker (for example by
+   `omniroute/case_31532730-register-cliproxy.sh`) are unbound and the broker
+   refuses to mutate them or map into them. To hand one to a company, list its id
+   under `adoptedResourceIds.provider` / `.combo` / `.mapping` in **that
+   company's** config. A connection that needs an upstream key is still
+   created by the operator script: the broker carries no credentials.
 
 ## Tests
 

@@ -11,10 +11,12 @@
  *   1. host           auth: "agent" + assertCompanyAccess   (cross-company)
  *   2. ownership.js   assignee + status + run lock          (who and when)
  *   3. verbs.js       verb lookup + approval classification (what)
+ *      resources.js   every named id bound to the caller's company (which)
  *   4. approvals.js   second key, if the class demands one  (how many)
  *   5. audit.js       preflight — PROVE the log writable    (before anything)
  *   6. omniroute.js   resolve credential, issue the call    (the only mutation)
  *   7. audit.js       commit — loud if it fails after (6)
+ *      resources.js   bind a created id / release a deleted one
  *   8. redact.js      scrub whatever comes back
  *
  * Steps 2-5 all run BEFORE the credential is resolved, so a refused request
@@ -37,6 +39,7 @@ import {
 import { AuditError, UnrecordedMutationError, buildRecord, commit, manualRecoveryLine, preflight } from "./audit.js";
 import { OmniRouteError, callManagement } from "./omniroute.js";
 import { RedactionError, redactResponse } from "./redact.js";
+import { ResourceBindingError, assertResourcesBound, bindingChange, bindingKey } from "./resources.js";
 
 let context = null;
 
@@ -44,7 +47,15 @@ const json = (status, body) => ({ status, headers: { "Content-Type": "applicatio
 
 const sha256Hex = (input) => createHash("sha256").update(input, "utf8").digest("hex");
 
-const KNOWN_ERRORS = [VerbError, OwnershipError, ApprovalError, AuditError, OmniRouteError, RedactionError];
+const KNOWN_ERRORS = [
+  VerbError,
+  OwnershipError,
+  ApprovalError,
+  AuditError,
+  OmniRouteError,
+  RedactionError,
+  ResourceBindingError,
+];
 
 const isKnown = (error) => KNOWN_ERRORS.some((Class) => error instanceof Class);
 
@@ -127,6 +138,59 @@ async function establishOwnership(ctx, { issueId, companyId, actor }) {
 
 const proposalKey = (id) => `proposal:${id}`;
 
+/** Step 3b: every id the call names must be bound to the caller's company. */
+function assertBound(ctx, { companyId, config, verb, request, params }) {
+  return assertResourcesBound({
+    companyId,
+    verb,
+    params,
+    body: request.body,
+    lookupBinding: (resource, id) => ctx.state.get(companyId, bindingKey(resource, id)),
+    adopted: config.adoptedResourceIds,
+  });
+}
+
+/**
+ * Record what a successful create or delete did to the binding table.
+ *
+ * Runs after the mutation, so a failure here must not turn a success into an
+ * error. Failing to bind leaves the new id unbound, which is the closed
+ * direction: the broker will refuse to touch it until an operator adopts it.
+ */
+async function applyBinding(ctx, { companyId, verb, request, params, payload, issueId, ownership }) {
+  const change = bindingChange({
+    verb,
+    params,
+    payload,
+    companyId,
+    issueId,
+    agentId: ownership.agentId,
+    now: Date.now(),
+  });
+  if (!change) return null;
+  try {
+    if (change.action === "bind") {
+      await ctx.state.set(companyId, bindingKey(change.resource, change.id), change.record);
+    } else if (change.action === "release" && change.id) {
+      await ctx.state.set(companyId, bindingKey(change.resource, change.id), null);
+    } else if (change.action === "unbound") {
+      ctx.logger.warn("omniroute-broker created a resource whose id could not be read; it stays unbound", {
+        verb: verb.name,
+        path: request.path,
+      });
+    }
+    return { action: change.action, resource: change.resource, id: change.id };
+  } catch {
+    ctx.logger.error("omniroute-broker could not record a resource binding", {
+      verb: verb.name,
+      action: change.action,
+      resource: change.resource,
+      id: change.id,
+    });
+    return { action: "binding-failed", resource: change.resource, id: change.id };
+  }
+}
+
 /**
  * Execute an approved (or single-approval) operation.
  *
@@ -134,7 +198,7 @@ const proposalKey = (id) => `proposal:${id}`;
  * has already changed OmniRoute. That boundary is why the audit preflight sits
  * where it does.
  */
-async function execute(ctx, { companyId, config, issueId, verb, request, approval, ownership, proposal }) {
+async function execute(ctx, { companyId, config, issueId, verb, request, params, approval, ownership, proposal }) {
   const record = buildRecord({
     companyId,
     issueId,
@@ -165,7 +229,9 @@ async function execute(ctx, { companyId, config, issueId, verb, request, approva
   // UnrecordedMutationError, which is handled distinctly in onApiRequest.
   await commit(ctx, record, { applied: true });
 
-  return payload;
+  const binding = await applyBinding(ctx, { companyId, verb, request, params, payload, issueId, ownership });
+
+  return { payload, binding };
 }
 
 /** Ungated read. Ownership-checked, then scrubbed. Never touches the two-key path. */
@@ -236,6 +302,7 @@ async function handleOperate(ctx, input) {
   const approval = classifyApproval(verb, operationBody);
   const request = buildRequest(verb, { params, body: operationBody });
   const config = await readConfig(ctx, companyId);
+  await assertBound(ctx, { companyId, config, verb, request, params });
 
   if (approval.approval === APPROVAL.DUAL) {
     // Do NOT execute. Record a proposal and hand back the digest a second,
@@ -278,12 +345,13 @@ async function handleOperate(ctx, input) {
     });
   }
 
-  const payload = await execute(ctx, {
+  const { payload, binding } = await execute(ctx, {
     companyId,
     config,
     issueId,
     verb,
     request,
+    params,
     approval,
     ownership,
     proposal: null,
@@ -294,6 +362,7 @@ async function handleOperate(ctx, input) {
     status: "applied",
     approval,
     verb: verb.name,
+    binding,
     result: summarizeMutation(payload, verb),
   });
 }
@@ -321,18 +390,21 @@ async function handleApprove(ctx, input) {
     now: Date.now(),
   });
 
+  const verb = resolveVerb(updated.verb);
+  const request = buildRequest(verb, { params: updated.params, body: updated.body });
+  const approval = classifyApproval(verb, updated.body);
+  const config = await readConfig(ctx, companyId);
+  // Re-checked at approval, not only at proposal: a binding can be released
+  // (the resource deleted) or an adoption withdrawn while the proposal waits.
+  await assertBound(ctx, { companyId, config, verb, request, params: updated.params });
+
   // Mark consumed BEFORE executing. If the mutation then fails, the proposal is
   // spent and must be re-proposed — deliberately chosen over the alternative,
   // where a crash between execute and mark leaves a live second key that could
   // be replayed into a second delete.
   await ctx.state.set(companyId, proposalKey(proposalId), updated);
 
-  const verb = resolveVerb(updated.verb);
-  const request = buildRequest(verb, { params: updated.params, body: updated.body });
-  const approval = classifyApproval(verb, updated.body);
-  const config = await readConfig(ctx, companyId);
-
-  const payload = await execute(ctx, {
+  const { payload, binding } = await execute(ctx, {
     companyId,
     config,
     // The audit entry is anchored to the issue the operation was PROPOSED under,
@@ -340,6 +412,7 @@ async function handleApprove(ctx, input) {
     issueId: updated.issueId ?? issueId,
     verb,
     request,
+    params: updated.params,
     approval,
     ownership,
     proposal: updated,
@@ -350,6 +423,7 @@ async function handleApprove(ctx, input) {
     status: "applied",
     approval,
     verb: verb.name,
+    binding,
     proposal: describeProposal(updated),
     result: summarizeMutation(payload, verb),
   });

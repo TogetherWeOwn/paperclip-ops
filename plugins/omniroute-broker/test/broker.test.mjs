@@ -33,7 +33,19 @@ import {
   resolveVerb,
   touchesPaidTraffic,
   assertMappingCreate,
+  BODY_KEYS,
+  COMBO_MEMBER_KEYS,
+  ENDPOINT_KEYS,
+  touchesEndpoint,
 } from "../dist/verbs.js";
+import {
+  ResourceBindingError,
+  assertResourcesBound,
+  bindingChange,
+  bindingKey,
+  extractCreatedId,
+  referencedResources,
+} from "../dist/resources.js";
 import {
   FIELD_ALLOWLIST,
   RedactionError,
@@ -792,6 +804,8 @@ test("the management base URL default targets the management port via the contai
  * the guard could have been dodged.
  * ──────────────────────────────────────────────────────────────────────────── */
 
+const MAPPING_OK_FOR = (comboId) => ({ ...MAPPING_OK, comboId });
+
 const MAPPING_OK = Object.freeze({
   pattern: "gpt-4o-mini",
   comboId: "combo-123",
@@ -948,5 +962,314 @@ test("the guard accepts all 52 real case_05be2d4e mapping patterns", { skip: exi
       enabled: true,
       description: `case_05be2d4e exact-pattern mapping -> ${mapping.comboName}`,
     });
+  }
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Provider and combo body allowlists, and the endpoint tripwire.
+ *
+ * A partial provider PUT keeps the stored upstream key, so the fields that say
+ * where a provider sends traffic decide where that key goes. They cannot sit in
+ * the single-approval class, and a credential never rides through the broker.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+test("every mutating verb has a body allowlist, and a verb without one fails closed", () => {
+  for (const [name, verb] of Object.entries(VERBS)) {
+    if (verb.method === "GET") continue;
+    const resolved = resolveVerb(name);
+    assert.doesNotThrow(
+      () => buildRequest(resolved, { params: { id: "x-1" }, body: name === "mappings.create" ? MAPPING_OK : {} }),
+      `${name} must accept its minimal body`,
+    );
+  }
+  assert.throws(
+    () => buildRequest({ name: "providers.made-up", method: "PUT", path: "/api/providers" }, { body: {} }),
+    (error) => error instanceof VerbError && error.status === 500,
+  );
+});
+
+test("a top-level baseUrl is refused on providers.update and providers.create", () => {
+  for (const name of ["providers.update", "providers.create"]) {
+    assert.throws(
+      () => buildRequest(resolveVerb(name), { params: { id: "conn-1" }, body: { baseUrl: "https://elsewhere.example" } }),
+      (error) => error instanceof VerbError && error.status === 400 && /baseUrl/.test(error.message),
+      name,
+    );
+  }
+});
+
+test("a baseUrl inside providerSpecificData requires DUAL approval", () => {
+  const verb = resolveVerb("providers.update");
+  const body = { providerSpecificData: { baseUrl: "https://elsewhere.example/v1" } };
+  assert.doesNotThrow(() => buildRequest(verb, { params: { id: "conn-1" }, body }));
+  const decision = classifyApproval(verb, body);
+  assert.equal(decision.approval, APPROVAL.DUAL);
+  assert.equal(decision.escalated, true);
+  assert.match(decision.reason, /endpoint/);
+});
+
+test("providerSpecificData is an endpoint field on its own, whatever it carries", () => {
+  for (const name of ["providers.create", "providers.update"]) {
+    for (const key of ENDPOINT_KEYS) {
+      assert.equal(classifyApproval(resolveVerb(name), { [key]: { autoSync: true } }).approval, APPROVAL.DUAL, `${name} ${key}`);
+    }
+  }
+});
+
+test("endpoint-shaped keys escalate wherever they sit", () => {
+  for (const key of ["baseUrl", "baseURL", "url", "host", "hostname", "endpoint", "proxyUrl", "apiBase", "origin"]) {
+    assert.equal(touchesEndpoint({ [key]: "x" }), true, key);
+    assert.equal(touchesEndpoint({ a: [{ b: { [key]: "x" } }] }), true, `nested ${key}`);
+  }
+  for (const key of BODY_KEYS["providers.update"].filter((k) => !ENDPOINT_KEYS.includes(k))) {
+    assert.equal(touchesEndpoint({ [key]: "x" }), false, `${key} is not an endpoint field`);
+  }
+});
+
+test("a rename alone stays single-approval", () => {
+  assert.equal(classifyApproval(resolveVerb("providers.update"), { name: "renamed" }).approval, APPROVAL.SINGLE);
+  assert.doesNotThrow(() => buildRequest(resolveVerb("providers.update"), { params: { id: "c" }, body: { name: "renamed" } }));
+});
+
+test("providers.update cannot re-type a connection", () => {
+  // Changing `provider` moves the stored key to a different upstream.
+  assert.throws(
+    () => buildRequest(resolveVerb("providers.update"), { params: { id: "c" }, body: { provider: "other" } }),
+    (error) => error instanceof VerbError && error.status === 400,
+  );
+});
+
+test("a credential field is refused on every verb, at any depth", () => {
+  const bodies = [
+    { apiKey: "sk-x" },
+    { api_key: "sk-x" },
+    { providerSpecificData: { token: "t" } },
+    { providerSpecificData: { headers: { "X-Custom": "v" } } },
+    { models: [{ model: "m", secret: "s" }] },
+  ];
+  for (const name of ["providers.create", "providers.update", "combos.create", "combos.update"]) {
+    for (const body of bodies) {
+      assert.throws(
+        () => buildRequest(resolveVerb(name), { params: { id: "c" }, body }),
+        (error) => error instanceof VerbError && error.status === 403,
+        `${name} ${JSON.stringify(body)}`,
+      );
+    }
+  }
+});
+
+test("an unknown provider or combo body key is refused, not forwarded", () => {
+  assert.throws(
+    () => buildRequest(resolveVerb("providers.create"), { body: { name: "x", sneaky: 1 } }),
+    (error) => error.status === 400 && /sneaky/.test(error.message),
+  );
+  assert.throws(
+    () => buildRequest(resolveVerb("combos.update"), { params: { id: "c" }, body: { routeTo: "x" } }),
+    (error) => error.status === 400,
+  );
+  assert.throws(
+    () =>
+      buildRequest(resolveVerb("combos.create"), {
+        body: { name: "x", models: [{ kind: "model", model: "m", upstream: "y" }] },
+      }),
+    (error) => error.status === 400 && /models\[0\]/.test(error.message),
+  );
+});
+
+test("a delete takes no body", () => {
+  for (const name of ["providers.delete", "combos.delete", "mappings.delete"]) {
+    assert.throws(
+      () => buildRequest(resolveVerb(name), { params: { id: "x" }, body: { cascade: true } }),
+      (error) => error instanceof VerbError && error.status === 400,
+      name,
+    );
+  }
+});
+
+test("a register-cliproxy-shaped combo is accepted", () => {
+  const body = {
+    name: "sub-gpt",
+    strategy: "priority",
+    models: [{ kind: "model", model: "gpt-5.4", providerId: "node-1", connectionId: "conn-1", weight: 1 }],
+  };
+  assert.deepEqual(Object.keys(body.models[0]).sort(), [...COMBO_MEMBER_KEYS].sort());
+  assert.deepEqual(buildRequest(resolveVerb("combos.create"), { body }).body, body);
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Resource binding. ownership.js proves the caller holds its own issue; this
+ * proves the id in the request belongs to the caller's company.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+const COMPANY_A = "company-aaaa";
+const COMPANY_B = "company-bbbb";
+
+/** A plugin-state stand-in keyed the way worker.js keys it: (company, key). */
+function bindingStore(entries = []) {
+  const map = new Map();
+  for (const [companyId, resource, id] of entries) {
+    map.set(`${companyId}|${bindingKey(resource, id)}`, { companyId, resource, id });
+  }
+  return {
+    map,
+    lookupFor: (companyId) => async (resource, id) => map.get(`${companyId}|${bindingKey(resource, id)}`) ?? null,
+  };
+}
+
+const bound = (store, companyId, verbName, { params = {}, body = null, adopted } = {}) =>
+  assertResourcesBound({
+    companyId,
+    verb: resolveVerb(verbName),
+    params,
+    body,
+    lookupBinding: store.lookupFor(companyId),
+    adopted,
+  });
+
+test("a foreign company's provider id is refused", async () => {
+  const store = bindingStore([[COMPANY_B, "provider", "conn-b"]]);
+  for (const name of ["providers.update", "providers.delete", "providers.set-priority"]) {
+    await assert.rejects(
+      bound(store, COMPANY_A, name, { params: { id: "conn-b" }, body: { name: "x" } }),
+      (error) => error instanceof ResourceBindingError && error.status === 403,
+      name,
+    );
+  }
+});
+
+test("a foreign company's binding is refused even if the store is not company-scoped", async () => {
+  // Defence in depth: the record's own companyId is compared, so a state backend
+  // that ignored the scope argument would still not leak a binding.
+  const record = { companyId: COMPANY_B, resource: "provider", id: "conn-b" };
+  await assert.rejects(
+    assertResourcesBound({
+      companyId: COMPANY_A,
+      verb: resolveVerb("providers.update"),
+      params: { id: "conn-b" },
+      body: {},
+      lookupBinding: async () => record,
+    }),
+    (error) => error instanceof ResourceBindingError && error.status === 403,
+  );
+});
+
+test("a foreign company's combo id is refused, and so is an id nobody bound", async () => {
+  const store = bindingStore([[COMPANY_B, "combo", "combo-b"]]);
+  for (const id of ["combo-b", "combo-never-seen"]) {
+    for (const name of ["combos.update", "combos.delete"]) {
+      await assert.rejects(bound(store, COMPANY_A, name, { params: { id } }), (error) => error.status === 403, `${name} ${id}`);
+    }
+  }
+});
+
+test("the refusal does not say whether the id exists elsewhere", async () => {
+  const store = bindingStore([[COMPANY_B, "combo", "combo-b"]]);
+  const messages = [];
+  for (const id of ["combo-b", "combo-never-seen"]) {
+    await bound(store, COMPANY_A, "combos.delete", { params: { id } }).catch((error) => messages.push(error.message.replace(id, "<id>")));
+  }
+  assert.equal(messages[0], messages[1]);
+});
+
+test("the caller's own bound ids pass", async () => {
+  const store = bindingStore([
+    [COMPANY_A, "provider", "conn-a"],
+    [COMPANY_A, "combo", "combo-a"],
+  ]);
+  await bound(store, COMPANY_A, "providers.update", { params: { id: "conn-a" }, body: { name: "x" } });
+  await bound(store, COMPANY_A, "combos.update", {
+    params: { id: "combo-a" },
+    body: { models: [{ kind: "model", model: "m", connectionId: "conn-a" }] },
+  });
+  await bound(store, COMPANY_A, "mappings.create", { body: MAPPING_OK_FOR("combo-a") });
+});
+
+test("a combo leg on a foreign connection is refused", async () => {
+  const store = bindingStore([[COMPANY_B, "provider", "conn-b"]]);
+  await assert.rejects(
+    bound(store, COMPANY_A, "combos.create", {
+      body: { name: "x", models: [{ kind: "model", model: "m", connectionId: "conn-b" }] },
+    }),
+    (error) => error.status === 403 && /models\[0\]\.connectionId/.test(error.message),
+  );
+});
+
+test("a mapping into a foreign combo is refused", async () => {
+  const store = bindingStore([[COMPANY_B, "combo", "combo-b"]]);
+  await assert.rejects(
+    bound(store, COMPANY_A, "mappings.create", { body: MAPPING_OK_FOR("combo-b") }),
+    (error) => error.status === 403 && /comboId/.test(error.message),
+  );
+});
+
+test("an operator-adopted id passes for that company only", async () => {
+  const store = bindingStore();
+  const adopted = { combo: ["sub-gpt"] };
+  await bound(store, COMPANY_A, "combos.update", { params: { id: "sub-gpt" }, adopted });
+  // Adoption is per company config: the same id without it is refused.
+  await assert.rejects(bound(store, COMPANY_B, "combos.update", { params: { id: "sub-gpt" } }), (error) => error.status === 403);
+  // An adoption is per resource class.
+  await assert.rejects(
+    bound(store, COMPANY_A, "providers.update", { params: { id: "sub-gpt" }, body: {}, adopted }),
+    (error) => error.status === 403,
+  );
+});
+
+test("reads and creates name no bound id", () => {
+  assert.deepEqual(referencedResources(resolveVerb("providers.get"), { params: { id: "x" } }), []);
+  assert.deepEqual(referencedResources(resolveVerb("providers.create"), { body: { name: "x" } }), []);
+});
+
+test("every mutating verb with an :id is bound", () => {
+  for (const [name, verb] of Object.entries(VERBS)) {
+    if (verb.method === "GET" || !(verb.params ?? []).includes("id")) continue;
+    const refs = referencedResources(resolveVerb(name), { params: { id: "x" } });
+    assert.deepEqual(refs[0], { resource: verb.resource, id: "x", field: ":id" }, name);
+  }
+});
+
+test("a create binds the returned id to the caller's company, a delete releases it", () => {
+  const now = Date.parse("2026-10-31T00:00:00Z");
+  const create = bindingChange({
+    verb: resolveVerb("providers.create"),
+    params: {},
+    payload: { connection: { id: "conn-new", apiKey: "sk-not-stored" } },
+    companyId: COMPANY_A,
+    issueId: "issue-1",
+    agentId: AGENT_A,
+    now,
+  });
+  assert.equal(create.action, "bind");
+  assert.equal(create.id, "conn-new");
+  assert.deepEqual(create.record, {
+    companyId: COMPANY_A,
+    resource: "provider",
+    id: "conn-new",
+    issueId: "issue-1",
+    agentId: AGENT_A,
+    boundAt: "2026-10-31T00:00:00.000Z",
+  });
+
+  const release = bindingChange({ verb: resolveVerb("combos.delete"), params: { id: "combo-a" }, payload: {}, companyId: COMPANY_A, now });
+  assert.deepEqual(release, { action: "release", resource: "combo", id: "combo-a" });
+
+  assert.equal(bindingChange({ verb: resolveVerb("providers.update"), params: { id: "c" }, payload: {}, companyId: COMPANY_A, now }), null);
+});
+
+test("a create whose response carries no usable id stays unbound, the closed direction", () => {
+  for (const payload of [{}, null, { id: "../x" }, { ok: true }]) {
+    const change = bindingChange({ verb: resolveVerb("combos.create"), params: {}, payload, companyId: COMPANY_A, now: 0 });
+    assert.equal(change.action, "unbound", JSON.stringify(payload));
+  }
+  assert.equal(extractCreatedId({ combo: { id: "combo-9" } }, "combo"), "combo-9");
+  assert.equal(extractCreatedId({ id: 42 }, "mapping"), "42");
+});
+
+test("the adoption config is pinned to safe ids per resource class", () => {
+  const schema = manifest.instanceConfigSchema.properties.adoptedResourceIds;
+  assert.equal(schema.additionalProperties, false);
+  assert.deepEqual(Object.keys(schema.properties).sort(), ["combo", "mapping", "provider"]);
+  for (const entry of Object.values(schema.properties)) {
+    assert.equal(entry.items.pattern, "^[A-Za-z0-9_.-]{1,128}$");
   }
 });

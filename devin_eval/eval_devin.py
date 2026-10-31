@@ -49,7 +49,7 @@ REGRESSION_OF = re.compile(r'(?im)^[ \t]*Regression-of:[ \t]*([A-Za-z0-9_.-]+/[A
 PR_URL = re.compile(r'https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)\b')
 SAME_REPO_REF = re.compile(r'(?<![\w/#])#(\d+)\b')
 ANSWER = [(re.compile(r'^Fixed in [0-9a-f]{7,40}\b', re.I), 'F'), (re.compile(r'^Rejected:\s*\S', re.I), 'R'),
-          (re.compile(r'^Duplicate of\s+\S', re.I), 'D')]
+          (re.compile(r'^Duplicate of\s+(?:https?://\S+|[\w.-]+/[\w.-]+#\d+|#\d+)', re.I), 'D')]
 GOLDEN_KINDS = ('behavior', 'test_gap', 'gate', 'safety')
 GOLDEN_FIELDS = {'id', 'kind', 'repo', 'pr', 'base_sha', 'head_sha', 'file', 'line_start', 'line_end',
                  'mechanism', 'source_findings', 'baseline_round', 'baseline_devin'}
@@ -73,9 +73,15 @@ def validate_endpoint(method, endpoint):
         raise ValueError('Only repository GET endpoints are allowed')
 
 
-def gh_get(endpoint):
+def gh_get(endpoint, missing_ok=False):
     validate_endpoint('GET', endpoint)
     p = subprocess.run(['gh', 'api', '--method', 'GET', endpoint], capture_output=True, text=True, timeout=120)
+    if p.returncode and missing_ok:
+        try:
+            if str(json.loads(p.stdout).get('status')) == '404':
+                return None
+        except (ValueError, AttributeError):
+            pass
     if p.returncode:
         # Do not serialize stderr/environment; gh can include private diagnostic text.
         raise RuntimeError('GitHub GET failed for ' + endpoint + ' (exit ' + str(p.returncode) + ')')
@@ -170,12 +176,12 @@ def build_versions_manifest(repos):
 
 
 def version_index(manifest):
-    # A blob seen at several versions (a revert) takes its latest version on main.
+    # A blob seen at several versions (a rollback) keeps its first version: pre-v2 text never qualifies.
     index = {}
     for repo, versions in manifest['repos'].items():
         for v in versions:
             if v['blob'] != 'none':
-                index[(repo, v['blob'])] = v
+                index.setdefault((repo, v['blob']), v)
     return index
 
 
@@ -456,6 +462,11 @@ def post_v2_heads(prs):
             for r in p['reviews'] if r['bot'] == 'devin' and r.get('review_md_qualifies')}
 
 
+def canonical_repo(name, repos):
+    """GitHub repository names are case-insensitive; map a reference onto the scoped spelling."""
+    return next((r for r in repos if r.lower() == name.lower()), name)
+
+
 def minimal_pr(pr):
     return dict(number=pr['number'], html_url=pr.get('html_url'), state=pr.get('state'), merged_at=pr.get('merged_at'),
                 head_sha=(pr.get('head') or {}).get('sha'), merge_commit_sha=pr.get('merge_commit_sha'),
@@ -488,7 +499,7 @@ def collect_escapes(repos, window_start, window_end):
             pulls = gh_get(f'/repos/{repo}/pulls?state=all&sort=updated&direction=desc&per_page=100&page={page}')
             for p in pulls:
                 if p['updated_at'] >= window_start:
-                    refs = [dict(repo=r, number=int(n)) for r, n in REGRESSION_OF.findall(p.get('body') or '')]
+                    refs = [dict(repo=canonical_repo(r, repos), number=int(n)) for r, n in REGRESSION_OF.findall(p.get('body') or '')]
                     if refs:
                         out['sources'].append(dict(source='regression_of', repo=repo, evidence_pr=p['number'], at=p['updated_at'],
                                                    introducing=refs))
@@ -501,8 +512,10 @@ def collect_escapes(repos, window_start, window_end):
                 continue
             linked = []
             for ref in issue_pr_refs(repo, issue.get('body')):
+                ref['repo'] = canonical_repo(ref['repo'], repos)
                 if ref['repo'] in repos and ref['via'] == 'same_repo_ref':
-                    if 'pull_request' not in gh_get(f"/repos/{ref['repo']}/issues/{ref['number']}"):
+                    target = gh_get(f"/repos/{ref['repo']}/issues/{ref['number']}", missing_ok=True)
+                    if target is None or 'pull_request' not in target:
                         continue
                 linked.append(dict(repo=ref['repo'], number=ref['number'], via=ref['via']))
             out['sources'].append(dict(source='regression_issue', repo=repo, evidence_issue=issue['number'], at=issue.get('updated_at'),
@@ -511,6 +524,11 @@ def collect_escapes(repos, window_start, window_end):
         for ref in source['introducing']:
             key = f"{ref['repo']}#{ref['number']}"
             if key in out['introducing'] or ref['repo'] not in repos:
+                continue
+            # A reference may name an issue or a missing number; record it rather than abort the round.
+            target = gh_get(f"/repos/{ref['repo']}/issues/{ref['number']}", missing_ok=True)
+            if target is None or 'pull_request' not in target:
+                out['introducing'][key] = dict(pr=None, statuses=[], unresolved='not_found' if target is None else 'not_a_pull_request')
                 continue
             pr = gh_get(f"/repos/{ref['repo']}/pulls/{ref['number']}")
             out['introducing'][key] = dict(pr=minimal_pr(pr), statuses=pages(f"/repos/{ref['repo']}/commits/{pr['head']['sha']}/statuses"))
@@ -714,6 +732,8 @@ def escape_report(escapes):
         row = dict(introducing_pr=key, evidence=sorted(candidates[key], key=lambda e: json.dumps(e, sort_keys=True)))
         if data is None:
             row.update(in_scope=False, merged=None, devin_completed_at_merge_head=None)
+        elif data.get('pr') is None:
+            row.update(in_scope=True, unresolved=data['unresolved'], merged=None, devin_completed_at_merge_head=None)
         else:
             pr = data['pr']
             merged_at = pr.get('merged_at')
@@ -779,23 +799,23 @@ def devin_status_signals(prs, escapes):
     seen, flags, in_progress = set(), [], 0
     sources = [(p['repo'], sha, ss) for p in prs for sha, ss in p['raw'].get('statuses', {}).items()]
     if escapes:
-        sources += [(k.split('#')[0], v['pr']['head_sha'], v['statuses']) for k, v in escapes['introducing'].items()]
+        sources += [(k.split('#')[0], v['pr']['head_sha'], v['statuses']) for k, v in escapes['introducing'].items() if v.get('pr')]
     for repo, sha, statuses in sources:
         devin = [s for s in statuses if s.get('context') == 'Devin Review' and BOT_LOGINS.get((s.get('creator') or {}).get('login')) == 'devin']
-        terminal = any(s.get('state') != 'pending' for s in devin)
+        terminal_times = [s.get('created_at') or '' for s in devin if s.get('state') != 'pending']
         for s in devin:
             identity = (repo, sha, s.get('id'), s.get('created_at'))
             if identity in seen or devin_completed(s):
                 continue
             seen.add(identity)
-            if s.get('state') == 'pending' and terminal:
+            if s.get('state') == 'pending' and any(t >= (s.get('created_at') or '') for t in terminal_times):
                 in_progress += 1
                 continue
             flags.append(dict(repo=repo, sha=sha, state=s.get('state'), description=s.get('description'), at=s.get('created_at'),
                               url=s.get('target_url')))
     flags.sort(key=lambda f: (f['repo'], f['sha'], f['at'] or ''))
     return dict(flags=flags, flagged=len(flags), superseded_in_progress=in_progress,
-                rule='Flag every Devin Review status whose description does not start with "Completed analysis", except a pending status on a SHA that also has a terminal status.')
+                rule='Flag every Devin Review status whose description does not start with "Completed analysis", except a pending status followed by a terminal status on the same SHA.')
 
 
 def load_optional(path, default):
@@ -965,7 +985,8 @@ def validate_golden(cases):
     return cases
 
 
-def golden_score(cases, findings, window):
+def golden_score(cases, findings, window, reviewed_heads):
+    """reviewed_heads: {(repo, sha)} with a Devin review in the snapshot. A head without one is unobserved, not missed."""
     devin = sorted((f for f in findings if f['bot'] == 'devin'), key=lambda f: f['key'])
     heads = {(c['repo'], c['head_sha']) for c in cases}
     matched, rows = set(), []
@@ -973,21 +994,26 @@ def golden_score(cases, findings, window):
         hits = [f['key'] for f in devin if f['repo'] == c['repo'] and f['sha'] == c['head_sha'] and f.get('path') == c['file']
                 and isinstance(f.get('line'), int) and c['line_start'] - window <= f['line'] <= c['line_end'] + window]
         matched.update(hits)
+        observed = bool(hits) or (c['repo'], c['head_sha']) in reviewed_heads
         rows.append(dict(id=c['id'], kind=c['kind'], caught=bool(hits), matched_findings=hits,
+                         outcome='caught' if hits else 'missed' if observed else 'unobserved',
                          head_had_devin_findings=any(f['repo'] == c['repo'] and f['sha'] == c['head_sha'] for f in devin)))
     unmatched = [dict(key=f['key'], repo=f['repo'], pr=f['pr'], sha=f['sha'], path=f.get('path'), line=f.get('line'), url=f['url'],
                       reason='Devin finding on a golden head outside every golden window; adjudicate as a new true or false finding.')
                  for f in devin if (f['repo'], f['sha']) in heads and f['key'] not in matched]
-    return dict(window_lines=window, cases=rows, caught=sum(r['caught'] for r in rows), total=len(rows),
-                caught_by_kind={k: sum(r['caught'] for r in rows if r['kind'] == k) for k in GOLDEN_KINDS},
+    observed = [r for r in rows if r['outcome'] != 'unobserved']
+    return dict(window_lines=window, cases=rows, caught=sum(r['caught'] for r in rows), observed=len(observed), total=len(rows),
+                unobserved=[r['id'] for r in rows if r['outcome'] == 'unobserved'],
+                caught_by_kind={k: [sum(r['caught'] for r in observed if r['kind'] == k), sum(r['kind'] == k for r in observed)] for k in GOLDEN_KINDS},
                 adjudication_queue=unmatched,
-                note='A match is a Devin finding at the exact golden head, same file, line within the window. A match is a catch candidate until adjudicated.')
+                note='A match is a Devin finding at the exact golden head, same file, line within the window, and is a catch candidate until adjudicated. caught_by_kind is [caught, observed]. A case whose head has no Devin review in this snapshot is unobserved, never missed.')
 
 
 def golden(round_name, workdir, golden_path, window):
     cases = validate_golden(json.loads(golden_path.read_text()))
     _, prs = normalize(workdir / 'snapshots' / round_name)
-    result = golden_score(cases, [f for p in prs for f in p['findings']], window)
+    reviewed = {(p['repo'], r['sha']) for p in prs for r in p['reviews'] if r['bot'] == 'devin'}
+    result = golden_score(cases, [f for p in prs for f in p['findings']], window, reviewed)
     result['round'] = round_name
     result['golden_sha256'] = hashlib.sha256(golden_path.read_bytes()).hexdigest()
     write_json(workdir / 'out' / round_name / 'golden-score.json', result)
@@ -1039,7 +1065,7 @@ def main(argv=None):
                               pending_adjudications=result['pending_adjudications']), sort_keys=True))
     else:
         result = golden(args.round, workdir, args.golden, args.window)
-        print(json.dumps(dict(round=args.round, caught=result['caught'], total=result['total'],
+        print(json.dumps(dict(round=args.round, caught=result['caught'], observed=result['observed'], total=result['total'],
                               queued=len(result['adjudication_queue'])), sort_keys=True))
 
 

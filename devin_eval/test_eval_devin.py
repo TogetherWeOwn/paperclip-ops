@@ -144,6 +144,17 @@ class CarriedOverTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][:4], ['gh', 'api', '--method', 'GET'])
 
+    def test_missing_ok_returns_none_only_for_not_found(self):
+        def run(stdout):
+            return lambda argv, **_: subprocess.CompletedProcess(argv, 1, stdout=stdout, stderr='gh: error')
+        with patch.object(m.subprocess, 'run', side_effect=run('{"message":"Not Found","status":"404"}')):
+            self.assertIsNone(m.gh_get('/repos/o/r/issues/9', missing_ok=True))
+            with self.assertRaises(RuntimeError):
+                m.gh_get('/repos/o/r/issues/9')
+        with patch.object(m.subprocess, 'run', side_effect=run('{"message":"Server Error","status":"502"}')):
+            with self.assertRaises(RuntimeError):
+                m.gh_get('/repos/o/r/issues/9', missing_ok=True)
+
     def test_devin_summary_and_inline_are_one_finding(self):
         # Counting the summary as well as its inline copy inflates precision denominators.
         r = {'id': 10, 'commit_id': 'a'*40, 'submitted_at': '2026-10-30T01:00:00Z', 'user': DEVIN, 'html_url': 'review',
@@ -343,6 +354,12 @@ class VersionManifestTests(unittest.TestCase):
         self.assertFalse(m.version_tag(repo, 'none', index)['review_md_qualifies'])
         self.assertFalse(m.version_tag('TogetherWeOwn/kofra', SHA['b'], index)['review_md_qualifies'])
 
+    def test_rollback_to_pre_v2_text_never_qualifies(self):
+        entries = [dict(commit=SHA['1'], blob=SHA['a']), dict(commit=SHA['2'], blob=SHA['b']), dict(commit=SHA['3'], blob=SHA['a'])]
+        manifest = dict(repos={'o/r': m.number_versions('o/r', entries, SHA['2'])})
+        tag = m.version_tag('o/r', SHA['a'], m.version_index(manifest))
+        self.assertEqual(tag, dict(review_md_version='r@v1:aaaaaaaa', review_md_qualifies=False))
+
     def test_post_v2_gate_excludes_review_md_prs_and_pre_v2_heads(self):
         def p(number, files, qualifies):
             return {'repo': 'o/r', 'number': number, 'raw': {'files': files},
@@ -386,22 +403,25 @@ class EscapeTests(unittest.TestCase):
                    'merge_commit_sha': SHA['8'], 'html_url': 'pr7', 'base': {'repo': {'full_name': repo}}},
                9: {'number': 9, 'state': 'closed', 'merged_at': '2026-10-21T10:00:00Z', 'head': {'sha': SHA['9']},
                    'merge_commit_sha': SHA['e'], 'html_url': 'pr9', 'base': {'repo': {'full_name': repo}}}}
-        def get(endpoint):
+        def get(endpoint, missing_ok=False):
             if endpoint.startswith(f'/repos/{repo}/commits?sha=main'):
                 return [{'sha': SHA['d'], 'commit': {'message': f'Revert "x"\n\nThis reverts commit {SHA["8"]}.',
                                                      'committer': {'date': '2026-10-25T00:00:00Z'}}}]
             if endpoint == f'/repos/{repo}/commits/{SHA["8"]}/pulls':
                 return [prs[7]]
             if endpoint.startswith(f'/repos/{repo}/pulls?state=all'):
-                return [{'number': 12, 'updated_at': '2026-10-26T00:00:00Z', 'body': 'Fix.\n\nRegression-of: TogetherWeOwn/kofra#9\n'},
+                return [{'number': 12, 'updated_at': '2026-10-26T00:00:00Z', 'body': 'Fix.\n\nRegression-of: togetherweown/KOFRA#9\nRegression-of: TogetherWeOwn/kofra#41\nRegression-of: TogetherWeOwn/kofra#77\n'},
                         {'number': 13, 'updated_at': '2026-10-26T00:00:00Z', 'body': 'mentions Regression-of: TogetherWeOwn/kofra#5 inline'}]
             if endpoint.startswith(f'/repos/{repo}/issues?labels=regression'):
                 return [{'number': 40, 'updated_at': '2026-10-27T00:00:00Z', 'body': 'Broke after #7, see #41 and https://github.com/o/elsewhere/pull/3'},
                         {'number': 42, 'pull_request': {}, 'body': 'a PR, not an issue'}]
-            if endpoint == f'/repos/{repo}/issues/7':
+            if endpoint in (f'/repos/{repo}/issues/7', f'/repos/{repo}/issues/9'):
                 return {'number': 7, 'pull_request': {}}
             if endpoint == f'/repos/{repo}/issues/41':
                 return {'number': 41}
+            if endpoint == f'/repos/{repo}/issues/77':
+                self.assertTrue(missing_ok)
+                return None
             if endpoint.startswith(f'/repos/{repo}/pulls/'):
                 return prs[int(endpoint.rsplit('/', 1)[1])]
             if endpoint.startswith(f'/repos/{repo}/commits/{SHA["7"]}/statuses'):
@@ -425,6 +445,11 @@ class EscapeTests(unittest.TestCase):
         # Devin finished after the merge: the merge head was not Devin-passed.
         self.assertFalse(rows[repo + '#9']['devin_completed_at_merge_head'])
         self.assertFalse(rows['o/elsewhere#3']['in_scope'])
+        # A Regression-of line naming an issue or a missing number is recorded, never fatal.
+        self.assertEqual(rows[repo + '#41']['unresolved'], 'not_a_pull_request')
+        self.assertEqual(rows[repo + '#77']['unresolved'], 'not_found')
+        # A lowercase owner/repo reference still resolves to the scoped repository.
+        self.assertNotIn('togetherweown/KOFRA#9', rows)
         self.assertEqual(len(rows[repo + '#7']['evidence']), 2)
         self.assertEqual((report['devin_passed_candidates'], report['devin_not_completed_candidates']), (1, 1))
 
@@ -468,6 +493,9 @@ class ThreadAnswerTests(unittest.TestCase):
         self.assertIsNone(m.thread_answer('Thanks!\nFixed in 1a2b3c4'))
         self.assertIsNone(m.thread_answer('Rejected:'))
         self.assertIsNone(m.thread_answer('Fixed in main'))
+        self.assertIsNone(m.thread_answer('Duplicate of TBD'))
+        self.assertEqual(m.thread_answer('Duplicate of #12'), 'D')
+        self.assertEqual(m.thread_answer('Duplicate of o/r#12'), 'D')
 
     def test_counts_only_human_answers_before_merge(self):
         finding = dict(bot='devin', inline_id=10, key='k1', url='u')
@@ -553,11 +581,21 @@ class GoldenTests(unittest.TestCase):
         findings = [f('hit', case['file'], case['line_end'] + 5), f('far', case['file'], case['line_end'] + 6),
                     f('other-file', 'x', case['line_start']), f('other-head', case['file'], case['line_start'], sha=SHA['0']),
                     dict(f('paperclip', case['file'], case['line_start']), bot='paperclip')]
-        result = m.golden_score(self.cases(), findings, 5)
+        result = m.golden_score(self.cases(), findings, 5, {(case['repo'], case['head_sha'])})
         row = next(r for r in result['cases'] if r['id'] == case['id'])
         self.assertEqual(row['matched_findings'], ['hit'])
         self.assertEqual(sorted(q['key'] for q in result['adjudication_queue']), ['far', 'other-file'])
-        self.assertEqual(result['caught'], 1)
+        self.assertEqual((result['caught'], result['observed']), (1, 1))
+
+    def test_unreviewed_golden_head_is_unobserved_not_missed(self):
+        cases = self.cases()
+        reviewed = {(cases[1]['repo'], cases[1]['head_sha'])}
+        result = m.golden_score(cases, [], 5, reviewed)
+        outcomes = {r['id']: r['outcome'] for r in result['cases']}
+        self.assertEqual(outcomes[cases[1]['id']], 'missed')
+        self.assertEqual(outcomes[cases[0]['id']], 'unobserved')
+        self.assertEqual((result['observed'], len(result['unobserved'])), (1, 7))
+        self.assertEqual(sum(observed for _, observed in result['caught_by_kind'].values()), 1)
 
 
 class StatusSignalTests(unittest.TestCase):
@@ -567,12 +605,14 @@ class StatusSignalTests(unittest.TestCase):
         statuses = {SHA['1']: [status('pending', 'Analyzing your changes', '2026-10-30T10:00:00Z', ident=1),
                                status('success', 'Completed analysis in 1m', '2026-10-30T10:01:00Z', ident=2)],
                     SHA['2']: [status('error', 'Usage limit reached', '2026-10-30T10:00:00Z', ident=3)],
+                    SHA['4']: [status('pending', 'Analyzing your changes', '2026-10-30T11:00:00Z', ident=6),
+                               status('success', 'Completed analysis in 1m', '2026-10-30T10:01:00Z', ident=7)],
                     SHA['3']: [status('pending', 'Analyzing your changes', '2026-10-30T10:00:00Z', ident=4),
                                status('success', 'Skipped', '2026-10-30T10:00:00Z', context='Other', ident=5)]}
         prs = [dict(repo='o/r', raw={'statuses': statuses})]
         result = m.devin_status_signals(prs, None)
         self.assertEqual([(f['sha'], f['description']) for f in result['flags']],
-                         [(SHA['2'], 'Usage limit reached'), (SHA['3'], 'Analyzing your changes')])
+                         [(SHA['2'], 'Usage limit reached'), (SHA['3'], 'Analyzing your changes'), (SHA['4'], 'Analyzing your changes')])
         self.assertEqual(result['superseded_in_progress'], 1)
 
 

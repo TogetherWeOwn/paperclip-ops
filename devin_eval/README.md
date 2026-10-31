@@ -13,12 +13,17 @@ outputs go on the round card, never into git.
 
 ```sh
 cd devin_eval
-python3 -I eval_devin.py collect --workdir "$W" --round r2 --since 2026-11-06T00:00:00Z
+python3 -I eval_devin.py collect --workdir "$W" --round r2 --since "$PREVIOUS_ROUND_STARTED_AT"
 python3 -I eval_devin.py score   --workdir "$W" --round r2 --prior-metrics "$W/out/r1/metrics.json"
 python3 -I eval_devin.py golden  --workdir "$W" --round r2
 # A snapshot collected before version manifests existed:
 python3 -I eval_devin.py freeze-manifest --workdir "$W" --round r1-early
 ```
+
+`--since` must be in the past. Use the previous round's `snapshot_started_at`
+(from its `metrics.json`), so consecutive rounds cover every review exactly once.
+For the first round, use the moment the change under test landed on main. A
+cutoff later than every review collects an empty round.
 
 Layout of `$W`:
 
@@ -70,6 +75,11 @@ Tests: `python3 -B -m unittest -v test_eval_devin` (stubbed client, no network).
   repositories, with 2 caught and 6 missed.
   - `golden` matches Devin findings at the exact golden head by file, with a
     line window (default ±5).
+  - Score it on a snapshot that contains the golden heads: the baseline
+    snapshots, or a replay round collected with a `--since` earlier than the
+    golden PRs' Devin reviews.
+  - A case whose head has no Devin review in the snapshot is reported as
+    `unobserved`, never `missed`. `caught_by_kind` is `[caught, observed]`.
   - Unmatched Devin findings on golden heads go to the adjudication queue.
   - Mechanisms are summaries only, with no exploit detail.
 - **Status signals.** The harness flags every `Devin Review` status whose

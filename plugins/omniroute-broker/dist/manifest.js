@@ -172,6 +172,27 @@ export const manifest = {
         minimum: 1000,
         maximum: 120000,
       },
+      adoptedResourceIds: {
+        // The operator path for resources that predate the broker (apply.sh).
+        // Config is per company, so an id listed here is bound to that company
+        // only. See resources.js.
+        type: "object",
+        title: "Resources this company may mutate that it did not create through the broker",
+        description:
+          "Provider (connection), combo and mapping ids created outside the broker that this company owns. Every other id the broker did not create for this company is refused.",
+        additionalProperties: false,
+        properties: Object.fromEntries(
+          ["provider", "combo", "mapping"].map((resource) => [
+            resource,
+            {
+              type: "array",
+              maxItems: 500,
+              uniqueItems: true,
+              items: { type: "string", pattern: "^[A-Za-z0-9_.-]{1,128}$" },
+            },
+          ]),
+        ),
+      },
     },
   },
 };

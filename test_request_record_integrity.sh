@@ -237,7 +237,10 @@ reset
 "$Q" submit --requester MGR --template E0_SPECIALIST --title "IRQ Visible" >/dev/null 2>&1
 REQ="$(last_sub)"
 STUBBIN="$TMP/nobin"; mkdir -p "$STUBBIN"
-for b in bash jq sed awk grep cut date cat wc sort head tail tr printf mktemp rm; do
+# dirname resolves the script's own directory (HERE). Bash before 5.3 treated
+# the empty `cd ""` left by a missing dirname as a no-op, so this only passed by
+# accident from the repo root; bash 5.3 (Ubuntu 26.04) refuses it.
+for b in bash jq sed awk grep cut date cat wc sort head tail tr printf mktemp rm dirname; do
   p="$(command -v "$b" 2>/dev/null)" && ln -sf "$p" "$STUBBIN/$b"
 done
 if grep -q "$REQ" <<<"$(PATH="$STUBBIN" "$Q" list --status pending 2>/dev/null)"; then

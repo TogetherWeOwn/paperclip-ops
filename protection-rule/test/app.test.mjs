@@ -78,7 +78,7 @@ function shaPayload(overrides = {}) {
 
 // Stub transport. `githubMode` scripts the GitHub half, `boardComments` the
 // board half; every callback post is recorded in `posts`. The JWT mint is
-// stubbed per-harness (its real path is covered by `mint` tests against a
+// stubbed per-harness (its real path is covered by test/github.test.mjs against a
 // generated key): the stub answers with a token except in `mint-fails`, where
 // it throws the way the real minter does on a bad key or a refused mint.
 function harness({ githubMode = 'happy', boardComments = [], boardCommentsByIssue = null, appOverrides = {} } = {}) {
@@ -484,4 +484,112 @@ test('unknown path is 404', async () => {
   const { app } = harness()
   const res = await app(new Request('https://protection-rule.example.invalid/elsewhere'))
   assert.equal(res.status, 404)
+})
+
+// Receiver refusal rows. Each one must answer with the HTTP error before any
+// credential is minted or any verdict is posted: a half-configured receiver,
+// an oversized body that lies about its length, a signed envelope GitHub
+// would never send, or a payload that names no run all stop at the door.
+test('half-configured receiver is 503 and reaches no transport', async () => {
+  const gaps = {
+    appId: { appId: '' },
+    appPrivateKey: { appPrivateKey: 'not-a-key' },
+    boardToken: { boardToken: '' },
+    boardOrigin: { boardOrigin: '' },
+  }
+  for (const [name, appOverrides] of Object.entries(gaps)) {
+    const { app, posts, calls, requests } = harness({ appOverrides, boardComments: [goComment(HASH)] })
+    const res = await delivery(app, payload())
+    assert.equal(res.status, 503, name)
+    assert.equal(posts.length, 0, name)
+    assert.equal(calls.mint, 0, name)
+    assert.equal(requests.length, 0, name)
+  }
+})
+
+test('oversized body without a declared length is still 413', async () => {
+  const { app, posts, calls } = harness()
+  const big = 'x'.repeat(MAX_ACCEPTED_BODY_BYTES + 1)
+  const headers = new Headers({
+    'content-type': 'application/json',
+    'x-github-event': EVENT,
+    'x-github-delivery': 'd-big',
+    'x-hub-signature-256': await sign(SECRET, big),
+  })
+  const res = await app(new Request('https://protection-rule.example.invalid/protection-rule', { method: 'POST', headers, body: big }))
+  assert.equal(res.status, 413)
+  assert.equal(posts.length, 0)
+  assert.equal(calls.mint, 0)
+})
+
+test('signed delivery missing its event or delivery header is 400 and posts nothing', async () => {
+  for (const drop of ['x-github-event', 'x-github-delivery']) {
+    const { app, posts, calls } = harness({ boardComments: [goComment(HASH)] })
+    const text = JSON.stringify(payload())
+    const headers = new Headers({
+      'content-type': 'application/json',
+      'x-github-event': EVENT,
+      'x-github-delivery': 'd-1',
+      'x-hub-signature-256': await sign(SECRET, text),
+    })
+    headers.delete(drop)
+    const res = await app(new Request('https://protection-rule.example.invalid/protection-rule', { method: 'POST', headers, body: text }))
+    assert.equal(res.status, 400, drop)
+    assert.equal(posts.length, 0, drop)
+    assert.equal(calls.mint, 0, drop)
+  }
+})
+
+test('signed but unparseable body is 400 and posts nothing', async () => {
+  for (const text of ['{not json', '', 'null', '"a string"']) {
+    const { app, posts, calls } = harness({ boardComments: [goComment(HASH)] })
+    const res = await delivery(app, text)
+    assert.equal(res.status, 400, JSON.stringify(text))
+    assert.equal(posts.length, 0, JSON.stringify(text))
+    assert.equal(calls.mint, 0, JSON.stringify(text))
+  }
+})
+
+test('a payload that names no reviewable run is 400 before any mint', async () => {
+  const cases = {
+    'run id zero': payload({ deployment: { run_id: 0, sha: HEAD, environment: PLAN_ENVIRONMENT } }),
+    'run id as string': payload({ deployment: { run_id: String(RUN_ID), sha: HEAD, environment: PLAN_ENVIRONMENT } }),
+    'no deployment': payload({ deployment: null }),
+    'no callback url': payload({ deployment_callback_url: '' }),
+    'no installation': payload({ installation: null }),
+    'installation id as string': payload({ installation: { id: String(INSTALLATION_ID) } }),
+  }
+  for (const [name, body] of Object.entries(cases)) {
+    const { app, posts, calls } = await approvedHarness()
+    const res = await delivery(app, body)
+    assert.equal(res.status, 400, name)
+    assert.equal(posts.length, 0, name)
+    assert.equal(calls.mint, 0, name)
+  }
+})
+
+test('fast-path rejection with no installation to answer as is 400, not a verdict', async () => {
+  const { app, posts, calls } = harness({ boardComments: [goComment(HASH)] })
+  const res = await delivery(app, payload({ installation: null }), { event: 'push' })
+  assert.equal(res.status, 400)
+  assert.equal(posts.length, 0)
+  assert.equal(calls.mint, 0)
+})
+
+// The verdict GitHub holds and the verdict we report must never disagree: an
+// approval whose callback post fails is reported as undelivered (502), never
+// as a delivered approval.
+test('approved verdict whose callback post fails is 502 and reported undelivered', async () => {
+  const { app, posts, calls, fixture } = await approvedHarness({ githubMode: 'callback-fails' })
+  fixture.claimZip = new Uint8Array(readFileSync(new URL('./fixtures/staging-migrate-apply-claim.upload-artifact.zip', import.meta.url)))
+  fixture.planZip = new Uint8Array(readFileSync(new URL('./fixtures/staging-migrate-plan.upload-artifact.zip', import.meta.url)))
+  const res = await delivery(app, payload())
+  assert.equal(res.status, 502)
+  const body = await res.json()
+  assert.equal(body.ok, false)
+  assert.equal(body.state, 'approved')
+  assert.equal(body.reason, REASON.APPROVED)
+  assert.equal(body.callback_posted, false)
+  assert.deepEqual(posts.map((p) => p.state), ['approved'])
+  assert.equal(calls.mint, 1) // no second identity is tried after the failed post
 })

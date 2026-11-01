@@ -130,6 +130,10 @@ def sandbox(readable):
 
     class PathRule(ctypes.Structure):
         _pack_ = 1
+        # Python 3.14 warns about _pack_ without an explicit layout, and the
+        # warning lands in the sandboxed child's stderr. "ms" is the layout
+        # _pack_ already produced; older Pythons ignore _layout_.
+        _layout_ = "ms"
         _fields_ = [("allowed_access", ctypes.c_uint64), ("parent_fd", ctypes.c_int)]
 
     def allow(path, access):

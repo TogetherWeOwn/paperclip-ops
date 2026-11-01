@@ -353,7 +353,8 @@
     "AX metric contract suites:1",
     "scanner finding adapter suite:1",
     "shell-substitution JSON acceptance:1",
-    "public-comment hygiene JSON suite:1"
+    "public-comment hygiene JSON suite:1",
+    "devin eval harness suite:1"
   ],
   "retained": [
     {
@@ -2000,6 +2001,11 @@
       "name": "public-comment hygiene JSON suite",
       "definition_sha256": "60125ad01be83d0c4323b4495f6a94511b5edc43583305b1bb20a1987ede42bf",
       "id": "public-comment hygiene JSON suite:1"
+    },
+    {
+      "name": "devin eval harness suite",
+      "definition_sha256": "f74e0c807727be53f65ba3a056022e6401624441511204c5422593563eb4f590",
+      "id": "devin eval harness suite:1"
     }
   ],
   "removed": [

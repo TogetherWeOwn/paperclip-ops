@@ -26,7 +26,8 @@
 // or swallow author text. A snapshot without a body string is undecidable, not
 // "no block". A held PR keeps its block maintained but takes no transition:
 // arming auto-merge under a hold would fight the disarm duty, which would
-// immediately disarm it again.
+// immediately disarm it again. A PR whose head is not provably in the same
+// repository (snapshot.crossRepository !== false) takes no write at all.
 
 import { snapshotFailureCode, writeFailureCode } from './github-adapter.js'
 import {
@@ -317,10 +318,17 @@ export function createReconciler({ github, policy, nowMs = () => Date.now() }) {
         counters.noOp++
         continue
       }
-      if (!enabled.has(ref.repository)) {
+      // Same-repository heads only. Any pass, whatever triggered it, scans
+      // every open PR, so the fork guard binds to each PR's own head rather
+      // than the triggering event. A fork head (true) or unknown provenance
+      // (anything but false) gets no write of any kind, body included.
+      const readOnly = snapshot.crossRepository === false ? null
+        : snapshot.crossRepository === true ? 'cross-repository' : 'head-repository-unknown'
+      if (!enabled.has(ref.repository) || readOnly !== null) {
+        const reason = readOnly === null ? decision.reason : `${decision.reason}+${readOnly}`
         records.push({ ...ref, headSha: snapshot.headSha, decision: 'would-act',
-          actions: [...decision.actions], reason: decision.reason,
-          log: logLine(ref.repository, ref.number, snapshot.headSha, 'would-act', decision.reason) })
+          actions: [...decision.actions], reason,
+          log: logLine(ref.repository, ref.number, snapshot.headSha, 'would-act', reason) })
         counters.wouldAct++
         continue
       }

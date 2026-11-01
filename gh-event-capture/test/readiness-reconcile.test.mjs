@@ -28,7 +28,7 @@ function greenChecks() {
 
 function snapshot(number, over = {}) {
   return { repository: repo, number, headSha: HEAD, baseRef: 'main',
-    state: 'open', merged: false, draft: true, autoMerge: false,
+    state: 'open', merged: false, draft: true, autoMerge: false, crossRepository: false,
     body: '## What Changed\n\n- a fix\n', labels: [],
     mergeableState: 'clean', reviewDecision: null,
     headPushedMs: 1, nowMs: NOW, checks: greenChecks(), ...over }
@@ -305,6 +305,74 @@ test('flag is per repo: enabled reconciles while another only logs', async () =>
     .runReconcile({ references: [{ repository: repo, number: 1 }, { repository: other, number: 7 }], nowMs: NOW })
   assert.deepEqual(records.map((r) => [r.number, r.decision]), [[1, 'acted'], [7, 'would-act']])
   assert.deepEqual(calls.filter(([op]) => op === 'update-body').map((c) => c[1]), [repo])
+})
+
+// --- head provenance: same-repository heads only -----------------------------
+
+const armable = (number, over = {}) => snapshot(number, { draft: false, autoMerge: false,
+  checks: [...greenChecks(),
+    { name: 'suites', status: 'completed', conclusion: 'success', completedMs: 1 },
+    { name: 'Paperclip Review', status: 'completed', conclusion: 'success', completedMs: 1 }],
+  ...over })
+const WRITES = ['update-body', 'mark-ready', 'convert-to-draft', 'enable-automerge']
+
+test('a cross-repository PR is never armed, even with the repo enabled and every gate green', async () => {
+  const snapshots = new Map([[`${repo}#20`, armable(20, { crossRepository: true })]])
+  const { github, calls } = doubles(snapshots)
+  const { records, counters } = await createReconciler({ github, policy: on })
+    .runReconcile({ references: [{ repository: repo, number: 20 }], nowMs: NOW })
+  assert.equal(records[0].decision, 'would-act')
+  assert.ok(records[0].actions.includes('enable-automerge'), 'the gate itself is green; only provenance refuses')
+  assert.match(records[0].reason, /\+cross-repository$/)
+  assert.match(records[0].log, new RegExp(`^readiness ${repo}#20@${HEAD}: would-act \\(.*\\+cross-repository\\)$`))
+  assert.deepEqual(calls.map(ops), ['read-snapshot', 'read-rulesets'])
+  assert.deepEqual([counters.wouldAct, counters.acted, counters.enabledAutomerge, counters.errors], [1, 0, 0, 0])
+})
+
+test('a cross-repository PR takes no write of any kind: body, mark-ready, convert-to-draft or arm', async () => {
+  const red = [{ name: 'ci-ok', status: 'completed', conclusion: 'failure', completedMs: 1 },
+    { name: 'gitleaks', status: 'completed', conclusion: 'success', completedMs: 1 }]
+  const cases = [
+    ['mark-ready', snapshot(21, { crossRepository: true })],
+    ['convert-to-draft', snapshot(22, { crossRepository: true, draft: false, checks: red })],
+    ['enable-automerge', armable(23, { crossRepository: true })],
+  ]
+  for (const [expected, snap] of cases) {
+    const { github, calls } = doubles(new Map([[`${repo}#${snap.number}`, snap]]))
+    const { records } = await createReconciler({ github, policy: on })
+      .runReconcile({ references: [{ repository: repo, number: snap.number }], nowMs: NOW })
+    assert.equal(records[0].decision, 'would-act', expected)
+    assert.ok(records[0].actions.includes('update-body') && records[0].actions.includes(expected), expected)
+    assert.deepEqual(calls.filter(([op]) => WRITES.includes(op)), [], `${expected}: no write reached GitHub`)
+  }
+})
+
+test('missing or malformed head provenance fails closed as would-act', async () => {
+  const withoutField = armable(30)
+  delete withoutField.crossRepository
+  for (const snap of [withoutField, armable(30, { crossRepository: null }),
+    armable(30, { crossRepository: 'false' }), armable(30, { crossRepository: 0 })]) {
+    const { github, calls } = doubles(new Map([[`${repo}#30`, snap]]))
+    const { records, counters } = await createReconciler({ github, policy: on })
+      .runReconcile({ references: [{ repository: repo, number: 30 }], nowMs: NOW })
+    assert.equal(records[0].decision, 'would-act')
+    assert.match(records[0].reason, /\+head-repository-unknown$/)
+    assert.deepEqual(calls.filter(([op]) => WRITES.includes(op)), [])
+    assert.equal(counters.enabledAutomerge, 0)
+  }
+})
+
+test('one pass over mixed heads arms the same-repository PR and refuses the cross-repository one', async () => {
+  const snapshots = new Map([
+    [`${repo}#40`, armable(40, { crossRepository: true })],
+    [`${repo}#41`, armable(41)],
+  ])
+  const { github, calls } = doubles(snapshots)
+  const { records } = await createReconciler({ github, policy: on })
+    .runReconcile({ references: [{ repository: repo, number: 40 }, { repository: repo, number: 41 }], nowMs: NOW })
+  assert.deepEqual(records.map((r) => [r.number, r.decision]), [[40, 'would-act'], [41, 'acted']])
+  assert.deepEqual(calls.filter(([op]) => op === 'enable-automerge'), [['enable-automerge', repo, 41, HEAD]])
+  assert.ok(calls.filter(([op]) => WRITES.includes(op)).every((c) => c[2] === 41))
 })
 
 test('unreadable snapshot, missing body and failed ruleset read are counted errors', async () => {

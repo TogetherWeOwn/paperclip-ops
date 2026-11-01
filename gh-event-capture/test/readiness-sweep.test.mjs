@@ -34,7 +34,7 @@ function greenChecks() {
 
 function snapshot(number, over = {}) {
   return { repository: repo, number, headSha: HEAD, baseRef: 'main',
-    state: 'open', merged: false, draft: true, autoMerge: false,
+    state: 'open', merged: false, draft: true, autoMerge: false, crossRepository: false,
     body: '## What Changed\n\n- a fix\n', labels: [],
     mergeableState: 'clean', reviewDecision: null,
     headPushedMs: 1, nowMs: NOW, checks: greenChecks(), ...over }

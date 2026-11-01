@@ -46,6 +46,8 @@ function pullRequest({ draft = true, nodes = baseChecks(), pushedDate = null, oi
     mergeStateStatus: 'CLEAN', baseRefName: 'main', autoMergeRequest: null,
     author: { __typename: 'User', login: 'fixture-author' },
     baseRepository: { nameWithOwner: repository },
+    isCrossRepository: false, headRepository: { nameWithOwner: repository },
+    headRepositoryOwner: { login: repository.split('/')[0] },
     labels: { nodes: [], pageInfo: { hasNextPage: false } },
     commits: { nodes: [{ commit: { oid, pushedDate,
       statusCheckRollup: rollup === undefined

@@ -109,4 +109,159 @@ output="$(run_wrapper 2)"
 assert_not_called
 pass 'missing and non-executable drift checks refuse with exit 2'
 
+# --- end to end with the REAL drift check ---------------------------------------------
+# The stubs above pin ordering and exit codes. These cases pin which BYTES run: the
+# wrapper must check a private copy and run that same copy, isolated from the shared
+# handoff directory. The real checker is re-pinned to a synthetic reviewed gate held in
+# a throwaway object store, as verification/case_c89b5362-drift-pin-mutation-gate.sh does.
+E2E="$TMP/e2e"
+HANDOFF="$E2E/operator-handoff"
+mkdir -p "$E2E/repo/verification" "$HANDOFF" "$E2E/shim"
+git -C "$E2E/repo" init -q
+sed "s|^HOST_GATE=.*|HOST_GATE=\"$HANDOFF/deploy-window-manifest.py\"|" \
+  "$ROOT/deploy_window_open.sh" > "$E2E/repo/deploy_window_open.sh"
+chmod +x "$E2E/repo/deploy_window_open.sh"
+
+cat > "$E2E/reviewed.py" <<'EOF'
+#!/usr/bin/env python3
+# reviewed synthetic gate
+import json, os, stat, sys
+here = os.path.dirname(os.path.abspath(sys.argv[0]))
+with open(os.environ['GATE_LOG'], 'w') as f:
+    json.dump({'ran': 'reviewed', 'argv': sys.argv[1:], 'dir': here,
+               'dir_mode': oct(stat.S_IMODE(os.stat(here).st_mode)),
+               'isolated': sys.flags.isolated}, f)
+EOF
+cat > "$E2E/swapped.py" <<'EOF'
+#!/usr/bin/env python3
+import json, os
+with open(os.environ['GATE_LOG'], 'w') as f:
+    json.dump({'ran': 'swapped'}, f)
+EOF
+blob="$(git -C "$E2E/repo" hash-object -w "$E2E/reviewed.py")"
+sha="$(sha256sum "$E2E/reviewed.py" | cut -d' ' -f1)"
+sed -e "s/^PINNED_BLOB=\"[0-9a-f]\{40\}\"$/PINNED_BLOB=\"$blob\"/" \
+    -e "s/^PINNED_SHA256=\"[0-9a-f]\{64\}\"$/PINNED_SHA256=\"$sha\"/" \
+  "$ROOT/verification/case_5dfa9150-handoff-copy-drift.sh" \
+  > "$E2E/repo/verification/case_5dfa9150-handoff-copy-drift.sh"
+chmod +x "$E2E/repo/verification/case_5dfa9150-handoff-copy-drift.sh"
+grep -Fq "PINNED_BLOB=\"$blob\"" "$E2E/repo/verification/case_5dfa9150-handoff-copy-drift.sh" ||
+  fail 'could not re-pin the staged drift check'
+
+# Anything the handoff directory could inject into the gate's imports leaves a marker.
+for mod in json os stat; do
+  printf 'open("%s", "w").write("imported")\n' "$E2E/planted.$mod" > "$HANDOFF/$mod.py"
+done
+
+# A python3 shim that, when the wrapper starts the gate (not its `python3 -I -` copy
+# step), swaps the handoff file for other bytes first: the latest possible moment after
+# the drift check passed.
+REAL_PYTHON="$(command -v python3)"
+cat > "$E2E/shim/python3" <<EOF
+#!/usr/bin/env bash
+if [ -n "\${SWAP_IN:-}" ] && [ "\${2:-}" != - ]; then cp "\$SWAP_IN" "$HANDOFF/deploy-window-manifest.py"; fi
+if [ -n "\${MODE_AFTER_COPY:-}" ] && [ "\${2:-}" = - ]; then
+  rc=0; "$REAL_PYTHON" "\$@" || rc=\$?
+  chmod "\$MODE_AFTER_COPY" "$HANDOFF/deploy-window-manifest.py"; exit "\$rc"
+fi
+exec "$REAL_PYTHON" "\$@"
+EOF
+chmod +x "$E2E/shim/python3"
+
+run_e2e() { # expected-exit [env assignments...] -- [args...]
+  local expected="$1" output rc
+  shift
+  local mask="${E2E_UMASK:-022}"
+  local -a envs=()
+  while [[ "$#" -gt 0 && "$1" != '--' ]]; do envs+=("$1"); shift; done
+  shift
+  rm -f "$E2E/gate.log"
+  set +e
+  # -u BASH_ENV: a startup file that resets PATH would bypass the shim below.
+  # timeout: a wrapper that blocks on the handoff path fails here instead of hanging.
+  output="$(cd "$HANDOFF" && umask "$mask" && env -u BASH_ENV GATE_LOG="$E2E/gate.log" \
+    PATH="$E2E/shim:$PATH" PYTHONPATH="$HANDOFF" "${envs[@]}" \
+    timeout 30 "$E2E/repo/deploy_window_open.sh" "$@" 2>&1)"
+  rc=$?
+  set -e
+  [[ "$rc" -eq "$expected" ]] || fail "expected exit $expected, got $rc; output: $output"
+  printf '%s' "$output"
+}
+gate_log() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$E2E/gate.log" "$1"; }
+reset_handoff() { cp "$E2E/reviewed.py" "$HANDOFF/deploy-window-manifest.py"; chmod 755 "$HANDOFF/deploy-window-manifest.py"; }
+
+# Planted modules beside the handoff file, in the working directory and on PYTHONPATH
+# are never imported, and the private copy is what runs.
+reset_handoff
+output="$(run_e2e 0 -- 'arg one' --flag)"
+[[ "$output" == *'PASS: handoff copy matches'* ]] || fail "real drift check did not pass: $output"
+[[ "$output" == *'WINDOW OPEN:'* ]] || fail 'WINDOW OPEN line missing'
+for mod in json os stat; do
+  [[ ! -e "$E2E/planted.$mod" ]] || fail "planted $mod.py beside the handoff file was imported"
+done
+[[ "$(gate_log ran)" == reviewed ]] || fail 'reviewed gate did not run'
+[[ "$(gate_log argv)" == "['arg one', '--flag']" ]] || fail "gate arguments changed: $(gate_log argv)"
+[[ "$(gate_log isolated)" == 1 ]] || fail 'gate did not run in isolated mode'
+[[ "$(gate_log dir_mode)" == 0o700 ]] || fail "private copy dir mode is $(gate_log dir_mode), not 0700"
+private_dir="$(gate_log dir)"
+[[ "$private_dir" != "$HANDOFF" ]] || fail 'gate ran from the handoff directory'
+[[ ! -e "$private_dir" ]] || fail "private copy was not removed: $private_dir"
+pass 'planted modules beside the handoff file are not imported; private copy removed'
+
+# Swapping the handoff file after the check does not change what runs.
+reset_handoff
+output="$(run_e2e 0 SWAP_IN="$E2E/swapped.py" --)"
+cmp -s "$E2E/swapped.py" "$HANDOFF/deploy-window-manifest.py" || fail 'swap fixture did not swap'
+[[ "$(gate_log ran)" == reviewed ]] || fail 'bytes swapped in after the check were run'
+pass 'handoff file swapped after the check does not change what runs'
+
+# Real drift still refuses, and names the handoff path the operator must sync.
+reset_handoff
+printf '# drift\n' >> "$HANDOFF/deploy-window-manifest.py"
+output="$(run_e2e 1 --)"
+[[ "$output" == *'REFUSING to run the window gate'* ]] || fail 'drift refusal line missing'
+[[ ! -e "$E2E/gate.log" ]] || fail 'gate ran despite drift'
+[[ "$output" == *"> \"$HANDOFF/deploy-window-manifest.py\""* ]] ||
+  fail "sync instruction does not name the handoff path: $output"
+rm -f "$HANDOFF/deploy-window-manifest.py"
+output="$(run_e2e 1 --)"
+[[ "$output" == *"handoff copy missing: $HANDOFF/deploy-window-manifest.py"* ]] ||
+  fail "missing handoff copy not reported by its path: $output"
+[[ ! -e "$E2E/gate.log" ]] || fail 'gate ran with no handoff copy'
+pass 'drift and a missing handoff copy refuse and name the handoff path'
+
+# Only a regular file is copied: a FIFO or directory at the handoff path is refused
+# without blocking, and the gate does not run.
+mkfifo "$HANDOFF/deploy-window-manifest.py"
+output="$(run_e2e 1 --)"
+[[ "$output" == *"not a regular file: $HANDOFF/deploy-window-manifest.py"* ]] ||
+  fail "FIFO at the handoff path not refused: $output"
+[[ ! -e "$E2E/gate.log" ]] || fail 'gate ran from a FIFO'
+rm -f "$HANDOFF/deploy-window-manifest.py"
+mkdir "$HANDOFF/deploy-window-manifest.py"
+output="$(run_e2e 1 --)"
+[[ "$output" == *"not a regular file: $HANDOFF/deploy-window-manifest.py"* ]] ||
+  fail "directory at the handoff path not refused: $output"
+rmdir "$HANDOFF/deploy-window-manifest.py"
+pass 'a FIFO or directory at the handoff path is refused without blocking'
+
+# The executable bit and mode are captured from the descriptor the bytes were read
+# from, not from the operator's umask and not from the handoff path at check time.
+reset_handoff
+output="$(E2E_UMASK=077 run_e2e 0 --)"
+[[ "$output" == *'mode 755'* ]] || fail "PASS line does not report the handoff file mode: $output"
+chmod 644 "$HANDOFF/deploy-window-manifest.py"
+output="$(run_e2e 1 --)"
+[[ "$output" == *"handoff copy is not executable: $HANDOFF/deploy-window-manifest.py"* ]] ||
+  fail "non-executable handoff file not refused by its path: $output"
+[[ ! -e "$E2E/gate.log" ]] || fail 'gate ran from a non-executable handoff file'
+chmod 755 "$HANDOFF/deploy-window-manifest.py"
+output="$(run_e2e 0 MODE_AFTER_COPY=644 --)"
+[[ "$output" == *'mode 755'* ]] || fail "PASS line does not report the copied mode: $output"
+chmod 644 "$HANDOFF/deploy-window-manifest.py"
+output="$(run_e2e 1 MODE_AFTER_COPY=755 --)"
+[[ "$output" == *'handoff copy is not executable'* ]] ||
+  fail "mode changed after the copy decided the verdict: $output"
+pass 'executable bit and mode are checked on the handoff file as copied'
+
 printf 'PASS: deploy window wrapper contract\n'

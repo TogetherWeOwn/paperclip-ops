@@ -72,6 +72,9 @@ PINNED_SHA256="24e5d8d49f34f571de2a697dd6d464a6be9c0fe4a78e0103fba3727e37ed934d"
 # REPO_ROOT only chooses which object store is asked for PINNED_BLOB — a blob id is
 # content-addressed, so any store that returns it returns byte-identical content.
 HOST_COPY="${HOST_COPY:-/paperclip/operator-handoff/deploy-window-manifest.py}"
+# deploy_window_open.sh checks a private copy of the handoff file, so messages name the
+# handoff path the operator syncs. HOST_COPY_LABEL changes wording only, never a verdict.
+HOST_COPY_LABEL="${HOST_COPY_LABEL:-$HOST_COPY}"
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 fail() { printf 'FAIL: %s\n' "$1"; exit "${2:-1}"; }
@@ -107,7 +110,7 @@ if [ "$ref_sha" != "$PINNED_SHA256" ]; then
 fi
 
 # --- compare the handoff copy against it ----------------------------------------------
-[ -f "$HOST_COPY" ] || fail "handoff copy missing: $HOST_COPY — the operator has no gate to run" 1
+[ -f "$HOST_COPY" ] || fail "handoff copy missing: $HOST_COPY_LABEL — the operator has no gate to run" 1
 
 host_sha="$(sha256sum "$HOST_COPY" | cut -d' ' -f1)"
 
@@ -115,20 +118,20 @@ if [ "$ref_sha" != "$host_sha" ]; then
   printf 'FAIL: handoff copy has drifted from the reviewed copy.\n\n'
   printf '  reviewed %s  %s:%s (blob %s)\n' \
     "${ref_sha:0:16}" "${PINNED_REV:0:12}" "$PINNED_PATH" "${PINNED_BLOB:0:12}"
-  printf '  handoff  %s  %s\n\n' "${host_sha:0:16}" "$HOST_COPY"
+  printf '  handoff  %s  %s\n\n' "${host_sha:0:16}" "$HOST_COPY_LABEL"
   printf '  Both copies can still print READY on a green tree, so this drift is\n'
   printf '  invisible until the day the gate goes red and the operator is given\n'
   printf '  advice from a superseded revision. Sync it from the PINNED object --\n'
   printf '  not from the working tree, which may itself have moved:\n\n'
   printf '    git -C "%s" cat-file blob %s > "%s"\n\n' \
-    "$REPO_ROOT" "$PINNED_BLOB" "$HOST_COPY"
+    "$REPO_ROOT" "$PINNED_BLOB" "$HOST_COPY_LABEL"
   printf '  Write the BYTES (as above) rather than replacing the file, so the\n'
   printf '  handoff copy keeps its mode; the operator invokes it directly.\n'
   exit 1
 fi
 
 # The operator invokes it directly, so a lost executable bit is a real breakage.
-[ -x "$HOST_COPY" ] || fail "handoff copy is not executable: $HOST_COPY" 1
+[ -x "$HOST_COPY" ] || fail "handoff copy is not executable: $HOST_COPY_LABEL" 1
 
 printf 'PASS: handoff copy matches the reviewed gate pinned at %s:%s\n' \
   "${PINNED_REV:0:12}" "$PINNED_PATH"

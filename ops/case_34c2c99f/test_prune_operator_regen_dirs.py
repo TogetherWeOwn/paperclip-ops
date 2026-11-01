@@ -1245,7 +1245,8 @@ def free_port():
 
 def newest_pg_bin():
     """The runner image decides the server major (16 on 24.04, 18 on 26.04)."""
-    found = sorted(glob.glob("/usr/lib/postgresql/*/bin"),
+    # Match on initdb: a client-only package also creates <major>/bin.
+    found = sorted((os.path.dirname(p) for p in glob.glob("/usr/lib/postgresql/*/bin/initdb")),
                    key=lambda p: int(p.split("/")[-2]) if p.split("/")[-2].isdigit() else -1)
     return found[-1] if found else "/usr/lib/postgresql/16/bin"
 

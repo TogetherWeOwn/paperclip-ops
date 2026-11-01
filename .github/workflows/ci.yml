@@ -596,7 +596,15 @@ jobs:
       - name: Start an ephemeral PostgreSQL cluster
         run: |
           set -euo pipefail
-          PGBIN=/usr/lib/postgresql/16/bin
+          # The runner image decides the server major (16 on 24.04, 18 on 26.04),
+          # so take the newest installed one instead of hard-coding a version.
+          # Match on initdb: a client-only package also creates <major>/bin.
+          PGBIN="$(ls -d /usr/lib/postgresql/*/bin/initdb 2>/dev/null | sort -V | tail -n 1 || true)"
+          PGBIN="${PGBIN%/initdb}"
+          if [[ -z "$PGBIN" || ! -x "$PGBIN/initdb" ]]; then
+            echo "::error::no PostgreSQL server binaries under /usr/lib/postgresql" >&2
+            exit 1
+          fi
           PGDATA="$RUNNER_TEMP/orgdb-pgdata"
           # Ask the kernel for a free port rather than picking one: two jobs on
           # the same host must never choose the same number.
@@ -618,6 +626,7 @@ jobs:
           "$PGBIN/createdb" -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" "$PGDATABASE"
           echo "PGPORT=$PGPORT" >> "$GITHUB_ENV"
           echo "ORGDB_PGDATA=$PGDATA" >> "$GITHUB_ENV"
+          echo "ORGDB_PGBIN=$PGBIN" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Restore toolkit-vendored files
         run: bash scripts/sync-toolkit.sh
@@ -778,8 +787,8 @@ jobs:
         if: always()
         run: |
           set -u
-          [[ -n "${ORGDB_PGDATA:-}" ]] || exit 0
-          /usr/lib/postgresql/16/bin/pg_ctl -D "$ORGDB_PGDATA" -m immediate stop || true
+          [[ -n "${ORGDB_PGDATA:-}" && -n "${ORGDB_PGBIN:-}" ]] || exit 0
+          "$ORGDB_PGBIN/pg_ctl" -D "$ORGDB_PGDATA" -m immediate stop || true
           rm -rf "$ORGDB_PGDATA"
       # CI verifies policy through the dumb stub. It deliberately cannot prove
       # what the real API now does with reportsTo, permissions, or termination;

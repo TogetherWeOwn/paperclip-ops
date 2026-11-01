@@ -116,6 +116,8 @@ AREA_PREFIXES: dict[str, tuple[str, ...]] = {
         "test_migration_evidence_ax.py",
         # Harness code, fixtures and scored tables are offline suite inputs.
         "eval/review-bakeoff/",
+        # Devin Review eval harness, golden set and its offline suite.
+        "devin_eval/",
         # Native-SSH citation gate and its hermetic mutation suite, wired
         # into the suites job. Both would fall through to core as root
         # files; pin explicitly so a change to either wakes the suites job

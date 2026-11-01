@@ -1,0 +1,140 @@
+[
+  {
+    "base_sha": "923ac4bbcfa616368f0f180552d527b52baf55bd",
+    "baseline_devin": "caught",
+    "baseline_round": "r0",
+    "file": "packages/server/src/viewers/markdown.ts",
+    "head_sha": "773a99c3ce98d77d12920335fe55a57b40775bed",
+    "id": "golden-behavior-kofra-112",
+    "kind": "behavior",
+    "line_end": 333,
+    "line_start": 327,
+    "mechanism": "The markdown heading scanner treats a foreign CDATA section inside dropped SVG as a bogus comment that ends at the first \">\", so text still inside the SVG can claim a later heading anchor.",
+    "pr": 112,
+    "repo": "TogetherWeOwn/kofra",
+    "source_findings": [
+      "TogetherWeOwn/kofra#112@773a99c3ce98d77d12920335fe55a57b40775bed:devin:BUG_pr-review-job-9146f447e3ba469996a2bbb0202c2726_0001"
+    ]
+  },
+  {
+    "base_sha": "76b048e3b39c757742e0f7d0af9ce2c425354dfb",
+    "baseline_devin": "missed",
+    "baseline_round": "r1-early",
+    "file": "crates/bot/src/eventsub_http.rs",
+    "head_sha": "5bbff17be97b4f59e718895de4344dc34e182764",
+    "id": "golden-behavior-two-bot-next-1424",
+    "kind": "behavior",
+    "line_end": 444,
+    "line_start": 444,
+    "mechanism": "EventSub shutdown admission checks only the draining flag, which is set after the serve loop sees the shutdown signal; a connection accepted in that gap can still be admitted after shutdown began.",
+    "pr": 1424,
+    "repo": "TogetherWeOwn/two-bot-next",
+    "source_findings": [
+      "TogetherWeOwn/two-bot-next#1424@5bbff17be97b4f59e718895de4344dc34e182764:paperclip:4428702006"
+    ]
+  },
+  {
+    "base_sha": "6e1a4bc58bfced3912439ac5d7d8f9400ce4113b",
+    "baseline_devin": "missed",
+    "baseline_round": "r1-early",
+    "file": "test/helpers/event-egress-text-postgres-acceptance.ts",
+    "head_sha": "4f295d186480ca49a83fce9e1a6a5db83c2eeeb7",
+    "id": "golden-test_gap-two-web-next-1849",
+    "kind": "test_gap",
+    "line_end": 443,
+    "line_start": 443,
+    "mechanism": "The 1,001-row sitemap acceptance fixture poisons only a column sitemap never selects, so its assertions cannot tell the raw row count from the text-admitted count.",
+    "pr": 1849,
+    "repo": "TogetherWeOwn/two-web-next",
+    "source_findings": [
+      "TogetherWeOwn/two-web-next#1849@4f295d186480ca49a83fce9e1a6a5db83c2eeeb7:paperclip:4427832338"
+    ]
+  },
+  {
+    "base_sha": "c6472c959ad970a69aba9dff46986562bf66ac89",
+    "baseline_devin": "missed",
+    "baseline_round": "r0",
+    "file": "packages/server/test/expiry-left.acceptance.test.ts",
+    "head_sha": "1ad54c1ced3253ceeb9f063ceadf60166fc98fed",
+    "id": "golden-test_gap-kofra-98",
+    "kind": "test_gap",
+    "line_end": 56,
+    "line_start": 56,
+    "mechanism": "Key-expiry fallback tests use whole-day offsets on a clock where local and UTC dates agree, so rounded cut-offs, timezone boundaries and long-past fallbacks are untested.",
+    "pr": 98,
+    "repo": "TogetherWeOwn/kofra",
+    "source_findings": [
+      "TogetherWeOwn/kofra#98@1ad54c1ced3253ceeb9f063ceadf60166fc98fed:paperclip:4421726051"
+    ]
+  },
+  {
+    "base_sha": "38e84d28dacff754d7fc6cef931dfc684db6a237",
+    "baseline_devin": "caught",
+    "baseline_round": "r1-early",
+    "file": "scripts/ci/check-test-inventory.py",
+    "head_sha": "afe2857162f7c94087e0ff0257c9c19ccded3377",
+    "id": "golden-gate-two-bot-next-1889",
+    "kind": "gate",
+    "line_end": 592,
+    "line_start": 590,
+    "mechanism": "The test-inventory gate recognises a process-exit call only as a bare expression statement, so an exit call inside an assignment passes the pre-dispatch exit screen.",
+    "pr": 1889,
+    "repo": "TogetherWeOwn/two-bot-next",
+    "source_findings": [
+      "TogetherWeOwn/two-bot-next#1889@afe2857162f7c94087e0ff0257c9c19ccded3377:devin:BUG_pr-review-job-38afee21b7024455ac5f0ce768ee95d3_0001",
+      "TogetherWeOwn/two-bot-next#1889@afe2857162f7c94087e0ff0257c9c19ccded3377:paperclip:4428714335"
+    ]
+  },
+  {
+    "base_sha": "14c39f57e76e82459510cb768d8c7e52897889bb",
+    "baseline_devin": "missed",
+    "baseline_round": "r0",
+    "file": "ci/check-machine-contract.mjs",
+    "head_sha": "a3c63f45f27f0188a85280ddb3710d019cdf1c17",
+    "id": "golden-gate-two-web-next-1935",
+    "kind": "gate",
+    "line_end": 429,
+    "line_start": 429,
+    "mechanism": "The machine-contract scanner stops the whole link scan at the first unmatched bracket depth, so later valid linked subjects are never normalised and the gate checks the wrong text.",
+    "pr": 1935,
+    "repo": "TogetherWeOwn/two-web-next",
+    "source_findings": [
+      "TogetherWeOwn/two-web-next#1935@a3c63f45f27f0188a85280ddb3710d019cdf1c17:paperclip:4421579622"
+    ]
+  },
+  {
+    "base_sha": "943d34efd9589cfb9f7237bb048060e9fc5bf182",
+    "baseline_devin": "missed",
+    "baseline_round": "r0",
+    "file": "workers/api/tests/support/atomic_registration_store_acceptance.rs",
+    "head_sha": "70066b4b445e60c357c4e56b04658997c2d2f104",
+    "id": "golden-safety-nntunev2-816",
+    "kind": "safety",
+    "line_end": 45,
+    "line_start": 45,
+    "mechanism": "The destructive database test guard checks the database name and host names but not host addresses, so the localhost-only boundary for destructive test operations is not enforced.",
+    "pr": 816,
+    "repo": "TogetherWeOwn/nntunev2",
+    "source_findings": [
+      "TogetherWeOwn/nntunev2#816@70066b4b445e60c357c4e56b04658997c2d2f104:paperclip:4422912644"
+    ]
+  },
+  {
+    "base_sha": "76b048e3b39c757742e0f7d0af9ce2c425354dfb",
+    "baseline_devin": "missed",
+    "baseline_round": "r1-early",
+    "file": "REVIEW.md",
+    "head_sha": "55e21d2a157d8672a9504f2810a1a88f92153627",
+    "id": "golden-safety-two-bot-next-1892",
+    "kind": "safety",
+    "line_end": 35,
+    "line_start": 33,
+    "mechanism": "The REVIEW.md security exception tells the reviewer to report security issues as public PR findings, which conflicts with the private-disclosure process in SECURITY.md.",
+    "pr": 1892,
+    "repo": "TogetherWeOwn/two-bot-next",
+    "source_findings": [
+      "TogetherWeOwn/two-bot-next#1892@55e21d2a157d8672a9504f2810a1a88f92153627:coderabbit:4426425246",
+      "TogetherWeOwn/two-bot-next#1892@55e21d2a157d8672a9504f2810a1a88f92153627:paperclip:4426637556"
+    ]
+  }
+]

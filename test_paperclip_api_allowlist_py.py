@@ -153,6 +153,37 @@ class AttackerSuite(FixtureCase):
             with self.subTest(base=base), self.assertRaises(AllowlistRefused):
                 check(base, path=self.path, env=env)
 
+    def test_dirty_authority_refuses_in_every_mode(self):
+        # A base whose authority is not one clean host[:port] never sends,
+        # not even as a shadow warning: the HTTP client may read the
+        # authority differently from the gate (header injection via encoded
+        # CR/LF, a second port, a host list), and an empty port would
+        # otherwise normalize onto the listed origin and match it.
+        bases = {
+            "encoded CRLF": "https://board.example.invalid%0d%0aX-Evil:1",
+            "encoded NUL": "https://board.example.invalid%00",
+            "empty host": "https://:443",
+            "host list": "https://board.example.invalid,evil.invalid",
+            "second port": "https://board.example.invalid:443:8443",
+            "unbracketed IPv6": "https://2001:db8::1",
+            "named port": "https://board.example.invalid:https",
+            "port out of range": "https://board.example.invalid:99999",
+            "empty port": "https://board.example.invalid:",
+            "empty port, slash": "https://board.example.invalid:/",
+            "unclosed IPv6": "https://[::1",
+        }
+        for env in ({}, {"PAPERCLIP_API_ALLOWLIST_MODE": "enforce"}):
+            for name, base in bases.items():
+                with self.subTest(env=env, case=name):
+                    err = io.StringIO()
+                    with redirect_stderr(err), \
+                            self.assertRaises(AllowlistRefused) as raised:
+                        check(base, path=self.path, env=env)
+                    self.assertIn("not a clean http(s) base",
+                                  str(raised.exception))
+                    self.assertNotIn("allowlist_shadow", err.getvalue())
+        self.assertEqual(allowlist.SHADOW_COUNT, 0)
+
     def test_matches_still_allow_in_enforce(self):
         env = {"PAPERCLIP_API_ALLOWLIST_MODE": "enforce"}
         self.assertEqual(

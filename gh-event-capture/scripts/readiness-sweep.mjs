@@ -42,7 +42,9 @@
 // triggering event is a fork pull_request (whose job token GitHub already
 // limits to read-only). A read-only pass keeps its scan but reconciles with
 // an empty enabled set, so every decision lands as would-act instead of
-// erroring per PR.
+// erroring per PR. That flag covers the triggering event only; a base-context
+// pass still scans fork PRs, which the reconciler refuses per PR from each
+// snapshot's head provenance.
 
 import { constants } from 'node:fs'
 import { open, rm } from 'node:fs/promises'

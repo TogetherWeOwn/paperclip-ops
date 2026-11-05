@@ -158,8 +158,13 @@ Rerunning an old failed run uses that run's old workflow revision, not this repa
 verify on a genuine new native event instead. No arbitrary commands, generators
 or auto-fixes are executed.
 
-Both checkouts disable persisted credentials; permissions are only `contents:
-read`. Do not inherit secrets. No host actions, package installs, production
+Both checkouts use actions/checkout v7.0.1, pinned to
+`3d3c42e5aac5ba805825da76410c181273ba90b1`, and disable persisted credentials;
+permissions are only `contents: read`. The version bump does not change which
+comparison head or immutable tools revision is selected. Keep the full-SHA
+validation and separate tools checkout when repinning the action; a dependency
+update is not permission to check out an untrusted fork in a privileged event.
+Do not inherit secrets. No host actions, package installs, production
 access or branch-protection edits are needed. The new job fails on findings/errors;
 repositories choose separately whether to require that check for merging.
 This extension does not edit or fork the separately staged Tier-0 foundation.

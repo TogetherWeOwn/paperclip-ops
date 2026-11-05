@@ -103,10 +103,10 @@ check('head-drift', () => { const b = fixture(); b.events.push(event('head-2', '
 check('release', () => { const b = fixture(); b.members[0].releaseRequired = true; seal(b); eq(post(b).closing.merged_awaiting_acceptance, 1, 'release'); b.events.push(event('release-1', 'release_accepted', 8, { head, actorId: 'reviewer-a', receipt: receipt('release') })); seal(b); eq(post(b).closing.accepted_delivery, 1, 'release'); });
 check('independence', () => { const b = fixture(); b.events.find(e => e.kind === 'accepted_delivery').actorId = 'builder-a'; seal(b); eq(post(b).closing.accepted_delivery, 0, 'independence'); });
 check('zero-latency', () => { const b = fixture(); b.events = b.events.filter(e => !['merged', 'closed', 'accepted_delivery'].includes(e.kind)); seal(b); eq(post(b).completedLatencyMs.p50, null, 'zero-latency'); eq(post(b).completedLatencyMs.p90, null, 'zero-latency'); });
-check('half-open', () => { const b = fixture(); b.events.find(e => e.kind === 'accepted_delivery').atUTC = at(9); seal(b); eq(post(b).completed, 0, 'half-open'); });
+check('half-open', () => { const b = fixture(); b.events.find(e => e.kind === 'accepted_delivery').atUTC = at(9); seal(b); eq(post(b).completed, 0, 'half-open'); eq(post(b).closing.accepted_delivery, 0, 'half-open'); });
 check('censor-window', () => { const b = fixture(); b.asOfUTC = at(8); seal(b); eq(post(b).fullyObserved, false, 'censor-window'); eq(score(b).evidence.comparison.status, 'INCONCLUSIVE', 'censor-window'); });
 check('ordering', () => { const b = fixture(), before = canonicalStringify(b), r = canonicalStringify(score(b)); b.events.reverse(); b.coverage.reverse(); b.coverage.forEach(c => c.recordIds.reverse()); eq(canonicalStringify(score(b)), r, 'ordering'); b.events.reverse(); b.coverage.reverse(); b.coverage.forEach(c => c.recordIds.reverse()); eq(canonicalStringify(b), before, 'ordering'); });
-check('frozen-clock', () => { const b = fixture(), r = score(b), old = Date.now; try { Date.now = () => { throw Error('SEMANTIC:frozen-clock wall clock read'); }; eq(score(b), r, 'frozen-clock'); } finally { Date.now = old; } });
+check('frozen-clock', () => { const b = fixture(), r = score(b), old = Date.now; try { Date.now = () => { assert.fail('SEMANTIC:frozen-clock wall clock read'); }; eq(score(b), r, 'frozen-clock'); } finally { Date.now = old; } });
 check('cost', () => { const b = fixture(); eq(score(b).cost.status, 'UNKNOWN', 'cost'); b.runs.push({ id: 'run-a', unitId: 'unit-a', sourceId: 'source-a', executorId: 'builder-a', membershipSha256: b.membershipSha256, atUTC: at(6), tokens: 100, runMs: 1000, subscriptionEquivalentUSD: 0.01 }); seal(b); eq(score(b).cost.status, 'SUFFICIENT', 'cost'); eq(score(b).cost.tokens, 100, 'cost'); b.runs[0].sourceId = 'other-source'; seal(b); eq(score(b).cost.status, 'UNKNOWN', 'cost'); });
 check('nearest-rank', () => { const b = fixture(); const extra = structuredClone(b.members[0]); extra.id = 'unit-b'; extra.sourceId = 'source-b'; extra.pr = 13; b.members.push(extra); b.events.push(...b.events.filter(e => !['started', 'accepted_delivery'].includes(e.kind)).map(e => ({ ...e, id: `${e.id}-b`, unitId: 'unit-b' })), { ...event('start-b', 'started', 3), unitId: 'unit-b' }, { ...event('accept-b', 'accepted_delivery', 7, { head, actorId: 'reviewer-a', receipt: receipt('acceptance') }), unitId: 'unit-b' }); seal(b); eq(post(b).completedLatencyMs.p50, 4 * 86400000, 'nearest-rank'); eq(post(b).completedLatencyMs.p90, 5 * 86400000, 'nearest-rank'); });
 check('complete-comparison', () => {
@@ -167,7 +167,7 @@ if (args.includes('--verify')) {
     ['blocked-started', "return 'started_wip';", "return s.blockedAt ? 'unstarted_backlog' : 'started_wip';"],
     ['unstarted-blocked', 'if (!s.started) return', 'if (!s.started && !s.blockedAt) return'],
     ['head-drift', 'resetEvidence(s); // head drift', '// faulty stale-head evidence'],
-    ['release', '(!m.releaseRequired || s.release)', 'true'],
+    ['release', '(!m.releaseRequired || s.release)', 'Boolean(s.release ||= s.delivery)'],
     ['independence', 'm.reviewerIds.includes(e.actorId)', 'true'],
     ['zero-latency', 'if (!values.length) return null;', 'if (!values.length) return 0;'],
     ['half-open', 'time(e.atUTC) < end', 'time(e.atUTC) <= end'],
@@ -185,7 +185,7 @@ if (args.includes('--verify')) {
       const path = join(dir, `${name}.mjs`); writeFileSync(path, source.replace(from, to));
       const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--subject', path, '--case', name], { encoding: 'utf8', timeout: 15000 });
       process.stdout.write(r.stdout || ''); process.stdout.write(r.stderr || '');
-      assert(r.status === 1 && r.stderr.includes(`SEMANTIC:${name}`), `mutant ${name} did not fail its designated semantic assertion (exit ${r.status})`);
+      assert(r.status === 1 && r.stderr.includes('AssertionError') && r.stderr.includes(`SEMANTIC:${name}`), `mutant ${name} did not fail its designated semantic assertion (exit ${r.status})`);
       console.log(JSON.stringify({ mutant: name, mutation: { from, to }, command: `node delivery-effectiveness.test.mjs --subject <mutant> --case ${name}`, expected: `SEMANTIC:${name}`, exit: r.status, verdict: 'KILLED' }));
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }

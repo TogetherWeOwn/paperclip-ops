@@ -476,7 +476,7 @@ jobs:
       upstream: ${{ steps.detect.outputs.upstream }}
       trivy: ${{ steps.detect.outputs.trivy }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Two-dot diff against the base SHA needs no shared history; a
           # full clone of this repo is minutes, so fetch only the base
@@ -627,7 +627,7 @@ jobs:
           echo "PGPORT=$PGPORT" >> "$GITHUB_ENV"
           echo "ORGDB_PGDATA=$PGDATA" >> "$GITHUB_ENV"
           echo "ORGDB_PGBIN=$PGBIN" >> "$GITHUB_ENV"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Restore toolkit-vendored files
         run: bash scripts/sync-toolkit.sh
       # test_orgdb_fixture.sh and the schema-fingerprint mutants below invoke
@@ -869,7 +869,7 @@ jobs:
           printf 'private runner: name=%s os=%s arch=%s\n' "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
 
       #
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           clean: true
           fetch-depth: 0
@@ -6309,7 +6309,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           clean: true
@@ -6342,7 +6342,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           clean: true
@@ -6376,7 +6376,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           clean: true
@@ -6574,7 +6574,7 @@ jobs:
           [[ "${RUNNER_ARCH:-}" == X64 ]]
           printf 'private runner: name=%s os=%s arch=%s\n' "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           clean: true
 

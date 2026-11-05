@@ -354,7 +354,8 @@
     "scanner finding adapter suite:1",
     "shell-substitution JSON acceptance:1",
     "public-comment hygiene JSON suite:1",
-    "devin eval harness suite:1"
+    "devin eval harness suite:1",
+    "delivery-effectiveness assertions and negative controls:1"
   ],
   "retained": [
     {
@@ -2006,6 +2007,11 @@
       "name": "devin eval harness suite",
       "definition_sha256": "f74e0c807727be53f65ba3a056022e6401624441511204c5422593563eb4f590",
       "id": "devin eval harness suite:1"
+    },
+    {
+      "name": "delivery-effectiveness assertions and negative controls",
+      "definition_sha256": "4b9a7077a8cbd8781a346cd635c5d59fdf83071e4ee719d6e743788af25dc310",
+      "id": "delivery-effectiveness assertions and negative controls:1"
     }
   ],
   "removed": [

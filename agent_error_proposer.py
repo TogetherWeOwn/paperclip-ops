@@ -208,7 +208,14 @@ def _valid_api_base(base):
     return True
 
 
-def api_get(base_url: str, api_key: str, path: str) -> Any:
+def _api_refusal(code: str, path: str, status: int | None = None) -> RuntimeError:
+    prefix = f"HTTP {status}: " if status is not None else ""
+    return RuntimeError(
+        f"{prefix}code={code} endpoint={path} retryable=false "
+        "next_action=check_board_api_then_retry")
+
+
+def api_get(base_url: str, api_key: str, path: str) -> list[Any]:
     if not _valid_api_base(base_url):
         raise RuntimeError(
             "refusing: PAPERCLIP_API_URL is not a clean http(s) base")
@@ -224,12 +231,17 @@ def api_get(base_url: str, api_key: str, path: str) -> Any:
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             raw = response.read()
-            return json.loads(raw) if raw else None
     except urllib.error.HTTPError as error:
-        raw = error.read().decode(errors="replace")
-        raise RuntimeError(f"GET {path}: HTTP {error.code}: {raw[:300]}") from error
+        raise _api_refusal("api_request_failed", path, error.code) from error
     except urllib.error.URLError as error:
         raise RuntimeError(f"GET {path}: {error.reason}") from error
+    try:
+        payload = json.loads(raw) if raw else None
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise _api_refusal("api_response_unparseable", path) from error
+    if not isinstance(payload, list):
+        raise _api_refusal("api_response_unexpected_shape", path)
+    return payload
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -250,7 +262,6 @@ def main(argv: list[str] | None = None) -> int:
     if base.endswith("/api"):
         base = base[:-4]
     agents = api_get(base, api_key, f"/api/companies/{args.company_id}/agents")
-    agents = agents if isinstance(agents, list) else []
     runs_by_agent: dict[str, list[dict[str, Any]]] = {}
     for agent in agents:
         if not isinstance(agent, dict) or agent.get("status") != "error":
@@ -261,8 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         runs = api_get(base, api_key,
                        f"/api/companies/{args.company_id}/heartbeat-runs"
                        f"?agentId={agent_id}&limit=5")
-        runs_by_agent[str(agent_id)] = (
-            runs if isinstance(runs, list) else [])
+        runs_by_agent[str(agent_id)] = runs
     now = datetime.datetime.now(datetime.timezone.utc)
     for record in propose(now, agents, runs_by_agent, args.age_min):
         print(json.dumps(record, sort_keys=True))

@@ -1,0 +1,25 @@
+name: Saved-output replay contracts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-replay-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate synthetic saved-output scoring contracts
+        run: python3 -B -m unittest discover -s eval/review-bakeoff -p test_replay.py -v

@@ -40,11 +40,16 @@ function seal(b) {
   }));
   return b;
 }
+function copyEvent(e, unitId) {
+  const copy = { ...structuredClone(e), id: `${e.id}-${unitId}`, unitId };
+  if (copy.receipt) copy.receipt.id += `-${unitId}`;
+  return copy;
+}
 function comparisonFixture() {
   const b = fixture();
   b.events.push(event('artifact-pre', 'accepted_artifact', 3, { head, actorId: 'reviewer-a', receipt: receipt('acceptance') }), event('reopen-post', 'reopened', 5));
   b.members.push({ ...structuredClone(b.members[0]), id: 'unit-b', sourceId: 'source-b', pr: 13 });
-  b.events.push(...b.events.map(e => ({ ...structuredClone(e), id: `${e.id}-b`, unitId: 'unit-b' })));
+  b.events.push(...b.events.map(e => copyEvent(e, 'unit-b')));
   return seal(b);
 }
 const score = b => scoreDelivery(b);
@@ -108,7 +113,7 @@ check('censor-window', () => { const b = fixture(); b.asOfUTC = at(8); seal(b); 
 check('ordering', () => { const b = fixture(), before = canonicalStringify(b), r = canonicalStringify(score(b)); b.events.reverse(); b.coverage.reverse(); b.coverage.forEach(c => c.recordIds.reverse()); eq(canonicalStringify(score(b)), r, 'ordering'); b.events.reverse(); b.coverage.reverse(); b.coverage.forEach(c => c.recordIds.reverse()); eq(canonicalStringify(b), before, 'ordering'); });
 check('frozen-clock', () => { const b = fixture(), r = score(b), old = Date.now; try { Date.now = () => { assert.fail('SEMANTIC:frozen-clock wall clock read'); }; eq(score(b), r, 'frozen-clock'); } finally { Date.now = old; } });
 check('cost', () => { const b = fixture(); eq(score(b).cost.status, 'UNKNOWN', 'cost'); b.runs.push({ id: 'run-a', unitId: 'unit-a', sourceId: 'source-a', executorId: 'builder-a', membershipSha256: b.membershipSha256, atUTC: at(6), tokens: 100, runMs: 1000, subscriptionEquivalentUSD: 0.01 }); seal(b); eq(score(b).cost.status, 'SUFFICIENT', 'cost'); eq(score(b).cost.tokens, 100, 'cost'); b.runs[0].sourceId = 'other-source'; seal(b); eq(score(b).cost.status, 'UNKNOWN', 'cost'); });
-check('nearest-rank', () => { const b = fixture(); const extra = structuredClone(b.members[0]); extra.id = 'unit-b'; extra.sourceId = 'source-b'; extra.pr = 13; b.members.push(extra); b.events.push(...b.events.filter(e => !['started', 'accepted_delivery'].includes(e.kind)).map(e => ({ ...e, id: `${e.id}-b`, unitId: 'unit-b' })), { ...event('start-b', 'started', 3), unitId: 'unit-b' }, { ...event('accept-b', 'accepted_delivery', 7, { head, actorId: 'reviewer-a', receipt: receipt('acceptance') }), unitId: 'unit-b' }); seal(b); eq(post(b).completedLatencyMs.p50, 4 * 86400000, 'nearest-rank'); eq(post(b).completedLatencyMs.p90, 5 * 86400000, 'nearest-rank'); });
+check('nearest-rank', () => { const b = fixture(); const extra = structuredClone(b.members[0]); extra.id = 'unit-b'; extra.sourceId = 'source-b'; extra.pr = 13; b.members.push(extra); b.events.push(...b.events.filter(e => !['started', 'accepted_delivery'].includes(e.kind)).map(e => copyEvent(e, 'unit-b')), { ...event('start-b', 'started', 3), unitId: 'unit-b' }, { ...event('accept-b', 'accepted_delivery', 7, { head, actorId: 'reviewer-a', receipt: receipt('acceptance') }), unitId: 'unit-b' }); seal(b); eq(post(b).completedLatencyMs.p50, 4 * 86400000, 'nearest-rank'); eq(post(b).completedLatencyMs.p90, 5 * 86400000, 'nearest-rank'); });
 check('complete-comparison', () => {
   const b = comparisonFixture(), r = score(b);
   eq(r.observed.pre.completed, 2, 'complete-comparison'); eq(r.observed.post.completed, 2, 'complete-comparison');
@@ -138,7 +143,7 @@ check('repeat-terminal', () => {
     if (b.members[0].releaseRequired) b.events.push(event('release-pre', 'release_accepted', 4, { head, actorId: 'reviewer-a', receipt: receipt('release') }));
     b.events.push(event('repeat-post', kind, 7, { head, actorId: 'reviewer-a', receipt: receipt(kind === 'release_accepted' ? 'release' : 'acceptance') }));
     b.members.push({ ...structuredClone(b.members[0]), id: 'unit-b', sourceId: 'source-b', pr: 13 });
-    b.events.push(...b.events.map(e => ({ ...structuredClone(e), id: `${e.id}-b`, unitId: 'unit-b' })));
+    b.events.push(...b.events.map(e => copyEvent(e, 'unit-b')));
     seal(b); const r = score(b);
     eq(r.observed.pre.completed, 2, 'repeat-terminal'); eq(r.observed.post.completed, 0, 'repeat-terminal');
     eq(r.descriptiveComparison.status, 'INCONCLUSIVE', 'repeat-terminal');
@@ -185,6 +190,48 @@ check('ambiguous-reviews', () => {
   b.events.push(event('review-a', 'review_arrived', 5), event('review-end', 'review_completed', 8)); seal(b);
   eq(post(b).reviewLatencyMs.n, 0, 'ambiguous-reviews'); eq(score(b).evidence.acceptance.status, 'UNKNOWN', 'ambiguous-reviews');
 });
+function reviewInvalidationFixture(kind) {
+  const b = fixture(), currentHead = kind === 'head' ? newerHead : head;
+  b.events = b.events.filter(e => !['merged', 'closed', 'accepted_delivery'].includes(e.kind));
+  b.events.push(event('review-start', 'review_arrived', 5, { actorId: 'reviewer-a' }),
+    event('invalidate-review', kind, 6, kind === 'head' ? { head: newerHead } : {}),
+    event('review-end', 'review_completed', 7, { actorId: 'reviewer-a' }),
+    event('fresh-merge', 'merged', 8, { atUTC: '2030-01-08T01:00:00.000Z', head: currentHead }),
+    event('fresh-accept', 'accepted_delivery', 8, { atUTC: '2030-01-08T02:00:00.000Z', head: currentHead, actorId: 'reviewer-a', receipt: receipt('acceptance') }));
+  return seal(b);
+}
+check('review-invalidation', () => {
+  for (const kind of ['head', 'reopened']) {
+    const b = reviewInvalidationFixture(kind);
+    eq(score(b).evidence.acceptance.status, 'SUFFICIENT', 'review-invalidation');
+    eq(post(b).closing.accepted_delivery, 1, 'review-invalidation');
+    b.events = b.events.filter(e => !['fresh-merge', 'fresh-accept'].includes(e.id)); seal(b);
+    eq(post(b).closing.accepted_delivery, 0, 'review-invalidation'); eq(post(b).closing.started_wip, 1, 'review-invalidation');
+  }
+});
+check('invalidated-review-latency', () => {
+  for (const kind of ['head', 'reopened']) {
+    const b = reviewInvalidationFixture(kind);
+    eq(post(b).reviewLatencyMs, { n: 0, p50: null, p90: null }, 'invalidated-review-latency');
+    b.asOfUTC = '2030-01-06T12:00:00.000Z'; b.events = b.events.filter(e => e.atUTC <= b.asOfUTC); seal(b);
+    eq(post(b).censoredWaits.filter(w => w.kind === 'review').length, 0, 'invalidated-review-latency');
+    const fresh = reviewInvalidationFixture(kind);
+    fresh.events.push(event('review-fresh', 'review_arrived', 7, { atUTC: '2030-01-07T01:00:00.000Z', actorId: 'reviewer-a' }),
+      event('review-fresh-end', 'review_completed', 7, { atUTC: '2030-01-07T02:00:00.000Z', actorId: 'reviewer-a' })); seal(fresh);
+    eq(post(fresh).reviewLatencyMs, { n: 1, p50: 3600000, p90: 3600000 }, 'invalidated-review-latency');
+    eq(score(fresh).evidence.acceptance.status, 'SUFFICIENT', 'invalidated-review-latency');
+  }
+});
+check('review-invalidation-ambiguity', () => {
+  for (const kind of ['head', 'reopened']) {
+    const b = reviewInvalidationFixture(kind); b.events = b.events.filter(e => e.id !== 'review-start'); seal(b);
+    eq(score(b).evidence.acceptance.status, 'UNKNOWN', 'review-invalidation-ambiguity');
+    const overlap = reviewInvalidationFixture(kind);
+    overlap.events.push(event('overlap', 'review_arrived', 6, { atUTC: '2030-01-06T01:00:00.000Z', actorId: 'reviewer-a' })); seal(overlap);
+    eq(score(overlap).evidence.acceptance.status, 'UNKNOWN', 'review-invalidation-ambiguity');
+    eq(post(overlap).reviewLatencyMs.n, 0, 'review-invalidation-ambiguity');
+  }
+});
 check('partial-asof', () => {
   const b = fixture(); b.asOfUTC = at(8); b.events.find(e => e.kind === 'accepted_delivery').atUTC = at(8); seal(b);
   eq(score(b).evidence.acceptance.status, 'SUFFICIENT', 'partial-asof'); eq(post(b).completed, 1, 'partial-asof'); eq(post(b).closing.accepted_delivery, 1, 'partial-asof');
@@ -209,6 +256,52 @@ check('aggregate-cost', () => {
   }
 });
 check('dot-repository', () => { const b = fixture(); b.scope.repository = 'https://github.com/example/.github'; assert.doesNotThrow(() => eq(score(b).scope.repository, b.scope.repository, 'dot-repository'), 'SEMANTIC:dot-repository'); });
+
+check('pending-acceptance', () => {
+  for (const started of [false, true]) {
+    const b = fixture(); b.events = b.events.filter(e => !['merged', 'closed', 'accepted_delivery'].includes(e.kind) && (started || e.kind !== 'started')); seal(b);
+    eq(score(b).evidence.acceptance.status, 'UNKNOWN', 'pending-acceptance');
+  }
+});
+check('reopen-acceptance', () => {
+  const b = fixture(); b.events.push(event('reopen', 'reopened', 8)); seal(b);
+  eq(score(b).evidence.acceptance.status, 'UNKNOWN', 'reopen-acceptance');
+  b.events.push(event('merge-fresh', 'merged', 8, { atUTC: '2030-01-08T01:00:00.000Z', head }),
+    event('accept-fresh', 'accepted_delivery', 8, { atUTC: '2030-01-08T02:00:00.000Z', head, actorId: 'reviewer-a', receipt: receipt('acceptance') })); seal(b);
+  eq(score(b).evidence.acceptance.status, 'SUFFICIENT', 'reopen-acceptance');
+});
+check('future-member', () => {
+  const b = fixture(); b.members[0].arrivedAtUTC = at(10); b.events = []; seal(b);
+  b.coverage.forEach(c => { c.fromUTC = at(9); c.throughUTC = at(10); });
+  assert.throws(() => score(b), /INVALID_MEMBER_TIME/, 'SEMANTIC:future-member');
+});
+check('coverage-order', () => {
+  const b = fixture(); b.coverage[0].fromUTC = at(9); b.coverage[0].throughUTC = at(1);
+  assert.throws(() => score(b), /INVALID_COVERAGE_TIME/, 'SEMANTIC:coverage-order');
+});
+check('duplicate-reviewer', () => {
+  const b = fixture(); b.members[0].reviewerIds.push('reviewer-a'); seal(b);
+  assert.throws(() => score(b), /INVALID_REVIEWER/, 'SEMANTIC:duplicate-reviewer');
+});
+check('receipt-unit', () => {
+  const b = comparisonFixture(), admissions = b.events.filter(e => e.kind === 'admission');
+  admissions[1].receipt.id = admissions[0].receipt.id; seal(b);
+  assert.throws(() => score(b), /INVALID_RECEIPT_UNIT/, 'SEMANTIC:receipt-unit');
+});
+check('cleanup-head', () => {
+  const b = fixture(); b.events = b.events.filter(e => !['merged', 'closed', 'accepted_delivery'].includes(e.kind));
+  b.events.push(event('withdraw', 'withdrawn', 6, { actorId: 'reviewer-a', receipt: receipt('withdrawal') }), event('head-new', 'head', 8, { head: newerHead })); seal(b);
+  eq(post(b).closing.authorized_cleanup, 1, 'cleanup-head'); eq(score(b).evidence.acceptance.status, 'SUFFICIENT', 'cleanup-head');
+});
+check('cli-score-body', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'delivery-cli-score-'));
+  try {
+    const p = join(dir, 'input.json'), b = fixture(); writeFileSync(p, JSON.stringify(b));
+    const r = spawnSync(process.execPath, [subject, '--from-file', p], { encoding: 'utf8', timeout: 15000 });
+    eq(r.status, 0, 'cli-score-body'); const { adapter, ...output } = JSON.parse(r.stdout);
+    eq(output, score(b), 'cli-score-body'); eq(typeof adapter.sourceSha256, 'string', 'cli-score-body');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 const selected = option('--case');
 let failures = 0;
@@ -261,16 +354,27 @@ if (args.includes('--verify')) {
     ['cost', 'r.sourceId === m.sourceId', 'true'],
     ['repeat-terminal', 'if (s.completedAt !== null) return s.completedAt;', '// faulty receipt refresh moves terminal time'],
     ['terminal-upgrade', 'if (s.completedAt !== null) return s.completedAt;', '// faulty artifact upgrade recounts a completion'],
-    ['acceptance-needs-merge', "if (!s.merge) s.issues.push('missing_merge');", 'if (!s.merge) s.delivery = e;'],
+    ['acceptance-needs-merge', "if (!s.merge) s.issues.push('missing_merge');", 'if (!s.merge) { s.merge = e; s.delivery = e; }'],
     ['head-requalification', 's.head = e.head || null;', "if (s.head) s.issues.push('head_drift'); s.head = e.head || null;"],
     ['withdrawal-close', "if (e.kind === 'closed' && !s.merge && !s.cleanup)", "if (e.kind === 'closed' && !s.merge)"],
     ['ready-pair', 'time(s.mergeReady)', 'time(s.ready)'],
     ['overlapping-reviews', 'const reviewer = e.actorId ||', 'const reviewer = m.reviewerIds[0] ||'],
     ['ambiguous-reviews', '(m.reviewerIds.length === 1 ? m.reviewerIds[0] : null)', 'm.reviewerIds[0]'],
+    ['review-invalidation', 'for (const arrival of s.reviewArrivals.values()) if (arrival) arrival.invalidated = true;', 's.reviewArrivals.clear();'],
+    ['invalidated-review-latency', '!arrived.invalidated && time(e.atUTC) >= start', 'time(e.atUTC) >= start'],
+    ['review-invalidation-ambiguity', "if (!arrived) s.issues.push('ambiguous_review');", 'if (!arrived) {}'],
     ['partial-asof', 'time(b.asOfUTC) + 1', 'time(b.asOfUTC)'],
     ['symlink-cli', 'realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))', 'resolve(process.argv[1]) === fileURLToPath(import.meta.url)'],
     ['aggregate-cost', 'joined && safeTotals', 'joined'],
     ['dot-repository', '[a-z0-9._-]+$', '[a-z0-9][a-z0-9._-]*$'],
+    ['pending-acceptance', '!s.invalidated && terminal(category(s, m))', "!s.invalidated && category(s, m) !== 'merged_awaiting_acceptance'"],
+    ['reopen-acceptance', '!s.invalidated && terminal(category(s, m))', "!s.invalidated && category(s, m) !== 'merged_awaiting_acceptance'"],
+    ['future-member', "requireThat(time(m.arrivedAtUTC) <= time(b.asOfUTC), 'MEMBER_TIME');", ';'],
+    ['coverage-order', "requireThat(time(c.fromUTC) <= time(c.throughUTC), 'COVERAGE_TIME');", ';'],
+    ['duplicate-reviewer', 'new Set(m.reviewerIds).size === m.reviewerIds.length', 'true'],
+    ['receipt-unit', "requireThat(!receiptUnit || receiptUnit === e.unitId, 'RECEIPT_UNIT');", ';'],
+    ['cleanup-head', 's.cleanup = cleanup;', 's.cleanup = null;'],
+    ['cli-score-body', 'const output = scoreDelivery(input);', 'const output = { ...scoreDelivery(input), operationalAuthorization: true };'],
   ];
   const source = readFileSync(subject, 'utf8'), dir = mkdtempSync(join(tmpdir(), 'delivery-mutants-'));
   try {

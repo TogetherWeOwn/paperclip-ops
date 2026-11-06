@@ -10,11 +10,16 @@ There is no installation, scheduler, network request, credential or host action.
 
 - `scoreDelivery(bundle)` returns a new JSON-compatible score without mutating the
   bundle, reading a clock, environment, file or network, or certifying its tests.
-- `canonicalStringify(value)` sorts object keys and every array recursively;
+- `canonicalStringify(value)` normalizes object keys and sorts every array recursively;
+  object keys are inserted lexically, then JavaScript JSON enumeration emits
+  integer-index keys numerically before other keys. This rule is deterministic;
   **all arrays in this version are unordered bags**, not ordered timelines.
   Timeline order comes only from event timestamps and the tie rule below.
   `canonicalHash(value)` is SHA256 of those UTF-8 canonical JSON bytes. No newline
-  is hashed. Duplicate records are checked before safe identical-ID deduplication.
+  is hashed. This is a custom canonical form, not RFC 8785/JCS: array order is
+  discarded and lone surrogates use JavaScript JSON escaping. External verifiers
+  must use this versioned algorithm, not substitute a JCS implementation.
+  Duplicate records are checked before safe identical-ID deduplication.
   Conflicting payloads are errors, never last-write-wins. The normalized input
   hash uses deduplicated records; the membership pin uses canonical members.
 - `node ops/eval/delivery-effectiveness.mjs --from-file <frozen.json>` reads only
@@ -87,8 +92,9 @@ begin with a dot, underscore or hyphen (for example `.github`); the path segment
 are version-pinned labels, not universal industry-wide WIP laws. Membership is
 immutable, includes pre-PR sources, and is not selected by outcomes. A member's
 `pr` is a positive PR number or `null`; source and non-null PR mappings must be
-unique. At least one independent reviewer is required; the executor cannot be a
-reviewer. Changing any membership identity requires a new membership hash and a
+unique. Members cannot arrive after the frozen asOf cutoff. At least one
+independent reviewer is required; reviewer IDs must be unique and the executor
+cannot be a reviewer. Changing any membership identity requires a new membership hash and a
 new analysis registration outside the scorer; the function cannot authenticate
 that registration. PR head hashes are 40 lowercase hex characters; SHA256 fields
 are 64 lowercase hex characters.
@@ -96,12 +102,14 @@ are 64 lowercase hex characters.
 A receipt is `{ id, kind, revision, sha256, persisted }`. Supported admission or
 application evidence must be an actual server-persisted per-unit receipt for
 this correction, at/after post-window start, not approval, consent or run start.
+An admission/application receipt ID cannot be reused across different units.
 Receipt authenticity and authorized reviewer membership must be independently
 established by the producer of the frozen bundle. This function validates the
 explicit joins, not the external server signature or authorization policy.
 
 Each member needs an `events` coverage receipt spanning its entire history from
-arrival through asOf. A `runs` receipt is separately needed for cost. The receipt
+arrival through asOf. Reversed coverage intervals are refused. A `runs` receipt
+is separately needed for cost. The receipt
 must assert complete, no errors and no truncation, list every consecutive page
 starting at 1 exactly once, agree with expected page and record counts, match
 all record IDs exactly and match the canonical hash of that member's records.
@@ -147,12 +155,18 @@ valid merge is insufficient evidence, not a sufficient WIP observation. Fixture
 success alone never accepts anything. An authorized cancellation/withdrawal needs
 a persisted `withdrawal` receipt from a declared reviewer. A subsequent ordinary
 close preserves that authorized cleanup; unsupported closure is not completion.
+Authorized cleanup is not head-specific and survives head updates, but a reopen
+invalidates it. Acceptance sufficiency requires a terminal category for every
+member; fully observed backlog or started WIP is still missing acceptance.
+Invalid acceptance records (including a delivery receipt before any valid merge)
+remain historical evidence issues even if later receipts qualify an outcome;
+this conservative v1 rule does not silently erase contradictory supplied proof.
 
 Each boundary snapshot separates `accepted_delivery`, `accepted_artifact`,
 `merged_awaiting_acceptance`, `authorized_cleanup`, `unstarted_backlog` and
 `started_wip`. Started blocked/reviewing work remains unfinished WIP. Never-started
-blocked work stays backlog. Merge and close count once per unit in the window;
-a close does not invent another merge. Reopens and raw cancellation/withdrawal
+blocked work stays backlog. Merges count once per unit in the window; closes do
+not add another merge or a separate close count. Reopens and raw cancellation/withdrawal
 events are separately counted. Closing accepted outcomes whose effective terminal
 time falls in the window supply completed counts/latencies; an outcome invalidated
 by reopen/head drift is not silently treated as still accepted at that boundary.
@@ -170,7 +184,14 @@ when the member has exactly one reviewer. Overlapping reviews from different
 reviewers retain separate samples and censored waits (with `reviewerId`).
 Undeclared/unidentified reviewers, duplicate outstanding arrivals for the same
 reviewer, or unmatched completions mark acceptance UNKNOWN and supply no
-fabricated latency for that ambiguous join.
+fabricated latency for that ambiguous join. A head change or reopen invalidates
+outstanding review waits but retains their known reviewer joins until completion;
+those completions are consumed without an ambiguity penalty or latency sample.
+Invalidated arrivals are not active censored waits. A fresh arrival after that
+completion can establish a new sample. An overlapping new arrival before the
+invalidated one completes is still ambiguous: the contract has no review-cycle
+identifier with which to choose a completion's arrival. This does not restore
+stale acceptance; fresh exact-head terminal evidence is still required.
 Cost is UNKNOWN unless nonempty run evidence has complete coverage and immutable
 unit/source/executor/membership joins; absence is not zero spend. The reported
 currency is subscription-equivalent, not cash billing.

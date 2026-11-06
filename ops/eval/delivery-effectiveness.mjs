@@ -72,11 +72,13 @@ function validate(input) {
   for (const m of b.members) {
     fields(m, ['id', 'sourceId', 'executorId', 'reviewerIds', 'pr', 'arrivedAtUTC', 'releaseRequired']);
     text(m.id); text(m.sourceId); text(m.executorId); utc(m.arrivedAtUTC); array(m.reviewerIds);
-    requireThat(m.reviewerIds.length > 0 && !m.reviewerIds.includes(m.executorId), 'REVIEWER'); m.reviewerIds.forEach(text);
+    requireThat(time(m.arrivedAtUTC) <= time(b.asOfUTC), 'MEMBER_TIME');
+    requireThat(m.reviewerIds.length > 0 && new Set(m.reviewerIds).size === m.reviewerIds.length && !m.reviewerIds.includes(m.executorId), 'REVIEWER'); m.reviewerIds.forEach(text);
     requireThat(typeof m.releaseRequired === 'boolean' && (m.pr === null || Number.isSafeInteger(m.pr) && m.pr > 0), 'MEMBER');
     if (sources.has(m.sourceId) || m.pr !== null && prs.has(m.pr)) throw Error('AMBIGUOUS_MAPPING');
     sources.add(m.sourceId); if (m.pr !== null) prs.add(m.pr); members.set(m.id, m);
   }
+  const treatmentReceiptUnits = new Map();
   for (const e of b.events) {
     fields(e, ['id', 'unitId', 'kind', 'atUTC', 'head', 'actorId', 'receipt', 'correction'], ['id', 'unitId', 'kind', 'atUTC']);
     requireThat(members.has(e.unitId) && KINDS.has(e.kind), 'EVENT'); utc(e.atUTC);
@@ -88,6 +90,11 @@ function validate(input) {
       fields(e.receipt, ['id', 'kind', 'revision', 'sha256', 'persisted']);
       text(e.receipt.id); text(e.receipt.kind); text(e.receipt.revision);
       requireThat(SHA.test(e.receipt.sha256) && typeof e.receipt.persisted === 'boolean', 'RECEIPT');
+      if (['admission', 'application'].includes(e.kind)) {
+        const receiptUnit = treatmentReceiptUnits.get(e.receipt.id);
+        requireThat(!receiptUnit || receiptUnit === e.unitId, 'RECEIPT_UNIT');
+        treatmentReceiptUnits.set(e.receipt.id, e.unitId);
+      }
     }
   }
   for (const r of b.runs) {
@@ -102,6 +109,7 @@ function validate(input) {
     requireThat(members.has(c.unitId) && ['events', 'runs'].includes(c.stream), 'COVERAGE');
     const key = `${c.unitId}:${c.stream}`; requireThat(!coverageKeys.has(key), 'COVERAGE_JOIN'); coverageKeys.add(key);
     utc(c.fromUTC); utc(c.throughUTC); integer(c.expectedPages); integer(c.expectedRecords);
+    requireThat(time(c.fromUTC) <= time(c.throughUTC), 'COVERAGE_TIME');
     array(c.fetchedPages); array(c.errors); array(c.recordIds); c.fetchedPages.forEach(integer); c.recordIds.forEach(text); c.errors.forEach(text);
     requireThat(typeof c.complete === 'boolean' && typeof c.truncated === 'boolean' && SHA.test(c.recordsSha256), 'COVERAGE');
   }
@@ -126,6 +134,11 @@ function accepted(e, m, s, kind) {
   return receiptValid(e, kind) && m.reviewerIds.includes(e.actorId) && e.head && e.head === s.head;
 }
 function resetEvidence(s) { s.merge = null; s.delivery = null; s.artifact = null; s.release = null; s.cleanup = null; s.completedAt = null; }
+function invalidateWaits(s) {
+  s.ready = null; s.mergeReady = null;
+  // Retain known arrivals to consume their completions without inventing a sample.
+  for (const arrival of s.reviewArrivals.values()) if (arrival) arrival.invalidated = true;
+}
 function category(s, m) {
   if (s.cleanup) return 'authorized_cleanup';
   if (s.delivery && s.merge && (!m.releaseRequired || s.release)) return 'accepted_delivery';
@@ -155,8 +168,10 @@ function replay(b, m, end, start = end, observedEnd = end) {
       if (!e.head) s.issues.push('missing_head');
       if (s.head && s.head !== e.head) {
         s.invalidated ||= Boolean(s.merge || s.delivery || s.artifact || s.release);
+        const cleanup = s.cleanup;
         resetEvidence(s); // head drift
-        s.ready = null; s.mergeReady = null; s.reviewArrivals.clear();
+        s.cleanup = cleanup;
+        invalidateWaits(s);
       }
       s.head = e.head || null;
     }
@@ -169,16 +184,16 @@ function replay(b, m, end, start = end, observedEnd = end) {
       if (!reviewer || !m.reviewerIds.includes(reviewer)) s.issues.push('ambiguous_review');
       else if (e.kind === 'review_arrived') {
         if (s.reviewArrivals.has(reviewer)) { s.reviewArrivals.set(reviewer, null); s.issues.push('ambiguous_review'); }
-        else s.reviewArrivals.set(reviewer, e.atUTC);
+        else s.reviewArrivals.set(reviewer, { atUTC: e.atUTC, invalidated: false });
       } else {
         const arrived = s.reviewArrivals.get(reviewer);
         if (!arrived) s.issues.push('ambiguous_review');
-        else if (time(e.atUTC) >= start) s.reviewLatencies.push(time(e.atUTC) - time(arrived));
+        else if (!arrived.invalidated && time(e.atUTC) >= start) s.reviewLatencies.push(time(e.atUTC) - time(arrived.atUTC));
         s.reviewArrivals.delete(reviewer);
       }
     }
     if (e.kind === 'reopened') { resetEvidence(s); // reopen
-      s.ready = null; s.mergeReady = null; s.reviewArrivals.clear(); }
+      invalidateWaits(s); }
     if (e.kind === 'merged') {
       if (e.head && e.head === s.head && s.started && !s.merge) { s.merge = e; s.mergeReady = s.ready; }
       else if (!e.head || e.head !== s.head || !s.started) s.issues.push('invalid_merge');
@@ -224,7 +239,7 @@ function windowScore(b, w) {
     if (s.merge && s.mergeReady && time(s.merge.atUTC) >= start) readyLatencies.push(time(s.merge.atUTC) - time(s.mergeReady));
     if (s.started && !terminal(c)) waits.push({ unitId: m.id, kind: 'started', censored: true, elapsedMs: observedEnd - time(s.started) });
     for (const [reviewerId, arrived] of s.reviewArrivals) {
-      if (arrived && !terminal(c)) waits.push({ unitId: m.id, reviewerId, kind: 'review', censored: true, elapsedMs: observedEnd - time(arrived) });
+      if (arrived && !arrived.invalidated && !terminal(c)) waits.push({ unitId: m.id, reviewerId, kind: 'review', censored: true, elapsedMs: observedEnd - time(arrived.atUTC) });
     }
   }
   const rows = b.events.filter(e => time(e.atUTC) >= start && time(e.atUTC) < end), merges = rows.filter(e => e.kind === 'merged');
@@ -242,7 +257,7 @@ export function scoreDelivery(bundle) {
   const states = b.members.filter(m => time(m.arrivedAtUTC) <= asOf).map(m => ({ m, s: replay(b, m, asOf + 1) }));
   const accounting = b.members.length > 0 && b.members.every(m => covered(b, m, 'events'));
   const treated = b.members.length > 0 && b.members.every(m => b.events.some(e => e.unitId === m.id && (e.kind === 'admission' || e.kind === 'application') && e.correction === b.scope.correction && receiptValid(e, e.kind) && time(e.atUTC) >= time(b.windows.post.startUTC) && time(e.atUTC) <= asOf));
-  const acceptance = accounting && states.every(({ m, s }) => !s.issues.length && !s.invalidated && category(s, m) !== 'merged_awaiting_acceptance');
+  const acceptance = accounting && states.every(({ m, s }) => !s.issues.length && !s.invalidated && terminal(category(s, m)));
   const observed = { pre: windowScore(b, b.windows.pre), post: windowScore(b, b.windows.post) };
   const matchedExposure = b.members.every(m => b.events.some(e => e.unitId === m.id && ['admission', 'application'].includes(e.kind) && e.correction === b.scope.correction && receiptValid(e, e.kind) && time(e.atUTC) === time(b.windows.post.startUTC)));
   const comparison = accounting && treated && matchedExposure && acceptance && observed.pre.fullyObserved && observed.post.fullyObserved && b.confounders.concurrentExposure === 'none' && b.confounders.changedMix === false && observed.pre.completed >= 2 && observed.post.completed >= 2;

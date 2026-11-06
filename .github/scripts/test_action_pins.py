@@ -102,7 +102,7 @@ class PinShapes(unittest.TestCase):
         self.assertEqual(1, len(out))
 
     def test_run_value_containing_uses_is_ignored(self):
-        self.assertEqual([], findings("steps:\n  - run: echo uses: foo\n"))
+        self.assertEqual([], findings('steps:\n  - run: "echo uses: foo"\n'))
 
 
 def run_main(args, cwd=None):

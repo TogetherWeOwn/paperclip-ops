@@ -97,7 +97,9 @@ independent reviewer is required; reviewer IDs must be unique and the executor
 cannot be a reviewer. Changing any membership identity requires a new membership hash and a
 new analysis registration outside the scorer; the function cannot authenticate
 that registration. PR head hashes are 40 lowercase hex characters; SHA256 fields
-are 64 lowercase hex characters.
+are 64 lowercase hex characters. Both must be primitive strings, never arrays
+or other values coerced to text. The repository URL has the same 512-code-unit
+string bound as the identifiers/labels.
 
 A receipt is `{ id, kind, revision, sha256, persisted }`. Supported admission or
 application evidence must be an actual server-persisted per-unit receipt for
@@ -134,7 +136,12 @@ are safely deduplicated. Differing payloads with the same ID or ambiguous joins
 are refused. Replay sorts by timestamp, then kind (with `merged` before other
 kinds), then event ID. This is a declared tie convention, not a reconstruction of
 unknown server order; the normalizer must not present ambiguous causal order as
-known fact. A head event establishes the exact PR head. Changing it invalidates
+known fact. Conflicting head values at the same instant do not establish a
+known current head: neither merge nor acceptance can qualify against that tie's
+arbitrary last ID. A later unambiguous head event can establish a fresh join;
+invalid acceptance/merge attempts during ambiguity remain historical issues.
+Identical tied heads are not conflicting. A head event establishes the exact PR
+head. Changing it invalidates
 prior merge, acceptance and release evidence. A reopen also invalidates terminal
 evidence and resets ready/review waits. Head changes reset those joins too.
 An ordinary pre-evidence head update does not itself defeat acceptance. An
@@ -145,16 +152,20 @@ service time. Repeated acceptance/release receipts do not move the first
 effective terminal timestamp. An artifact-to-delivery upgrade without an
 invalidation is also not a second completion.
 
-An acceptance event needs a persisted `acceptance` receipt, the exact current
-head and an actor in the member's independent reviewer list. Artifact acceptance
+An acceptance event needs prior started work (a `started` event already processed
+in replay), a persisted `acceptance` receipt, the exact unambiguous current head
+and an actor in the member's independent reviewer list. Artifact acceptance
 and live delivery acceptance are different event kinds. A `release_accepted`
-event needs a `release` receipt with the same exact-head/reviewer requirements.
+event needs a `release` receipt with the same prior-start/exact-head/reviewer
+requirements. A receipt on never-started work is invalid acceptance, not completion.
 Delivery additionally needs a valid merge and, when `releaseRequired:true`,
 applicable release acceptance. An asserted delivery receipt without an already
 valid merge is insufficient evidence, not a sufficient WIP observation. Fixture
 success alone never accepts anything. An authorized cancellation/withdrawal needs
 a persisted `withdrawal` receipt from a declared reviewer. A subsequent ordinary
-close preserves that authorized cleanup; unsupported closure is not completion.
+close preserves that authorized cleanup or an already accepted artifact; it does
+not add a completion or upgrade artifact acceptance to delivery. Unsupported
+closure without either accepted artifact, merge or cleanup is not completion.
 Authorized cleanup is not head-specific and survives head updates, but a reopen
 invalidates it. Acceptance sufficiency requires a terminal category for every
 member; fully observed backlog or started WIP is still missing acceptance.
@@ -181,10 +192,16 @@ Readiness is captured with its valid merge, not overwritten by later ready event
 Review arrivals/completions join on a declared reviewer `actorId`, with at most
 one outstanding review per reviewer. Missing actor identity is inferred only
 when the member has exactly one reviewer. Overlapping reviews from different
-reviewers retain separate samples and censored waits (with `reviewerId`).
-Undeclared/unidentified reviewers, duplicate outstanding arrivals for the same
-reviewer, or unmatched completions mark acceptance UNKNOWN and supply no
-fabricated latency for that ambiguous join. A head change or reopen invalidates
+reviewers retain separate samples and censored waits (with `reviewerId`), even
+when another reviewer's acceptance makes the unit terminal. Only that review's
+completion or invalidation ends its active wait; terminal-unit status alone does
+not. Undeclared/unidentified reviewers, duplicate outstanding arrivals for the
+same reviewer, or unmatched completions mark acceptance UNKNOWN and supply no
+fabricated latency for that ambiguous join. Overlaps retain an outstanding count:
+all overlapping arrivals must be drained by completions before a fresh arrival
+can form an unambiguous join. Interleaved new arrivals do not reset ambiguity,
+even when only one outstanding review remains. Ambiguous joins supply neither
+latency samples nor invented censored durations. A head change or reopen invalidates
 outstanding review waits but retains their known reviewer joins until completion;
 those completions are consumed without an ambiguity penalty or latency sample.
 Invalidated arrivals are not active censored waits. A fresh arrival after that
@@ -232,8 +249,10 @@ node ops/eval/delivery-effectiveness.test.mjs --verify
 ```
 
 The assertions are written before the implementation. `--verify` first checks
-the actual source, then generates named one-fault scorer copies in a temporary
-directory and runs each designated assertion against its mutant. A control is
+the actual source, then generates named one-fault scorer copies (and one harness
+copy for relative `--subject` resolution) in a temporary directory and runs each
+designated assertion against its mutant. Absolute and cwd-relative `--subject`
+paths resolve to the same scorer for both import and executable-symlink checks. A control is
 accepted only with exit 1 **and its designated `SEMANTIC:<case>` assertion**;
 missing modules, syntax errors, timeout and import failures do not count. Logs
 record each exact replacement, command, expected assertion, exit and verdict.

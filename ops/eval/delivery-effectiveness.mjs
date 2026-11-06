@@ -8,6 +8,7 @@ import { resolve } from 'node:path';
 export const LIMITS = Object.freeze({ bytes: 2 * 1024 * 1024, records: 10000, members: 1000, depth: 32 });
 const KINDS = new Set(['head', 'started', 'blocked', 'unblocked', 'reviewing', 'ready', 'review_arrived', 'review_completed', 'admission', 'application', 'approval', 'run_started', 'fixture_pass', 'merged', 'closed', 'reopened', 'accepted_artifact', 'accepted_delivery', 'release_accepted', 'cancelled', 'withdrawn', 'failed', 'rework', 'rollback', 'security']);
 const SHA = /^[a-f0-9]{64}$/, HEAD = /^[a-f0-9]{40}$/;
+const hashMatches = (pattern, value) => typeof value === 'string' && pattern.test(value);
 const time = s => Date.parse(s);
 const cmp = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 function requireThat(ok, code) { if (!ok) throw Error(`INVALID_${code}`); }
@@ -56,6 +57,7 @@ function validate(input) {
   requireThat(b.schema === 'delivery-bundle.v1' && b.policy === 'delivery-policy.v1', 'VERSION');
   utc(b.asOfUTC);
   fields(b.scope, ['repository', 'workclass', 'correction']);
+  text(b.scope.repository);
   requireThat(/^https:\/\/github\.com\/[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/.test(b.scope.repository) && !['.', '..'].includes(b.scope.repository.split('/').at(-1)), 'REPOSITORY');
   text(b.scope.workclass); text(b.scope.correction);
   fields(b.windows, ['pre', 'post']);
@@ -63,10 +65,11 @@ function validate(input) {
   requireThat(time(b.windows.pre.endUTC) === time(b.windows.post.startUTC) && time(b.windows.pre.endUTC) - time(b.windows.pre.startUTC) === time(b.windows.post.endUTC) - time(b.windows.post.startUTC), 'MATCHED_WINDOWS');
   requireThat(time(b.asOfUTC) >= time(b.windows.post.startUTC), 'ASOF');
   fields(b.provenance, ['sources', 'sourceSha256', 'testSha256', 'contractSha256']);
-  for (const k of ['sourceSha256', 'testSha256', 'contractSha256']) requireThat(SHA.test(b.provenance[k]), 'HASH');
+  for (const k of ['sourceSha256', 'testSha256', 'contractSha256']) requireThat(hashMatches(SHA, b.provenance[k]), 'HASH');
   array(b.provenance.sources); requireThat(b.provenance.sources.length > 0, 'PROVENANCE');
   b.provenance.sources = unique(b.provenance.sources);
-  for (const s of b.provenance.sources) { fields(s, ['id', 'revision', 'sha256']); text(s.id); text(s.revision); requireThat(SHA.test(s.sha256), 'HASH'); }
+  for (const s of b.provenance.sources) { fields(s, ['id', 'revision', 'sha256']); text(s.id); text(s.revision); requireThat(hashMatches(SHA, s.sha256), 'HASH'); }
+  requireThat(hashMatches(SHA, b.membershipSha256), 'HASH');
   if (b.membershipSha256 !== canonicalHash(b.members)) throw Error('MEMBERSHIP_HASH');
   const sources = new Set(), prs = new Set(), members = new Map();
   for (const m of b.members) {
@@ -83,13 +86,13 @@ function validate(input) {
     fields(e, ['id', 'unitId', 'kind', 'atUTC', 'head', 'actorId', 'receipt', 'correction'], ['id', 'unitId', 'kind', 'atUTC']);
     requireThat(members.has(e.unitId) && KINDS.has(e.kind), 'EVENT'); utc(e.atUTC);
     requireThat(time(e.atUTC) >= time(members.get(e.unitId).arrivedAtUTC) && time(e.atUTC) <= time(b.asOfUTC), 'EVENT_TIME');
-    if (e.head !== undefined) requireThat(HEAD.test(e.head) && members.get(e.unitId).pr !== null, 'HEAD');
+    if (e.head !== undefined) requireThat(hashMatches(HEAD, e.head) && members.get(e.unitId).pr !== null, 'HEAD');
     if (e.actorId !== undefined) text(e.actorId);
     if (e.correction !== undefined) text(e.correction);
     if (e.receipt !== undefined) {
       fields(e.receipt, ['id', 'kind', 'revision', 'sha256', 'persisted']);
       text(e.receipt.id); text(e.receipt.kind); text(e.receipt.revision);
-      requireThat(SHA.test(e.receipt.sha256) && typeof e.receipt.persisted === 'boolean', 'RECEIPT');
+      requireThat(hashMatches(SHA, e.receipt.sha256) && typeof e.receipt.persisted === 'boolean', 'RECEIPT');
       if (['admission', 'application'].includes(e.kind)) {
         const receiptUnit = treatmentReceiptUnits.get(e.receipt.id);
         requireThat(!receiptUnit || receiptUnit === e.unitId, 'RECEIPT_UNIT');
@@ -100,7 +103,7 @@ function validate(input) {
   for (const r of b.runs) {
     fields(r, ['id', 'unitId', 'sourceId', 'executorId', 'membershipSha256', 'atUTC', 'tokens', 'runMs', 'subscriptionEquivalentUSD']);
     requireThat(members.has(r.unitId), 'RUN'); text(r.sourceId); text(r.executorId); utc(r.atUTC);
-    requireThat(SHA.test(r.membershipSha256) && time(r.atUTC) <= time(b.asOfUTC), 'RUN');
+    requireThat(hashMatches(SHA, r.membershipSha256) && time(r.atUTC) <= time(b.asOfUTC), 'RUN');
     integer(r.tokens); integer(r.runMs); requireThat(Number.isFinite(r.subscriptionEquivalentUSD) && r.subscriptionEquivalentUSD >= 0, 'COST');
   }
   const coverageKeys = new Set();
@@ -111,7 +114,7 @@ function validate(input) {
     utc(c.fromUTC); utc(c.throughUTC); integer(c.expectedPages); integer(c.expectedRecords);
     requireThat(time(c.fromUTC) <= time(c.throughUTC), 'COVERAGE_TIME');
     array(c.fetchedPages); array(c.errors); array(c.recordIds); c.fetchedPages.forEach(integer); c.recordIds.forEach(text); c.errors.forEach(text);
-    requireThat(typeof c.complete === 'boolean' && typeof c.truncated === 'boolean' && SHA.test(c.recordsSha256), 'COVERAGE');
+    requireThat(typeof c.complete === 'boolean' && typeof c.truncated === 'boolean' && hashMatches(SHA, c.recordsSha256), 'COVERAGE');
   }
   fields(b.confounders, ['concurrentExposure', 'changedMix', 'comparableUntreated']);
   text(b.confounders.concurrentExposure); requireThat([true, false, null].includes(b.confounders.changedMix) && [true, false, null].includes(b.confounders.comparableUntreated), 'CONFOUNDERS');
@@ -131,7 +134,7 @@ function receiptValid(e, kind) {
   return Boolean(r && r.kind === kind && r.persisted === true);
 }
 function accepted(e, m, s, kind) {
-  return receiptValid(e, kind) && m.reviewerIds.includes(e.actorId) && e.head && e.head === s.head;
+  return receiptValid(e, kind) && m.reviewerIds.includes(e.actorId) && !s.headAmbiguous && e.head && e.head === s.head;
 }
 function resetEvidence(s) { s.merge = null; s.delivery = null; s.artifact = null; s.release = null; s.cleanup = null; s.completedAt = null; }
 function invalidateWaits(s) {
@@ -157,16 +160,23 @@ function terminalAt(s, m) {
   return null;
 }
 function replay(b, m, end, start = end, observedEnd = end) {
-  const s = { head: null, started: null, blockedAt: null, ready: null, mergeReady: null, reviewArrivals: new Map(), invalidated: false, issues: [], blockedMs: 0, reviewLatencies: [] };
+  const s = { head: null, headAmbiguous: false, started: null, blockedAt: null, ready: null, mergeReady: null, reviewArrivals: new Map(), invalidated: false, issues: [], blockedMs: 0, reviewLatencies: [] };
   resetEvidence(s);
   let previous = time(m.arrivedAtUTC);
   const rows = b.events.filter(e => e.unitId === m.id && time(e.atUTC) < end).sort((a, b) => time(a.atUTC) - time(b.atUTC) || cmp(a.kind === 'merged' ? '' : a.kind, b.kind === 'merged' ? '' : b.kind) || cmp(a.id, b.id));
+  const headsAt = new Map();
+  for (const e of rows) if (e.kind === 'head') {
+    const at = time(e.atUTC);
+    if (!headsAt.has(at)) headsAt.set(at, new Set());
+    headsAt.get(at).add(e.head);
+  }
   const charge = until => { if (s.started && s.blockedAt && !terminal(category(s, m))) s.blockedMs += Math.max(0, until - Math.max(previous, start)); previous = until; };
   for (const e of rows) {
     charge(time(e.atUTC));
     if (e.kind === 'head') {
       if (!e.head) s.issues.push('missing_head');
-      if (s.head && s.head !== e.head) {
+      s.headAmbiguous = headsAt.get(time(e.atUTC)).size > 1;
+      if (s.head && (s.head !== e.head || s.headAmbiguous)) {
         s.invalidated ||= Boolean(s.merge || s.delivery || s.artifact || s.release);
         const cleanup = s.cleanup;
         resetEvidence(s); // head drift
@@ -183,22 +193,26 @@ function replay(b, m, end, start = end, observedEnd = end) {
       const reviewer = e.actorId || (m.reviewerIds.length === 1 ? m.reviewerIds[0] : null);
       if (!reviewer || !m.reviewerIds.includes(reviewer)) s.issues.push('ambiguous_review');
       else if (e.kind === 'review_arrived') {
-        if (s.reviewArrivals.has(reviewer)) { s.reviewArrivals.set(reviewer, null); s.issues.push('ambiguous_review'); }
-        else s.reviewArrivals.set(reviewer, { atUTC: e.atUTC, invalidated: false });
+        const arrived = s.reviewArrivals.get(reviewer);
+        if (arrived) { arrived.pending++; arrived.ambiguous = true; s.issues.push('ambiguous_review'); }
+        else s.reviewArrivals.set(reviewer, { atUTC: e.atUTC, invalidated: false, pending: 1, ambiguous: false });
       } else {
         const arrived = s.reviewArrivals.get(reviewer);
         if (!arrived) s.issues.push('ambiguous_review');
-        else if (!arrived.invalidated && time(e.atUTC) >= start) s.reviewLatencies.push(time(e.atUTC) - time(arrived.atUTC));
-        s.reviewArrivals.delete(reviewer);
+        else {
+          if (!arrived.ambiguous && !arrived.invalidated && time(e.atUTC) >= start) s.reviewLatencies.push(time(e.atUTC) - time(arrived.atUTC));
+          // No cycle IDs: only a fully drained overlap permits a fresh unambiguous join.
+          if (--arrived.pending === 0) s.reviewArrivals.delete(reviewer);
+        }
       }
     }
     if (e.kind === 'reopened') { resetEvidence(s); // reopen
       invalidateWaits(s); }
     if (e.kind === 'merged') {
-      if (e.head && e.head === s.head && s.started && !s.merge) { s.merge = e; s.mergeReady = s.ready; }
-      else if (!e.head || e.head !== s.head || !s.started) s.issues.push('invalid_merge');
+      if (!s.headAmbiguous && e.head && e.head === s.head && s.started && !s.merge) { s.merge = e; s.mergeReady = s.ready; }
+      else if (s.headAmbiguous || !e.head || e.head !== s.head || !s.started) s.issues.push('invalid_merge');
     }
-    if (e.kind === 'closed' && !s.merge && !s.cleanup) s.issues.push('unauthorized_close');
+    if (e.kind === 'closed' && !s.merge && !s.cleanup && !s.artifact) s.issues.push('unauthorized_close');
     if (['cancelled', 'withdrawn'].includes(e.kind)) {
       if (receiptValid(e, 'withdrawal') && m.reviewerIds.includes(e.actorId)) s.cleanup = e;
       else s.issues.push('unauthorized_cleanup');
@@ -239,7 +253,7 @@ function windowScore(b, w) {
     if (s.merge && s.mergeReady && time(s.merge.atUTC) >= start) readyLatencies.push(time(s.merge.atUTC) - time(s.mergeReady));
     if (s.started && !terminal(c)) waits.push({ unitId: m.id, kind: 'started', censored: true, elapsedMs: observedEnd - time(s.started) });
     for (const [reviewerId, arrived] of s.reviewArrivals) {
-      if (arrived && !arrived.invalidated && !terminal(c)) waits.push({ unitId: m.id, reviewerId, kind: 'review', censored: true, elapsedMs: observedEnd - time(arrived.atUTC) });
+      if (arrived && !arrived.ambiguous && !arrived.invalidated) waits.push({ unitId: m.id, reviewerId, kind: 'review', censored: true, elapsedMs: observedEnd - time(arrived.atUTC) });
     }
   }
   const rows = b.events.filter(e => time(e.atUTC) >= start && time(e.atUTC) < end), merges = rows.filter(e => e.kind === 'merged');

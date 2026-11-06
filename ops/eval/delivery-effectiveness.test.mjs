@@ -3,13 +3,13 @@
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve, relative } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const args = process.argv.slice(2);
 const option = name => args.includes(name) ? args[args.indexOf(name) + 1] : null;
-const subject = option('--subject') || fileURLToPath(new URL('./delivery-effectiveness.mjs', import.meta.url));
+const subject = resolve(option('--subject') || fileURLToPath(new URL('./delivery-effectiveness.mjs', import.meta.url)));
 const { scoreDelivery, canonicalStringify, canonicalHash, LIMITS } = await import(pathToFileURL(subject));
 const sha = 'a'.repeat(64), head = 'b'.repeat(40), newerHead = 'c'.repeat(40);
 const at = day => `2030-01-${String(day).padStart(2, '0')}T00:00:00.000Z`;
@@ -303,6 +303,92 @@ check('cli-score-body', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+check('terminal-review-wait', () => {
+  const b = fixture(); b.members[0].reviewerIds.push('reviewer-b');
+  b.events.push(event('review-b', 'review_arrived', 6, { actorId: 'reviewer-b' })); seal(b);
+  eq(score(b).evidence.acceptance.status, 'SUFFICIENT', 'terminal-review-wait');
+  eq(post(b).censoredWaits, [{ unitId: 'unit-a', reviewerId: 'reviewer-b', kind: 'review', censored: true, elapsedMs: 3 * 86400000 }], 'terminal-review-wait');
+  b.events.push(event('review-b-end', 'review_completed', 8, { actorId: 'reviewer-b' })); seal(b);
+  eq(post(b).censoredWaits, [], 'terminal-review-wait');
+  eq(post(b).reviewLatencyMs, { n: 1, p50: 2 * 86400000, p90: 2 * 86400000 }, 'terminal-review-wait');
+});
+check('review-ambiguity-drain', () => {
+  const b = fixture();
+  b.events.push(event('arrival-1', 'review_arrived', 3), event('arrival-2', 'review_arrived', 4),
+    event('completion-1', 'review_completed', 5), event('arrival-3', 'review_arrived', 6), event('completion-2', 'review_completed', 7)); seal(b);
+  eq(post(b).reviewLatencyMs, { n: 0, p50: null, p90: null }, 'review-ambiguity-drain');
+  eq(post(b).censoredWaits.filter(w => w.kind === 'review'), [], 'review-ambiguity-drain');
+  eq(score(b).evidence.acceptance.status, 'UNKNOWN', 'review-ambiguity-drain');
+  b.events.push(event('completion-3', 'review_completed', 8),
+    event('arrival-fresh', 'review_arrived', 8, { atUTC: '2030-01-08T01:00:00.000Z' }),
+    event('completion-fresh', 'review_completed', 8, { atUTC: '2030-01-08T03:00:00.000Z' })); seal(b);
+  eq(post(b).reviewLatencyMs, { n: 1, p50: 7200000, p90: 7200000 }, 'review-ambiguity-drain');
+  eq(score(b).evidence.acceptance.status, 'UNKNOWN', 'review-ambiguity-drain');
+});
+for (const field of ['sourceSha256', 'testSha256', 'contractSha256', 'sourceReceipt', 'acceptanceReceipt', 'eventHead', 'runMembership', 'coverageRecords', 'membershipSha256']) {
+  const name = `primitive-${field}`;
+  check(name, () => {
+    const b = fixture();
+    if (field === 'sourceReceipt') b.provenance.sources[0].sha256 = [sha];
+    else if (field === 'acceptanceReceipt') b.events.find(e => e.kind === 'accepted_delivery').receipt.sha256 = [sha];
+    else if (field === 'eventHead') b.events[0].head = [head];
+    else if (field === 'runMembership') b.runs.push({ id: 'run-a', unitId: 'unit-a', sourceId: 'source-a', executorId: 'builder-a', membershipSha256: [b.membershipSha256], atUTC: at(6), tokens: 1, runMs: 1, subscriptionEquivalentUSD: 0 });
+    else if (field === 'coverageRecords') b.coverage[0].recordsSha256 = [b.coverage[0].recordsSha256];
+    else if (field === 'membershipSha256') b.membershipSha256 = [b.membershipSha256];
+    else b.provenance[field] = [sha];
+    // Coverage remains valid for the receipt/head negatives: refusal is the field type, not missing evidence.
+    if (['sourceReceipt', 'acceptanceReceipt', 'eventHead', 'runMembership'].includes(field)) seal(b);
+    assert.throws(() => score(b), /INVALID_(HASH|HEAD|RECEIPT|RUN|COVERAGE)|MEMBERSHIP_HASH/, `SEMANTIC:${name}`);
+  });
+}
+check('repository-bound', () => {
+  const b = fixture(), prefix = 'https://github.com/example/';
+  b.scope.repository = prefix + 'x'.repeat(512 - prefix.length);
+  eq(score(b).scope.repository.length, 512, 'repository-bound');
+  b.scope.repository += 'x';
+  assert.throws(() => score(b), /INVALID_TEXT/, 'SEMANTIC:repository-bound');
+  b.scope.repository = ['https://github.com/example/project'];
+  assert.throws(() => score(b), /INVALID_TEXT/, 'SEMANTIC:repository-bound');
+});
+check('tied-heads', () => {
+  const b = fixture(); b.events.push(event('head-z', 'head', 1, { head: newerHead }));
+  b.events.filter(e => ['merged', 'accepted_delivery'].includes(e.kind)).forEach(e => { e.head = newerHead; }); seal(b);
+  eq(score(b).evidence.acceptance.status, 'UNKNOWN', 'tied-heads');
+  eq(post(b).completed, 0, 'tied-heads');
+  const r = canonicalStringify(score(b)); b.events.reverse();
+  eq(canonicalStringify(score(b)), r, 'tied-heads');
+  // Renaming tied event IDs must not select sufficient evidence for either head.
+  b.events.find(e => e.id === 'head-1').id = 'head-zz'; seal(b);
+  eq(score(b).evidence.acceptance.status, 'UNKNOWN', 'tied-heads');
+  b.events.push(event('head-resolved', 'head', 3, { head: newerHead })); seal(b);
+  eq(score(b).evidence.acceptance.status, 'SUFFICIENT', 'tied-heads');
+  const same = fixture(); same.events.push(event('head-identical', 'head', 1, { head })); seal(same);
+  eq(score(same).evidence.acceptance.status, 'SUFFICIENT', 'tied-heads');
+  eq(score(fixture()).evidence.acceptance.status, 'SUFFICIENT', 'tied-heads');
+});
+check('artifact-close', () => {
+  const b = fixture(); b.events = b.events.filter(e => !['merged', 'closed', 'accepted_delivery'].includes(e.kind));
+  b.events.push(event('artifact-pre', 'accepted_artifact', 3, { head, actorId: 'reviewer-a', receipt: receipt('acceptance') }), event('normal-close', 'closed', 6)); seal(b);
+  eq(score(b).evidence.acceptance.status, 'SUFFICIENT', 'artifact-close');
+  eq(score(b).observed.pre.completed, 1, 'artifact-close'); eq(post(b).completed, 0, 'artifact-close');
+  eq(post(b).closing.accepted_artifact, 1, 'artifact-close'); eq(post(b).closing.accepted_delivery, 0, 'artifact-close'); eq(post(b).merges, 0, 'artifact-close');
+  b.events = b.events.filter(e => e.kind !== 'accepted_artifact'); seal(b);
+  eq(score(b).evidence.acceptance.status, 'UNKNOWN', 'artifact-close'); eq(post(b).completed, 0, 'artifact-close'); eq(post(b).closing.started_wip, 1, 'artifact-close');
+});
+check('prior-start', () => {
+  for (const kind of ['accepted_artifact', 'accepted_delivery', 'release_accepted']) {
+    const b = fixture(); b.events = b.events.filter(e => !['started', 'merged', 'closed', 'accepted_delivery'].includes(e.kind));
+    b.events.push(event('unstarted-accept', kind, 7, { head, actorId: 'reviewer-a', receipt: receipt(kind === 'release_accepted' ? 'release' : 'acceptance') })); seal(b);
+    eq(score(b).evidence.acceptance.status, 'UNKNOWN', 'prior-start');
+    eq(post(b).completed, 0, 'prior-start');
+  }
+});
+check('relative-subject', () => {
+  const run = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--subject', relative(process.cwd(), subject), '--case', 'symlink-cli'], { encoding: 'utf8', timeout: 15000 });
+  eq(run.status, 0, 'relative-subject');
+  eq(run.stdout.includes('PASS symlink-cli'), true, 'relative-subject');
+});
+
 const selected = option('--case');
 let failures = 0;
 for (const [name, body] of cases) {
@@ -338,7 +424,7 @@ if (args.includes('--verify')) {
     ['no-causal-claim', "status: 'NOT_ESTABLISHED'", "status: 'ESTABLISHED'"],
     ['merge-close', 'merges: new Set(merges.map(e => e.unitId)).size', 'merges: merges.length + rows.filter(e => e.kind === "closed").length'],
     ['reopen', 'resetEvidence(s); // reopen', '// faulty retained terminal evidence'],
-    ['unauthorized-close', "if (e.kind === 'closed' && !s.merge && !s.cleanup) s.issues.push('unauthorized_close');", "if (e.kind === 'closed' && !s.merge) s.cleanup = e;"],
+    ['unauthorized-close', "if (e.kind === 'closed' && !s.merge && !s.cleanup && !s.artifact) s.issues.push('unauthorized_close');", "if (e.kind === 'closed' && !s.merge) s.cleanup = e;"],
     ['blocked-started', "return 'started_wip';", "return s.blockedAt ? 'unstarted_backlog' : 'started_wip';"],
     ['unstarted-blocked', 'if (!s.started) return', 'if (!s.started && !s.blockedAt) return'],
     ['head-drift', 'resetEvidence(s); // head drift', '// faulty stale-head evidence'],
@@ -356,7 +442,7 @@ if (args.includes('--verify')) {
     ['terminal-upgrade', 'if (s.completedAt !== null) return s.completedAt;', '// faulty artifact upgrade recounts a completion'],
     ['acceptance-needs-merge', "if (!s.merge) s.issues.push('missing_merge');", 'if (!s.merge) { s.merge = e; s.delivery = e; }'],
     ['head-requalification', 's.head = e.head || null;', "if (s.head) s.issues.push('head_drift'); s.head = e.head || null;"],
-    ['withdrawal-close', "if (e.kind === 'closed' && !s.merge && !s.cleanup)", "if (e.kind === 'closed' && !s.merge)"],
+    ['withdrawal-close', "if (e.kind === 'closed' && !s.merge && !s.cleanup && !s.artifact)", "if (e.kind === 'closed' && !s.merge && !s.artifact)"],
     ['ready-pair', 'time(s.mergeReady)', 'time(s.ready)'],
     ['overlapping-reviews', 'const reviewer = e.actorId ||', 'const reviewer = m.reviewerIds[0] ||'],
     ['ambiguous-reviews', '(m.reviewerIds.length === 1 ? m.reviewerIds[0] : null)', 'm.reviewerIds[0]'],
@@ -375,16 +461,26 @@ if (args.includes('--verify')) {
     ['receipt-unit', "requireThat(!receiptUnit || receiptUnit === e.unitId, 'RECEIPT_UNIT');", ';'],
     ['cleanup-head', 's.cleanup = cleanup;', 's.cleanup = null;'],
     ['cli-score-body', 'const output = scoreDelivery(input);', 'const output = { ...scoreDelivery(input), operationalAuthorization: true };'],
+    ['terminal-review-wait', 'arrived && !arrived.ambiguous && !arrived.invalidated) waits.push', 'arrived && !arrived.ambiguous && !arrived.invalidated && !terminal(c)) waits.push'],
+    ['review-ambiguity-drain', 'if (--arrived.pending === 0)', 'if (true)'],
+    ...['sourceSha256', 'testSha256', 'contractSha256', 'sourceReceipt', 'acceptanceReceipt', 'eventHead', 'runMembership', 'coverageRecords'].map(field =>
+      [`primitive-${field}`, "typeof value === 'string' && pattern.test(value)", 'pattern.test(value)']),
+    ['repository-bound', 'text(b.scope.repository);', ';'],
+    ['tied-heads', 's.headAmbiguous = headsAt.get(time(e.atUTC)).size > 1;', 's.headAmbiguous = false;'],
+    ['artifact-close', "if (e.kind === 'closed' && !s.merge && !s.cleanup && !s.artifact)", "if (e.kind === 'closed' && !s.merge && !s.cleanup)"],
+    ['prior-start', 'if (s.started && accepted(e, m, s, kind))', 'if (accepted(e, m, s, kind))'],
+    ['relative-subject', 'const subject = resolve(', 'const subject = (', 'harness'],
   ];
-  const source = readFileSync(subject, 'utf8'), dir = mkdtempSync(join(tmpdir(), 'delivery-mutants-'));
+  const source = readFileSync(subject, 'utf8'), harness = readFileSync(fileURLToPath(import.meta.url), 'utf8'), dir = mkdtempSync(join(tmpdir(), 'delivery-mutants-'));
   try {
-    for (const [name, from, to] of mutants) {
-      assert(source.includes(from), `missing mutant anchor: ${name}`);
-      const path = join(dir, `${name}.mjs`); writeFileSync(path, source.replace(from, to));
-      const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--subject', path, '--case', name], { encoding: 'utf8', timeout: 15000 });
+    for (const [name, from, to, target = 'scorer'] of mutants) {
+      const original = target === 'harness' ? harness : source;
+      assert(original.includes(from), `missing mutant anchor: ${name}`);
+      const path = join(dir, `${name}.mjs`); writeFileSync(path, original.replace(from, to));
+      const r = spawnSync(process.execPath, [target === 'harness' ? path : fileURLToPath(import.meta.url), '--subject', target === 'harness' ? subject : path, '--case', name], { encoding: 'utf8', timeout: 15000 });
       process.stdout.write(r.stdout || ''); process.stdout.write(r.stderr || '');
       assert(r.status === 1 && r.stderr.includes('AssertionError') && r.stderr.includes(`SEMANTIC:${name}`), `mutant ${name} did not fail its designated semantic assertion (exit ${r.status})`);
-      console.log(JSON.stringify({ mutant: name, mutation: { from, to }, command: `node delivery-effectiveness.test.mjs --subject <mutant> --case ${name}`, expected: `SEMANTIC:${name}`, exit: r.status, verdict: 'KILLED' }));
+      console.log(JSON.stringify({ mutant: name, mutation: { target, from, to }, command: target === 'harness' ? `node <mutant-harness> --subject <scorer> --case ${name}` : `node delivery-effectiveness.test.mjs --subject <mutant> --case ${name}`, expected: `SEMANTIC:${name}`, exit: r.status, verdict: 'KILLED' }));
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
   console.log(JSON.stringify({ negativeControls: mutants.length, verdict: 'PASS' }));

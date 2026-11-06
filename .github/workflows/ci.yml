@@ -986,6 +986,11 @@ jobs:
         with:
           node-version: '24'
 
+      # Frozen evidence only; the same assertions must kill semantic mutants.
+      - name: delivery-effectiveness assertions and negative controls
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: node ops/eval/delivery-effectiveness.test.mjs --verify
+
       # case_221a4156. Keep the migration contract executable: changing the label,
       # restoring a paid fallback, deleting the runner proof, or dropping the
       # clean checkout must turn this job red.

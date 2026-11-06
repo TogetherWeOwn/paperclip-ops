@@ -1,0 +1,22 @@
+name = "cloudflare-uptime"
+main = "src/worker.mjs"
+compatibility_date = "2026-10-30"
+workers_dev = true
+
+[vars]
+ENVIRONMENT = "production"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[[durable_objects.bindings]]
+name = "MONITOR"
+class_name = "Monitor"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Monitor"]
+
+# MONITOR_CONFIG, ALERT_WEBHOOK_URL, CF_CERTIFICATES_READ_TOKEN are Worker
+# secrets, never committed vars. Staging additionally requires DRILL_TOKEN.
+# Account selection is supplied privately through CLOUDFLARE_ACCOUNT_ID.

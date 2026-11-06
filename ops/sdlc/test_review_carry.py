@@ -8,6 +8,7 @@ sys.modules before import; docs_lane is stubbed the same way. Exit codes
 and degraded-outcome strings are pinned; human-readable text is not.
 """
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -263,6 +264,152 @@ class DecideTest(unittest.TestCase):
     def test_identical_patch_is_success(self):
         conclusion, _ = rc.decide(check(), {"equal": True})
         self.assertEqual(conclusion, "success")
+
+
+class MintStdoutTests(unittest.TestCase):
+    """parse_mint_stdout: exactly one credential object, pino lines tolerated.
+
+    Regression: the in-container preflight's stdout gained a pino NDJSON log
+    record ahead of the credential JSON, and whole-stream json.loads rejected
+    every mint with "reviewer App credential response invalid". Only pino
+    {level,time} records (with an optional string msg) are skipped; any other line, a missing
+    credential, or a second credential object fails closed. The placeholder
+    below is not a credential.
+    """
+
+    PINO = ('{"level":30,"time":1761097920000,"pid":1,"hostname":"h",'
+            '"msg":"retained file logging enabled"}')
+    CRED = ('{"token":"test-token-placeholder","app_id":5191093,'
+            '"installation_id":1,"expires_at":"2030-01-01T00:00:00Z"}')
+
+    def test_pino_line_plus_credential_returns_token(self):
+        self.assertEqual(
+            rc.parse_mint_stdout(self.PINO + "\n" + self.CRED + "\n"),
+            "test-token-placeholder")
+
+    def test_credential_only_still_returns_token(self):
+        self.assertEqual(rc.parse_mint_stdout(self.CRED + "\n"),
+                         "test-token-placeholder")
+
+    def test_pino_unicode_msg_tolerated(self):
+        pino = '{"level":30,"time":1761097920000,"msg":"r\\u00e9sum\\ncaf\\u00e9"}'
+        self.assertEqual(rc.parse_mint_stdout(pino + "\n" + self.CRED + "\n"),
+                         "test-token-placeholder")
+
+    def test_raw_unicode_separators_in_message(self):
+        for separator in ("\u0085", "\u2028", "\u2029"):
+            with self.subTest(separator=repr(separator)):
+                log = json.dumps({"level": 30, "time": 1, "msg": "a" + separator + "b"}, ensure_ascii=False)
+                self.assertEqual(rc.parse_mint_stdout(log + "\n" + self.CRED), "test-token-placeholder")
+
+    def test_app_id_context_and_message_less_logs(self):
+        for log in ('{"level":30,"time":1,"msg":"preflight","app_id":1234}',
+                    '{"level":30,"time":1,"app_id":5191093}'):
+            with self.subTest(log=log):
+                self.assertEqual(rc.parse_mint_stdout(log + "\n" + self.CRED), "test-token-placeholder")
+
+    def test_individual_malformed_log_fields_fail_closed(self):
+        for log in ('{"level":"30","time":1,"msg":"x"}',
+                    '{"time":1,"msg":"x"}',
+                    '{"level":30,"time":"1","msg":"x"}',
+                    '{"level":30,"msg":"x"}',
+                    '{"level":30,"time":1,"msg":123}',
+                    '{"level":true,"time":1,"msg":"x"}',
+                    '{"level":30,"time":false,"msg":"x"}',
+                    '{"level":30,"time":NaN,"msg":"x"}',
+                    '{"level":30,"time":Infinity,"msg":"x"}',
+                    '{"level":30,"time":-Infinity,"msg":"x"}'):
+            with self.subTest(log=log), self.assertRaises(ValueError):
+                rc.parse_mint_stdout(log + "\n" + self.CRED)
+
+    def test_non_string_token_fails_closed(self):
+        for token in (123, True, [1], {"value": "x"}):
+            with self.subTest(token=token), self.assertRaises(ValueError):
+                rc.parse_mint_stdout(json.dumps({"app_id": rc.APP_ID, "token": token}))
+
+    def test_blank_lines_tolerated(self):
+        self.assertEqual(
+            rc.parse_mint_stdout("\n" + self.CRED + "\n\n"),
+            "test-token-placeholder")
+
+    def test_second_credential_object_fails_closed(self):
+        with self.assertRaises(ValueError):
+            rc.parse_mint_stdout(self.CRED + "\n" + self.CRED + "\n")
+
+    def test_non_pino_object_line_fails_closed(self):
+        with self.assertRaises(ValueError):
+            rc.parse_mint_stdout('{"foo": 1}\n' + self.CRED + "\n")
+
+    def test_plain_text_line_fails_closed(self):
+        with self.assertRaises(ValueError):
+            rc.parse_mint_stdout("starting preflight\n" + self.CRED + "\n")
+
+    def test_non_object_json_line_fails_closed(self):
+        with self.assertRaises(ValueError):
+            rc.parse_mint_stdout("[1, 2]\n" + self.CRED + "\n")
+
+    def test_malformed_json_fails_closed(self):
+        with self.assertRaises(ValueError):
+            rc.parse_mint_stdout(self.CRED + "\n" + '{"token": "truncated\n')
+
+    def test_missing_credential_fails_closed(self):
+        with self.assertRaises(ValueError):
+            rc.parse_mint_stdout(self.PINO + "\n")
+
+    def test_wrong_app_fails_closed(self):
+        with self.assertRaises(ValueError):
+            rc.parse_mint_stdout(self.CRED.replace("5191093", "1234") + "\n")
+
+    def test_empty_token_fails_closed(self):
+        with self.assertRaises(ValueError):
+            rc.parse_mint_stdout(
+                self.CRED.replace("test-token-placeholder", "") + "\n")
+
+    def test_token_line_is_never_skipped_as_log(self):
+        # A token-bearing line counts as the credential even when it also
+        # carries log-shaped keys; a second one still fails closed.
+        loggy = ('{"level":30,"time":1,"msg":"x",'
+                 '"token":"test-token-placeholder","app_id":5191093}')
+        self.assertEqual(rc.parse_mint_stdout(loggy + "\n"),
+                         "test-token-placeholder")
+        with self.assertRaises(ValueError):
+            rc.parse_mint_stdout(loggy + "\n" + self.CRED + "\n")
+
+
+class MintContractTests(unittest.TestCase):
+    """mint() maps mocked transport outcomes to the two Unsafe branches."""
+
+    def run_mint(self, stdout, returncode=0):
+        completed = mock.Mock(stdout=stdout, returncode=returncode)
+        with mock.patch.object(rc.subprocess, "run",
+                               return_value=completed), \
+                mock.patch.object(rc.L, "load_cfg", return_value={},
+                                  create=True):
+            return rc.mint("o/r")
+
+    def test_pino_prefixed_stdout_mints(self):
+        token = self.run_mint(MintStdoutTests.PINO + "\n" +
+                              MintStdoutTests.CRED + "\n")
+        self.assertEqual(token, "test-token-placeholder")
+
+    def test_invalid_log_and_token_map_to_unsafe(self):
+        for stdout in ('{"level":true,"time":1,"msg":"x"}\n' + MintStdoutTests.CRED,
+                       '{"level":30,"time":NaN,"msg":"x"}\n' + MintStdoutTests.CRED,
+                       '{"app_id":5191093,"token":123}'):
+            with self.subTest(stdout=stdout), self.assertRaisesRegex(rc.Unsafe, "response invalid"):
+                self.run_mint(stdout)
+
+    def test_raw_unicode_log_and_context_mint(self):
+        log = json.dumps({"level": 30, "time": 1, "msg": "a\u2028b", "app_id": 1234}, ensure_ascii=False)
+        self.assertEqual(self.run_mint(log + "\n" + MintStdoutTests.CRED), "test-token-placeholder")
+
+    def test_garbage_line_fails_response_invalid(self):
+        with self.assertRaisesRegex(rc.Unsafe, "response invalid"):
+            self.run_mint("garbage\n" + MintStdoutTests.CRED + "\n")
+
+    def test_nonzero_exit_fails_preflight_without_fallback(self):
+        with self.assertRaisesRegex(rc.Unsafe, "preflight failed"):
+            self.run_mint("", returncode=1)
 
 
 if __name__ == "__main__":

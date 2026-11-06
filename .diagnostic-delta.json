@@ -1,0 +1,1 @@
+{"version": 1, "producer": "ax-lint", "include": ["scripts/quality-gates/**"]}

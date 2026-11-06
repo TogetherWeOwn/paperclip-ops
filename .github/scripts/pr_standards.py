@@ -8,7 +8,9 @@ needs no ruleset change. Stdlib only. Adapted from the PR quality gates in paper
 parts of upstream are deliberately not adopted.
 
 Environment contract (every value is a plain string):
-  EVENT                  pull_request | push | workflow_dispatch   (anything but pull_request lints commits)
+  EVENT                  pull_request | push | merge_group | workflow_dispatch
+  GITHUB_EVENT_PATH      native merge_group JSON file (action, base_sha, head_sha)
+  GITHUB_SHA             native merge_group head; must match the event and checkout
   TITLE, BODY, AUTHOR    pull request title, body, author login
   HEAD_REF               pull request head branch name
   COMMITS                JSON array of {id, message} for push events
@@ -24,6 +26,7 @@ gate in warn mode, clear its open PRs, then flip one line to `error`.
 import json
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 
@@ -307,19 +310,20 @@ def check_pull_request(env):
     return out
 
 
-def check_commits(env):
+def check_commits(env, commits=None, *, allow_generated=True):
     mode = "error" if env.get("PR_STANDARDS_MODE", "warn").strip().lower() == "error" else "warning"
     prefixes = env.get("INTERNAL_ID_PREFIXES") or "TOG|PAP|PAPA"
     private = env.get("REPO_PRIVATE", "true").strip().lower() == "true"
     out = []
-    try:
-        commits = json.loads(env.get("COMMITS") or "[]") or []
-    except ValueError:
-        commits = []
+    if commits is None:
+        try:
+            commits = json.loads(env.get("COMMITS") or "[]") or []
+        except ValueError:
+            commits = []
     for c in commits:
         message = c.get("message") or ""
         subject = message.splitlines()[0] if message else ""
-        if subject.startswith(("Merge ", 'Revert "')):
+        if allow_generated and subject.startswith(("Merge ", 'Revert "')):
             continue
         short = (c.get("id") or "")[:10]
         errs = header_errors(subject)
@@ -334,8 +338,71 @@ def check_commits(env):
     return out
 
 
+def check_merge_group(env):
+    """Validate this repository's native SQUASH queue, never a push payload.
+
+    Only queued first-parent squashes are in scope, not the original branch
+    commits. Missing history or a different queue topology cannot prove that
+    every queued squash was checked, so refuse rather than skip it.
+    """
+    def error(message):
+        return [Finding("error", "Merge-group evidence", message)]
+
+    path = env.get("GITHUB_EVENT_PATH")
+    if not path:
+        return error("GITHUB_EVENT_PATH is required for native merge-group validation.")
+    try:
+        with open(path, encoding="utf-8") as event_file:
+            event = json.load(event_file)
+    except (OSError, ValueError):
+        return error("Cannot read native merge-group event JSON.")
+    if not isinstance(event, dict) or event.get("action") != "checks_requested":
+        return error("Expected a native merge_group checks_requested event.")
+    group = event.get("merge_group")
+    if not isinstance(group, dict):
+        return error("The native event must contain a merge_group object.")
+    base, head, runner_head = group.get("base_sha"), group.get("head_sha"), env.get("GITHUB_SHA")
+    for name, sha in (("base_sha", base), ("head_sha", head), ("GITHUB_SHA", runner_head)):
+        if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha) or sha == "0" * 40:
+            return error(f"{name} must be a raw full nonzero lowercase commit SHA.")
+    if head != runner_head:
+        return error("Native head_sha does not match GITHUB_SHA.")
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "--no-replace-objects", *args], check=True,
+            env=dict(os.environ, GIT_NO_LAZY_FETCH="1", GIT_ALLOW_PROTOCOL="", GIT_TERMINAL_PROMPT="0"),
+            capture_output=True, encoding="utf-8", timeout=10,
+        ).stdout
+
+    try:
+        if git("rev-parse", "--verify", "HEAD^{commit}").strip() != head:
+            return error("Checked-out HEAD does not match the native merge-group head.")
+        if git("cat-file", "-t", base).strip() != "commit":
+            return error("Native base_sha must identify a commit object.")
+        history = git("rev-list", "--first-parent", "--parents", f"{base}..{head}").splitlines()
+        if not history:
+            return error("Native merge-group history must contain at least one queued squash.")
+        expected, commits = head, []
+        for line in history:
+            parts = line.split()
+            if len(parts) != 2 or parts[0] != expected:
+                return error("Incomplete or non-squash queue history; a complete linear chain is required.")
+            commits.append({"id": parts[0], "message": git("show", "-s", "--format=%B", parts[0])})
+            expected = parts[1]
+        if expected != base:
+            return error("Native base_sha is not the boundary of the complete first-parent squash chain.")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return error("Cannot resolve complete native squash history; fetch the full checkout history.")
+    return check_commits(env, commits, allow_generated=False)
+
+
 def evaluate(env):
-    return check_pull_request(env) if env.get("EVENT") == "pull_request" else check_commits(env)
+    if env.get("EVENT") == "pull_request":
+        return check_pull_request(env)
+    if env.get("EVENT") == "merge_group":
+        return check_merge_group(env)
+    return check_commits(env)
 
 
 def _escape(text):

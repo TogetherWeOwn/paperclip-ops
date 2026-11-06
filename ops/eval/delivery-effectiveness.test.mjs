@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Synthetic frozen-clock assertions. --verify also proves semantic negative controls.
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -128,6 +128,88 @@ check('cli', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+check('repeat-terminal', () => {
+  for (const kind of ['accepted_delivery', 'accepted_artifact', 'release_accepted']) {
+    const b = fixture();
+    b.members[0].releaseRequired = kind === 'release_accepted';
+    b.events = b.events.filter(e => !['ready', 'merged', 'closed', 'accepted_delivery'].includes(e.kind));
+    b.events.push(event('merge-pre', 'merged', 3, { head }),
+      event('accept-pre', kind === 'accepted_artifact' ? kind : 'accepted_delivery', 4, { head, actorId: 'reviewer-a', receipt: receipt('acceptance') }));
+    if (b.members[0].releaseRequired) b.events.push(event('release-pre', 'release_accepted', 4, { head, actorId: 'reviewer-a', receipt: receipt('release') }));
+    b.events.push(event('repeat-post', kind, 7, { head, actorId: 'reviewer-a', receipt: receipt(kind === 'release_accepted' ? 'release' : 'acceptance') }));
+    b.members.push({ ...structuredClone(b.members[0]), id: 'unit-b', sourceId: 'source-b', pr: 13 });
+    b.events.push(...b.events.map(e => ({ ...structuredClone(e), id: `${e.id}-b`, unitId: 'unit-b' })));
+    seal(b); const r = score(b);
+    eq(r.observed.pre.completed, 2, 'repeat-terminal'); eq(r.observed.post.completed, 0, 'repeat-terminal');
+    eq(r.descriptiveComparison.status, 'INCONCLUSIVE', 'repeat-terminal');
+  }
+});
+check('terminal-upgrade', () => {
+  const b = fixture(); b.events.push(event('artifact-pre', 'accepted_artifact', 3, { head, actorId: 'reviewer-a', receipt: receipt('acceptance') })); seal(b);
+  eq(score(b).observed.pre.completed, 1, 'terminal-upgrade'); eq(post(b).closing.accepted_delivery, 1, 'terminal-upgrade'); eq(post(b).completed, 0, 'terminal-upgrade');
+});
+check('acceptance-needs-merge', () => {
+  const b = fixture(); b.events = b.events.filter(e => !['merged', 'closed'].includes(e.kind)); seal(b);
+  eq(score(b).evidence.acceptance.status, 'UNKNOWN', 'acceptance-needs-merge'); eq(post(b).completed, 0, 'acceptance-needs-merge');
+});
+check('head-requalification', () => {
+  for (const day of [3, 8]) {
+    const b = fixture(); b.events.push(event('head-2', 'head', day, { head: newerHead }));
+    if (day === 3) b.events.filter(e => ['merged', 'accepted_delivery'].includes(e.kind)).forEach(e => { e.head = newerHead; });
+    else b.events.push(event('merge-2', 'merged', 8, { atUTC: '2030-01-08T01:00:00.000Z', head: newerHead }), event('accept-2', 'accepted_delivery', 8, { atUTC: '2030-01-08T02:00:00.000Z', head: newerHead, actorId: 'reviewer-a', receipt: receipt('acceptance') }));
+    seal(b); eq(score(b).evidence.acceptance.status, 'SUFFICIENT', 'head-requalification'); eq(post(b).closing.accepted_delivery, 1, 'head-requalification');
+  }
+});
+check('withdrawal-close', () => {
+  const b = fixture(); b.events = b.events.filter(e => !['merged', 'closed', 'accepted_delivery'].includes(e.kind));
+  b.events.push(event('withdraw-1', 'withdrawn', 6, { actorId: 'reviewer-a', receipt: receipt('withdrawal') }), event('close-later', 'closed', 7)); seal(b);
+  eq(score(b).evidence.acceptance.status, 'SUFFICIENT', 'withdrawal-close'); eq(post(b).closing.authorized_cleanup, 1, 'withdrawal-close'); eq(post(b).completed, 0, 'withdrawal-close');
+});
+check('ready-pair', () => {
+  const b = fixture(); b.events.push(event('ready-late', 'ready', 8)); seal(b);
+  eq(post(b).readyToMergeMs, { n: 1, p50: 86400000, p90: 86400000 }, 'ready-pair');
+  b.events = b.events.filter(e => e.id !== 'ready-late');
+  b.events.push(event('head-new', 'head', 8, { head: newerHead }), event('merge-new', 'merged', 8, { atUTC: '2030-01-08T01:00:00.000Z', head: newerHead })); seal(b);
+  eq(post(b).readyToMergeMs.n, 0, 'ready-pair');
+});
+check('overlapping-reviews', () => {
+  const b = fixture(); b.members[0].reviewerIds.push('reviewer-b');
+  b.events.push(event('review-a', 'review_arrived', 5, { actorId: 'reviewer-a' }), event('review-b', 'review_arrived', 6, { actorId: 'reviewer-b' }),
+    event('review-a-end', 'review_completed', 7, { actorId: 'reviewer-a' }), event('review-b-end', 'review_completed', 8, { actorId: 'reviewer-b' })); seal(b);
+  eq(post(b).reviewLatencyMs, { n: 2, p50: 2 * 86400000, p90: 2 * 86400000 }, 'overlapping-reviews');
+  b.events = b.events.filter(e => !['merged', 'closed', 'accepted_delivery', 'review_completed'].includes(e.kind)); seal(b);
+  eq(post(b).censoredWaits.filter(w => w.kind === 'review').length, 2, 'overlapping-reviews');
+});
+check('ambiguous-reviews', () => {
+  const b = fixture(); b.members[0].reviewerIds.push('reviewer-b');
+  b.events.push(event('review-a', 'review_arrived', 5), event('review-end', 'review_completed', 8)); seal(b);
+  eq(post(b).reviewLatencyMs.n, 0, 'ambiguous-reviews'); eq(score(b).evidence.acceptance.status, 'UNKNOWN', 'ambiguous-reviews');
+});
+check('partial-asof', () => {
+  const b = fixture(); b.asOfUTC = at(8); b.events.find(e => e.kind === 'accepted_delivery').atUTC = at(8); seal(b);
+  eq(score(b).evidence.acceptance.status, 'SUFFICIENT', 'partial-asof'); eq(post(b).completed, 1, 'partial-asof'); eq(post(b).closing.accepted_delivery, 1, 'partial-asof');
+  eq(post(b).observedThroughUTC, at(8), 'partial-asof');
+});
+check('symlink-cli', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'delivery-symlink-'));
+  try {
+    const p = join(dir, 'input.json'), link = join(dir, 'entry.mjs'), inputLink = join(dir, 'input-link.json');
+    writeFileSync(p, JSON.stringify(fixture())); symlinkSync(subject, link); symlinkSync(p, inputLink);
+    const run = (...a) => spawnSync(process.execPath, [link, ...a], { encoding: 'utf8', timeout: 15000 });
+    const r = run('--from-file', p); eq(r.status, 0, 'symlink-cli'); eq(Boolean(r.stdout.trim()), true, 'symlink-cli');
+    eq(JSON.parse(r.stdout).schema, 'delivery-score.v1', 'symlink-cli'); eq(run().status, 2, 'symlink-cli'); eq(run('--from-file', inputLink).status, 2, 'symlink-cli');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+check('aggregate-cost', () => {
+  for (const field of ['tokens', 'runMs', 'subscriptionEquivalentUSD']) {
+    const b = fixture(), r = { id: 'run-a', unitId: 'unit-a', sourceId: 'source-a', executorId: 'builder-a', membershipSha256: b.membershipSha256, atUTC: at(6), tokens: 1, runMs: 1, subscriptionEquivalentUSD: 1 };
+    r[field] = field === 'subscriptionEquivalentUSD' ? Number.MAX_VALUE : Number.MAX_SAFE_INTEGER;
+    b.runs = [r, { ...r, id: 'run-b', [field]: field === 'subscriptionEquivalentUSD' ? Number.MAX_VALUE : 2 }]; seal(b);
+    eq(score(b).cost, { status: 'UNKNOWN', tokens: null, runMs: null, subscriptionEquivalentUSD: null }, 'aggregate-cost');
+  }
+});
+check('dot-repository', () => { const b = fixture(); b.scope.repository = 'https://github.com/example/.github'; assert.doesNotThrow(() => eq(score(b).scope.repository, b.scope.repository, 'dot-repository'), 'SEMANTIC:dot-repository'); });
+
 const selected = option('--case');
 let failures = 0;
 for (const [name, body] of cases) {
@@ -163,7 +245,7 @@ if (args.includes('--verify')) {
     ['no-causal-claim', "status: 'NOT_ESTABLISHED'", "status: 'ESTABLISHED'"],
     ['merge-close', 'merges: new Set(merges.map(e => e.unitId)).size', 'merges: merges.length + rows.filter(e => e.kind === "closed").length'],
     ['reopen', 'resetEvidence(s); // reopen', '// faulty retained terminal evidence'],
-    ['unauthorized-close', "if (e.kind === 'closed' && !s.merge) s.issues.push('unauthorized_close');", "if (e.kind === 'closed' && !s.merge) s.cleanup = e;"],
+    ['unauthorized-close', "if (e.kind === 'closed' && !s.merge && !s.cleanup) s.issues.push('unauthorized_close');", "if (e.kind === 'closed' && !s.merge) s.cleanup = e;"],
     ['blocked-started', "return 'started_wip';", "return s.blockedAt ? 'unstarted_backlog' : 'started_wip';"],
     ['unstarted-blocked', 'if (!s.started) return', 'if (!s.started && !s.blockedAt) return'],
     ['head-drift', 'resetEvidence(s); // head drift', '// faulty stale-head evidence'],
@@ -177,6 +259,18 @@ if (args.includes('--verify')) {
     ['matched-exposure', 'treated && matchedExposure && acceptance', 'treated && acceptance'],
     ['frozen-clock', 'const asOf = time(b.asOfUTC);', 'const asOf = Date.now();'],
     ['cost', 'r.sourceId === m.sourceId', 'true'],
+    ['repeat-terminal', 'if (s.completedAt !== null) return s.completedAt;', '// faulty receipt refresh moves terminal time'],
+    ['terminal-upgrade', 'if (s.completedAt !== null) return s.completedAt;', '// faulty artifact upgrade recounts a completion'],
+    ['acceptance-needs-merge', "if (!s.merge) s.issues.push('missing_merge');", 'if (!s.merge) s.delivery = e;'],
+    ['head-requalification', 's.head = e.head || null;', "if (s.head) s.issues.push('head_drift'); s.head = e.head || null;"],
+    ['withdrawal-close', "if (e.kind === 'closed' && !s.merge && !s.cleanup)", "if (e.kind === 'closed' && !s.merge)"],
+    ['ready-pair', 'time(s.mergeReady)', 'time(s.ready)'],
+    ['overlapping-reviews', 'const reviewer = e.actorId ||', 'const reviewer = m.reviewerIds[0] ||'],
+    ['ambiguous-reviews', '(m.reviewerIds.length === 1 ? m.reviewerIds[0] : null)', 'm.reviewerIds[0]'],
+    ['partial-asof', 'time(b.asOfUTC) + 1', 'time(b.asOfUTC)'],
+    ['symlink-cli', 'realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))', 'resolve(process.argv[1]) === fileURLToPath(import.meta.url)'],
+    ['aggregate-cost', 'joined && safeTotals', 'joined'],
+    ['dot-repository', '[a-z0-9._-]+$', '[a-z0-9][a-z0-9._-]*$'],
   ];
   const source = readFileSync(subject, 'utf8'), dir = mkdtempSync(join(tmpdir(), 'delivery-mutants-'));
   try {

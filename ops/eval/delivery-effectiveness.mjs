@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Frozen evidence accounting only. This module never authorizes an operation.
 import { createHash } from 'node:crypto';
-import { openSync, fstatSync, readSync, closeSync, readFileSync, constants } from 'node:fs';
+import { openSync, fstatSync, readSync, closeSync, readFileSync, realpathSync, constants } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
@@ -56,7 +56,7 @@ function validate(input) {
   requireThat(b.schema === 'delivery-bundle.v1' && b.policy === 'delivery-policy.v1', 'VERSION');
   utc(b.asOfUTC);
   fields(b.scope, ['repository', 'workclass', 'correction']);
-  requireThat(/^https:\/\/github\.com\/[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9._-]*$/.test(b.scope.repository), 'REPOSITORY');
+  requireThat(/^https:\/\/github\.com\/[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/.test(b.scope.repository) && !['.', '..'].includes(b.scope.repository.split('/').at(-1)), 'REPOSITORY');
   text(b.scope.workclass); text(b.scope.correction);
   fields(b.windows, ['pre', 'post']);
   for (const w of Object.values(b.windows)) { fields(w, ['startUTC', 'endUTC']); utc(w.startUTC); utc(w.endUTC); requireThat(time(w.startUTC) < time(w.endUTC), 'WINDOW'); }
@@ -125,7 +125,7 @@ function receiptValid(e, kind) {
 function accepted(e, m, s, kind) {
   return receiptValid(e, kind) && m.reviewerIds.includes(e.actorId) && e.head && e.head === s.head;
 }
-function resetEvidence(s) { s.merge = null; s.delivery = null; s.artifact = null; s.release = null; s.cleanup = null; }
+function resetEvidence(s) { s.merge = null; s.delivery = null; s.artifact = null; s.release = null; s.cleanup = null; s.completedAt = null; }
 function category(s, m) {
   if (s.cleanup) return 'authorized_cleanup';
   if (s.delivery && s.merge && (!m.releaseRequired || s.release)) return 'accepted_delivery';
@@ -138,12 +138,13 @@ const terminal = c => ['accepted_delivery', 'accepted_artifact', 'authorized_cle
 function terminalAt(s, m) {
   const c = category(s, m);
   if (c === 'authorized_cleanup') return time(s.cleanup.atUTC);
+  if (s.completedAt !== null) return s.completedAt;
   if (c === 'accepted_artifact') return time(s.artifact.atUTC);
   if (c === 'accepted_delivery') return Math.max(time(s.delivery.atUTC), time(s.merge.atUTC), m.releaseRequired ? time(s.release.atUTC) : 0);
   return null;
 }
-function replay(b, m, end, start = end) {
-  const s = { head: null, started: null, blockedAt: null, ready: null, reviewArrival: null, issues: [], blockedMs: 0, reviewLatencies: [] };
+function replay(b, m, end, start = end, observedEnd = end) {
+  const s = { head: null, started: null, blockedAt: null, ready: null, mergeReady: null, reviewArrivals: new Map(), invalidated: false, issues: [], blockedMs: 0, reviewLatencies: [] };
   resetEvidence(s);
   let previous = time(m.arrivedAtUTC);
   const rows = b.events.filter(e => e.unitId === m.id && time(e.atUTC) < end).sort((a, b) => time(a.atUTC) - time(b.atUTC) || cmp(a.kind === 'merged' ? '' : a.kind, b.kind === 'merged' ? '' : b.kind) || cmp(a.id, b.id));
@@ -152,25 +153,37 @@ function replay(b, m, end, start = end) {
     charge(time(e.atUTC));
     if (e.kind === 'head') {
       if (!e.head) s.issues.push('missing_head');
-      if (s.head && s.head !== e.head) { resetEvidence(s); // head drift
-        s.issues.push('head_drift'); }
+      if (s.head && s.head !== e.head) {
+        s.invalidated ||= Boolean(s.merge || s.delivery || s.artifact || s.release);
+        resetEvidence(s); // head drift
+        s.ready = null; s.mergeReady = null; s.reviewArrivals.clear();
+      }
       s.head = e.head || null;
     }
     if (e.kind === 'started' && !s.started) s.started = e.atUTC;
     if (e.kind === 'blocked') s.blockedAt = e.atUTC;
     if (e.kind === 'unblocked') s.blockedAt = null;
     if (e.kind === 'ready') s.ready = e.atUTC;
-    if (e.kind === 'review_arrived') s.reviewArrival = e.atUTC;
-    if (e.kind === 'review_completed' && s.reviewArrival) {
-      if (time(e.atUTC) >= start) s.reviewLatencies.push(time(e.atUTC) - time(s.reviewArrival)); s.reviewArrival = null;
+    if (['review_arrived', 'review_completed'].includes(e.kind)) {
+      const reviewer = e.actorId || (m.reviewerIds.length === 1 ? m.reviewerIds[0] : null);
+      if (!reviewer || !m.reviewerIds.includes(reviewer)) s.issues.push('ambiguous_review');
+      else if (e.kind === 'review_arrived') {
+        if (s.reviewArrivals.has(reviewer)) { s.reviewArrivals.set(reviewer, null); s.issues.push('ambiguous_review'); }
+        else s.reviewArrivals.set(reviewer, e.atUTC);
+      } else {
+        const arrived = s.reviewArrivals.get(reviewer);
+        if (!arrived) s.issues.push('ambiguous_review');
+        else if (time(e.atUTC) >= start) s.reviewLatencies.push(time(e.atUTC) - time(arrived));
+        s.reviewArrivals.delete(reviewer);
+      }
     }
     if (e.kind === 'reopened') { resetEvidence(s); // reopen
-      s.ready = null; s.reviewArrival = null; }
+      s.ready = null; s.mergeReady = null; s.reviewArrivals.clear(); }
     if (e.kind === 'merged') {
-      if (e.head && e.head === s.head && s.started) s.merge = e;
-      else s.issues.push('invalid_merge');
+      if (e.head && e.head === s.head && s.started && !s.merge) { s.merge = e; s.mergeReady = s.ready; }
+      else if (!e.head || e.head !== s.head || !s.started) s.issues.push('invalid_merge');
     }
-    if (e.kind === 'closed' && !s.merge) s.issues.push('unauthorized_close');
+    if (e.kind === 'closed' && !s.merge && !s.cleanup) s.issues.push('unauthorized_close');
     if (['cancelled', 'withdrawn'].includes(e.kind)) {
       if (receiptValid(e, 'withdrawal') && m.reviewerIds.includes(e.actorId)) s.cleanup = e;
       else s.issues.push('unauthorized_cleanup');
@@ -179,12 +192,16 @@ function replay(b, m, end, start = end) {
       const kind = e.kind === 'release_accepted' ? 'release' : 'acceptance';
       if (s.started && accepted(e, m, s, kind)) {
         if (e.kind === 'accepted_artifact') { s.artifact = e; }
-        if (e.kind === 'accepted_delivery') s.delivery = e;
+        if (e.kind === 'accepted_delivery') {
+          if (!s.merge) s.issues.push('missing_merge');
+          else s.delivery = e;
+        }
         if (e.kind === 'release_accepted') s.release = e;
       } else s.issues.push('invalid_acceptance');
     }
+    if (terminal(category(s, m))) { s.invalidated = false; s.completedAt ??= terminalAt(s, m); }
   }
-  charge(end);
+  charge(observedEnd);
   return s;
 }
 function quantile(values, p) {
@@ -193,23 +210,26 @@ function quantile(values, p) {
 }
 const quantiles = a => ({ n: a.length, p50: quantile(a, 0.5), p90: quantile(a, 0.9) });
 function windowScore(b, w) {
-  const start = time(w.startUTC), end = Math.min(time(w.endUTC), time(b.asOfUTC));
+  const start = time(w.startUTC), end = Math.min(time(w.endUTC), time(b.asOfUTC) + 1);
+  const observedEnd = Math.min(time(w.endUTC), time(b.asOfUTC));
   const buckets = () => Object.fromEntries(['accepted_delivery', 'accepted_artifact', 'merged_awaiting_acceptance', 'authorized_cleanup', 'unstarted_backlog', 'started_wip'].map(k => [k, 0]));
   const opening = buckets(), closing = buckets(), waits = [], latencies = [], readyLatencies = [], reviewLatencies = [];
   let blockedMs = 0, completed = 0;
   for (const m of b.members) {
     if (time(m.arrivedAtUTC) < start) opening[category(replay(b, m, start), m)]++;
     if (time(m.arrivedAtUTC) >= end) continue;
-    const s = replay(b, m, end, start), c = category(s, m), finished = terminalAt(s, m);
+    const s = replay(b, m, end, start, observedEnd), c = category(s, m), finished = terminalAt(s, m);
     closing[c]++; blockedMs += s.blockedMs; reviewLatencies.push(...s.reviewLatencies);
     if (['accepted_delivery', 'accepted_artifact'].includes(c) && finished >= start && finished < end) { completed++; if (s.started) latencies.push(finished - time(s.started)); }
-    if (s.merge && s.ready && time(s.merge.atUTC) >= start) readyLatencies.push(time(s.merge.atUTC) - time(s.ready));
-    if (s.started && !terminal(c)) waits.push({ unitId: m.id, kind: 'started', censored: true, elapsedMs: end - time(s.started) });
-    if (s.reviewArrival && !terminal(c)) waits.push({ unitId: m.id, kind: 'review', censored: true, elapsedMs: end - time(s.reviewArrival) });
+    if (s.merge && s.mergeReady && time(s.merge.atUTC) >= start) readyLatencies.push(time(s.merge.atUTC) - time(s.mergeReady));
+    if (s.started && !terminal(c)) waits.push({ unitId: m.id, kind: 'started', censored: true, elapsedMs: observedEnd - time(s.started) });
+    for (const [reviewerId, arrived] of s.reviewArrivals) {
+      if (arrived && !terminal(c)) waits.push({ unitId: m.id, reviewerId, kind: 'review', censored: true, elapsedMs: observedEnd - time(arrived) });
+    }
   }
   const rows = b.events.filter(e => time(e.atUTC) >= start && time(e.atUTC) < end), merges = rows.filter(e => e.kind === 'merged');
   const counts = kind => rows.filter(e => e.kind === kind).length;
-  return { startUTC: w.startUTC, endUTC: w.endUTC, observedThroughUTC: new Date(end).toISOString(), fullyObserved: time(w.endUTC) <= time(b.asOfUTC), opening, closing,
+  return { startUTC: w.startUTC, endUTC: w.endUTC, observedThroughUTC: new Date(observedEnd).toISOString(), fullyObserved: time(w.endUTC) <= time(b.asOfUTC), opening, closing,
     arrivals: b.members.filter(m => time(m.arrivedAtUTC) >= start && time(m.arrivedAtUTC) < end).length,
     reopens: counts('reopened'), cancellations: counts('cancelled'), withdrawals: counts('withdrawn'),
     merges: new Set(merges.map(e => e.unitId)).size, completed, completedLatencyMs: quantiles(latencies), readyToMergeMs: quantiles(readyLatencies),
@@ -222,7 +242,7 @@ export function scoreDelivery(bundle) {
   const states = b.members.filter(m => time(m.arrivedAtUTC) <= asOf).map(m => ({ m, s: replay(b, m, asOf + 1) }));
   const accounting = b.members.length > 0 && b.members.every(m => covered(b, m, 'events'));
   const treated = b.members.length > 0 && b.members.every(m => b.events.some(e => e.unitId === m.id && (e.kind === 'admission' || e.kind === 'application') && e.correction === b.scope.correction && receiptValid(e, e.kind) && time(e.atUTC) >= time(b.windows.post.startUTC) && time(e.atUTC) <= asOf));
-  const acceptance = accounting && states.every(({ m, s }) => !s.issues.length && category(s, m) !== 'merged_awaiting_acceptance');
+  const acceptance = accounting && states.every(({ m, s }) => !s.issues.length && !s.invalidated && category(s, m) !== 'merged_awaiting_acceptance');
   const observed = { pre: windowScore(b, b.windows.pre), post: windowScore(b, b.windows.post) };
   const matchedExposure = b.members.every(m => b.events.some(e => e.unitId === m.id && ['admission', 'application'].includes(e.kind) && e.correction === b.scope.correction && receiptValid(e, e.kind) && time(e.atUTC) === time(b.windows.post.startUTC)));
   const comparison = accounting && treated && matchedExposure && acceptance && observed.pre.fullyObserved && observed.post.fullyObserved && b.confounders.concurrentExposure === 'none' && b.confounders.changedMix === false && observed.pre.completed >= 2 && observed.post.completed >= 2;
@@ -230,6 +250,8 @@ export function scoreDelivery(bundle) {
     const m = b.members.find(m => m.id === r.unitId);
     return r.sourceId === m.sourceId && r.executorId === m.executorId && r.membershipSha256 === b.membershipSha256 && time(r.atUTC) >= time(m.arrivedAtUTC);
   });
+  const totals = b.runs.reduce((sum, r) => ({ tokens: sum.tokens + r.tokens, runMs: sum.runMs + r.runMs, subscriptionEquivalentUSD: sum.subscriptionEquivalentUSD + r.subscriptionEquivalentUSD }), { tokens: 0, runMs: 0, subscriptionEquivalentUSD: 0 });
+  const safeTotals = Number.isSafeInteger(totals.tokens) && Number.isSafeInteger(totals.runMs) && Number.isFinite(totals.subscriptionEquivalentUSD);
   const claim = (ok, why) => ({ status: ok ? 'SUFFICIENT' : 'UNKNOWN', limits: ok ? [] : why });
   const result = {
     schema: 'delivery-score.v1', policy: b.policy, scope: b.scope, asOfUTC: b.asOfUTC,
@@ -240,7 +262,7 @@ export function scoreDelivery(bundle) {
     observed,
     descriptiveComparison: { status: comparison ? 'OBSERVED_ONLY' : 'INCONCLUSIVE', completedDelta: comparison ? observed.post.completed - observed.pre.completed : null, p50LatencyDeltaMs: comparison ? observed.post.completedLatencyMs.p50 - observed.pre.completedLatencyMs.p50 : null },
     causalEffectiveness: { status: 'NOT_ESTABLISHED', note: 'Deterministic arithmetic and an asserted comparable cohort do not identify a causal effect.' },
-    cost: joined ? { status: 'SUFFICIENT', basis: 'Immutable cohort/source/executor/run joins; subscription-equivalent, not cash billing.', tokens: b.runs.reduce((n, r) => n + r.tokens, 0), runMs: b.runs.reduce((n, r) => n + r.runMs, 0), subscriptionEquivalentUSD: b.runs.reduce((n, r) => n + r.subscriptionEquivalentUSD, 0) } : { status: 'UNKNOWN', tokens: null, runMs: null, subscriptionEquivalentUSD: null },
+    cost: joined && safeTotals ? { status: 'SUFFICIENT', basis: 'Immutable cohort/source/executor/run joins; subscription-equivalent, not cash billing.', ...totals } : { status: 'UNKNOWN', tokens: null, runMs: null, subscriptionEquivalentUSD: null },
     operationalAuthorization: false,
   };
   return normalize({ ...result, outputSha256: canonicalHash(result) });
@@ -295,6 +317,10 @@ function main(args) {
   const sourceSha256 = createHash('sha256').update(readFileSync(fileURLToPath(import.meta.url))).digest('hex');
   console.log(canonicalStringify({ ...output, adapter: { sourceSha256, suppliedSourceMatches: input.provenance.sourceSha256 === sourceSha256 } }));
 }
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isMain() {
+  try { return Boolean(process.argv[1]) && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (isMain()) {
   try { main(process.argv.slice(2)); } catch (e) { console.error(JSON.stringify({ error: String(e.message), operationalAuthorization: false })); process.exitCode = 2; }
 }

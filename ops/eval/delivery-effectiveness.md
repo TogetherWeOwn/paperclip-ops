@@ -25,7 +25,10 @@ There is no installation, scheduler, network request, credential or host action.
 - Limits: 2 MiB UTF-8 input, 1,000 members, 10,000 total event/run/coverage records
   before deduplication, and nesting depth 32. Strings used as identifiers/labels
   are nonempty and at most 512 UTF-16 code units. Numbers must be finite; counts,
-  tokens and run milliseconds are nonnegative safe integers.
+  tokens and run milliseconds are nonnegative safe integers. Their aggregate
+  totals must also be safe integers and the aggregate currency total must remain
+  finite; otherwise cost is UNKNOWN with null totals, never rounded sufficient
+  accounting. Currency uses finite JavaScript numbers, not decimal cash billing.
 - Source, test and contract hashes are supplied provenance, not authenticated
   attestations. The CLI additionally reports the actual scorer-file hash and
   whether the supplied source hash matches. `outputSha256` covers the pure score
@@ -48,7 +51,12 @@ are real UTC calendar instants, with a `Z` suffix and either no fraction or
 exactly three millisecond digits. No offset, local date or rollover is accepted.
 The two adjacent, equal-duration windows are half-open `[startUTC,endUTC)`.
 `asOfUTC` must reach the post-window start; it may precede its end. Future events
-and runs are refused, while future window time stays censored.
+and runs are refused, while future window time stays censored. A partial window
+includes events and arrivals exactly at asOf, consistently with final evidence
+replay; events at the actual half-open window end are still excluded. Censored
+durations and `observedThroughUTC` stop at asOf without adding a millisecond.
+Executable symlinks resolve to the scorer and run normally; the named input
+file itself must still be a regular, non-symlink file.
 
 ```text
 {
@@ -73,7 +81,9 @@ and runs are refused, while future window time stays censored.
 ```
 
 `repository` is one canonical lowercase `https://github.com/owner/repository`,
-without trailing slash, credentials, query or fragment. Workclass and correction
+without trailing slash, credentials, query or fragment. Repository names may
+begin with a dot, underscore or hyphen (for example `.github`); the path segments
+`.` and `..` are refused. Workclass and correction
 are version-pinned labels, not universal industry-wide WIP laws. Membership is
 immutable, includes pre-PR sources, and is not selected by outcomes. A member's
 `pr` is a positive PR number or `null`; source and non-null PR mappings must be
@@ -118,17 +128,25 @@ kinds), then event ID. This is a declared tie convention, not a reconstruction o
 unknown server order; the normalizer must not present ambiguous causal order as
 known fact. A head event establishes the exact PR head. Changing it invalidates
 prior merge, acceptance and release evidence. A reopen also invalidates terminal
-evidence and resets ready/review waits. First-start age is retained across a
-reopen; it is not an estimate of active service time.
+evidence and resets ready/review waits. Head changes reset those joins too.
+An ordinary pre-evidence head update does not itself defeat acceptance. An
+invalidation of existing proof stays UNKNOWN until fresh exact-head terminal
+proof qualifies it again; it is not a permanent historical head-drift penalty.
+First-start age is retained across a reopen; it is not an estimate of active
+service time. Repeated acceptance/release receipts do not move the first
+effective terminal timestamp. An artifact-to-delivery upgrade without an
+invalidation is also not a second completion.
 
 An acceptance event needs a persisted `acceptance` receipt, the exact current
 head and an actor in the member's independent reviewer list. Artifact acceptance
 and live delivery acceptance are different event kinds. A `release_accepted`
 event needs a `release` receipt with the same exact-head/reviewer requirements.
 Delivery additionally needs a valid merge and, when `releaseRequired:true`,
-applicable release acceptance. Fixture success alone never accepts anything.
-An authorized cancellation/withdrawal needs a persisted `withdrawal` receipt
-from a declared reviewer. Unauthorized closure is not completion.
+applicable release acceptance. An asserted delivery receipt without an already
+valid merge is insufficient evidence, not a sufficient WIP observation. Fixture
+success alone never accepts anything. An authorized cancellation/withdrawal needs
+a persisted `withdrawal` receipt from a declared reviewer. A subsequent ordinary
+close preserves that authorized cleanup; unsupported closure is not completion.
 
 Each boundary snapshot separates `accepted_delivery`, `accepted_artifact`,
 `merged_awaiting_acceptance`, `authorized_cleanup`, `unstarted_backlog` and
@@ -145,6 +163,14 @@ Blocked time is accumulated only for started, nonterminal work and clipped to th
 observation window. Latencies are elapsed UTC milliseconds, not business time or
 active service time. Every quantile is nearest-rank (`ceil(p*n)-1`); an empty
 sample returns `null`, never zero. Ready-to-merge and review samples are separate.
+Readiness is captured with its valid merge, not overwritten by later ready events.
+Review arrivals/completions join on a declared reviewer `actorId`, with at most
+one outstanding review per reviewer. Missing actor identity is inferred only
+when the member has exactly one reviewer. Overlapping reviews from different
+reviewers retain separate samples and censored waits (with `reviewerId`).
+Undeclared/unidentified reviewers, duplicate outstanding arrivals for the same
+reviewer, or unmatched completions mark acceptance UNKNOWN and supply no
+fabricated latency for that ambiguous join.
 Cost is UNKNOWN unless nonempty run evidence has complete coverage and immutable
 unit/source/executor/membership joins; absence is not zero spend. The reported
 currency is subscription-equivalent, not cash billing.

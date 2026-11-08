@@ -17,8 +17,13 @@ function tokenize(value) {
     if (value.slice(consumed, match.index).trim()) return null;
     const token = match[0];
     consumed = pattern.lastIndex;
-    for (const expression of token.match(/\$\(\((?:[^()]|\([^()]*\))*\)\)/g) ?? []) {
-      if (/[$`\\'"]/.test(expression.slice(3, -2))) return null;
+    const fragments = token.match(/\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|\$\(\((?:[^()]|\([^()]*\))*\)\)/g) ?? [];
+    for (const fragment of fragments) {
+      if (fragment.startsWith("'") || fragment.startsWith('\\')) continue;
+      const active = fragment.startsWith('"') ? fragment.slice(1, -1).replace(/\\[$`"\\\n]/g, ' ') : fragment;
+      for (const expression of active.match(/\$\(\((?:[^()]|\([^()]*\))*\)\)/g) ?? []) {
+        if (/[$`\\'"]/.test(expression.slice(3, -2))) return null;
+      }
     }
     tokens.push(token);
     if (redirect) {
@@ -49,7 +54,6 @@ function sourceCommand(command) {
   if (typeof command !== 'string') return false;
   let tokens = tokenize(command);
   if (!tokens) return null;
-  const hasHeredoc = tokens.heredoc;
   let program = true, wrapper = null, operand = null, redirect = false, loopHeader = false;
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index];
@@ -95,8 +99,8 @@ function sourceCommand(command) {
     const executable = word.split('/').at(-1);
     if (executable === 'env' || executable === 'command') { wrapper = executable; continue; }
     if (sourceProgram.test(executable)) return true;
-    // A shell can execute its stdin. Do not treat its heredoc as inert API data.
-    if (hasHeredoc && /^(?:sh|ash|bash|rbash|dash|ksh|mksh|zsh|csh|tcsh|fish)$/.test(executable)) return null;
+    // Shells can execute stdin, arguments or files; their script semantics are unsupported.
+    if (/^(?:sh|ash|bash|rbash|dash|ksh|mksh|zsh|csh|tcsh|fish)$/.test(executable)) return null;
     program = false;
   }
   return false;
@@ -141,7 +145,7 @@ export function extractToolOutputs(content, run, { expectedRefusalCallIds = [] }
         } else if (valid) return true;
         malformed++; return false;
       }) : [];
-      if (!Array.isArray(content)) malformed++;
+      if (!Array.isArray(content) && typeof content !== 'string') malformed++;
       event = { ...event, message: { ...event.message, content: blocks } };
     }
     frames.push({ event, at: at ?? event.timestamp ?? null });

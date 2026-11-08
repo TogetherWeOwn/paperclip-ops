@@ -107,12 +107,15 @@ Record contracts:
   API arguments do not themselves identify source reads. Literal heredoc bodies
   for non-shell consumers are skipped as data, including multiple heredocs and
   tab-stripping `<<-`; unquoted bodies without `$`, backticks or backslashes are
-  also literal. Shell-interpreter heredocs, unquoted expansion-bearing bodies and
-  incomplete heredocs are unsupported: their results are excluded and log coverage
-  becomes UNKNOWN rather than claiming a measured zero. Simple arithmetic shifts
-  are expressions, not heredoc operators; unsupported arithmetic expansions remain
-  UNKNOWN. Malformed message-content containers or blocks are counted as parse
-  losses without discarding valid frames or blocks in the same run.
+  also literal. Shell interpreters in program position (stdin, here-strings, pipes,
+  arguments or script files), unquoted expansion-bearing bodies and incomplete
+  heredocs are unsupported: their results are excluded and log coverage becomes
+  UNKNOWN rather than claiming a measured zero. Simple arithmetic shifts are
+  expressions, not heredoc operators; unsupported active arithmetic expansions
+  remain UNKNOWN, while single-quoted or escaped arithmetic text stays literal.
+  Valid string message content is prose, not tool evidence or a parse loss.
+  Malformed message-content containers or blocks are counted as parse losses
+  without discarding valid frames or blocks in the same run.
   This is a conservative lexical filter,
   not a shell interpreter or proof of arbitrary command semantics. Declared
   expected-refusal calls and test commands stay diagnostic. Unrecognized/raw frames make log coverage UNKNOWN rather

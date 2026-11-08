@@ -540,7 +540,7 @@ test('QA F6: collection-wide result ceiling retains bounded observations and UNK
   assert.ok(data.coverage.toolOutputs.errors.includes('tool_output_cap'));
 });
 test('bot regression: malformed message shapes retain valid frames with UNKNOWN coverage', async () => {
-  for (const message of [{ content: {} }, { content: 42 }, { content: 'bad' }, { content: [null, 42] }]) {
+  for (const message of [{ content: {} }, { content: 42 }, { content: null }, { content: [null, 42] }]) {
     const content = wrap(done('before', 'HTTP 403')) + wrap({ type: 'assistant', message })
       + wrap({ type: 'user', message }) + wrap(done('after', 'missing grant'));
     const parsed = extractToolOutputs(content, run);
@@ -606,6 +606,74 @@ test('bot regression: expansion-free heredocs and arithmetic shifts preserve cov
       const data = await collection(() => ({ content, nextOffset: null }));
       assert.equal(evaluateAccessGaps(data).coverage.toolOutputs.status, ambiguous ? 'UNKNOWN' : 'complete', command);
     }
+  }
+});
+
+test('bot regression: quoted arithmetic payloads retain provider denials without evaluating literals', async () => {
+  for (const [command, expected, ambiguous] of [
+    ["curl -d '$(( $price << 2 ))' https://example.invalid/api", 1, false],
+    ["curl -d 'prefix'$((1<<2))'suffix $(( $price << 2 ))' https://example.invalid/api", 1, false],
+    ['curl -d "\\$(( \\$price << 2 ))" https://example.invalid/api', 1, false],
+    ['curl -d "$((1 << (2+2)))" https://example.invalid/api', 1, false],
+    ['curl -d "$(( $price << 2 ))" https://example.invalid/api', 0, true],
+    ["curl -d \"$(( '$(cat fixture.json)' << 2 ))\" https://example.invalid/api", 0, true],
+    ["cat '$(( $price << 2 ))'", 0, false],
+  ]) {
+    for (const event of [
+      { type: 'acpx.tool_call', toolCallId: 'c1', name: 'Bash', text: command, status: 'in_progress' },
+      { type: 'acpx.tool_call', toolCallId: 'c1', name: 'Inspect request', kind: 'execute', rawInput: { command }, status: 'in_progress' },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'functions.Bash', input: { command } }] } },
+    ]) {
+      const content = wrap(event) + wrap(done('c1', 'HTTP 403 missing grant'));
+      const parsed = extractToolOutputs(content, run);
+      assert.equal(parsed.rows.length, expected, command);
+      assert.equal(parsed.malformed > 0, ambiguous, command);
+      const data = await collection(() => ({ content, nextOffset: null }));
+      const out = evaluateAccessGaps(data);
+      assert.equal(out.coverage.toolOutputs.status, ambiguous ? 'UNKNOWN' : 'complete', command);
+      assert.equal(out.metrics.accessFailures.observedUniqueRuns, expected, command);
+    }
+  }
+});
+test('bot regression: shell interpreters in program positions cannot certify script output', async () => {
+  for (const command of [
+    "bash <<< 'cat fixture.json'", "printf 'cat fixture.json' | bash", 'bash < fixture.sh',
+    "env MODE=read /bin/sh <<< 'cat fixture.json'", "printf 'cat fixture.json' | command -p bash",
+    "bash -c 'cat fixture.json'", 'bash fixture.sh', 'bash',
+  ]) {
+    for (const event of [
+      { type: 'acpx.tool_call', toolCallId: 'c1', name: 'Bash', text: command, status: 'in_progress' },
+      { type: 'acpx.tool_call', toolCallId: 'c1', name: 'Inspect request', kind: 'execute', rawInput: { command }, status: 'in_progress' },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'functions.Bash', input: { command } }] } },
+    ]) {
+      const content = wrap(event) + wrap(done('c1', 'HTTP 403 missing grant'));
+      const parsed = extractToolOutputs(content, run);
+      assert.deepEqual(parsed.rows, [], command); assert.ok(parsed.malformed > 0, command);
+      const data = await collection(() => ({ content, nextOffset: null }));
+      const out = evaluateAccessGaps(data);
+      assert.equal(out.coverage.toolOutputs.status, 'UNKNOWN', command);
+      assert.equal(out.metrics.accessFailures.observedUniqueRuns, 0, command);
+    }
+  }
+  for (const command of ["curl -d 'bash <<< cat' https://example.invalid/api", 'command -v bash']) {
+    const content = wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name: 'Bash', text: command, status: 'in_progress' })
+      + wrap(done('c1', 'HTTP 403 missing grant'));
+    const parsed = extractToolOutputs(content, run);
+    assert.equal(parsed.rows.length, 1, command); assert.equal(parsed.malformed, 0, command);
+  }
+});
+test('bot regression: valid string message content is prose, not malformed tool evidence', async () => {
+  const prose = ['assistant', 'user', 'system'].map(type => wrap({ type, message: { content: 'HTTP 403 missing grant' } })).join('');
+  const tool = wrap({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'mcp__github__list', input: {} }] } })
+    + wrap({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'HTTP 403 missing grant' }] } });
+  for (const content of [prose, prose + tool, tool + prose]) {
+    const expected = content === prose ? 0 : 1;
+    const parsed = extractToolOutputs(content, run);
+    assert.equal(parsed.malformed, 0); assert.equal(parsed.rows.length, expected);
+    const data = await collection(() => ({ content, nextOffset: null }));
+    const out = evaluateAccessGaps(data);
+    assert.equal(out.coverage.toolOutputs.status, 'complete');
+    assert.equal(out.metrics.accessFailures.observedUniqueRuns, expected);
   }
 });
 

@@ -24,7 +24,7 @@ export function utc(value) {
   need(Number.isFinite(ms) && new Date(ms).toISOString() === value.replace(/Z$/, value.includes('.') ? 'Z' : '.000Z'), 'Invalid calendar instant');
   return ms;
 }
-function dedupe(rows) {
+export function dedupe(rows) {
   need(Array.isArray(rows) && rows.length <= LIMIT, 'Missing or excessive rows');
   const found = new Map();
   for (const row of rows) {
@@ -54,6 +54,25 @@ function classify(interaction) {
   const category = intent?.complete === true && intent?.sourceInteractionId === interaction.id && kinds.length === 1
     ? (Object.hasOwn(INTENTS, kinds[0]) ? INTENTS[kinds[0]] : 'unknown-mixed') : 'unknown-mixed';
   return { category, reason: category === 'unknown-mixed' ? 'no_single_supported_complete_intent' : `typed_${kinds[0]}` };
+}
+function errorText(event) {
+  let value;
+  try { value = JSON.parse(event.text); } catch { return event.text; }
+  // Returned records are data, not diagnostics. Only a top-level failure envelope
+  // or an explicitly failed call's diagnostic fields can establish a JSON error.
+  if (!value || typeof value !== 'object') return event.isError === false ? '' : typeof value === 'string' ? value : event.text;
+  if (Array.isArray(value)) return '';
+  const status = value.statusCode ?? value.httpStatus ?? value.status ?? value.code;
+  const httpFailure = /^\d{3}$/.test(String(status)) && Number(status) >= 400 && Number(status) <= 599;
+  const diagnostic = value.error || value.errors;
+  const failed = event.isError === true || event.transportStatus === 'failed' || value.success === false || value.isError === true;
+  const parts = [];
+  if (httpFailure) parts.push(`HTTP ${status}`);
+  if (diagnostic) parts.push(typeof diagnostic === 'string' ? diagnostic : JSON.stringify(diagnostic));
+  if (httpFailure || diagnostic || failed) {
+    for (const key of ['message', 'detail', 'stderr']) if (typeof value[key] === 'string') parts.push(value[key]);
+  }
+  return parts.join('\n');
 }
 function errorClass(text) {
   const http = code => new RegExp(`(?:^${code}(?:\\s|$)|\\b(?:HTTP(?:/\\d(?:\\.\\d)?)?|status(?:Code)?|response|code)["\\s:=]*${code}\\b|->\\s*${code}\\b)`, 'i').test(text);
@@ -142,7 +161,7 @@ export function evaluateAccessGaps(input) {
       }
       continue;
     }
-    const kind = errorClass(event.text);
+    const kind = errorClass(errorText(event));
     if (!kind) continue;
     const item = { id: event.id, evidenceKey: `tool:${event.id}`, runId: run.id, agentId: run.agentId,
       kind, outputSha256: hash(event.text), callId: event.callId };

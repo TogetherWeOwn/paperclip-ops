@@ -91,16 +91,24 @@ Record contracts:
   `{id,runId,callId,at,origin,text,
   instructionRead,expectedRefusal,transportStatus?,isError?}`. Only
   `origin: "tool_result"` is eligible. Wrapper completion does not prove HTTP
-  success: a completed curl may still report 403. Mere quota inventory is not a
-  quota failure; the rule requires an exhausted/exceeded/insufficient condition.
+  success: a completed curl may still report 403. JSON record collections and
+  nested record messages are data, not failure diagnostics. Only top-level error
+  envelopes, HTTP error statuses or explicitly failed calls' diagnostic fields
+  establish structured error evidence. Mere quota inventory is not a quota failure;
+  the rule requires an exhausted/exceeded/insufficient condition.
   The parser accepts ACP completion/failure and stream-json `tool_result`
   blocks, not user text/model prose. Two passes join source-read and test-call
   exclusions even when completions arrive first. Instruction/source reads are
   excluded conservatively, including namespaced `functions.Read` and
-  `mcp__filesystem__Read` names. Shell source detection follows `env`/`command`
-  prefixes, control keywords and redirections to the invoked program; wrapper
-  option values, loop-header words, redirection targets and quoted API arguments
-  do not themselves identify source reads. This is a conservative lexical filter,
+  `mcp__filesystem__Read`, `read_file`, `read_text_file` and `read_multiple_files`
+  identities, without matching unrelated provider readers. Shell source detection
+  follows `env`/`command` prefixes, control keywords and redirections to the invoked
+  program; wrapper option values, loop-header words, redirection targets and quoted
+  API arguments do not themselves identify source reads. Quoted literal heredoc
+  bodies are skipped as data, including multiple heredocs and tab-stripping `<<-`.
+  Unquoted expansion-bearing or incomplete heredocs are unsupported: their results
+  are excluded and log coverage becomes UNKNOWN rather than claiming a measured zero.
+  This is a conservative lexical filter,
   not a shell interpreter or proof of arbitrary command semantics. Declared
   expected-refusal calls and test commands stay diagnostic. Unrecognized/raw frames make log coverage UNKNOWN rather
   than being guessed into tool results. Raw output is hashed but never emitted;
@@ -109,7 +117,11 @@ Record contracts:
   targetScope?,tier?}`. Native routine/producer supplies reviewed annotations,
   not regex guesses from a title. Native identity/status always win over
   annotations; missing boolean `accessRelated` annotations make native stock
-  coverage UNKNOWN. Stock uses unique blocked/deferred/backlog
+  coverage UNKNOWN. Every relevant nonterminal card also needs a valid modern
+  `gap:<sha256>` key or a legacy group/class identity, plus agent/scope/tier for
+  grants, before native card coverage can certify proposal dedupe. A stock boolean
+  alone is insufficient; unknown dedupe readiness defers proposals and updates.
+  Stock uses unique blocked/deferred/backlog
   access-related cards; flow uses separate status-event IDs, never added to
   stock or failures as if disjoint populations.
 - Card event: `{id,cardId,kind,at,accessRelated?,authorized?,success?,version?,
@@ -193,8 +205,11 @@ provider HTTP executor, SQL, writes or privileged fallback.
 
 Per collection: 500 maximum network reads, 16 MiB aggregate responses, 2 MiB per
 response, two-minute request-start deadline, 15-second per-request timeout,
-20,000-record scan ceiling and at most 40 × 1 MiB log pages per run (defaults
-10 × 250 KiB). Request caching avoids duplicate M26/list reads. No retry loop or
+20,000-record scan ceiling, an independent 20,000-unique-tool-result ceiling,
+and at most 40 × 1 MiB log pages per run (defaults 10 × 250 KiB). Results are
+retained in stable run/result order up to the ceiling; overflow sets UNKNOWN
+with bounded observations instead of refusing the report. Request caching avoids
+duplicate M26/list reads. No retry loop or
 long-lived worker; cancellation/exit leaves no resource or timer to tear down.
 The existing run route's 1,000-row cap, missing EOF proof, failed/truncated pages,
 unknown JSON event types, unjoined run IDs, frame parse losses and scan limits
@@ -202,8 +217,9 @@ make coverage UNKNOWN. Wrapper chunks are reassembled per stream before parsing.
 A short page/chunk is not
 log EOF proof. Each numeric continuation must equal the accumulated UTF-8 byte
 count, including on a terminal page; a supplied native terminal `logBytes` must
-also match EOF. Gaps, overlaps and size mismatches retain only observed evidence
-with UNKNOWN coverage and null failure rates. Input denials are reported as stable reason classes, not raw
+also match EOF. Gaps, overlaps, size mismatches and later-page GET failures
+retain already retrieved complete frames with UNKNOWN coverage and null failure
+rates; incomplete frames never become observations. Input denials are reported as stable reason classes, not raw
 exception messages that may contain secrets. Supplied IDs/hashes are provenance,
 not an authentication oracle; the producer must not present a selected subset
 as a complete census.

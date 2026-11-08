@@ -1,16 +1,47 @@
-import { hash, utc, LIMIT } from './access-gap.mjs';
+import { hash, utc, LIMIT, dedupe } from './access-gap.mjs';
 
 const instruction = /(?:^|[/\\\s])(?:SKILL|AGENTS|CLAUDE)\.md\b|\/skills\/[^\s]*\/files\b/i;
 const sourceTool = /^(?:Read|Grep|WebFetch)(?:\s|$)/;
-const namespacedSourceTool = /^(?:functions\.|mcp__filesystem__)(?:read|grep|webfetch)(?:\s|$)/i;
+const namespacedSourceTool = /^(?:functions\.(?:read|grep|webfetch)|mcp__filesystem__(?:read|read_file|read_text_file|read_multiple_files|grep|webfetch))(?:\s|$)/i;
 const shellTool = /^(?:functions\.)?bash(?:\s|$)/i;
 const sourceProgram = /^(?:cat|head|tail|sed|awk|rg|grep)$/i;
 const commandLabel = /^`?(?:cat|head|tail|sed|awk|rg|grep)\s+\S/i;
+const shellWord = token => token.replace(/'([^']*)'|"([^"\\]*)"|\\([\s\S])/g, (_, single, double, escaped) => single ?? double ?? escaped);
+function tokenize(value) {
+  // Keep quoted arguments together. Literal heredoc bodies are data, not programs;
+  // expansion-bearing or incomplete heredocs are unsupported, never complete coverage.
+  const pattern = /[0-9]*(?:<<<|<<-?|<>|>>|>\||[<>]&|[<>])|&>>?|(?:\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|[^\s"'\\|;&()<>])+|[|;&()\n]/g;
+  const tokens = [], heredocs = [];
+  let match, redirect = null;
+  while ((match = pattern.exec(value))) {
+    const token = match[0];
+    tokens.push(token);
+    if (redirect) {
+      const delimiter = shellWord(token);
+      if (token === delimiter || /[\r\n]/.test(delimiter)) return null;
+      heredocs.push({ delimiter, tabs: redirect.endsWith('-') }); redirect = null;
+    } else if (/^[0-9]*<<-?$/.test(token)) redirect = token;
+    if (token === '\n' && heredocs.length) {
+      let offset = pattern.lastIndex;
+      for (const { delimiter, tabs } of heredocs) {
+        let found = false;
+        while (offset < value.length) {
+          const end = value.indexOf('\n', offset);
+          const line = value.slice(offset, end < 0 ? value.length : end);
+          offset = end < 0 ? value.length : end + 1;
+          if ((tabs ? line.replace(/^\t+/, '') : line) === delimiter) { found = true; break; }
+        }
+        if (!found) return null;
+      }
+      heredocs.length = 0; pattern.lastIndex = offset;
+    }
+  }
+  return redirect || heredocs.length ? null : tokens;
+}
 function sourceCommand(command) {
   if (typeof command !== 'string') return false;
-  // Keep quoted arguments together; redirection targets and wrapper options are not programs.
-  const tokenize = value => value.match(/[0-9]*(?:<<<|<<-?|<>|>>|>\||[<>]&|[<>])|&>>?|(?:\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|[^\s"'\\|;&()<>])+|[|;&()\n]/g) ?? [];
   let tokens = tokenize(command);
+  if (!tokens) return null;
   let program = true, wrapper = null, operand = null, redirect = false, loopHeader = false;
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index];
@@ -20,7 +51,7 @@ function sourceCommand(command) {
     }
     if (/^(?:[0-9]*[<>]|&>)/.test(token)) { redirect = true; continue; }
     if (redirect) { redirect = false; continue; }
-    const word = token.replace(/'([^']*)'|"([^"\\]*)"|\\([\s\S])/g, (_, single, double, escaped) => single ?? double ?? escaped);
+    const word = shellWord(token);
     if (loopHeader) {
       // Positional loops allow do just after the name; in-lists need a separator.
       if (loopHeader === 'name') loopHeader = 'afterName';
@@ -30,7 +61,11 @@ function sourceCommand(command) {
     }
     if (!program) continue;
     if (operand) {
-      if (operand === 'split') tokens = tokens.slice(0, index + 1).concat(tokenize(word), tokens.slice(index + 1));
+      if (operand === 'split') {
+        const split = tokenize(word);
+        if (!split) return null;
+        tokens = tokens.slice(0, index + 1).concat(split, tokens.slice(index + 1));
+      }
       operand = null; continue;
     }
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue;
@@ -39,7 +74,11 @@ function sourceCommand(command) {
       if (wrapper === 'env') {
         if (['-u', '--unset', '-C', '--chdir', '--argv0'].includes(word)) operand = 'value';
         if (['-S', '--split-string'].includes(word)) operand = 'split';
-        if (word.startsWith('--split-string=')) tokens = tokens.slice(0, index + 1).concat(tokenize(word.slice(15)), tokens.slice(index + 1));
+        if (word.startsWith('--split-string=')) {
+          const split = tokenize(word.slice(15));
+          if (!split) return null;
+          tokens = tokens.slice(0, index + 1).concat(split, tokens.slice(index + 1));
+        }
       } else if (/^-[p]*[vV]/.test(word)) program = false; // command -v/-V queries, rather than executes.
       continue;
     }
@@ -57,14 +96,9 @@ const sourceRead = (name, command, execute = false) => sourceTool.test(name) || 
 const tests = /\b(?:node\s+--test|pytest|unittest|cargo\s+test|npm\s+(?:run\s+)?test)\b/;
 const compare = (a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b), 'en');
 export function receipt(rows, window, complete, errors = [], pages = [1], revision = 'paperclip-get.v1') {
+  const records = dedupe(rows);
   return { ...window, complete, truncated: !complete, errors, pages, revision,
-    sourceSha256: hash(rows), recordCount: rows.length,
-    recordsSha256: hash([...rows].map(orderKeys).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b), 'en'))) };
-}
-function orderKeys(value) {
-  if (Array.isArray(value)) return value.map(orderKeys);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k, orderKeys(value[k])]));
-  return value;
+    sourceSha256: hash(rows), recordCount: records.length, recordsSha256: hash(records) };
 }
 function text(value) {
   if (typeof value === 'string') return value;
@@ -114,12 +148,16 @@ export function extractToolOutputs(content, run, { expectedRefusalCallIds = [] }
       const shellCommand = event.rawInput?.command ?? (event.status === 'completed' || event.status === 'failed' ? '' : event.text ?? '');
       const command = `${name}\n${shellCommand}`;
       // ACP names can be command display labels; provider arguments alone are not shell identity.
-      if (instruction.test(command) || sourceRead(name, shellCommand, event.kind === 'execute') || commandLabel.test(name)) excluded.add(event.toolCallId);
+      const source = sourceRead(name, shellCommand, event.kind === 'execute');
+      if (source === null) malformed++;
+      if (instruction.test(command) || source !== false || commandLabel.test(name)) excluded.add(event.toolCallId);
       if (tests.test(command)) expected.add(event.toolCallId);
     }
     for (const c of event.message?.content ?? []) if (c.type === 'tool_use') {
       const command = `${c.name ?? ''} ${c.input?.command ?? c.input?.file_path ?? c.input?.url ?? ''}`;
-      if (instruction.test(command) || sourceRead(c.name ?? '', c.input?.command ?? '')) excluded.add(c.id);
+      const source = sourceRead(c.name ?? '', c.input?.command ?? '');
+      if (source === null) malformed++;
+      if (instruction.test(command) || source !== false) excluded.add(c.id);
       if (tests.test(command)) expected.add(c.id);
     }
   }
@@ -153,6 +191,15 @@ function more(data) {
   return !Array.isArray(data) && (data.hasMore === true || data.nextCursor || data.next || data.pagination?.hasMore === true || data.pagination?.nextCursor);
 }
 const safeId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+function cardDedupeReady(card) {
+  if (typeof card.accessRelated !== 'boolean') return false;
+  if (!card.accessRelated || ['done', 'cancelled', 'closed'].includes(card.status)) return true;
+  if (String(card.gapKey ?? '').startsWith('gap:')) return /^gap:[a-f0-9]{64}$/.test(card.gapKey);
+  if (typeof card.group !== 'string' || !card.group) return false;
+  if (card.gapClass === 'missing_group_package' || card.gapClass === 'provider_api_drift') return true;
+  return card.gapClass === 'missing_policy_grant' && typeof card.agentId === 'string' && !!card.agentId
+    && typeof card.targetScope === 'string' && !!card.targetScope && ['read', 'write', 'reserved'].includes(card.tier);
+}
 
 export async function collectAccessInputs({ company, operatorId, window, asOf, get, collectInteractions,
   metadata = {}, pageSize = 250, scanLimit = LIMIT, maxLogPages = 10, logBytes = 250000 }) {
@@ -188,7 +235,7 @@ export async function collectAccessInputs({ company, operatorId, window, asOf, g
     });
     // Native identity/status win; unclassified stock and dedupe inventory are not known zero.
     const cardsComplete = result.coverage?.issuePaginationComplete === true && !result.coverage?.truncated
-      && input.cards.every(c => typeof c.accessRelated === 'boolean');
+      && input.cards.every(cardDedupeReady);
     input.coverage.cards = receipt(input.cards, window, cardsComplete,
       cardsComplete ? [] : ['issue_inventory_or_annotations_incomplete']);
   } catch {
@@ -221,7 +268,7 @@ export async function collectAccessInputs({ company, operatorId, window, asOf, g
       } catch { runErrors.push('run_list_unavailable'); }
     }
   } catch { runErrors.push('agents_unavailable'); }
-  for (const run of runs.values()) {
+  for (const run of [...runs.values()].sort(compare)) {
     let offset = 0, content = '', finished = false;
     try {
       for (let page = 0; page < maxLogPages; page++) {
@@ -245,10 +292,14 @@ export async function collectAccessInputs({ company, operatorId, window, asOf, g
         offset = data.nextOffset;
       }
       if (!finished) logErrors.push('log_page_cap');
-      const extracted = extractToolOutputs(content, run, { expectedRefusalCallIds: metadata.expectedRefusalCalls?.[run.id] ?? [] });
-      if (extracted.malformed) logErrors.push('unparsed_log_frames');
-      for (const output of extracted.rows) outputs.set(output.id, output);
     } catch { logErrors.push('log_unavailable'); }
+    // A later denied page does not erase complete frames already observed.
+    const extracted = extractToolOutputs(content, run, { expectedRefusalCallIds: metadata.expectedRefusalCalls?.[run.id] ?? [] });
+    if (extracted.malformed) logErrors.push('unparsed_log_frames');
+    for (const output of extracted.rows) {
+      if (!outputs.has(output.id) && outputs.size >= LIMIT) { logErrors.push('tool_output_cap'); break; }
+      outputs.set(output.id, output);
+    }
   }
   input.runs = [...runs.values()].sort(compare);
   input.toolOutputs = [...outputs.values()].sort(compare);

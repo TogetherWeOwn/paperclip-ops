@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateAccessGaps, gapKey } from './access-gap.mjs';
+import { evaluateAccessGaps, gapKey, LIMIT } from './access-gap.mjs';
 import { extractToolOutputs, collectAccessInputs, receipt } from './access-gap-collect.mjs';
 
 const window = { since: '2026-01-01T00:00:00Z', until: '2026-01-02T00:00:00Z' };
@@ -422,4 +422,133 @@ test('review regression: unauthorized or failed enablement cannot prove enabled 
     ];
     const out = score(data); assert.ok(out.outcomes.every(e => e.status === 'UNKNOWN'));
   }
+});
+
+test('QA F1: successful record content is not an error but HTTP denials remain evidence', () => {
+  const cases = [
+    [JSON.stringify({ issues: [{ title: 'Document permission denied troubleshooting' }] }), false, 0],
+    [JSON.stringify([{ message: 'HTTP 403 missing grant' }]), false, 0],
+    [JSON.stringify({ issues: [{ error: 'missing grant' }], status: 200 }), false, 0],
+    [JSON.stringify({ message: 'permission denied' }), true, 1],
+    [JSON.stringify({ error: { message: 'missing grant' } }), false, 1],
+    [JSON.stringify({ status: 403, message: 'Forbidden' }), false, 1],
+    ['HTTP/2 403\nmissing grant', false, 1],
+    ['HTTP 403 missing grant', true, 1],
+  ];
+  for (const [content, isError, expected] of cases) {
+    const events = wrap({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'mcp__github__list_issues', input: {} }] } })
+      + wrap({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c1', is_error: isError, content }] } });
+    const data = input(); data.runs = [run]; data.toolOutputs = extractToolOutputs(events, run).rows;
+    const out = score(data);
+    assert.equal(out.metrics.accessFailures.observedUniqueRuns, expected, content);
+    assert.equal(out.metrics.accessFailures.status, 'complete');
+  }
+});
+test('QA F2: relevant open stock needs modern or sufficient legacy dedupe identity', async () => {
+  const base = candidate(), identity = { group: 'forge', gapClass: 'missing_policy_grant', agentId: 'a1', targetScope: 'repo1', tier: 'read' };
+  const key = gapKey(identity);
+  for (const [annotation, complete, update] of [
+    [{ accessRelated: true }, false, false],
+    [{ accessRelated: true, gapKey: 'gap:invalid' }, false, false],
+    [{ accessRelated: true, group: 'forge', gapClass: 'missing_policy_grant' }, false, false],
+    [{ accessRelated: true, gapKey: key }, true, true],
+    [{ accessRelated: true, ...identity }, true, true],
+    [{ accessRelated: true, group: 'forge', gapClass: 'missing_group_package' }, true, false],
+    [{ accessRelated: false }, true, false],
+  ]) {
+    const data = await collectAccessInputs({ company: 'company', operatorId: 'operator', window, asOf: window.until,
+      metadata: { newCardsAlreadyCreated: 0, cardAnnotations: { card1: annotation } },
+      collectInteractions: async ({ get }) => {
+        await get('/companies/company/issues?limit=250&offset=0&includeHidden=true');
+        return { interactions: [], coverage: { complete: true, issuePaginationComplete: true, truncated: false } };
+      }, get: async path => path.includes('/issues?') ? [{ id: 'card1', status: 'blocked' }] : [] });
+    base.cards = data.cards; seal(base); base.coverage.cards = data.coverage.cards;
+    const out = evaluateAccessGaps(base);
+    assert.equal(out.coverage.cards.status, complete ? 'complete' : 'UNKNOWN', JSON.stringify(annotation));
+    assert.equal(out.proposals.length, complete && !update ? 1 : 0);
+    assert.equal(out.updates.length, update ? 1 : 0);
+    if (!complete) assert.equal(out.deferred[0].reason, 'unknown_existing_cards');
+  }
+});
+test('QA F3: filesystem file readers exclude fixture denials without matching provider readers', () => {
+  for (const [name, expected] of [
+    ['mcp__filesystem__read_file', 0], ['mcp__filesystem__read_text_file', 0],
+    ['mcp__filesystem__read_multiple_files', 0], ['mcp__github__read_file', 1],
+    ['functions.read_file_metadata', 1],
+  ]) {
+    const calls = [
+      wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name, status: 'in_progress' }) + wrap(done('c1', 'HTTP 403 missing grant')),
+      wrap({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name, input: { path: 'fixture.json' } }] } })
+        + wrap({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'HTTP 403 missing grant' }] } }),
+    ];
+    for (const content of calls) assert.equal(extractToolOutputs(content, run).rows.length, expected, name);
+  }
+});
+test('QA F4: literal heredoc data is not a program; ambiguous heredocs lose coverage', async () => {
+  for (const [command, expected, ambiguous] of [
+    ["curl --data-binary @- https://example.invalid/api <<'PAYLOAD'\ncat fixture.json\nPAYLOAD", 1, false],
+    ['curl --data-binary @- https://example.invalid/api <<"PAYLOAD"\ngrep deny fixture.json\nPAYLOAD\n', 1, false],
+    ["curl --data-binary @- https://example.invalid/api <<- 'PAYLOAD'\n\tcat fixture.json\n\tPAYLOAD", 1, false],
+    ["curl --data-binary @- https://example.invalid/api <<'A' <<'B'\ncat fixture.json\nA\ngrep deny fixture.json\nB", 1, false],
+    ["curl --data-binary @- https://example.invalid/api <<'PAYLOAD'\ncat fixture.json\nPAYLOAD\ncat real.json", 0, false],
+    ['curl --data-binary @- https://example.invalid/api <<PAYLOAD\n$(cat fixture.json)\nPAYLOAD', 0, true],
+    ["curl --data-binary @- https://example.invalid/api <<'PAYLOAD'\ncat fixture.json", 0, true],
+    ['curl --data "<<\'PAYLOAD\' cat" https://example.invalid/api', 1, false],
+  ]) {
+    for (const event of [
+      { type: 'acpx.tool_call', toolCallId: 'c1', name: 'Bash', text: command, status: 'in_progress' },
+      { type: 'acpx.tool_call', toolCallId: 'c1', name: 'Inspect request', kind: 'execute', rawInput: { command }, status: 'in_progress' },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'functions.Bash', input: { command } }] } },
+    ]) {
+      const content = wrap(event) + wrap(done('c1', 'HTTP 403 missing grant'));
+      const parsed = extractToolOutputs(content, run);
+      assert.equal(parsed.rows.length, expected, command);
+      assert.equal(parsed.malformed > 0, ambiguous, command);
+      const data = await collection(() => ({ content, nextOffset: null }));
+      assert.equal(evaluateAccessGaps(data).coverage.toolOutputs.status, ambiguous ? 'UNKNOWN' : 'complete', command);
+    }
+  }
+});
+test('QA F5: later page denial retains complete frames but not incomplete frames', async () => {
+  const first = wrap(done('c1', 'HTTP 403 missing grant'));
+  for (const content of [first, first + wrap(done('c2', 'HTTP 403')).slice(0, -20)]) {
+    const data = await collection(path => {
+      if (path.includes('offset=0&')) return { content, nextOffset: Buffer.byteLength(content) };
+      throw Error('denied_later_page');
+    });
+    const out = evaluateAccessGaps(data);
+    assert.equal(out.metrics.accessFailures.status, 'UNKNOWN');
+    assert.equal(out.metrics.accessFailures.per100CoveredRuns, null);
+    assert.equal(out.metrics.accessFailures.observedUniqueRuns, 1);
+    assert.deepEqual(data.toolOutputs.map(x => x.callId), ['c1']);
+    assert.ok(data.coverage.toolOutputs.errors.includes('log_unavailable'));
+  }
+});
+test('QA F6: collection-wide result ceiling retains bounded observations and UNKNOWN', async () => {
+  const records = Array.from({ length: 101 }, (_, n) => ({ ...run, id: `r${String(n).padStart(3, '0')}` }));
+  const content = Array.from({ length: 200 }, (_, n) => wrap(done(`c${n}`, 'HTTP 403'))).join('');
+  const collect = records => collectAccessInputs({ company: 'company', operatorId: 'operator', window, asOf: window.until,
+    metadata: { newCardsAlreadyCreated: 0 }, collectInteractions: async () => ({ interactions: [], coverage: { complete: true } }),
+    get: async path => path.endsWith('/agents') ? [{ id: 'a1' }] : path.includes('/heartbeat-runs?') ? records : { content, nextOffset: null } });
+  const data = await collect(records), reversed = await collect([...records].reverse());
+  assert.equal(data.toolOutputs.length, LIMIT);
+  assert.deepEqual(data.toolOutputs, reversed.toolOutputs);
+  const out = evaluateAccessGaps(data);
+  assert.equal(out.metrics.accessFailures.status, 'UNKNOWN');
+  assert.equal(out.metrics.accessFailures.per100CoveredRuns, null);
+  assert.ok(out.metrics.accessFailures.observedUniqueRuns > 0);
+  assert.ok(data.coverage.toolOutputs.errors.includes('tool_output_cap'));
+});
+test('QA F7: receipts bind identical-duplicate collapse and still refuse conflicts', async () => {
+  const data = candidate(), baseline = score(structuredClone(data));
+  for (const stream of streams) data[stream] = data[stream].flatMap(row => [row, Object.fromEntries(Object.entries(row).reverse())]);
+  const out = score(data);
+  for (const stream of streams) assert.equal(out.coverage[stream].status, 'complete', stream);
+  assert.deepEqual(out.metrics, baseline.metrics); assert.deepEqual(out.proposals, baseline.proposals);
+  const ix = { id: 'ix1', createdAt: at, addresseeUserId: 'operator' };
+  const collected = await collectAccessInputs({ company: 'company', operatorId: 'operator', window, asOf: window.until,
+    metadata: { newCardsAlreadyCreated: 0 }, get: async () => [],
+    collectInteractions: async () => ({ interactions: [ix, { ...ix }], coverage: { complete: true } }) });
+  assert.equal(evaluateAccessGaps(collected).coverage.interactions.status, 'complete');
+  assert.throws(() => receipt([ix, { ...ix, status: 'rejected' }], window, true), /Conflicting duplicate/);
 });

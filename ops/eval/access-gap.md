@@ -220,7 +220,9 @@ output source hashes/coverage records provide accounting, not a new authority DB
 The existing Actions CI runs
 `node --test ops/eval/access-gap.test.mjs ops/eval/access-gap-collect.test.mjs ops/eval/access-gap-regressions.test.mjs` in
 the cheap Node 24 `access-gap-fixtures` job, including drafts, aggregated into
-`ci-ok`. Full suites and CI mirrors run only on Actions. Fixtures
+`ci-ok`. Its three-minute workflow timeout is mirrored under the exact check-run
+name `Access-gap collector fixtures` in `ops/case_e1e23b50/hung_job_thresholds.json`.
+Full suites and CI mirrors run only on Actions. Fixtures
 are synthetic and perform no live API calls. They are not staging, installation,
 production authorization or comparable post-adoption evidence. The first draft
 may skip heavy jobs under existing CI policy; skipped tests are not a pass.

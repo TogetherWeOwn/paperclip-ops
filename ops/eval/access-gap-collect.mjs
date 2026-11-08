@@ -10,23 +10,33 @@ const shellWord = token => token.replace(/'([^']*)'|"([^"\\]*)"|\\([\s\S])/g, (_
 function tokenize(value) {
   // Keep quoted arguments and arithmetic shifts together. Heredoc bodies are
   // data only for non-shell consumers; expansion-bearing input is unsupported.
-  const pattern = /[0-9]*(?:<<<|<<-?|<>|>>|>\||[<>]&|[<>])|&>>?|(?:\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|\$\(\((?:[^()]|\([^()]*\))*\)\)|\$(?!\(\()|[^\s"'\\|;&()<>$])+|[|;&()\n]/g;
+  const pattern = /[0-9]*(?:<<<|<<-?|<>|>>|>\||[<>]&|[<>])|&>>?|(?:\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|\$\(\((?:[^()]|\([^()]*\))*\)\)|\$(?!\()|[^\s"'\\|;&()<>$])+|[|;&()\n]/g;
   const tokens = [], heredocs = [];
   let match, redirect = null, consumed = 0;
   while ((match = pattern.exec(value))) {
     if (value.slice(consumed, match.index).trim()) return null;
     const token = match[0];
+    // Retokenize joined shell words/openers, but never rewrite literal heredoc bodies.
+    const joined = token.replace(/\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"/g, fragment => {
+      if (fragment.startsWith("'")) return fragment;
+      return fragment.replace(/\\[\s\S]/g, escaped => escaped === '\\\n' ? '' : escaped);
+    });
+    if (joined !== token) {
+      value = value.slice(0, match.index) + joined + value.slice(pattern.lastIndex);
+      pattern.lastIndex = match.index; continue;
+    }
     consumed = pattern.lastIndex;
-    const fragments = token.match(/\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|\$\(\((?:[^()]|\([^()]*\))*\)\)/g) ?? [];
+    const fragments = token.match(/\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|[^'"\\]+/g) ?? [];
     for (const fragment of fragments) {
       if (fragment.startsWith("'") || fragment.startsWith('\\')) continue;
-      const active = fragment.startsWith('"') ? fragment.slice(1, -1).replace(/\\[$`"\\\n]/g, ' ') : fragment;
+      const active = fragment.startsWith('"') ? fragment.slice(1, -1).replace(/\\[$`"\\]/g, ' ') : fragment;
       const arithmetic = /\$\(\((?:[^()]|\([^()]*\))*\)\)/g;
-      // Nested shell quotes may split an active expansion across fragments.
-      if (active.replace(arithmetic, ' ').includes('$((')) return null;
+      // Only numeric literal arithmetic is supported: variables can recursively execute.
       for (const expression of active.match(arithmetic) ?? []) {
-        if (/[$`\\'"]/.test(expression.slice(3, -2))) return null;
+        if (!/^[0-9\s()+*/%<>&|^~!?:-]+$/.test(expression.slice(3, -2))) return null;
       }
+      // Nested quotes or any other active substitution cannot certify tool evidence.
+      if (/\$\(|`/.test(active.replace(arithmetic, ' '))) return null;
     }
     tokens.push(token);
     if (redirect) {

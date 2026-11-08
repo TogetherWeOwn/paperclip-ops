@@ -110,10 +110,16 @@ Record contracts:
   also literal. Shell interpreters in program position (stdin, here-strings, pipes,
   arguments or script files), unquoted expansion-bearing bodies and incomplete
   heredocs are unsupported: their results are excluded and log coverage becomes
-  UNKNOWN rather than claiming a measured zero. Simple arithmetic shifts are
-  expressions, not heredoc operators; unsupported active arithmetic expansions
-  remain UNKNOWN, including nested quotes that split an active expansion across
-  lexical fragments, while single-quoted or escaped arithmetic text stays literal.
+  UNKNOWN rather than claiming a measured zero. Active command substitutions
+  (`$(...)` and backticks) are unsupported, including inside double quotes.
+  Backslash-newline continuations join shell words and expansion openers before
+  syntax recognition; single-quoted text and literal heredoc bodies are not rewritten.
+  Simple arithmetic shifts are expressions, not heredoc operators. Supported
+  arithmetic contains only decimal digits, whitespace, parentheses and numeric
+  operators; variable names, array subscripts and other active arithmetic are
+  UNKNOWN because recursive evaluation may execute substitutions. Nested quotes
+  that split an active expansion across lexical fragments also remain UNKNOWN,
+  while single-quoted or escaped substitution/arithmetic text stays literal.
   Valid string message content is prose, not tool evidence or a parse loss.
   Malformed message-content containers or blocks are counted as parse losses
   without discarding valid frames or blocks in the same run.

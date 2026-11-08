@@ -703,6 +703,47 @@ test('bot regression: valid string message content is prose, not malformed tool 
   }
 });
 
+test('QA F8: only literal shell expansions can certify complete provider evidence', async () => {
+  const continuation = '\\\n';
+  for (const [command, expected, ambiguous] of [
+    ['curl -d "$(cat fixture.json >&2)" https://example.invalid/api', 0, true],
+    [`curl -d "$${continuation}(( $(cat fixture.json >&2) + 1 ))" https://example.invalid/api`, 0, true],
+    [`price='a[$(cat fixture.json >&2)0]'; curl -d "$((price << 2))" https://example.invalid/api`, 0, true],
+    ['curl -d "`cat fixture.json >&2`" https://example.invalid/api', 0, true],
+    ['curl -d `cat fixture.json` https://example.invalid/api', 0, true],
+    ['curl -d $(cat fixture.json) https://example.invalid/api', 0, true],
+    ['curl -d "$((items[0] + 1))" https://example.invalid/api', 0, true],
+    ['curl -d "$((price + 1))" https://example.invalid/api', 0, true],
+    [`curl -d '$${continuation}(( $(cat fixture.json) ))' https://example.invalid/api`, 1, false],
+    ["curl -d '$(cat fixture.json >&2)' https://example.invalid/api", 1, false],
+    ['curl -d "\\$(cat fixture.json) \\`cat fixture.json\\`" https://example.invalid/api', 1, false],
+    ['curl -d "$((1 << (2+2)))" https://example.invalid/api', 1, false],
+    [`curl -d "$${continuation}((1 << 2))" https://example.invalid/api`, 1, false],
+    [`cu${continuation}rl https://example.invalid/api`, 1, false],
+    [`ca${continuation}t fixture.json`, 0, false],
+    ["cat '$(cat fixture.json)'", 0, false],
+    ["curl <<'EOF'\n$(cat fixture.json)\nEOF", 1, false],
+  ]) {
+    const result = 'HTTP 403 missing grant';
+    const calls = [
+      wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name: 'Bash', text: command, status: 'in_progress' }) + wrap(done('c1', result)),
+      wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name: 'Inspect request', kind: 'execute', rawInput: { command }, status: 'in_progress' }) + wrap(done('c1', result)),
+      wrap({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'functions.Bash', input: { command } }] } })
+        + wrap({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c1', content: result }] } }),
+    ];
+    for (const content of calls) {
+      const parsed = extractToolOutputs(content, run);
+      assert.equal(parsed.rows.length, expected, command);
+      assert.equal(parsed.malformed > 0, ambiguous, command);
+      const data = await collection(() => ({ content, nextOffset: null }));
+      const out = evaluateAccessGaps(data);
+      assert.equal(out.coverage.toolOutputs.status, ambiguous ? 'UNKNOWN' : 'complete', command);
+      assert.equal(out.metrics.accessFailures.observedUniqueRuns, expected, command);
+      assert.equal(out.metrics.accessFailures.per100CoveredRuns, ambiguous ? null : expected * 100, command);
+    }
+  }
+});
+
 test('QA F7: receipts bind identical-duplicate collapse and still refuse conflicts', async () => {
   const data = candidate(), baseline = score(structuredClone(data));
   for (const stream of streams) data[stream] = data[stream].flatMap(row => [row, Object.fromEntries(Object.entries(row).reverse())]);

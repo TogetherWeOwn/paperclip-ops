@@ -4,10 +4,24 @@ const instruction = /(?:^|[/\\\s])(?:SKILL|AGENTS|CLAUDE)\.md\b|\/skills\/[^\s]*
 const sourceTool = /^(?:Read|Grep|WebFetch)(?:\s|$)/;
 const namespacedSourceTool = /^(?:functions\.|mcp__filesystem__)(?:read|grep|webfetch)(?:\s|$)/i;
 const shellTool = /^(?:functions\.)?bash(?:\s|$)/i;
-const sourceCommand = /\b(?:cat|head|tail|sed|awk|rg|grep)\b/i;
+const sourceProgram = /^(?:cat|head|tail|sed|awk|rg|grep)$/i;
 const commandLabel = /^`?(?:cat|head|tail|sed|awk|rg|grep)\s+\S/i;
+function sourceCommand(command) {
+  if (typeof command !== 'string') return false;
+  // Keep quoted arguments together; only a program position can identify a source read.
+  const tokens = command.match(/(?:\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|[^\s"'\\|;&()])+|[|;&()\n]/g) ?? [];
+  let program = true;
+  for (const token of tokens) {
+    if (/^[|;&()\n]$/.test(token)) { program = true; continue; }
+    if (!program || /^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue;
+    const word = token.replace(/'([^']*)'|"([^"\\]*)"|\\([\s\S])/g, (_, single, double, escaped) => single ?? double ?? escaped);
+    if (sourceProgram.test(word.split('/').at(-1))) return true;
+    program = false;
+  }
+  return false;
+}
 const sourceRead = (name, command, execute = false) => sourceTool.test(name) || namespacedSourceTool.test(name)
-  || ((execute || shellTool.test(name)) && sourceCommand.test(command));
+  || ((execute || shellTool.test(name)) && sourceCommand(command));
 const tests = /\b(?:node\s+--test|pytest|unittest|cargo\s+test|npm\s+(?:run\s+)?test)\b/;
 const compare = (a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b), 'en');
 export function receipt(rows, window, complete, errors = [], pages = [1], revision = 'paperclip-get.v1') {
@@ -65,14 +79,15 @@ export function extractToolOutputs(content, run, { expectedRefusalCallIds = [] }
   for (const { event } of frames) {
     if (event.type === 'acpx.tool_call' && event.toolCallId) {
       const name = event.name ?? '';
-      const command = `${name}\n${event.rawInput?.command ?? ''}\n${event.status === 'completed' || event.status === 'failed' ? '' : event.text ?? ''}`;
+      const shellCommand = event.rawInput?.command ?? (event.status === 'completed' || event.status === 'failed' ? '' : event.text ?? '');
+      const command = `${name}\n${shellCommand}`;
       // ACP names can be command display labels; provider arguments alone are not shell identity.
-      if (instruction.test(command) || sourceRead(name, command, event.kind === 'execute') || commandLabel.test(name)) excluded.add(event.toolCallId);
+      if (instruction.test(command) || sourceRead(name, shellCommand, event.kind === 'execute') || commandLabel.test(name)) excluded.add(event.toolCallId);
       if (tests.test(command)) expected.add(event.toolCallId);
     }
     for (const c of event.message?.content ?? []) if (c.type === 'tool_use') {
       const command = `${c.name ?? ''} ${c.input?.command ?? c.input?.file_path ?? c.input?.url ?? ''}`;
-      if (instruction.test(command) || sourceRead(c.name ?? '', command)) excluded.add(c.id);
+      if (instruction.test(command) || sourceRead(c.name ?? '', c.input?.command ?? '')) excluded.add(c.id);
       if (tests.test(command)) expected.add(c.id);
     }
   }

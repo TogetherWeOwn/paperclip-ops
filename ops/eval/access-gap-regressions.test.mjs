@@ -186,6 +186,39 @@ test('bot regression: lowercase source identities and ACP command labels exclude
   assert.equal(extractToolOutputs(provider, run).rows.length, 1, 'provider arguments are not shell identity');
 });
 
+test('bot regression: shell source detection distinguishes programs from API arguments', () => {
+  const result = wrap(done('c1', 'HTTP 403 missing grant'));
+  const commands = [
+    ['curl https://api.example.invalid/items?q=cat', true],
+    ['curl https://api.example.invalid/grep', true],
+    ['curl -H "X-Query: cat" https://api.example.invalid/items', true],
+    ['curl --data \'{"query":"cat; grep | head"}\' https://api.example.invalid/items', true],
+    ['printf "%s" "cat fixture.json"', true],
+    ['cat fixture.json', false],
+    ['/usr/bin/grep deny fixture.json', false],
+    ['printf "%s" fixture.json | cat', false],
+    ['true && grep deny fixture.json', false],
+    ['true; cat fixture.json', false],
+    ['true\ncat fixture.json', false],
+    ['MODE=read cat fixture.json', false],
+  ];
+  for (const [command, eligible] of commands) {
+    const calls = [
+      wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name: 'Fetch inventory', kind: 'execute', rawInput: { command }, status: 'in_progress' }) + result,
+      wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name: 'Bash', text: command, status: 'in_progress' }) + result,
+      wrap({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'functions.Bash', input: { command } }] } })
+        + wrap({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'HTTP 403 missing grant' }] } }),
+    ];
+    for (const content of calls) {
+      const parsed = extractToolOutputs(content, run);
+      assert.equal(parsed.malformed, 0);
+      assert.equal(parsed.rows.length, eligible ? 1 : 0, command);
+      const data = input(); data.runs = [run]; data.toolOutputs = parsed.rows;
+      assert.equal(score(data).metrics.accessFailures.observedUniqueRuns, eligible ? 1 : 0, command);
+    }
+  }
+});
+
 test('review regression: explicit truncation defeats a parseable log EOF', async () => {
   const data = await collection(() => ({ content: wrap(done('c1', 'clean')), truncated: true, nextOffset: null }));
   const out = evaluateAccessGaps(data);

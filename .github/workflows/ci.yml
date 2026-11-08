@@ -442,6 +442,22 @@ jobs:
   # EVERYTHING, as does any change to dependency manifests, .github,
   # shared code, or this detector itself. verification/case_d5bc7950-ci-gating.sh
   # pins this contract; test_ci_gating.sh is its CI entry point.
+  access-gap-fixtures:
+    name: Access-gap collector fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      # Cheap synthetic assertions run on drafts too; no host or live API access.
+      - run: node --test ops/eval/access-gap.test.mjs ops/eval/access-gap-collect.test.mjs
+
   changes:
     name: Change detection
     # case_5236db70: hard-pinned to the larger GARM ephemeral pool (node7b1ff338 max 2 +
@@ -6502,6 +6518,7 @@ jobs:
     permissions: {}
     needs:
       - changes
+      - access-gap-fixtures
       - secret-scan
       - trivy-scan
       - privilege-suites

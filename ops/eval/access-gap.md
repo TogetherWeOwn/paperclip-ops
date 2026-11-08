@@ -104,10 +104,15 @@ Record contracts:
   identities, without matching unrelated provider readers. Shell source detection
   follows `env`/`command` prefixes, control keywords and redirections to the invoked
   program; wrapper option values, loop-header words, redirection targets and quoted
-  API arguments do not themselves identify source reads. Quoted literal heredoc
-  bodies are skipped as data, including multiple heredocs and tab-stripping `<<-`.
-  Unquoted expansion-bearing or incomplete heredocs are unsupported: their results
-  are excluded and log coverage becomes UNKNOWN rather than claiming a measured zero.
+  API arguments do not themselves identify source reads. Literal heredoc bodies
+  for non-shell consumers are skipped as data, including multiple heredocs and
+  tab-stripping `<<-`; unquoted bodies without `$`, backticks or backslashes are
+  also literal. Shell-interpreter heredocs, unquoted expansion-bearing bodies and
+  incomplete heredocs are unsupported: their results are excluded and log coverage
+  becomes UNKNOWN rather than claiming a measured zero. Simple arithmetic shifts
+  are expressions, not heredoc operators; unsupported arithmetic expansions remain
+  UNKNOWN. Malformed message-content containers or blocks are counted as parse
+  losses without discarding valid frames or blocks in the same run.
   This is a conservative lexical filter,
   not a shell interpreter or proof of arbitrary command semantics. Declared
   expected-refusal calls and test commands stay diagnostic. Unrecognized/raw frames make log coverage UNKNOWN rather

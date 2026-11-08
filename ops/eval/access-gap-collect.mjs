@@ -8,40 +8,48 @@ const sourceProgram = /^(?:cat|head|tail|sed|awk|rg|grep)$/i;
 const commandLabel = /^`?(?:cat|head|tail|sed|awk|rg|grep)\s+\S/i;
 const shellWord = token => token.replace(/'([^']*)'|"([^"\\]*)"|\\([\s\S])/g, (_, single, double, escaped) => single ?? double ?? escaped);
 function tokenize(value) {
-  // Keep quoted arguments together. Literal heredoc bodies are data, not programs;
-  // expansion-bearing or incomplete heredocs are unsupported, never complete coverage.
-  const pattern = /[0-9]*(?:<<<|<<-?|<>|>>|>\||[<>]&|[<>])|&>>?|(?:\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|[^\s"'\\|;&()<>])+|[|;&()\n]/g;
+  // Keep quoted arguments and arithmetic shifts together. Heredoc bodies are
+  // data only for non-shell consumers; expansion-bearing input is unsupported.
+  const pattern = /[0-9]*(?:<<<|<<-?|<>|>>|>\||[<>]&|[<>])|&>>?|(?:\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|\$\(\((?:[^()]|\([^()]*\))*\)\)|\$(?!\(\()|[^\s"'\\|;&()<>$])+|[|;&()\n]/g;
   const tokens = [], heredocs = [];
-  let match, redirect = null;
+  let match, redirect = null, consumed = 0;
   while ((match = pattern.exec(value))) {
+    if (value.slice(consumed, match.index).trim()) return null;
     const token = match[0];
+    consumed = pattern.lastIndex;
+    for (const expression of token.match(/\$\(\((?:[^()]|\([^()]*\))*\)\)/g) ?? []) {
+      if (/[$`\\'"]/.test(expression.slice(3, -2))) return null;
+    }
     tokens.push(token);
     if (redirect) {
       const delimiter = shellWord(token);
-      if (token === delimiter || /[\r\n]/.test(delimiter)) return null;
-      heredocs.push({ delimiter, tabs: redirect.endsWith('-') }); redirect = null;
+      if (/[\r\n]/.test(delimiter)) return null;
+      heredocs.push({ delimiter, tabs: redirect.endsWith('-'), expands: token === delimiter }); redirect = null;
+      tokens.heredoc = true;
     } else if (/^[0-9]*<<-?$/.test(token)) redirect = token;
     if (token === '\n' && heredocs.length) {
       let offset = pattern.lastIndex;
-      for (const { delimiter, tabs } of heredocs) {
+      for (const { delimiter, tabs, expands } of heredocs) {
         let found = false;
         while (offset < value.length) {
           const end = value.indexOf('\n', offset);
           const line = value.slice(offset, end < 0 ? value.length : end);
           offset = end < 0 ? value.length : end + 1;
           if ((tabs ? line.replace(/^\t+/, '') : line) === delimiter) { found = true; break; }
+          if (expands && /[$`\\]/.test(line)) return null;
         }
         if (!found) return null;
       }
-      heredocs.length = 0; pattern.lastIndex = offset;
+      heredocs.length = 0; pattern.lastIndex = consumed = offset;
     }
   }
-  return redirect || heredocs.length ? null : tokens;
+  return redirect || heredocs.length || value.slice(consumed).trim() ? null : tokens;
 }
 function sourceCommand(command) {
   if (typeof command !== 'string') return false;
   let tokens = tokenize(command);
   if (!tokens) return null;
+  const hasHeredoc = tokens.heredoc;
   let program = true, wrapper = null, operand = null, redirect = false, loopHeader = false;
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index];
@@ -63,7 +71,7 @@ function sourceCommand(command) {
     if (operand) {
       if (operand === 'split') {
         const split = tokenize(word);
-        if (!split) return null;
+        if (!split || split.heredoc) return null;
         tokens = tokens.slice(0, index + 1).concat(split, tokens.slice(index + 1));
       }
       operand = null; continue;
@@ -76,7 +84,7 @@ function sourceCommand(command) {
         if (['-S', '--split-string'].includes(word)) operand = 'split';
         if (word.startsWith('--split-string=')) {
           const split = tokenize(word.slice(15));
-          if (!split) return null;
+          if (!split || split.heredoc) return null;
           tokens = tokens.slice(0, index + 1).concat(split, tokens.slice(index + 1));
         }
       } else if (/^-[p]*[vV]/.test(word)) program = false; // command -v/-V queries, rather than executes.
@@ -87,6 +95,8 @@ function sourceCommand(command) {
     const executable = word.split('/').at(-1);
     if (executable === 'env' || executable === 'command') { wrapper = executable; continue; }
     if (sourceProgram.test(executable)) return true;
+    // A shell can execute its stdin. Do not treat its heredoc as inert API data.
+    if (hasHeredoc && /^(?:sh|ash|bash|rbash|dash|ksh|mksh|zsh|csh|tcsh|fish)$/.test(executable)) return null;
     program = false;
   }
   return false;
@@ -115,6 +125,25 @@ export function extractToolOutputs(content, run, { expectedRefusalCallIds = [] }
   let malformed = 0;
   const add = (event, at) => {
     if (!event || typeof event !== 'object' || !known.has(event.type)) { malformed++; return; }
+    if (event.type === 'acpx.tool_call' && (typeof event.toolCallId !== 'string'
+      || (event.name != null && typeof event.name !== 'string')
+      || (event.rawInput?.command != null && typeof event.rawInput.command !== 'string')
+      || (event.text != null && typeof event.text !== 'string'))) { malformed++; return; }
+    if (event.message && Object.hasOwn(event.message, 'content')) {
+      const content = event.message.content;
+      const blocks = Array.isArray(content) ? content.filter(block => {
+        const valid = block && typeof block === 'object' && typeof block.type === 'string';
+        if (valid && block.type === 'tool_use') {
+          if (typeof block.id === 'string' && typeof block.name === 'string'
+            && ['command', 'file_path', 'url'].every(key => block.input?.[key] == null || typeof block.input[key] === 'string')) return true;
+        } else if (valid && block.type === 'tool_result') {
+          if (typeof block.tool_use_id === 'string') return true;
+        } else if (valid) return true;
+        malformed++; return false;
+      }) : [];
+      if (!Array.isArray(content)) malformed++;
+      event = { ...event, message: { ...event.message, content: blocks } };
+    }
     frames.push({ event, at: at ?? event.timestamp ?? null });
   };
   for (const raw of content.split('\n')) {

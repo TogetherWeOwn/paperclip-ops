@@ -539,6 +539,76 @@ test('QA F6: collection-wide result ceiling retains bounded observations and UNK
   assert.ok(out.metrics.accessFailures.observedUniqueRuns > 0);
   assert.ok(data.coverage.toolOutputs.errors.includes('tool_output_cap'));
 });
+test('bot regression: malformed message shapes retain valid frames with UNKNOWN coverage', async () => {
+  for (const message of [{ content: {} }, { content: 42 }, { content: 'bad' }, { content: [null, 42] }]) {
+    const content = wrap(done('before', 'HTTP 403')) + wrap({ type: 'assistant', message })
+      + wrap({ type: 'user', message }) + wrap(done('after', 'missing grant'));
+    const parsed = extractToolOutputs(content, run);
+    assert.equal(parsed.rows.length, 2); assert.ok(parsed.malformed > 0);
+    const data = await collection(() => ({ content, nextOffset: null }));
+    const out = evaluateAccessGaps(data);
+    assert.equal(data.toolOutputs.length, 2);
+    assert.equal(out.metrics.accessFailures.observedUniqueRuns, 1);
+    assert.equal(out.metrics.accessFailures.status, 'UNKNOWN');
+    assert.equal(out.metrics.accessFailures.per100CoveredRuns, null);
+    assert.ok(data.coverage.toolOutputs.errors.includes('unparsed_log_frames'));
+  }
+  const content = wrap({ type: 'assistant', message: { content: [null,
+    { type: 'tool_use', id: 'read', name: 'Read', input: { file_path: 'fixture.json' } }] } })
+    + wrap({ type: 'user', message: { content: [null,
+      { type: 'tool_result', tool_use_id: 'read', content: 'HTTP 403' },
+      { type: 'tool_result', tool_use_id: 'real', content: 'HTTP 403' }] } });
+  const parsed = extractToolOutputs(content, run);
+  assert.ok(parsed.malformed > 0);
+  assert.deepEqual(parsed.rows.map(x => x.callId), ['real']);
+});
+test('bot regression: executable shell heredocs are unsupported rather than counted as provider failures', async () => {
+  for (const shell of ['bash', '/bin/sh', 'env MODE=read bash', 'command -p bash', 'zsh', 'dash', 'ksh']) {
+    for (const body of ['cat fixture.json', 'curl https://example.invalid/api']) {
+      const command = `${shell} <<'SCRIPT'\n${body}\nSCRIPT`;
+      for (const event of [
+        { type: 'acpx.tool_call', toolCallId: 'c1', name: 'Bash', text: command, status: 'in_progress' },
+        { type: 'acpx.tool_call', toolCallId: 'c1', name: 'Inspect request', kind: 'execute', rawInput: { command }, status: 'in_progress' },
+        { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'functions.Bash', input: { command } }] } },
+      ]) {
+        const content = wrap(event) + wrap(done('c1', 'HTTP 403 missing grant'));
+        const parsed = extractToolOutputs(content, run);
+        assert.deepEqual(parsed.rows, [], command); assert.ok(parsed.malformed > 0, command);
+        const data = await collection(() => ({ content, nextOffset: null }));
+        assert.equal(evaluateAccessGaps(data).coverage.toolOutputs.status, 'UNKNOWN', command);
+      }
+    }
+  }
+});
+test('bot regression: expansion-free heredocs and arithmetic shifts preserve coverage', async () => {
+  for (const [command, expected, ambiguous] of [
+    ['curl --data-binary @- https://example.invalid/api <<EOF\ncat fixture.json\nEOF', 1, false],
+    ['python3 - <<EOF\nprint(1)\nEOF', 1, false],
+    ['curl --data-binary @- https://example.invalid/api <<-EOF\n\tplain data\n\tEOF', 1, false],
+    ['curl --data-binary @- https://example.invalid/api <<EOF\n$VALUE\nEOF', 0, true],
+    ['curl --data-binary @- https://example.invalid/api <<EOF\n`cat fixture.json`\nEOF', 0, true],
+    ['curl --data-binary @- https://example.invalid/api <<EOF\nback\\\\slash\nEOF', 0, true],
+    ['printf "%s" $((1<<4))', 1, false],
+    ['MODE=$((1<<4)) curl https://example.invalid/api', 1, false],
+    ['MODE=$((1<<4)) cat fixture.json', 0, false],
+    ['printf "%s" $((1 << (2+2)))', 1, false],
+    ['printf "%s" $(( $(cat fixture.json) << 4 ))', 0, true],
+  ]) {
+    for (const event of [
+      { type: 'acpx.tool_call', toolCallId: 'c1', name: 'Bash', text: command, status: 'in_progress' },
+      { type: 'acpx.tool_call', toolCallId: 'c1', name: 'Inspect request', kind: 'execute', rawInput: { command }, status: 'in_progress' },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'functions.Bash', input: { command } }] } },
+    ]) {
+      const content = wrap(event) + wrap(done('c1', 'HTTP 403 missing grant'));
+      const parsed = extractToolOutputs(content, run);
+      assert.equal(parsed.rows.length, expected, command);
+      assert.equal(parsed.malformed > 0, ambiguous, command);
+      const data = await collection(() => ({ content, nextOffset: null }));
+      assert.equal(evaluateAccessGaps(data).coverage.toolOutputs.status, ambiguous ? 'UNKNOWN' : 'complete', command);
+    }
+  }
+});
+
 test('QA F7: receipts bind identical-duplicate collapse and still refuse conflicts', async () => {
   const data = candidate(), baseline = score(structuredClone(data));
   for (const stream of streams) data[stream] = data[stream].flatMap(row => [row, Object.fromEntries(Object.entries(row).reverse())]);

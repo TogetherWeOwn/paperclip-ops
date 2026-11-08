@@ -117,8 +117,11 @@ Record contracts:
   Simple arithmetic shifts are expressions, not heredoc operators. Supported
   arithmetic contains only decimal digits, whitespace, parentheses and numeric
   operators; variable names, array subscripts and other active arithmetic are
-  UNKNOWN because recursive evaluation may execute substitutions. Nested quotes
-  that split an active expansion across lexical fragments also remain UNKNOWN,
+  UNKNOWN because recursive evaluation may execute substitutions. Alternate
+  arithmetic `$[...]`, parameter expansions `${...}` (including array subscripts
+  and substring offsets), arithmetic commands `((...))` and `let` in program
+  position are unsupported, even when a particular expression appears literal.
+  Nested quotes that split an active expansion across lexical fragments also remain UNKNOWN,
   while single-quoted or escaped substitution/arithmetic text stays literal.
   Valid string message content is prose, not tool evidence or a parse loss.
   Malformed message-content containers or blocks are counted as parse losses

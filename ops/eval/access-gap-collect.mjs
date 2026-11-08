@@ -36,8 +36,10 @@ function tokenize(value) {
         if (!/^[0-9\s()+*/%<>&|^~!?:-]+$/.test(expression.slice(3, -2))) return null;
       }
       // Nested quotes or any other active substitution cannot certify tool evidence.
-      if (/\$\(|`/.test(active.replace(arithmetic, ' '))) return null;
+      if (/\$[([{]|`/.test(active.replace(arithmetic, ' '))) return null;
     }
+    // Arithmetic commands and subshell lookalikes are outside the supported syntax.
+    if (token === '(' && tokens.at(-1) === '(') return null;
     tokens.push(token);
     if (redirect) {
       const delimiter = shellWord(token);
@@ -112,8 +114,8 @@ function sourceCommand(command) {
     const executable = word.split('/').at(-1);
     if (executable === 'env' || executable === 'command') { wrapper = executable; continue; }
     if (sourceProgram.test(executable)) return true;
-    // Shells can execute stdin, arguments or files; their script semantics are unsupported.
-    if (/^(?:sh|ash|bash|rbash|dash|ksh|mksh|zsh|csh|tcsh|fish)$/.test(executable)) return null;
+    // Shells execute scripts and let recursively evaluates arithmetic; neither is supported.
+    if (/^(?:sh|ash|bash|rbash|dash|ksh|mksh|zsh|csh|tcsh|fish|let)$/.test(executable)) return null;
     program = false;
   }
   return false;

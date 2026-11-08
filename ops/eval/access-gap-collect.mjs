@@ -23,26 +23,43 @@ function text(value) {
 // Parse structured results only. Runtime stderr and user prose are not themselves tool results.
 // Two passes keep source/negative-test exclusions even if result frames arrive before call frames.
 export function extractToolOutputs(content, run, { expectedRefusalCallIds = [] } = {}) {
-  const frames = [], excluded = new Set(), expected = new Set(expectedRefusalCallIds);
+  const frames = [], excluded = new Set(), expected = new Set(expectedRefusalCallIds), pending = new Map();
+  const known = new Set(['acpx.tool_call', 'assistant', 'user', 'system', 'result', 'stream_event',
+    'rate_limit_event', 'acpx.agent_message', 'acpx.plan', 'acpx.usage_update', 'acpx.session_info']);
   let malformed = 0;
+  const add = (event, at) => {
+    if (!event || typeof event !== 'object' || !known.has(event.type)) { malformed++; return; }
+    frames.push({ event, at: at ?? event.timestamp ?? null });
+  };
   for (const raw of content.split('\n')) {
     if (!raw.trim()) continue;
     try {
       const rec = JSON.parse(raw);
-      const chunks = typeof rec.chunk === 'string' ? rec.chunk.split('\n') : [null];
-      for (const chunk of chunks) {
-        if (chunk !== null && !chunk.trim()) continue;
-        let event;
-        try { event = chunk === null ? rec : JSON.parse(chunk); }
-        catch { malformed++; continue; }
-        frames.push({ event, at: rec.ts ?? event.timestamp ?? null });
+      if (typeof rec.chunk !== 'string') { add(rec, rec.ts); continue; }
+      const stream = rec.stream ?? 'stdout';
+      const state = pending.get(stream) ?? { text: '', at: rec.ts };
+      if (!state.text) state.at = rec.ts;
+      state.text += rec.chunk;
+      // Outer records and API pages may split inner JSON at any byte boundary.
+      // Parse complete lines, or an entire complete frame without a final newline.
+      let newline;
+      while ((newline = state.text.indexOf('\n')) >= 0) {
+        const line = state.text.slice(0, newline); state.text = state.text.slice(newline + 1);
+        if (line.trim()) { try { add(JSON.parse(line), state.at); } catch { malformed++; } }
+        state.at = rec.ts;
       }
+      if (state.text.trim()) {
+        try { const event = JSON.parse(state.text); add(event, state.at); state.text = ''; }
+        catch { /* Keep an incomplete frame until the next chunk or EOF. */ }
+      } else state.text = '';
+      pending.set(stream, state);
     } catch { malformed++; }
   }
+  for (const state of pending.values()) if (state.text.trim()) malformed++;
   for (const { event } of frames) {
     if (event.type === 'acpx.tool_call' && event.toolCallId) {
       const command = `${event.name ?? ''}\n${event.status === 'completed' || event.status === 'failed' ? '' : event.text ?? ''}`;
-      if (instruction.test(command) || sourceRead.test(event.name ?? '')) excluded.add(event.toolCallId);
+      if (instruction.test(command) || sourceRead.test(command)) excluded.add(event.toolCallId);
       if (tests.test(command)) expected.add(event.toolCallId);
     }
     for (const c of event.message?.content ?? []) if (c.type === 'tool_use') {
@@ -54,9 +71,9 @@ export function extractToolOutputs(content, run, { expectedRefusalCallIds = [] }
   const outputs = new Map();
   for (const { event, at } of frames) {
     const results = event.type === 'acpx.tool_call' && ['completed', 'failed'].includes(event.status)
-      ? [{ callId: event.toolCallId, output: text(event.text) }]
+      ? [{ callId: event.toolCallId, output: text(event.text), transportStatus: event.status, isError: event.is_error ?? null }]
       : event.type === 'user' && Array.isArray(event.message?.content)
-        ? event.message.content.filter(c => c.type === 'tool_result').map(c => ({ callId: c.tool_use_id, output: text(c.content) })) : [];
+        ? event.message.content.filter(c => c.type === 'tool_result').map(c => ({ callId: c.tool_use_id, output: text(c.content), transportStatus: 'result', isError: c.is_error ?? null })) : [];
     for (const result of results) {
       if (!result.callId || excluded.has(result.callId) || !result.output) continue;
       let timestamp = at;
@@ -64,7 +81,7 @@ export function extractToolOutputs(content, run, { expectedRefusalCallIds = [] }
       if (!timestamp) { malformed++; continue; }
       const record = { id: `${run.id}:${result.callId}:${hash(result.output)}`, runId: run.id, callId: result.callId,
         at: timestamp, origin: 'tool_result', text: result.output, instructionRead: false,
-        expectedRefusal: expected.has(result.callId) };
+        transportStatus: result.transportStatus, isError: result.isError, expectedRefusal: expected.has(result.callId) };
       // A replayed streaming completion is one result. Conflicting/multiple output chunks
       // remain separate evidence; the scorer counts runs, not streaming hits.
       outputs.set(record.id, record);
@@ -109,10 +126,16 @@ export async function collectAccessInputs({ company, operatorId, window, asOf, g
     input.interactions = result.interactions.map(x => ({ ...x, requestEvidence: metadata.interactionAnnotations?.[x.id] ?? null }));
     input.coverage.interactions = receipt(input.interactions, window, result.coverage?.complete === true,
       result.coverage?.complete ? [] : ['m26_incomplete']);
-    input.cards = [...observedIssues.values()].map(c => ({ id: c.id, status: c.status, ...(metadata.cardAnnotations?.[c.id] ?? {}) }));
-    // Interaction failures do not defeat the independently enumerated issue inventory.
-    input.coverage.cards = receipt(input.cards, window, result.coverage?.issuePaginationComplete === true && !result.coverage?.truncated,
-      result.coverage?.issuePaginationComplete && !result.coverage?.truncated ? [] : ['issue_inventory_incomplete']);
+    input.cards = [...observedIssues.values()].map(c => {
+      const a = metadata.cardAnnotations?.[c.id] ?? {};
+      return { ...Object.fromEntries(['accessRelated', 'gapKey', 'group', 'gapClass', 'agentId', 'targetScope', 'tier', 'schemaRevision']
+        .filter(k => Object.hasOwn(a, k)).map(k => [k, a[k]])), id: c.id, status: c.status };
+    });
+    // Native identity/status win; unclassified stock and dedupe inventory are not known zero.
+    const cardsComplete = result.coverage?.issuePaginationComplete === true && !result.coverage?.truncated
+      && input.cards.every(c => typeof c.accessRelated === 'boolean');
+    input.coverage.cards = receipt(input.cards, window, cardsComplete,
+      cardsComplete ? [] : ['issue_inventory_or_annotations_incomplete']);
   } catch {
     input.interactions = []; input.cards = [];
     for (const k of ['interactions', 'cards']) input.coverage[k] = receipt([], window, false, ['m26_unavailable']);
@@ -148,6 +171,7 @@ export async function collectAccessInputs({ company, operatorId, window, asOf, g
       for (let page = 0; page < maxLogPages; page++) {
         const data = await cachedGet(`/heartbeat-runs/${run.id}/log?offset=${offset}&limitBytes=${logBytes}`);
         if (typeof data.content !== 'string') throw new Error('invalid_log');
+        if (data.truncated === true || data.complete === false || data.errors?.length) logErrors.push('log_reported_incomplete');
         content += data.content;
         if (Buffer.byteLength(content) > maxLogPages * logBytes) throw new Error('oversize_log');
         // Only explicit EOF is sufficient; a short chunk alone does not prove EOF.

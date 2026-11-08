@@ -456,7 +456,7 @@ jobs:
         with:
           node-version: '24'
       # Cheap synthetic assertions run on drafts too; no host or live API access.
-      - run: node --test ops/eval/access-gap.test.mjs ops/eval/access-gap-collect.test.mjs
+      - run: node --test ops/eval/access-gap.test.mjs ops/eval/access-gap-collect.test.mjs ops/eval/access-gap-regressions.test.mjs
 
   changes:
     name: Change detection

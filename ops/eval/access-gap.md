@@ -87,7 +87,10 @@ Record contracts:
   establish agent-doable intent. This does not decide semantic routing or
   authorize the request. Platform connection requests remain separately marked.
 - Run: `{id,agentId,createdAt}`. Tool output: `{id,runId,callId,at,origin,text,
-  instructionRead,expectedRefusal}`. Only `origin: "tool_result"` is eligible.
+  instructionRead,expectedRefusal,transportStatus?,isError?}`. Only
+  `origin: "tool_result"` is eligible. Wrapper completion does not prove HTTP
+  success: a completed curl may still report 403. Mere quota inventory is not a
+  quota failure; the rule requires an exhausted/exceeded/insufficient condition.
   The parser accepts ACP completion/failure and stream-json `tool_result`
   blocks, not user text/model prose. Two passes join source-read and test-call
   exclusions even when completions arrive first. Instruction/source reads are
@@ -97,14 +100,17 @@ Record contracts:
   run/call IDs locate evidence in its native access-controlled source.
 - Card snapshot: `{id,status,accessRelated,gapKey?,group?,gapClass?,agentId?,
   targetScope?,tier?}`. Native routine/producer supplies reviewed annotations,
-  not regex guesses from a title. Stock uses unique blocked/deferred/backlog
+  not regex guesses from a title. Native identity/status always win over
+  annotations; missing boolean `accessRelated` annotations make native stock
+  coverage UNKNOWN. Stock uses unique blocked/deferred/backlog
   access-related cards; flow uses separate status-event IDs, never added to
   stock or failures as if disjoint populations.
 - Card event: `{id,cardId,kind,at,accessRelated?,authorized?,success?,version?,
   tier?,agentId?}`. Opened/merged/enabled/adopted remain separate ledger states.
   Adoption needs a successful authorized use and matching earlier authorized
   enabled evidence for the same card, version, agent and tier. A merged label
-  does not imply enabled/adopted. Incomplete event coverage defeats evidence.
+  does not imply enabled/adopted. Unauthorized or explicitly failed enablement
+  proves neither state. Incomplete event coverage defeats evidence.
 - Provider: `{id,group,package,packagePresent,inventoryComplete,tools,
   policyComplete,policyRevision,grants,capabilityMap,snapshot}`. Tool entries are
   `{operation,name}`; grant metadata is `{agentId,scope,tier,operationIds,
@@ -141,11 +147,14 @@ Only validated, joined, covered incidents can produce proposal inputs:
   package. One **full-surface / all-tier / schema-revision** update covers the
   added operations; event-level evidence and individual scopes remain in the
   source incidents, not separate function cards. Unchanged/unknown snapshots do
-  not establish drift.
+  not establish drift. A valid previous snapshot hash is required, and additions
+  already implemented by their exact installed tool do not create drift work.
+  Conflicting metadata for one agent/resource/tier/operation makes policy UNKNOWN.
 
 `gapKey` hashes `[group,class,targetScope,tier,grantAgentOrNull,driftRevisionOrNull]`.
 Existing nonterminal cards match exact keys or legacy group/class records;
-legacy grant matches also require exact agent/resource/tier. Unknown existing
+modern `gap:` keys cannot fall back across different schema revisions. Legacy
+grant matches also require exact agent/resource/tier. Unknown existing
 card coverage defers proposals and updates. Matches emit evidence updates, not
 new cards. Rank affected agents, then distinct runs, then stable gap key. Apart
 from independently reproduced material gaps or an authorized owner seed, require
@@ -176,8 +185,10 @@ response, two-minute request-start deadline, 15-second per-request timeout,
 20,000-record scan ceiling and at most 40 × 1 MiB log pages per run (defaults
 10 × 250 KiB). Request caching avoids duplicate M26/list reads. No retry loop or
 long-lived worker; cancellation/exit leaves no resource or timer to tear down.
-The existing run route's 1,000-row cap, missing EOF proof, failed pages, frame
-parse losses and scan limits make coverage UNKNOWN. A short page/chunk is not
+The existing run route's 1,000-row cap, missing EOF proof, failed/truncated pages,
+unknown JSON event types, unjoined run IDs, frame parse losses and scan limits
+make coverage UNKNOWN. Wrapper chunks are reassembled per stream before parsing.
+A short page/chunk is not
 log EOF proof. Input denials are reported as stable reason classes, not raw
 exception messages that may contain secrets. Supplied IDs/hashes are provenance,
 not an authentication oracle; the producer must not present a selected subset
@@ -193,7 +204,7 @@ output source hashes/coverage records provide accounting, not a new authority DB
 ## Actions verification and separate application
 
 The existing Actions CI runs
-`node --test ops/eval/access-gap.test.mjs ops/eval/access-gap-collect.test.mjs` in
+`node --test ops/eval/access-gap.test.mjs ops/eval/access-gap-collect.test.mjs ops/eval/access-gap-regressions.test.mjs` in
 the cheap Node 24 `access-gap-fixtures` job, including drafts, aggregated into
 `ci-ok`. Full suites and CI mirrors run only on Actions. Fixtures
 are synthetic and perform no live API calls. They are not staging, installation,
@@ -212,6 +223,7 @@ company skill **files API with expectedVersionId**, retaining all existing files
 | `ops/eval/access-gap-cli.mjs` | `scripts/access-gap-cli.mjs` |
 | `ops/eval/access-gap.test.mjs` | `scripts/access-gap.test.mjs` |
 | `ops/eval/access-gap-collect.test.mjs` | `scripts/access-gap-collect.test.mjs` |
+| `ops/eval/access-gap-regressions.test.mjs` | `scripts/access-gap-regressions.test.mjs` |
 | `ops/eval/access-gap.md` | `references/access-gap.md` |
 
 Retain the existing `owner-routing-collect.mjs` and its time module unchanged.

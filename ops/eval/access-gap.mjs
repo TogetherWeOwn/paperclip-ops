@@ -52,17 +52,18 @@ function classify(interaction) {
   const intent = interaction.requestEvidence;
   const kinds = unique(intent?.kinds ?? []);
   const category = intent?.complete === true && intent?.sourceInteractionId === interaction.id && kinds.length === 1
-    ? INTENTS[kinds[0]] ?? 'unknown-mixed' : 'unknown-mixed';
+    ? (Object.hasOwn(INTENTS, kinds[0]) ? INTENTS[kinds[0]] : 'unknown-mixed') : 'unknown-mixed';
   return { category, reason: category === 'unknown-mixed' ? 'no_single_supported_complete_intent' : `typed_${kinds[0]}` };
 }
 function errorClass(text) {
+  const http = code => new RegExp(`(?:^${code}(?:\\s|$)|\\b(?:HTTP(?:/\\d(?:\\.\\d)?)?|status(?:Code)?|response|code)["\\s:=]*${code}\\b|->\\s*${code}\\b)`, 'i').test(text);
   if (/tools\/list[^\n]*403|discovery[^\n]*(?:failed|403)|connection[^\n]*(?:broken|unavailable)/i.test(text)) return 'discovery_fault';
-  if (/\b429\b|quota|rate.limit/i.test(text)) return 'quota';
+  if (http(429) || /quota[^\n]*(?:exceeded|exhausted|insufficient)|(?:exceeded|exhausted|insufficient)[^\n]*quota|rate.limit(?:ed|[^\n]*(?:exceeded|exhausted|reached))/i.test(text)) return 'quota';
   if (/denied.by.policy|policy[_ -](?:denied|refusal)|forbidden.by.policy/i.test(text)) return 'policy_refusal';
   if (/missing.grant|not.enabled.for.(?:this.)?agent|capability.not.granted/i.test(text)) return 'missing_grant';
-  if (/\b401\b|missing.credentials?|credentials?.*(?:absent|unavailable)|github_identity_unavailable/i.test(text)) return 'credential_absence';
+  if (http(401) || /missing.credentials?|credentials?.*(?:absent|unavailable)|github_identity_unavailable/i.test(text)) return 'credential_absence';
   if (/command not found|executable doesn't exist|unknown skill/i.test(text)) return 'missing_tool';
-  if (/\b403\b|permission denied|\bforbidden\b/i.test(text)) return 'unknown_access';
+  if (http(403) || /permission denied|\bforbidden\b/i.test(text)) return 'unknown_access';
   return null;
 }
 export function gapKey({ group, gapClass, targetScope, tier, agentId = null, schemaRevision = null }) {
@@ -78,6 +79,14 @@ function providerState(p) {
   if (!snapshot?.revision || !/^[a-f0-9]{64}$/.test(snapshot?.sha256 ?? '') || !/^https:\/\//.test(snapshot?.sourceUrl ?? '') || !Array.isArray(snapshot?.operations)) reasons.push('missing_provider_snapshot');
   if (p.inventoryComplete !== true || !Array.isArray(p.tools) || typeof p.packagePresent !== 'boolean') reasons.push('missing_tool_inventory');
   if (p.policyComplete !== true || !p.policyRevision || !Array.isArray(p.grants)) reasons.push('missing_policy_inventory');
+  if (snapshot?.previousSha256 != null && !/^[a-f0-9]{64}$/.test(snapshot.previousSha256)) reasons.push('invalid_previous_snapshot');
+  const grants = new Map();
+  for (const grant of p.grants ?? []) for (const operation of grant.operationIds ?? []) {
+    const key = hash([grant.agentId, grant.scope, grant.tier, operation]);
+    const state = hash([grant.eligible, grant.granted, grant.prohibited]);
+    if (grants.has(key) && grants.get(key) !== state) reasons.push('conflicting_policy_inventory');
+    grants.set(key, state);
+  }
   const ops = map?.operations ?? [];
   const operationIds = ops.map(op => op.id);
   if (new Set(operationIds).size !== operationIds.length) reasons.push('duplicate_operation_mapping');
@@ -120,9 +129,15 @@ export function evaluateAccessGaps(input) {
   const evidence = new Map(interactions.map(x => [`interaction:${x.id}`, { ...x, source: 'interactions' }]));
   const failures = [], diagnostics = [];
   for (const event of rows.toolOutputs) {
-    const run = runById.get(event.runId);
-    if (!run || !inWindow(event.at)) continue;
+    if (!inWindow(event.at)) continue;
     if (event.origin !== 'tool_result' || event.instructionRead === true || typeof event.text !== 'string') continue;
+    const run = runById.get(event.runId);
+    if (!run) {
+      if (!rows.runs.some(r => r.id === event.runId)) {
+        sources.toolOutputs.status = 'UNKNOWN'; sources.toolOutputs.reasons.push('unjoined_run');
+      }
+      continue;
+    }
     const kind = errorClass(event.text);
     if (!kind) continue;
     const item = { id: event.id, evidenceKey: `tool:${event.id}`, runId: run.id, agentId: run.agentId,
@@ -161,8 +176,8 @@ export function evaluateAccessGaps(input) {
     if (reason) { refused.push({ id: incident.id, reason }); continue; }
     let gapClass;
     if (p.packagePresent === false) gapClass = 'missing_group_package';
-    else if (incident.schemaRevision === p.snapshot.revision && p.snapshot.previousSha256 && p.snapshot.previousSha256 !== p.snapshot.sha256
-      && p.snapshot.addedOperations?.includes(incident.operation)) gapClass = 'provider_api_drift';
+    else if (incident.schemaRevision === p.snapshot.revision && /^[a-f0-9]{64}$/.test(p.snapshot.previousSha256 ?? '') && p.snapshot.previousSha256 !== p.snapshot.sha256
+      && p.snapshot.addedOperations?.includes(incident.operation) && !p.tools.some(t => t.operation === op.id && t.name === op.tool)) gapClass = 'provider_api_drift';
     else if (p.tools?.some(t => t.operation === op.id && t.name === op.tool)) {
       const grant = p.grants?.find(g => g.agentId === incident.agentId && g.scope === op.scope && g.tier === op.tier && g.operationIds?.includes(op.id));
       if (grant?.eligible === true && grant.granted === false && grant.prohibited === false) gapClass = 'missing_policy_grant';
@@ -197,8 +212,9 @@ export function evaluateAccessGaps(input) {
   for (const c of ranked) {
     if (sources.cards.status !== 'complete') { deferred.push({ ...c, reason: 'unknown_existing_cards' }); continue; }
     const matches = rows.cards.filter(card => !['done', 'cancelled', 'closed'].includes(card.status) && (card.gapKey === c.gapKey
-      || (card.group === c.group && card.gapClass === c.gapClass && (c.gapClass !== 'missing_policy_grant'
-        || (card.agentId === c.agentId && card.targetScope === c.targetScope && card.tier === c.tier)))));
+      || (!String(card.gapKey ?? '').startsWith('gap:') && card.group === c.group && card.gapClass === c.gapClass
+        && (c.gapClass !== 'provider_api_drift' || !card.schemaRevision || card.schemaRevision === c.schemaRevision)
+        && (c.gapClass !== 'missing_policy_grant' || (card.agentId === c.agentId && card.targetScope === c.targetScope && card.tier === c.tier)))));
     if (matches.length) { updates.push({ ...c, existingCardIds: unique(matches.map(m => m.id)) }); continue; }
     const sourceEvents = c.evidenceKeys.filter(k => k.startsWith('interaction:') || k.startsWith('tool:'));
     const distinctEvents = unique(sourceEvents.map(k => { const e = evidence.get(k); return e.runId ? `run:${e.runId}` : k; }));
@@ -207,9 +223,11 @@ export function evaluateAccessGaps(input) {
     proposals.push(c);
   }
   const ledger = rows.cardEvents.filter(e => inWindow(e.at) && ['opened', 'merged', 'enabled', 'adopted'].includes(e.kind));
-  const enabled = rows.cardEvents.filter(e => e.kind === 'enabled' && utc(e.at) <= observed && e.authorized === true && e.version && e.tier && e.agentId);
+  const enabled = rows.cardEvents.filter(e => e.kind === 'enabled' && utc(e.at) <= observed && e.authorized === true && e.success !== false && e.version && TIERS.includes(e.tier) && e.agentId);
   const outcomes = ledger.map(e => ({ id: e.id, cardId: e.cardId, kind: e.kind, at: e.at,
-    status: sources.cardEvents.status === 'complete' && (e.kind !== 'adopted' || (e.authorized === true && e.success === true && enabled.some(x => x.cardId === e.cardId && x.version === e.version && x.tier === e.tier && x.agentId === e.agentId && utc(x.at) <= utc(e.at)))) ? 'evidenced' : 'UNKNOWN' }));
+    status: sources.cardEvents.status === 'complete'
+      && (e.kind !== 'enabled' || enabled.some(x => x.id === e.id))
+      && (e.kind !== 'adopted' || (e.authorized === true && e.success === true && enabled.some(x => x.cardId === e.cardId && x.version === e.version && x.tier === e.tier && x.agentId === e.agentId && utc(x.at) <= utc(e.at)))) ? 'evidenced' : 'UNKNOWN' }));
   const counts = Object.fromEntries([...Object.values(INTENTS), 'unknown-mixed'].map(category => [category, interactions.filter(x => x.category === category).length]));
   const failureRuns = unique(failures.map(e => e.runId));
   const pct = (n, d, complete) => complete && d > 0 ? n / d * 100 : null;

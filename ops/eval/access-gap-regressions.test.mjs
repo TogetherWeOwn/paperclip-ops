@@ -158,6 +158,34 @@ test('bot regression: exact source tools and shell reads still exclude quoted fa
   }
 });
 
+test('bot regression: lowercase source identities and ACP command labels exclude quoted denials', () => {
+  const cases = [];
+  const result = wrap(done('c1', 'HTTP 403 missing grant'));
+  for (const name of ['functions.read', 'functions.grep', 'functions.webfetch', 'mcp__filesystem__read', 'functions.bash', 'bash']) {
+    cases.push([name, wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name, text: 'cat fixture.json', status: 'in_progress' }) + result]);
+    cases.push([name, wrap({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name, input: { command: 'cat fixture.json' } }] } })
+      + wrap({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'HTTP 403 missing grant' }] } })]);
+  }
+  for (const call of [
+    { name: '`cat fixture.json`' }, { name: 'grep -n deny src' }, { name: 'rg deny src' },
+    { name: 'Inspect fixture', kind: 'execute', rawInput: { command: 'cat fixture.json' } },
+    { name: 'Inspect fixture', kind: 'execute', rawInput: { command: 'node --test fixture.test.mjs' } },
+    { name: 'Bash', rawInput: { command: 'cat fixture.json' } },
+  ]) cases.push([call.name, wrap({ type: 'acpx.tool_call', toolCallId: 'c1', status: 'in_progress', ...call }) + result]);
+  const leaked = cases.filter(([, content]) => {
+    const parsed = extractToolOutputs(content, run);
+    assert.equal(parsed.malformed, 0);
+    return parsed.rows.some(row => !row.expectedRefusal);
+  }).map(([name]) => name);
+  assert.deepEqual(leaked, [], 'source/test output must not become access-failure evidence');
+  for (const name of ['read', 'grep', 'cat', 'github.grep.issue', 'mcp__gmail__read', 'mcp__gmail__grep']) {
+    const content = wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name, status: 'in_progress' }) + result;
+    assert.equal(extractToolOutputs(content, run).rows.length, 1, name);
+  }
+  const provider = wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name: 'mcp__gmail__read', text: 'cat fixture.json', status: 'in_progress' }) + result;
+  assert.equal(extractToolOutputs(provider, run).rows.length, 1, 'provider arguments are not shell identity');
+});
+
 test('review regression: explicit truncation defeats a parseable log EOF', async () => {
   const data = await collection(() => ({ content: wrap(done('c1', 'clean')), truncated: true, nextOffset: null }));
   const out = evaluateAccessGaps(data);

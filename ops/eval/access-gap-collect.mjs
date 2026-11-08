@@ -1,10 +1,13 @@
 import { hash, utc, LIMIT } from './access-gap.mjs';
 
 const instruction = /(?:^|[/\\\s])(?:SKILL|AGENTS|CLAUDE)\.md\b|\/skills\/[^\s]*\/files\b/i;
-const sourceTool = /^(?:functions\.|mcp__filesystem__)?(?:Read|Grep|WebFetch)(?:\s|$)/;
-const shellTool = /^(?:functions\.)?Bash(?:\s|$)/;
+const sourceTool = /^(?:Read|Grep|WebFetch)(?:\s|$)/;
+const namespacedSourceTool = /^(?:functions\.|mcp__filesystem__)(?:read|grep|webfetch)(?:\s|$)/i;
+const shellTool = /^(?:functions\.)?bash(?:\s|$)/i;
 const sourceCommand = /\b(?:cat|head|tail|sed|awk|rg|grep)\b/i;
-const sourceRead = (name, command) => sourceTool.test(name) || (shellTool.test(name) && sourceCommand.test(command));
+const commandLabel = /^`?(?:cat|head|tail|sed|awk|rg|grep)\s+\S/i;
+const sourceRead = (name, command, execute = false) => sourceTool.test(name) || namespacedSourceTool.test(name)
+  || ((execute || shellTool.test(name)) && sourceCommand.test(command));
 const tests = /\b(?:node\s+--test|pytest|unittest|cargo\s+test|npm\s+(?:run\s+)?test)\b/;
 const compare = (a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b), 'en');
 export function receipt(rows, window, complete, errors = [], pages = [1], revision = 'paperclip-get.v1') {
@@ -61,8 +64,10 @@ export function extractToolOutputs(content, run, { expectedRefusalCallIds = [] }
   for (const state of pending.values()) if (state.text.trim()) malformed++;
   for (const { event } of frames) {
     if (event.type === 'acpx.tool_call' && event.toolCallId) {
-      const command = `${event.name ?? ''}\n${event.status === 'completed' || event.status === 'failed' ? '' : event.text ?? ''}`;
-      if (instruction.test(command) || sourceRead(event.name ?? '', command)) excluded.add(event.toolCallId);
+      const name = event.name ?? '';
+      const command = `${name}\n${event.rawInput?.command ?? ''}\n${event.status === 'completed' || event.status === 'failed' ? '' : event.text ?? ''}`;
+      // ACP names can be command display labels; provider arguments alone are not shell identity.
+      if (instruction.test(command) || sourceRead(name, command, event.kind === 'execute') || commandLabel.test(name)) excluded.add(event.toolCallId);
       if (tests.test(command)) expected.add(event.toolCallId);
     }
     for (const c of event.message?.content ?? []) if (c.type === 'tool_use') {

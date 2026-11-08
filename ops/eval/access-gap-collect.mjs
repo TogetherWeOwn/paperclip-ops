@@ -1,7 +1,10 @@
 import { hash, utc, LIMIT } from './access-gap.mjs';
 
 const instruction = /(?:^|[/\\\s])(?:SKILL|AGENTS|CLAUDE)\.md\b|\/skills\/[^\s]*\/files\b/i;
-const sourceRead = /^(?:[A-Za-z0-9_-]+(?:\.|__))*(?:Read|Grep|WebFetch)\b|\b(?:cat|head|tail|sed|awk|rg|grep)\b/i;
+const sourceTool = /^(?:functions\.|mcp__filesystem__)?(?:Read|Grep|WebFetch)$/;
+const shellTool = /^(?:functions\.)?Bash$/;
+const sourceCommand = /\b(?:cat|head|tail|sed|awk|rg|grep)\b/i;
+const sourceRead = (name, command) => sourceTool.test(name) || (shellTool.test(name) && sourceCommand.test(command));
 const tests = /\b(?:node\s+--test|pytest|unittest|cargo\s+test|npm\s+(?:run\s+)?test)\b/;
 const compare = (a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b), 'en');
 export function receipt(rows, window, complete, errors = [], pages = [1], revision = 'paperclip-get.v1') {
@@ -59,12 +62,12 @@ export function extractToolOutputs(content, run, { expectedRefusalCallIds = [] }
   for (const { event } of frames) {
     if (event.type === 'acpx.tool_call' && event.toolCallId) {
       const command = `${event.name ?? ''}\n${event.status === 'completed' || event.status === 'failed' ? '' : event.text ?? ''}`;
-      if (instruction.test(command) || sourceRead.test(command)) excluded.add(event.toolCallId);
+      if (instruction.test(command) || sourceRead(event.name ?? '', command)) excluded.add(event.toolCallId);
       if (tests.test(command)) expected.add(event.toolCallId);
     }
     for (const c of event.message?.content ?? []) if (c.type === 'tool_use') {
       const command = `${c.name ?? ''} ${c.input?.command ?? c.input?.file_path ?? c.input?.url ?? ''}`;
-      if (instruction.test(command) || sourceRead.test(command)) excluded.add(c.id);
+      if (instruction.test(command) || sourceRead(c.name ?? '', command)) excluded.add(c.id);
       if (tests.test(command)) expected.add(c.id);
     }
   }

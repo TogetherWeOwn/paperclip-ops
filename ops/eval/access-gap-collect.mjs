@@ -8,14 +8,40 @@ const sourceProgram = /^(?:cat|head|tail|sed|awk|rg|grep)$/i;
 const commandLabel = /^`?(?:cat|head|tail|sed|awk|rg|grep)\s+\S/i;
 function sourceCommand(command) {
   if (typeof command !== 'string') return false;
-  // Keep quoted arguments together; only a program position can identify a source read.
-  const tokens = command.match(/(?:\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|[^\s"'\\|;&()])+|[|;&()\n]/g) ?? [];
-  let program = true;
-  for (const token of tokens) {
-    if (/^[|;&()\n]$/.test(token)) { program = true; continue; }
-    if (!program || /^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue;
+  // Keep quoted arguments together; redirection targets and wrapper options are not programs.
+  const tokenize = value => value.match(/[0-9]*(?:<<<|<<-?|<>|>>|>\||[<>]&|[<>])|&>>?|(?:\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|[^\s"'\\|;&()<>])+|[|;&()\n]/g) ?? [];
+  let tokens = tokenize(command);
+  let program = true, wrapper = null, operand = null, redirect = false, loopHeader = false;
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (/^[|;&()\n]$/.test(token)) { program = true; wrapper = operand = null; redirect = false; continue; }
+    if (/^(?:[0-9]*[<>]|&>)/.test(token)) { redirect = true; continue; }
+    if (redirect) { redirect = false; continue; }
     const word = token.replace(/'([^']*)'|"([^"\\]*)"|\\([\s\S])/g, (_, single, double, escaped) => single ?? double ?? escaped);
-    if (sourceProgram.test(word.split('/').at(-1))) return true;
+    if (loopHeader) {
+      if (token === 'do') { loopHeader = false; program = true; }
+      continue;
+    }
+    if (!program) continue;
+    if (operand) {
+      if (operand === 'split') tokens = tokens.slice(0, index + 1).concat(tokenize(word), tokens.slice(index + 1));
+      operand = null; continue;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue;
+    if (wrapper && word.startsWith('-')) {
+      if (word === '--') { wrapper = null; continue; }
+      if (wrapper === 'env') {
+        if (['-u', '--unset', '-C', '--chdir', '--argv0'].includes(word)) operand = 'value';
+        if (['-S', '--split-string'].includes(word)) operand = 'split';
+        if (word.startsWith('--split-string=')) tokens = tokens.slice(0, index + 1).concat(tokenize(word.slice(15)), tokens.slice(index + 1));
+      } else if (/^-[p]*[vV]/.test(word)) program = false; // command -v/-V queries, rather than executes.
+      continue;
+    }
+    if (token === word && /^(?:for|select)$/.test(word)) { loopHeader = true; continue; }
+    if (token === word && /^(?:if|then|elif|else|while|until|do|!|\{)$/.test(word)) { wrapper = null; continue; }
+    const executable = word.split('/').at(-1);
+    if (executable === 'env' || executable === 'command') { wrapper = executable; continue; }
+    if (sourceProgram.test(executable)) return true;
     program = false;
   }
   return false;

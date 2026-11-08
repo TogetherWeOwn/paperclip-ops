@@ -219,6 +219,53 @@ test('bot regression: shell source detection distinguishes programs from API arg
   }
 });
 
+test('bot regression: shell prefixes and redirections exclude source reads without hiding API failures', () => {
+  const commands = [
+    ['env MODE=read cat fixture.json', false],
+    ['/usr/bin/env -u MODE --chdir /tmp MODE=read /bin/cat fixture.json', false],
+    ['env --unset=MODE -- cat fixture.json', false],
+    ['env -S "MODE=read cat fixture.json"', false],
+    ['command cat fixture.json', false],
+    ['command -p grep deny fixture.json', false],
+    ['if cat fixture.json; then true; fi', false],
+    ['if true; then cat fixture.json; else true; fi', false],
+    ['while grep deny fixture.json; do true; done', false],
+    ['for name in cat grep; do cat fixture.json; done', false],
+    ['! cat fixture.json', false],
+    ['{ cat fixture.json; }', false],
+    ['< fixture.json cat', false],
+    ['2>/dev/null command cat fixture.json', false],
+    ['env 2>/dev/null MODE=read cat fixture.json', false],
+    ['command 2>&1 cat fixture.json', false],
+    ['env MODE=cat curl https://api.example.invalid/items?q=grep', true],
+    ['env -u cat curl -H "X-Query: cat" https://api.example.invalid/items', true],
+    ['env --chdir cat curl https://api.example.invalid/items', true],
+    ['command -p curl --data \'{"query":"cat; grep | head"}\' https://api.example.invalid/items', true],
+    ['if true; then curl https://api.example.invalid/cat; fi', true],
+    ['for name in cat grep; do curl https://api.example.invalid/items; done', true],
+    ['< cat curl https://api.example.invalid/items', true],
+    ['2>cat curl https://api.example.invalid/items', true],
+    ['command -v cat', true],
+    ['printf "%s" "env MODE=read cat fixture.json"', true],
+  ];
+  for (const [command, eligible] of commands) {
+    const result = wrap(done('c1', 'HTTP 403 missing grant'));
+    const calls = [
+      wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name: 'Inspect request', kind: 'execute', rawInput: { command }, status: 'in_progress' }) + result,
+      wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name: 'Bash', text: command, status: 'in_progress' }) + result,
+      wrap({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'functions.Bash', input: { command } }] } })
+        + wrap({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'HTTP 403 missing grant' }] } }),
+    ];
+    for (const content of calls) {
+      const parsed = extractToolOutputs(content, run);
+      assert.equal(parsed.malformed, 0);
+      assert.equal(parsed.rows.length, eligible ? 1 : 0, command);
+      const data = input(); data.runs = [run]; data.toolOutputs = parsed.rows;
+      assert.equal(score(data).metrics.accessFailures.observedUniqueRuns, eligible ? 1 : 0, command);
+    }
+  }
+});
+
 test('review regression: explicit truncation defeats a parseable log EOF', async () => {
   const data = await collection(() => ({ content: wrap(done('c1', 'clean')), truncated: true, nextOffset: null }));
   const out = evaluateAccessGaps(data);

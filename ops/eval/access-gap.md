@@ -97,8 +97,12 @@ Record contracts:
   blocks, not user text/model prose. Two passes join source-read and test-call
   exclusions even when completions arrive first. Instruction/source reads are
   excluded conservatively, including namespaced `functions.Read` and
-  `mcp__filesystem__Read` names. Declared expected-refusal calls and test commands
-  stay diagnostic. Unrecognized/raw frames make log coverage UNKNOWN rather
+  `mcp__filesystem__Read` names. Shell source detection follows `env`/`command`
+  prefixes, control keywords and redirections to the invoked program; wrapper
+  option values, loop-header words, redirection targets and quoted API arguments
+  do not themselves identify source reads. This is a conservative lexical filter,
+  not a shell interpreter or proof of arbitrary command semantics. Declared
+  expected-refusal calls and test commands stay diagnostic. Unrecognized/raw frames make log coverage UNKNOWN rather
   than being guessed into tool results. Raw output is hashed but never emitted;
   run/call IDs locate evidence in its native access-controlled source.
 - Card snapshot: `{id,status,accessRelated,gapKey?,group?,gapClass?,agentId?,

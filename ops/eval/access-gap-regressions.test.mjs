@@ -635,6 +635,32 @@ test('bot regression: quoted arithmetic payloads retain provider denials without
     }
   }
 });
+test('bot regression: nested arithmetic quotes cannot certify complete coverage', async () => {
+  for (const [command, expected, ambiguous] of [
+    ['curl -d "$(( "$price" << 2 ))" https://example.invalid/api', 0, true],
+    ['curl -d "$(( "$(cat fixture.json)" << 2 ))" https://example.invalid/api', 0, true],
+    ['curl -d "$((1<<2))$(( "$price" << 2 ))" https://example.invalid/api', 0, true],
+    ['curl -d "$((1 << 2 ))" https://example.invalid/api', 1, false],
+    ["curl -d '$(( \"$price\" << 2 ))' https://example.invalid/api", 1, false],
+    ['curl -d "\\$(( \\"$price\\" << 2 ))" https://example.invalid/api', 1, false],
+    ["cat '$(( \"$price\" << 2 ))'", 0, false],
+  ]) {
+    for (const event of [
+      { type: 'acpx.tool_call', toolCallId: 'c1', name: 'Bash', text: command, status: 'in_progress' },
+      { type: 'acpx.tool_call', toolCallId: 'c1', name: 'Inspect request', kind: 'execute', rawInput: { command }, status: 'in_progress' },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'functions.Bash', input: { command } }] } },
+    ]) {
+      const content = wrap(event) + wrap(done('c1', 'HTTP 403 missing grant'));
+      const parsed = extractToolOutputs(content, run);
+      assert.equal(parsed.rows.length, expected, command);
+      assert.equal(parsed.malformed > 0, ambiguous, command);
+      const data = await collection(() => ({ content, nextOffset: null }));
+      const out = evaluateAccessGaps(data);
+      assert.equal(out.coverage.toolOutputs.status, ambiguous ? 'UNKNOWN' : 'complete', command);
+      assert.equal(out.metrics.accessFailures.observedUniqueRuns, expected, command);
+    }
+  }
+});
 test('bot regression: shell interpreters in program positions cannot certify script output', async () => {
   for (const command of [
     "bash <<< 'cat fixture.json'", "printf 'cat fixture.json' | bash", 'bash < fixture.sh',

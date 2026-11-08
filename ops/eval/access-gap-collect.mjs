@@ -21,7 +21,10 @@ function tokenize(value) {
     for (const fragment of fragments) {
       if (fragment.startsWith("'") || fragment.startsWith('\\')) continue;
       const active = fragment.startsWith('"') ? fragment.slice(1, -1).replace(/\\[$`"\\\n]/g, ' ') : fragment;
-      for (const expression of active.match(/\$\(\((?:[^()]|\([^()]*\))*\)\)/g) ?? []) {
+      const arithmetic = /\$\(\((?:[^()]|\([^()]*\))*\)\)/g;
+      // Nested shell quotes may split an active expansion across fragments.
+      if (active.replace(arithmetic, ' ').includes('$((')) return null;
+      for (const expression of active.match(arithmetic) ?? []) {
         if (/[$`\\'"]/.test(expression.slice(3, -2))) return null;
       }
     }

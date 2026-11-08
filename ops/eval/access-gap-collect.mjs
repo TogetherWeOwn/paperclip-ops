@@ -22,9 +22,10 @@ function sourceCommand(command) {
     if (redirect) { redirect = false; continue; }
     const word = token.replace(/'([^']*)'|"([^"\\]*)"|\\([\s\S])/g, (_, single, double, escaped) => single ?? double ?? escaped);
     if (loopHeader) {
-      // A list item named do is not the delimiter until the header has ended.
-      if (loopHeader === 'body' && token === 'do') { loopHeader = false; program = true; }
-      else if (loopHeader === 'body' && token === 'in') loopHeader = 'list';
+      // Positional loops allow do just after the name; in-lists need a separator.
+      if (loopHeader === 'name') loopHeader = 'afterName';
+      else if ((loopHeader === 'afterName' || loopHeader === 'body') && token === 'do') { loopHeader = false; program = true; }
+      else if ((loopHeader === 'afterName' || loopHeader === 'body') && token === 'in') loopHeader = 'list';
       continue;
     }
     if (!program) continue;
@@ -42,7 +43,7 @@ function sourceCommand(command) {
       } else if (/^-[p]*[vV]/.test(word)) program = false; // command -v/-V queries, rather than executes.
       continue;
     }
-    if (token === word && /^(?:for|select)$/.test(word)) { loopHeader = 'list'; continue; }
+    if (token === word && /^(?:for|select)$/.test(word)) { loopHeader = 'name'; continue; }
     if (token === word && /^(?:if|then|elif|else|while|until|do|!|\{)$/.test(word)) { wrapper = null; continue; }
     const executable = word.split('/').at(-1);
     if (executable === 'env' || executable === 'command') { wrapper = executable; continue; }

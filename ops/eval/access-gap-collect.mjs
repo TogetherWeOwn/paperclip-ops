@@ -1,8 +1,8 @@
 import { hash, utc, LIMIT } from './access-gap.mjs';
 
 const instruction = /(?:^|[/\\\s])(?:SKILL|AGENTS|CLAUDE)\.md\b|\/skills\/[^\s]*\/files\b/i;
-const sourceTool = /^(?:functions\.|mcp__filesystem__)?(?:Read|Grep|WebFetch)$/;
-const shellTool = /^(?:functions\.)?Bash$/;
+const sourceTool = /^(?:functions\.|mcp__filesystem__)?(?:Read|Grep|WebFetch)(?:\s|$)/;
+const shellTool = /^(?:functions\.)?Bash(?:\s|$)/;
 const sourceCommand = /\b(?:cat|head|tail|sed|awk|rg|grep)\b/i;
 const sourceRead = (name, command) => sourceTool.test(name) || (shellTool.test(name) && sourceCommand.test(command));
 const tests = /\b(?:node\s+--test|pytest|unittest|cargo\s+test|npm\s+(?:run\s+)?test)\b/;

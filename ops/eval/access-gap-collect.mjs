@@ -14,12 +14,17 @@ function sourceCommand(command) {
   let program = true, wrapper = null, operand = null, redirect = false, loopHeader = false;
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index];
-    if (/^[|;&()\n]$/.test(token)) { program = true; wrapper = operand = null; redirect = false; continue; }
+    if (/^[|;&()\n]$/.test(token)) {
+      if (loopHeader && /^[;\n]$/.test(token)) loopHeader = 'body';
+      program = true; wrapper = operand = null; redirect = false; continue;
+    }
     if (/^(?:[0-9]*[<>]|&>)/.test(token)) { redirect = true; continue; }
     if (redirect) { redirect = false; continue; }
     const word = token.replace(/'([^']*)'|"([^"\\]*)"|\\([\s\S])/g, (_, single, double, escaped) => single ?? double ?? escaped);
     if (loopHeader) {
-      if (token === 'do') { loopHeader = false; program = true; }
+      // A list item named do is not the delimiter until the header has ended.
+      if (loopHeader === 'body' && token === 'do') { loopHeader = false; program = true; }
+      else if (loopHeader === 'body' && token === 'in') loopHeader = 'list';
       continue;
     }
     if (!program) continue;
@@ -37,7 +42,7 @@ function sourceCommand(command) {
       } else if (/^-[p]*[vV]/.test(word)) program = false; // command -v/-V queries, rather than executes.
       continue;
     }
-    if (token === word && /^(?:for|select)$/.test(word)) { loopHeader = true; continue; }
+    if (token === word && /^(?:for|select)$/.test(word)) { loopHeader = 'list'; continue; }
     if (token === word && /^(?:if|then|elif|else|while|until|do|!|\{)$/.test(word)) { wrapper = null; continue; }
     const executable = word.split('/').at(-1);
     if (executable === 'env' || executable === 'command') { wrapper = executable; continue; }

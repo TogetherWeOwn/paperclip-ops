@@ -266,6 +266,39 @@ test('bot regression: shell prefixes and redirections exclude source reads witho
   }
 });
 
+test('bot regression: quoted assignments and loop list keywords retain API denial evidence', () => {
+  const commands = [];
+  for (const program of ['cat', 'head', 'tail', 'sed', 'awk', 'rg', 'grep']) {
+    for (const value of [`'${program}'`, `"${program}"`, `pre'${program}'"suffix"`, `a\\ b'${program}'`]) {
+      commands.push([`env MODE=${value} curl https://api.example.invalid/items`, true]);
+      commands.push([`MODE=${value} cat fixture.json`, false]);
+    }
+    for (const delimiter of [';', '\n']) {
+      commands.push([`for name in do ${program}${delimiter} do curl https://api.example.invalid/items; done`, true]);
+      commands.push([`for name in do ${program}${delimiter} do cat fixture.json; done`, false]);
+    }
+  }
+  commands.push(['select name in do cat; do curl https://api.example.invalid/items; done', true]);
+  const mismatches = [];
+  for (const [command, eligible] of commands) {
+    const result = wrap(done('c1', 'HTTP 403 missing grant'));
+    const calls = [
+      wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name: 'Inspect request', kind: 'execute', rawInput: { command }, status: 'in_progress' }) + result,
+      wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name: 'Bash', text: command, status: 'in_progress' }) + result,
+      wrap({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'functions.Bash', input: { command } }] } })
+        + wrap({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'HTTP 403 missing grant' }] } }),
+    ];
+    for (const content of calls) {
+      const parsed = extractToolOutputs(content, run);
+      assert.equal(parsed.malformed, 0);
+      const data = input(); data.runs = [run]; data.toolOutputs = parsed.rows;
+      if (parsed.rows.length !== (eligible ? 1 : 0)
+        || score(data).metrics.accessFailures.observedUniqueRuns !== (eligible ? 1 : 0)) mismatches.push(command);
+    }
+  }
+  assert.deepEqual([...new Set(mismatches)], []);
+});
+
 test('review regression: explicit truncation defeats a parseable log EOF', async () => {
   const data = await collection(() => ({ content: wrap(done('c1', 'clean')), truncated: true, nextOffset: null }));
   const out = evaluateAccessGaps(data);

@@ -95,14 +95,18 @@ function providerState(p) {
     if (op.entitled && (!op.tool || !['implemented', 'reviewed', 'enabled'].includes(op.status))) reasons.push('unimplemented_operation');
   }
   for (const op of snapshot?.operations ?? []) if (!ops.some(m => m.id === op)) reasons.push('unmapped_api_operation');
+  for (const op of ops) if (!snapshot?.operations?.includes(op.id)) reasons.push('operation_absent_from_snapshot');
+  if (snapshot?.addedOperations != null && (!Array.isArray(snapshot.addedOperations)
+    || snapshot.addedOperations.some(op => !snapshot.operations?.includes(op)))) reasons.push('invalid_snapshot_additions');
+  const installed = op => p.packagePresent === true && p.tools?.some(t => t.operation === op.id && t.name === op.tool);
   return { group: p.group, package: p.package, status: reasons.length ? 'UNKNOWN' : 'complete', reasons: unique(reasons),
     snapshotRevision: snapshot?.revision ?? null, snapshotSha256: snapshot?.sha256 ?? null,
     policyRevision: p.policyRevision ?? null, capabilityMapSha256: map?.sha256 ?? null,
     tiers: Object.fromEntries(TIERS.map(tier => [tier, {
       entitled: ops.filter(op => op.tier === tier && op.entitled).length,
-      implemented: ops.filter(op => op.tier === tier && op.entitled && ['implemented', 'reviewed', 'enabled'].includes(op.status)).length,
-      reviewed: ops.filter(op => op.tier === tier && op.entitled && ['reviewed', 'enabled'].includes(op.status)).length,
-      enabled: ops.filter(op => op.tier === tier && op.entitled && op.status === 'enabled').length,
+      implemented: ops.filter(op => op.tier === tier && op.entitled && installed(op) && ['implemented', 'reviewed', 'enabled'].includes(op.status)).length,
+      reviewed: ops.filter(op => op.tier === tier && op.entitled && installed(op) && ['reviewed', 'enabled'].includes(op.status)).length,
+      enabled: ops.filter(op => op.tier === tier && op.entitled && installed(op) && op.status === 'enabled').length,
     }])) };
 }
 

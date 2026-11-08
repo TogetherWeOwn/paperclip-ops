@@ -86,7 +86,9 @@ Record contracts:
   kinds → `unknown-mixed`. Free text, title prefixes and quoted rules never
   establish agent-doable intent. This does not decide semantic routing or
   authorize the request. Platform connection requests remain separately marked.
-- Run: `{id,agentId,createdAt}`. Tool output: `{id,runId,callId,at,origin,text,
+- Run: `{id,agentId,createdAt,logBytes?}`. Optional `logBytes` is the native
+  terminal UTF-8 byte count; when supplied, EOF must match it. Tool output:
+  `{id,runId,callId,at,origin,text,
   instructionRead,expectedRefusal,transportStatus?,isError?}`. Only
   `origin: "tool_result"` is eligible. Wrapper completion does not prove HTTP
   success: a completed curl may still report 403. Mere quota inventory is not a
@@ -94,7 +96,8 @@ Record contracts:
   The parser accepts ACP completion/failure and stream-json `tool_result`
   blocks, not user text/model prose. Two passes join source-read and test-call
   exclusions even when completions arrive first. Instruction/source reads are
-  excluded conservatively. Declared expected-refusal calls and test commands
+  excluded conservatively, including namespaced `functions.Read` and
+  `mcp__filesystem__Read` names. Declared expected-refusal calls and test commands
   stay diagnostic. Unrecognized/raw frames make log coverage UNKNOWN rather
   than being guessed into tool results. Raw output is hashed but never emitted;
   run/call IDs locate evidence in its native access-controlled source.
@@ -121,7 +124,11 @@ Record contracts:
   `{revision,sha256,sourceUrl,operations:[operationId],previousSha256?,
   addedOperations?:[operationId]}` names the official schema snapshot. Missing
   map/snapshot/inventory/policy and unmapped operations prevent complete coverage.
-  Implemented, reviewed and enabled counts are reported separately per tier.
+  Every mapped operation and declared addition must belong to the current
+  official snapshot; mismatches are UNKNOWN and refuse proposals. Implemented,
+  reviewed and enabled counts join the exact installed operation/tool pair in a
+  present package, not map status alone. Counts are reported separately per tier;
+  incomplete inventories remain UNKNOWN even if some installed tools are observed.
 - Incident: `{id,at,group,operation,targetScope,tier,agentId,schemaRevision?,
   evidenceKeys,validation}`. Evidence keys join `interaction:<id>`, `tool:<id>`
   and `card:<id>`. Validation `{completeRequest,currentCapabilityPolicy,revision,
@@ -189,7 +196,10 @@ The existing run route's 1,000-row cap, missing EOF proof, failed/truncated page
 unknown JSON event types, unjoined run IDs, frame parse losses and scan limits
 make coverage UNKNOWN. Wrapper chunks are reassembled per stream before parsing.
 A short page/chunk is not
-log EOF proof. Input denials are reported as stable reason classes, not raw
+log EOF proof. Each numeric continuation must equal the accumulated UTF-8 byte
+count, including on a terminal page; a supplied native terminal `logBytes` must
+also match EOF. Gaps, overlaps and size mismatches retain only observed evidence
+with UNKNOWN coverage and null failure rates. Input denials are reported as stable reason classes, not raw
 exception messages that may contain secrets. Supplied IDs/hashes are provenance,
 not an authentication oracle; the producer must not present a selected subset
 as a complete census.

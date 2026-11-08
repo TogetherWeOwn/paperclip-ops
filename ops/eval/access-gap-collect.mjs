@@ -1,7 +1,7 @@
 import { hash, utc, LIMIT } from './access-gap.mjs';
 
 const instruction = /(?:^|[/\\\s])(?:SKILL|AGENTS|CLAUDE)\.md\b|\/skills\/[^\s]*\/files\b/i;
-const sourceRead = /^(?:Read|Grep|WebFetch)\b|\b(?:cat|head|tail|sed|awk|rg|grep)\b/i;
+const sourceRead = /^(?:[A-Za-z0-9_-]+(?:\.|__))*(?:Read|Grep|WebFetch)\b|\b(?:cat|head|tail|sed|awk|rg|grep)\b/i;
 const tests = /\b(?:node\s+--test|pytest|unittest|cargo\s+test|npm\s+(?:run\s+)?test)\b/;
 const compare = (a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b), 'en');
 export function receipt(rows, window, complete, errors = [], pages = [1], revision = 'paperclip-get.v1') {
@@ -158,7 +158,8 @@ export async function collectAccessInputs({ company, operatorId, window, asOf, g
           const created = utc(run.createdAt);
           if (created < start || created >= end) continue;
           if (runs.size >= scanLimit) { runErrors.push('run_scan_capped'); break; }
-          const normalized = { id: run.id, agentId: run.agentId, createdAt: run.createdAt };
+          const normalized = { id: run.id, agentId: run.agentId, createdAt: run.createdAt,
+            ...(run.logBytes == null ? {} : { logBytes: run.logBytes }) };
           if (runs.has(run.id) && hash(runs.get(run.id)) !== hash(normalized)) runErrors.push('conflicting_run');
           runs.set(run.id, normalized);
         }
@@ -173,10 +174,19 @@ export async function collectAccessInputs({ company, operatorId, window, asOf, g
         if (typeof data.content !== 'string') throw new Error('invalid_log');
         if (data.truncated === true || data.complete === false || data.errors?.length) logErrors.push('log_reported_incomplete');
         content += data.content;
-        if (Buffer.byteLength(content) > maxLogPages * logBytes) throw new Error('oversize_log');
+        const collectedBytes = Buffer.byteLength(content);
+        if (collectedBytes > maxLogPages * logBytes) throw new Error('oversize_log');
+        // Offsets address UTF-8 bytes, not string characters. Retain observed
+        // evidence on a gap, but never certify a skipped/overlapping segment.
+        if (data.nextOffset != null && (!Number.isSafeInteger(data.nextOffset) || data.nextOffset !== collectedBytes)) {
+          logErrors.push('log_offset_gap'); break;
+        }
         // Only explicit EOF is sufficient; a short chunk alone does not prove EOF.
-        if (data.nextOffset === null || data.hasMore === false) { finished = true; break; }
-        if (!Number.isSafeInteger(data.nextOffset) || data.nextOffset <= offset) throw new Error('unknown_log_continuation');
+        if (data.nextOffset === null || data.hasMore === false) {
+          if (run.logBytes != null && (!Number.isSafeInteger(run.logBytes) || run.logBytes < 0 || run.logBytes !== collectedBytes)) logErrors.push('log_terminal_size_mismatch');
+          finished = true; break;
+        }
+        if (!Number.isSafeInteger(data.nextOffset) || data.nextOffset <= offset) { logErrors.push('unknown_log_continuation'); break; }
         offset = data.nextOffset;
       }
       if (!finished) logErrors.push('log_page_cap');

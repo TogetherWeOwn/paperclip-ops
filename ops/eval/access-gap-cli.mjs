@@ -66,9 +66,11 @@ export async function main(args) {
   const sourceHashes = Object.fromEntries(files.map(name => [name, createHash('sha256').update(readFileSync(new URL(name, import.meta.url))).digest('hex')]));
   return canonical({ ...result, adapter: { sourceHashes, authorization: false } });
 }
-let isMain = false;
-try { isMain = Boolean(process.argv[1]) && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); } catch {}
-if (isMain) {
+function isEntrypoint() {
+  try { return Boolean(process.argv[1]) && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (isEntrypoint()) {
   try { console.log(JSON.stringify(await main(process.argv.slice(2)))); }
   catch { console.error(JSON.stringify({ error: 'access_gap_refused', operationalAuthorization: false })); process.exitCode = 2; }
 }

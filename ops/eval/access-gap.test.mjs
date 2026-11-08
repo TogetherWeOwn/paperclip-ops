@@ -468,7 +468,7 @@ test('many incidents for one missing group produce one full-surface package, not
   assert.equal(proposal.coverageStatus, 'complete');
   assert.equal(proposal.gapKey, gapKey(proposal));
   for (const tier of ['read', 'write', 'reserved']) {
-    assert.deepEqual(result.providerCoverage[0].tiers[tier], { entitled: 1, implemented: 1, reviewed: 1, enabled: 0 });
+    assert.deepEqual(result.providerCoverage[0].tiers[tier], { entitled: 1, implemented: 0, reviewed: 0, enabled: 0 });
   }
 });
 

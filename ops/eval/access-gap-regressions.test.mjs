@@ -35,7 +35,7 @@ function candidate() {
   return data;
 }
 const score = data => evaluateAccessGaps(seal(data));
-function collection(getLog, metadata = {}) {
+function collection(getLog, metadata = {}, runRecord = run) {
   return collectAccessInputs({ company: 'company', operatorId: 'operator', window, asOf: window.until,
     metadata: { newCardsAlreadyCreated: 0, ...metadata },
     collectInteractions: async ({ get }) => {
@@ -44,11 +44,93 @@ function collection(getLog, metadata = {}) {
     }, get: async path => {
       if (path.includes('/issues?')) return [{ id: 'card1', status: 'done' }];
       if (path.endsWith('/agents')) return [{ id: 'a1' }];
-      if (path.includes('/heartbeat-runs?')) return [run];
-      if (path.includes('/log?')) return getLog();
+      if (path.includes('/heartbeat-runs?')) return [runRecord];
+      if (path.includes('/log?')) return getLog(path);
       throw Error('unexpected_mock_route');
     } });
 }
+
+test('bot regression: operations absent from the official snapshot cannot propose grants or drift', () => {
+  for (const drift of [false, true]) {
+    const data = candidate(), p = data.providers[0];
+    p.snapshot.operations = [];
+    if (drift) {
+      p.tools = []; p.snapshot.previousSha256 = 'c'.repeat(64); p.snapshot.addedOperations = ['list'];
+      data.incidents.forEach(i => { i.schemaRevision = 's2'; });
+    }
+    const out = score(data);
+    assert.equal(out.providerCoverage[0].status, 'UNKNOWN');
+    assert.ok(out.providerCoverage[0].reasons.includes('operation_absent_from_snapshot'));
+    assert.deepEqual(out.proposals, []); assert.deepEqual(out.updates, []);
+  }
+});
+test('bot regression: added operations must belong to the current official snapshot', () => {
+  const data = candidate(), p = data.providers[0];
+  p.tools = []; p.snapshot.previousSha256 = 'c'.repeat(64); p.snapshot.addedOperations = ['list', 'unlisted'];
+  data.incidents.forEach(i => { i.schemaRevision = 's2'; });
+  const out = score(data);
+  assert.equal(out.providerCoverage[0].status, 'UNKNOWN');
+  assert.ok(out.providerCoverage[0].reasons.includes('invalid_snapshot_additions'));
+  assert.deepEqual(out.proposals, []); assert.deepEqual(out.updates, []);
+});
+test('bot regression: coverage joins mapped operations to exact installed tools', () => {
+  for (const status of ['implemented', 'reviewed', 'enabled']) {
+    for (const tools of [[], [{ operation: 'list', name: 'wrong' }], [{ operation: 'other', name: 'list_tool' }]]) {
+      const data = candidate(), p = data.providers[0];
+      p.tools = tools; p.capabilityMap.operations[0].status = status;
+      assert.deepEqual(score(data).providerCoverage[0].tiers.read, { entitled: 1, implemented: 0, reviewed: 0, enabled: 0 });
+    }
+    const data = candidate(), p = data.providers[0]; p.capabilityMap.operations[0].status = status;
+    assert.deepEqual(score(data).providerCoverage[0].tiers.read,
+      { entitled: 1, implemented: 1, reviewed: status === 'implemented' ? 0 : 1, enabled: status === 'enabled' ? 1 : 0 });
+    p.inventoryComplete = false;
+    assert.equal(score(data).providerCoverage[0].status, 'UNKNOWN');
+  }
+});
+test('bot regression: byte-offset gaps and overlaps cannot certify complete log coverage', async () => {
+  const content = wrap(done('c1', 'HTTP 403 — forbidden'));
+  for (const delta of [-1, 1]) {
+    const data = await collection(path => new URLSearchParams(path.split('?')[1]).get('offset') === '0'
+      ? { content, nextOffset: Buffer.byteLength(content) + delta }
+      : { content: '', nextOffset: null });
+    const out = evaluateAccessGaps(data);
+    assert.equal(out.coverage.toolOutputs.status, 'UNKNOWN');
+    assert.ok(out.coverage.toolOutputs.reasons.includes('unavailable_input'));
+    assert.equal(out.metrics.accessFailures.per100CoveredRuns, null);
+    assert.equal(out.metrics.accessFailures.observedUniqueRuns, 1, 'retain observed lower-bound evidence');
+  }
+});
+test('bot regression: UTF-8 contiguous log pages and matching terminal byte counts remain complete', async () => {
+  const content = wrap(done('c1', 'HTTP 403 — forbidden')), size = Buffer.byteLength(content);
+  const data = await collection(path => new URLSearchParams(path.split('?')[1]).get('offset') === '0'
+    ? { content, nextOffset: size } : { content: '', nextOffset: null }, {}, { ...run, logBytes: size });
+  const out = evaluateAccessGaps(data);
+  assert.equal(out.coverage.toolOutputs.status, 'complete');
+  assert.equal(out.metrics.accessFailures.observedUniqueRuns, 1);
+});
+test('bot regression: terminal byte mismatch and invalid EOF offsets defeat completeness', async () => {
+  const content = wrap(done('c1', 'HTTP 403')), size = Buffer.byteLength(content);
+  for (const [response, logBytes] of [
+    [{ content, nextOffset: null }, size + 1],
+    [{ content, nextOffset: null }, -1],
+    [{ content, hasMore: false, nextOffset: size + 1 }, size],
+  ]) {
+    const out = evaluateAccessGaps(await collection(() => response, {}, { ...run, logBytes }));
+    assert.equal(out.coverage.toolOutputs.status, 'UNKNOWN');
+    assert.equal(out.metrics.accessFailures.per100CoveredRuns, null);
+  }
+});
+test('bot regression: namespaced source-read tools exclude quoted denials in both trace formats', () => {
+  for (const name of ['functions.Read', 'functions.Grep', 'functions.WebFetch', 'mcp__filesystem__Read']) {
+    const acp = wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name, status: 'in_progress' }) + wrap(done('c1', 'HTTP 403 missing grant'));
+    assert.deepEqual(extractToolOutputs(acp, run).rows, [], name);
+    const stream = wrap({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name, input: {} }] } })
+      + wrap({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'HTTP 403 missing grant' }] } });
+    assert.deepEqual(extractToolOutputs(stream, run).rows, [], name);
+  }
+  const acp = wrap({ type: 'acpx.tool_call', toolCallId: 'c1', name: 'functions.provider_list', status: 'in_progress' }) + wrap(done('c1', 'HTTP 403'));
+  assert.equal(extractToolOutputs(acp, run).rows.length, 1, 'real provider failures remain eligible');
+});
 
 test('review regression: explicit truncation defeats a parseable log EOF', async () => {
   const data = await collection(() => ({ content: wrap(done('c1', 'clean')), truncated: true, nextOffset: null }));

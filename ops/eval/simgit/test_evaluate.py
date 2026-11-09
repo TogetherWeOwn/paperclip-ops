@@ -3,7 +3,9 @@ import importlib.util
 import os
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
+from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location("simgit_evaluation", Path(__file__).with_name("evaluate.py"))
 evaluation = importlib.util.module_from_spec(SPEC)
@@ -97,6 +99,74 @@ class AllocationTests(unittest.TestCase):
             self.assertEqual(result["allocated_bytes"], expected)
             self.assertEqual(result["categories"]["generated_output"],
                              (generated.stat().st_blocks + (generated / "output").stat().st_blocks) * 512)
+
+
+class CorrectionTests(unittest.TestCase):
+    def test_counts_directory_symlink_without_following_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            outer = Path(directory)
+            target = outer / ("long-directory-" + "x" * 150)
+            target.mkdir()
+            (target / "not-in-boundary").write_bytes(b"x" * 8192)
+            root = outer / "measured"
+            root.mkdir()
+            link = root / "link"
+            link.symlink_to(target, target_is_directory=True)
+            result = evaluation.allocated(root)
+            self.assertEqual(result["unique_inodes"], 2)
+            self.assertEqual(result["allocated_bytes"], (root.stat().st_blocks + link.lstat().st_blocks) * 512)
+
+    def test_crash_or_unrelated_error_is_not_a_native_refusal(self):
+        reason = "worktree has uncommitted changes"
+        for code, stdout, stderr in ((-11, "", reason), (1, "", "unrelated error"),
+                                     (0, "", reason), (1, "{}", reason)):
+            self.assertFalse(evaluation.expected_refusal(subprocess.CompletedProcess([], code, stdout, stderr), reason))
+        self.assertTrue(evaluation.expected_refusal(subprocess.CompletedProcess([], 1, "", reason), reason))
+
+    def test_timeout_keeps_partial_command_audit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = evaluation.Evaluation(root / "never-executed", root / "data", root)
+            with mock.patch.object(evaluation.subprocess, "run", side_effect=subprocess.TimeoutExpired(
+                    ["never-executed"], 30, output=b"partial", stderr=b"diagnostic")):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    instance.command(root, "never-executed")
+            entry = instance.result["commands"][-1]
+            self.assertEqual(entry["argv"], ["never-executed"])
+            self.assertEqual(entry["outcome"], "TIMEOUT")
+            self.assertEqual(entry["stdout"], "partial")
+            self.assertEqual(entry["stderr"], "diagnostic")
+            self.assertIsNone(entry["exit"])
+
+    def test_group_cleanup_is_attempted_even_after_launcher_exit(self):
+        with mock.patch.object(evaluation.os, "killpg") as kill:
+            evaluation.stop_process_group(12345)
+            kill.assert_called_once_with(12345, evaluation.signal.SIGKILL)
+        with mock.patch.object(evaluation.os, "killpg", side_effect=ProcessLookupError):
+            evaluation.stop_process_group(12345)
+
+    def test_soft_timeout_raises_a_catchable_interruption(self):
+        with self.assertRaises(InterruptedError):
+            evaluation.termination_requested(evaluation.signal.SIGTERM, None)
+
+    def test_scenario_failure_enters_native_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = evaluation.Evaluation(root / "never-executed", root / "data", root)
+            source = root / "source"
+            with mock.patch.object(instance, "source", return_value=(source, "a" * 40, {})), \
+                 mock.patch.object(instance, "snapshot", return_value={}), \
+                 mock.patch.object(instance, "create", side_effect=InterruptedError("synthetic failure")), \
+                 mock.patch.object(instance, "cleanup") as cleanup:
+                with self.assertRaises(InterruptedError):
+                    instance.scenario("git", "cold", 1)
+                cleanup.assert_called_once_with("git", source, root / "data" / "git-cold-n1")
+
+    def test_workflow_lifetime_budget_and_no_reruns(self):
+        workflow = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "simgit-evaluation.yml"
+        text = workflow.read_text()
+        self.assertIn("github.run_attempt == 1 && github.run_number <= 2", text)
+        self.assertIn("ci-policy: non-required --", text)
 
 
 if __name__ == "__main__":

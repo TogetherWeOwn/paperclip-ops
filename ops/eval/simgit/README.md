@@ -2,8 +2,10 @@
 
 This is an experiment, not an installed provider or a recommendation to adopt
 simgit. The [Actions workflow](../../../.github/workflows/simgit-evaluation.yml)
-runs once per matching same-repository PR head, on `ubuntu-latest`, with a
-20-minute job timeout. Keep the PR draft until its evidence is reviewed. Do not
+runs on `ubuntu-latest` with a 20-minute job timeout. Its lifetime budget is
+workflow run numbers 1 and 2 only, attempt 1 only: one initial run and one
+defect-justified correction documented in [CORRECTION.md](CORRECTION.md).
+Further pushes and reruns cannot execute the matrix under this workflow. Keep the PR draft until its evidence is reviewed. Do not
 run this experiment on a shared host. No workflow dispatch, scheduled backstop,
 paid/self-hosted runner, live source data or runtime integration is provided.
 
@@ -90,16 +92,25 @@ Cases record PASS/FAIL/UNRUN. The four-tree cold simgit case additionally checks
 - dirty safe removal refuses and preserves work;
 - an owned `simgit run` launcher refuses unlock while alive, then is killed
   together with its synthetic waiting child and recovered with native unlock;
-- a uniquely identified owned FUSE process is killed, native repair is invoked
-  once, and upperdir contents and ordinary Git access must survive;
+- a uniquely identified owned FUSE process is killed, daemon exit and actual
+  failed access are observed, then native repair is invoked once; upperdir
+  contents and ordinary Git access must survive;
 - safe native removal leaves no linked registrations, paths, owned FUSE
   processes or mount entries; explicit prune measures residual storage.
+
+After the matrix, one additional single-tree lifecycle probe injects a dirty
+worker exception and checks the native failure finalizer, residual allocation
+and prune. It is not another storage matrix. Safe refusal requires exit 1 plus
+the expected diagnostic and preserved data, not just any nonzero/crash exit.
+The launcher child is explicitly tracked and its exit verified.
 
 Any substantive failure stops the matrix; absent cases stay UNRUN. The finalizer
 inspects registrations and attempts bounded cleanup of **only this experiment's
 synthetic trees**, with dirty discard recorded as failure containment, not a
 successful normal cleanup. No unknown add is blindly replayed. Residual mounts,
-processes and bytes are recorded. A hard job timeout can prevent finalization;
+processes and bytes are recorded. The ten-minute soft timeout raises a catchable
+SIGTERM interruption and allows 90 seconds for bounded native cleanup; command
+timeouts retain partial audit output. A hard timeout can prevent finalization;
 absence of final evidence then means UNKNOWN/UNRUN. Disposable runner destruction
 is final containment, never proof of successful explicit native cleanup.
 

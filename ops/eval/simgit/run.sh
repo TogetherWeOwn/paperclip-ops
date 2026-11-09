@@ -22,6 +22,14 @@ limitation() {
   printf '%s\n' "$1" > "$out/limitation.txt"
   printf '%s\n' 'NO-GO: matrix and lifecycle cases UNRUN; capability/build prerequisite unmet.' >> "$out/limitation.txt"
 }
+if [[ ${GITHUB_RUN_ATTEMPT:-0} != 1 || ${GITHUB_RUN_NUMBER:-999} -gt 2 ]]; then
+  limitation 'Experiment lifetime budget exhausted; no renewed matrix.'
+  exit 0
+fi
+if [[ $GITHUB_RUN_NUMBER == 2 && ! -s ops/eval/simgit/CORRECTION.md ]]; then
+  limitation 'Second run requires a committed defect-justification record.'
+  exit 0
+fi
 # Do not install host packages or format a substitute filesystem to force a pass.
 if ! command -v fuse-overlayfs > /dev/null || ! command -v fusermount3 > /dev/null || [[ ! -r /dev/fuse || ! -w /dev/fuse ]]; then
   limitation 'Hosted image lacks executable fuse-overlayfs/fusermount3 or readable+writable /dev/fuse.'
@@ -58,6 +66,6 @@ sha256sum "$work/build/release/simgit" > "$out/candidate-binary-sha256.txt"
 "${clean[@]}" "${work}/build/release/simgit" --version > "$out/candidate-version.txt"
 # Python's finally block performs native cleanup and records residuals. On a
 # hard job timeout runner disposal is containment, never an explicit-cleanup PASS.
-"${clean[@]}" timeout --signal=TERM --kill-after=30 600 python3 -I \
+"${clean[@]}" timeout --signal=TERM --kill-after=90 600 python3 -I \
   ops/eval/simgit/evaluate.py --binary "$work/build/release/simgit" \
   --root "$work/data" --output "$out"

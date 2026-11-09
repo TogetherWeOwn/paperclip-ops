@@ -13,7 +13,7 @@ import time
 PIN = "a4721aca27ffcbedfd79c553c78f8969c29bbc63"
 CASES = ("unchanged_contents", "independent_writes", "git_identity_commit",
          "dirty_removal_refused", "interrupted_launcher_unlock", "interrupted_mount_repair",
-         "explicit_cleanup", "provider_identity_path_validation")
+         "explicit_cleanup", "provider_identity_path_validation", "failure_path_cleanup")
 
 
 def validate_doctor(value, source):
@@ -44,6 +44,30 @@ def validate_allocation(value, source, expected, branch, base):
             or value.get("base") != base or value.get("ephemeral") is not True):
         raise ValueError("allocation identity or CoW mode mismatch")
     return value["cleanup_token"]
+
+
+def termination_requested(signum, frame):
+    raise InterruptedError(f"evaluation interrupted by signal {signum}; native cleanup required")
+
+
+def expected_refusal(process, diagnostic):
+    return process.returncode == 1 and not process.stdout.strip() and diagnostic in process.stderr
+
+
+def process_active(pid):
+    try:
+        # A zombie has exited even if its parent has not reaped it yet.
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except FileNotFoundError:
+        return False
+
+
+def stop_process_group(pid):
+    # The launcher may already have exited while its child still owns the group.
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 def mounts():
@@ -84,8 +108,9 @@ def allocated(root, mounted=()):
                             "generated_output", "trees_and_metadata"), 0)
     for directory, dirs, files in os.walk(root, followlinks=False):
         parent = Path(directory)
-        dirs[:] = [d for d in dirs if parent / d not in skip]
-        for path in [parent] + [parent / n for n in files]:
+        links = [parent / d for d in dirs if (parent / d).is_symlink() and parent / d not in skip]
+        dirs[:] = [d for d in dirs if parent / d not in skip and not (parent / d).is_symlink()]
+        for path in [parent] + [parent / n for n in files] + links:
             st = path.lstat()
             identity = (st.st_dev, st.st_ino)
             if identity in seen:
@@ -125,14 +150,26 @@ class Evaluation:
         temporary.write_text(json.dumps(self.result, indent=2) + "\n")
         temporary.replace(self.output / "result.json")
 
-    def command(self, cwd, *args, ok=True):
+    def command(self, cwd, *args, ok=True, timeout=30):
         start = time.monotonic()
-        p = subprocess.run(list(map(str, args)), cwd=cwd, env=self.env,
-                           text=True, capture_output=True, timeout=30)
-        self.result["commands"].append({"cwd": str(cwd), "argv": list(map(str, args)),
-                                        "exit": p.returncode, "seconds": time.monotonic() - start,
-                                        "stdout": p.stdout, "stderr": p.stderr})
+        entry = {"cwd": str(cwd), "argv": list(map(str, args)), "exit": None,
+                 "stdout": "", "stderr": "", "outcome": "STARTED"}
+        self.result["commands"].append(entry)
         self.save()
+        try:
+            p = subprocess.run(list(map(str, args)), cwd=cwd, env=self.env,
+                               text=True, capture_output=True, timeout=timeout)
+            entry.update(exit=p.returncode, stdout=p.stdout, stderr=p.stderr, outcome="EXITED")
+        except subprocess.TimeoutExpired as error:
+            text = lambda value: value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+            entry.update(outcome="TIMEOUT", stdout=text(error.stdout), stderr=text(error.stderr))
+            raise
+        except Exception as error:
+            entry.update(outcome="INTERRUPTED_OR_ERROR", stderr=str(error))
+            raise
+        finally:
+            entry["seconds"] = time.monotonic() - start
+            self.save()
         if ok and p.returncode:
             raise RuntimeError(f"command failed: {args}, exit {p.returncode}: {p.stderr}")
         return p
@@ -194,6 +231,7 @@ class Evaluation:
         if len(actual) != 1 or actual[0]["type"] != "fuse.fuse-overlayfs":
             raise ValueError(f"actual mount is not fuse-overlayfs: {actual}")
         self.result.setdefault("verified_mounts", []).extend(actual)
+        self.result["provider_validations"] = self.result.get("provider_validations", 0) + 1
         return token
 
     def remove(self, method, source, token):
@@ -231,7 +269,9 @@ class Evaluation:
 
     def interrupted_launcher(self, source, path, branch, root):
         ready = root / "launcher-ready"
-        code = "from pathlib import Path; import signal,sys; Path(sys.argv[1]).write_text('ready'); signal.pause()"
+        code = ("from pathlib import Path; import os,signal,sys; "
+                "p=Path(sys.argv[1]+'.tmp'); p.write_text(str(os.getpid())); "
+                "p.rename(sys.argv[1]); signal.pause()")
         with (self.output / "launcher.log").open("w") as log:
             process = subprocess.Popen([str(self.binary), "run", branch, "--path", str(path),
                                         "--", "python3", "-I", "-c", code, str(ready)],
@@ -242,16 +282,21 @@ class Evaluation:
                 while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
                     time.sleep(0.05)
                 assert ready.exists(), "launcher child never became ready"
+                child_pid = int(ready.read_text())
+                self.result.setdefault("owned_launcher_children", []).append(child_pid)
                 refused = self.simgit(source, "unlock", "--json", "--", path, ok=False)
-                assert refused.returncode != 0, "unlock accepted a live launcher"
+                assert expected_refusal(refused, "workspace is in use by a running command"), "not a native live-owner refusal"
+                assert str(process.pid) in refused.stderr
             finally:
-                if process.poll() is None:
-                    os.killpg(process.pid, signal.SIGKILL)
+                stop_process_group(process.pid)
                 process.wait(timeout=5)
-        # Child was stopped with the owned process group, not left writing files.
+        deadline = time.monotonic() + 5
+        while process_active(child_pid) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not process_active(child_pid), "owned launcher child survived group cleanup"
         unlocked = json.loads(self.simgit(source, "unlock", "--json", "--", path).stdout)
         assert unlocked["was_locked"] is True
-        return {"launcher_pid": process.pid, "unlock": unlocked}
+        return {"launcher_pid": process.pid, "child_pid": child_pid, "child_exited": True, "unlock": unlocked}
 
     def interrupted_mount(self, source, path, root):
         marker = path / "recovery-marker"
@@ -260,7 +305,20 @@ class Evaluation:
         processes = [p for p in overlay_processes(root) if str(path) in p["args"]]
         if len(processes) != 1:
             raise RuntimeError(f"cannot uniquely identify owned FUSE process: {processes}")
-        os.kill(processes[0]["pid"], signal.SIGKILL)
+        pid = processes[0]["pid"]
+        os.kill(pid, signal.SIGKILL)
+        disconnected = False
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if not process_active(pid):
+                try:
+                    marker.read_text()
+                except OSError:
+                    disconnected = True
+                    break
+            time.sleep(0.01)
+        assert disconnected, "mount interruption was not observed before repair"
+        assert self.git(path, "status", "--porcelain", ok=False).returncode != 0
         repaired = self.simgit(source, "repair", "--json")
         assert marker.read_text() == "preserve synthetic upperdir\n"
         assert any(m["path"] == str(path) and m["type"] == "fuse.fuse-overlayfs" for m in mounts())
@@ -274,7 +332,7 @@ class Evaluation:
         # recorded separately from successful native provider cleanup.
         attempted = []
         if source.exists():
-            listing = self.git(source, "worktree", "list", "--porcelain", ok=False)
+            listing = self.git(source, "worktree", "list", "--porcelain", ok=False, timeout=5)
             for line in listing.stdout.splitlines():
                 if not line.startswith("worktree "):
                     continue
@@ -282,9 +340,9 @@ class Evaluation:
                 if path == source or not path.is_relative_to(root):
                     continue
                 if method == "simgit":
-                    p = self.simgit(source, "remove", "--json", "--discard-dirty", "--", path, ok=False)
+                    p = self.simgit(source, "remove", "--json", "--discard-dirty", "--", path, ok=False, timeout=5)
                 else:
-                    p = self.git(source, "worktree", "remove", "--force", path, ok=False)
+                    p = self.git(source, "worktree", "remove", "--force", path, ok=False, timeout=5)
                 attempted.append({"path": str(path), "exit": p.returncode})
         remaining_mounts = owned_mounts(root)
         remaining_processes = overlay_processes(root)
@@ -354,7 +412,8 @@ class Evaluation:
                 dirty.write_text("must survive refused removal\n")
                 def refusal():
                     p = self.simgit(source, "remove", "--json", "--", tokens[0], ok=False)
-                    assert p.returncode != 0 and not p.stdout.strip()
+                    assert expected_refusal(p, "worktree has uncommitted changes"), "not a native dirty-work refusal"
+                    assert str(paths[0]) in p.stderr
                     assert dirty.read_text() == "must survive refused removal\n"
                     return "Safe cleanup refused dirty tree with empty JSON stdout and preserved its file."
                 self.case(name + ":dirty_removal_refused", refusal)
@@ -389,13 +448,41 @@ class Evaluation:
         finally:
             self.cleanup(method, source, root)
 
+    def failure_cleanup_probe(self):
+        root = self.root / "failure-cleanup-probe"
+        source, base, _ = self.source(root)
+        path = root / "tree"
+        try:
+            token = self.create("simgit", source, path, "failure-cleanup", base)
+            (path / "dirty-failure-marker").write_text("owned synthetic worker output\n")
+            raise RuntimeError("injected worker failure")
+        except RuntimeError as error:
+            assert str(error) == "injected worker failure"
+        finally:
+            self.cleanup("simgit", source, root)
+        assert not path.exists() and not owned_mounts(root) and not overlay_processes(root)
+        assert self.git(source, "worktree", "list", "--porcelain").stdout.count("worktree ") == 1
+        before_prune = self.snapshot(root)
+        self.simgit(source, "prune", "--all", "--json")
+        return {"injected": "worker exception with dirty owned tree", "cleanup_token": token,
+                "after_failure_cleanup": before_prune, "after_prune": self.snapshot(root)}
+
     def run(self):
         self.root.mkdir()
         try:
+            startup = json.loads(self.simgit(self.root, "doctor", "--json").stdout)
+            assert startup.get("identity") == "simgit" and startup.get("version") == "0.5.0"
+            assert startup.get("repository") is None
+            self.result["startup_doctor"] = startup
             for method in ("git", "simgit"):
                 for cache in ("cold", "warm"):
                     for count in (1, 4):
                         self.scenario(method, cache, count)
+            self.case("failure:failure_path_cleanup", self.failure_cleanup_probe)
+            def provider_validation():
+                assert self.result.get("provider_validations") == 13
+                return "Startup identity plus 12 matrix allocations (including warm seeds) and one failure probe validated; negative shapes/paths tested in separate contract-test step."
+            self.case("provider:provider_identity_path_validation", provider_validation)
             self.result["recommendation"] = "REVIEW REQUIRED: measured savings and lifecycle evidence must both qualify; no plugin authorized"
         except Exception as error:
             self.result["error"] = str(error)
@@ -406,6 +493,10 @@ class Evaluation:
                     self.result["cases"].append({"name": "not-executed:" + case, "verdict": "UNRUN"})
             self.result["residual_mounts"] = owned_mounts(self.root)
             self.result["residual_processes"] = overlay_processes(self.root)
+            self.result["residual_launcher_children"] = [
+                pid for pid in self.result.get("owned_launcher_children", []) if process_active(pid)]
+            if self.result["residual_launcher_children"]:
+                self.result["recommendation"] = "NO-GO: owned launcher child survived cleanup"
             self.save()
 
 
@@ -417,6 +508,7 @@ def main():
     args = parser.parse_args()
     if args.root.exists() or not args.binary.is_absolute() or not args.binary.is_file():
         parser.error("require a new synthetic root and an absolute candidate executable")
+    signal.signal(signal.SIGTERM, termination_requested)
     Evaluation(args.binary, args.root.resolve(), args.output.resolve()).run()
 
 

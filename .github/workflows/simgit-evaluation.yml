@@ -1,0 +1,35 @@
+name: Synthetic simgit evaluation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/simgit-evaluation.yml'
+      - 'ops/eval/simgit/**'
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-ext4:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Harness contract tests
+        run: python3 -I -m unittest discover -s ops/eval/simgit -p 'test_*.py' -v
+      - name: Exact-source build and synthetic evaluation
+        env:
+          EVALUATED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: bash ops/eval/simgit/run.sh
+      - name: Preserve measured evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: simgit-evaluation-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/simgit-evidence/
+          if-no-files-found: error
+          retention-days: 14

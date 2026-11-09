@@ -235,7 +235,7 @@ jobs:
           echo "WARN: cleanup failed; manually delete PlanetScale branch $REHEARSAL_BRANCH" >&2
           exit 1
 
-      # Pinned: actions/upload-artifact v7.0.1. Repin with the SHA on updates.
+      # Pinned: actions/upload-artifact v7.0.2. Repin with the SHA on updates.
       - name: Upload rehearsal evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

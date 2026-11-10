@@ -284,6 +284,7 @@ python3 -m unittest test_check_workflow_job_permissions || fail "workflow job pe
 ./test_acceptance_transport.sh || fail "acceptance-transport reply suite failed"
 ./test_upstream_prepush_hook.sh || fail "upstream pre-push hook suite failed"
 ./test_cliproxy_mgmt_recon_argv.sh || fail "cliproxy recon argv suite failed"
+bash test_cliproxy_plugin_deploy.sh || fail "cliproxy plugin rollback fault suite failed"
 ./test_case_b2acfa5c_selfhosted_runner.sh || fail "runner migration contract failed"
 python3 -m unittest test_pr6_acceptance || fail "pr6 acceptance failed"
 ./test_dropchannel_scan.sh || fail "dropchannel fixture suite failed"

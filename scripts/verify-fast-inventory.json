@@ -45,6 +45,7 @@
     {"id": "acceptance-transport", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_acceptance_transport.sh"]},
     {"id": "upstream-prepush-hook", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_upstream_prepush_hook.sh"]},
     {"id": "cliproxy-mgmt-recon", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_cliproxy_mgmt_recon_argv.sh"]},
+    {"id": "cliproxy-plugin-rollback", "tier": "fast", "prerequisites": ["bash", "python3"], "preparation": {"actions": []}, "command": ["bash", "test_cliproxy_plugin_deploy.sh"]},
     {"id": "runner-contract", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_case_b2acfa5c_selfhosted_runner.sh"]},
     {"id": "pr6-acceptance", "tier": "fast", "prerequisites": ["python3", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["python3", "-m", "unittest", "test_pr6_acceptance"]},
     {"id": "dropchannel-scan", "tier": "fast", "prerequisites": ["bash", "toolkit-vendored-files"], "preparation": {"actions": ["bash scripts/sync-toolkit.sh"]}, "command": ["./test_dropchannel_scan.sh"]},

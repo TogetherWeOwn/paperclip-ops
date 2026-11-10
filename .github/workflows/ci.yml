@@ -3937,6 +3937,10 @@ jobs:
       # so the apply-mode positive control reports SKIPPED and the apply path
       # is asserted to fail closed instead. The rollback-mode positive control
       # always runs, so the suite can never go vacuous unnoticed.
+      - name: CLIProxy plugin rollback fault suite
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: bash test_cliproxy_plugin_deploy.sh
+
       - name: CLIProxy release preflight suite
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
         run: ./test_cliproxy_release_preflight.sh

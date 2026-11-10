@@ -129,6 +129,7 @@ and cites a single pinned rubric in every phase.
 | `ci_required_checks_audit.py` |
 | `ci_required_checks_ownership.py` |
 | `claude_countdown.py` |
+| `cliproxy_plugin_deploy.sh` and `cliproxy_plugin_deploy.py` ([source-only transaction contract](docs/cliproxy-plugin-deploy.md); no operational adapter is bundled) |
 | `codex_countdown.py` |
 | `coolify_capacity_headroom.sh` and `coolify_capacity_headroom.py` ([offline evidence contract](docs/capacity-evidence.md); keep these siblings together) |
 | `credential_chain_audit.sh` |

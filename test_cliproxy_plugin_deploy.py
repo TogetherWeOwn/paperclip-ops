@@ -241,6 +241,151 @@ esac
         self.assertEqual(self.marker(), "verified")
         self.assertEqual((self.state / "config.yaml.orig").read_bytes(), backup)
 
+    def test_shared_state_is_locked_across_service_roots(self):
+        self.assertEqual(self.deploy.rollback(), 0)
+        shared = self.base / "shared-state"
+        shared.mkdir(mode=0o700)
+        other = self.base / "other-service"
+        other.mkdir(mode=0o700)
+        for name in ("auths", "plugins"):
+            (other / name).mkdir(mode=0o700)
+        (other / "config.yaml").write_bytes(self.original)
+        (other / "config.yaml").chmod(0o600)
+        holder = subject.Deployment(shared)
+        real = holder.helper
+        def interleaved(action):
+            if action == "preflight":
+                before = (shared / "state").read_bytes()
+                with patch.dict(os.environ, {"S": str(other), "STATE_DIR": str(shared)}):
+                    self.assertEqual(subject.main(["run"]), 75)
+                self.assertEqual((shared / "state").read_bytes(), before)
+                self.assertEqual((other / "config.yaml").read_bytes(), self.original)
+                self.assertFalse((other / ".cliproxy-plugin-owner").exists())
+            return real(action)
+        with patch.object(holder, "helper", side_effect=interleaved):
+            self.assertEqual(holder.run(), 0)
+        self.assertEqual(json.loads((shared / "deployment.json").read_text())["root"], str(self.root))
+
+    def test_state_lock_also_guards_recovery_reads(self):
+        with (self.state / ".cliproxy-plugin.lock").open("a+b") as holder:
+            fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            for action in ("rollback", "watchdog"):
+                with self.subTest(action=action):
+                    self.assertEqual(subject.main([action]), 75)
+                    self.assertEqual(self.marker(), "verified")
+                    self.assertEqual(self.config.read_bytes(), self.rendered)
+
+    def test_sticky_service_and_target_directories_are_refused(self):
+        for directory in (self.root, self.auth.parent, self.artifact.parent):
+            with self.subTest(directory=directory.name):
+                directory.chmod(0o1777)
+                try:
+                    self.assertEqual(subject.main(["rollback"]), 1)
+                    self.assertEqual(self.config.read_bytes(), self.rendered)
+                    self.assertTrue(self.auth.exists() and self.artifact.exists())
+                finally:
+                    directory.chmod(0o700)
+
+    def test_insecure_or_linked_lock_inode_is_refused(self):
+        for directory in (self.root, self.state):
+            lock = directory / ".cliproxy-plugin.lock"
+            lock.touch(mode=0o600)
+            with self.subTest(directory=directory.name, fault="permissions"):
+                lock.chmod(0o666)
+                try:
+                    self.assertEqual(subject.main(["rollback"]), 1)
+                finally:
+                    lock.chmod(0o600)
+            with self.subTest(directory=directory.name, fault="hardlink"):
+                alias = self.base / "lock-alias"
+                os.link(lock, alias)
+                try:
+                    self.assertEqual(subject.main(["rollback"]), 1)
+                finally:
+                    alias.unlink()
+            self.assertEqual(self.marker(), "verified")
+
+    def test_removal_parents_are_synced_before_success(self):
+        events = []
+        real_sync, real_state = subject.sync_dir, self.deploy.state
+        def synced(path):
+            events.append(("sync", path))
+            return real_sync(path)
+        def stored(value):
+            events.append(("state", value))
+            return real_state(value)
+        with patch.object(subject, "sync_dir", side_effect=synced), \
+                patch.object(self.deploy, "state", side_effect=stored):
+            self.assertEqual(self.deploy.rollback(), 0)
+        for parent in (self.auth.parent, self.artifact.parent):
+            self.assertIn(("sync", parent), events)
+            self.assertLess(events.index(("sync", parent)), events.index(("state", "rolledback")))
+        self.assert_restored()
+
+    def test_removal_directory_sync_failure_is_not_success(self):
+        real = subject.sync_dir
+        for parent in (self.auth.parent, self.artifact.parent):
+            with self.subTest(parent=parent.name):
+                def injected(path):
+                    if path == parent:
+                        raise OSError("injected deletion persistence failure")
+                    return real(path)
+                with patch.object(subject, "sync_dir", side_effect=injected):
+                    self.assertEqual(self.deploy.rollback(), 1)
+                self.assertEqual(self.marker(), "rollback-FAILED")
+
+    def test_rendered_backup_fsync_failure_refuses_preparation(self):
+        self.assertEqual(self.deploy.rollback(), 0)
+        fresh = self.base / "fresh-state"
+        fresh.mkdir(mode=0o700)
+        real = subject.os.fsync
+        def injected(fd):
+            if Path(f"/proc/self/fd/{fd}").resolve() == fresh / "config.yaml.new":
+                raise OSError("injected rendered data persistence failure")
+            return real(fd)
+        with patch.object(subject.os, "fsync", side_effect=injected):
+            self.assertEqual(subject.Deployment(fresh).run(), 3)
+        self.assertFalse((fresh / "deployment.json").exists())
+        self.assertEqual(self.config.read_bytes(), self.original)
+        self.assertFalse(self.auth.exists() or self.artifact.exists())
+
+    def test_internal_metadata_destinations_refused_before_preparation(self):
+        self.assertEqual(self.deploy.rollback(), 0)
+        (self.root / ".cliproxy-plugin-owner").unlink()
+        for key in ("AUTH_REL", "ARTIFACT_REL"):
+            for name in (".cliproxy-plugin-owner", ".cliproxy-plugin.lock"):
+                with self.subTest(key=key, name=name):
+                    fresh = self.base / f"{key}-{name}-state"
+                    fresh.mkdir(mode=0o700)
+                    with patch.dict(os.environ, {key: name}):
+                        self.assertEqual(subject.Deployment(fresh).run(), 3)
+                    self.assertFalse((fresh / "deployment.json").exists())
+                    self.assertFalse((self.root / ".cliproxy-plugin-owner").exists())
+                    self.assertFalse(self.auth.exists() or self.artifact.exists())
+                    self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_unloadable_manifest_refused_before_preparation(self):
+        self.assertEqual(self.deploy.rollback(), 0)
+        fresh = self.base / "long-path-state"
+        fresh.mkdir(mode=0o700)
+        relatives = {}
+        for key, prefix in (("AUTH_REL", "auth-long"), ("ARTIFACT_REL", "artifact-long")):
+            parent = self.root / prefix
+            for _ in range(16):
+                parent /= "é" * 90
+            parent.mkdir(mode=0o700, parents=True)
+            relatives[key] = str((parent / "dummy").relative_to(self.root))
+        with patch.dict(os.environ, relatives):
+            self.assertEqual(subject.Deployment(fresh).run(), 3)
+        self.assertFalse((fresh / "deployment.json").exists())
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_nonzero_restart_action_is_not_success(self):
+        with patch.object(self.deploy, "healthy", return_value=False), \
+                patch.object(self.deploy, "helper", side_effect=subprocess.CalledProcessError(1, "restart")):
+            self.assertEqual(self.deploy.rollback(), 1)
+        self.assertEqual(self.marker(), "rollback-FAILED")
+
     def test_cli_watchdog_exit_and_usage(self):
         self.deploy.state("rollback-FAILED")
         for args, expected in ((["watchdog"], 1), (["invalid"], 2), ([], 2)):

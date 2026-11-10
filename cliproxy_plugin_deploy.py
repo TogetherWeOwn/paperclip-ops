@@ -16,6 +16,10 @@ import time
 import uuid
 
 
+MANIFEST_MAX_BYTES = 16384
+INTERNAL_PATHS = {".cliproxy-plugin-owner", ".cliproxy-plugin.lock"}
+
+
 class Refusal(Exception):
     pass
 
@@ -44,9 +48,10 @@ def secure_dir(path):
     require(path.is_absolute() and path == path.resolve())
     for item in (path, *path.parents):
         info = item.lstat()
-        require(stat.S_ISDIR(info.st_mode))
-        # A sticky system temporary directory is acceptable for isolated fixtures.
-        require(not info.st_mode & 0o022 or bool(info.st_mode & stat.S_ISVTX))
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid in (0, os.geteuid()))
+        # Only root-owned sticky ancestors, never a mutable target, may be shared.
+        shared_ancestor = item != path and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
+        require(not info.st_mode & 0o022 or shared_ancestor)
     require(path.stat().st_uid == os.geteuid())
 
 
@@ -98,6 +103,7 @@ class Deployment:
         require(isinstance(relative, str) and relative and not Path(relative).is_absolute())
         path = self.root / relative
         require(path == path.resolve(strict=False) and path.is_relative_to(self.root))
+        require(path != self.root and path.relative_to(self.root).parts[0] not in INTERNAL_PATHS)
         secure_dir(path.parent)
         return path
 
@@ -113,12 +119,14 @@ class Deployment:
             return False
 
     @contextlib.contextmanager
-    def lock(self):
-        # A service-wide lock also serializes different deployment state directories.
-        fd = os.open(self.root / ".cliproxy-plugin.lock",
+    def lock(self, directory):
+        secure_dir(directory)
+        fd = os.open(directory / ".cliproxy-plugin.lock",
                      os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
-            require(stat.S_ISREG(os.fstat(fd).st_mode))
+            info = os.fstat(fd)
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid())
+            require(stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1)
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             yield
         finally:
@@ -126,7 +134,7 @@ class Deployment:
 
     def load(self):
         path = self.state_dir / "deployment.json"
-        require(regular(path).stat().st_size <= 16384)
+        require(regular(path).stat().st_size <= MANIFEST_MAX_BYTES)
         self.plan = json.loads(path.read_text())
         require(self.plan["schema"] == 1)
         require(re.fullmatch(r"[a-f0-9]{32}", self.plan["id"]) is not None)
@@ -187,6 +195,8 @@ class Deployment:
             # Recheck after helpers, including on a repeated rollback.
             self.ownership()
             self.postconditions()
+            sync_dir(self.auth.parent)
+            sync_dir(self.artifact.parent)
             self.state("rolledback")
             return 0
         except (OSError, ValueError, KeyError, Refusal, subprocess.SubprocessError):
@@ -198,9 +208,10 @@ class Deployment:
             return 1
 
     def rollback(self):
-        self.load()
-        with self.lock():
-            return self.rollback_locked()
+        with self.lock(self.state_dir):
+            self.load()
+            with self.lock(self.root):
+                return self.rollback_locked()
 
     def prepare(self):
         self.root = Path(os.environ["S"])
@@ -227,6 +238,8 @@ class Deployment:
         self.helper("render")
         rendered = self.state_dir / "config.yaml.new"
         require(stat.S_IMODE(regular(rendered).stat().st_mode) == 0o600)
+        with rendered.open("rb") as stream:
+            os.fsync(stream.fileno())
         self.plan["rendered"] = digest(rendered)
         require(self.plan["rendered"] != self.plan["original"])
         # Adapter returns one auth record over a private pipe, never argv or logs.
@@ -235,7 +248,9 @@ class Deployment:
                               stdin=subprocess.DEVNULL).stdout
         require(isinstance(json.loads(auth), dict))
         self.plan["auth_sha256"] = hashlib.sha256(auth).hexdigest()
-        atomic(self.state_dir / "deployment.json", json.dumps(self.plan, sort_keys=True).encode())
+        manifest = json.dumps(self.plan, sort_keys=True).encode()
+        require(len(manifest) <= MANIFEST_MAX_BYTES)
+        atomic(self.state_dir / "deployment.json", manifest)
         marker = self.plan["id"] + " " + digest(self.state_dir / "deployment.json") + "\n"
         atomic(self.root / ".cliproxy-plugin-owner", marker.encode())
         return source, auth
@@ -256,7 +271,8 @@ class Deployment:
     def run(self):
         self.root = Path(os.environ["S"])
         secure_dir(self.root)
-        with self.lock():
+        # Always acquire state before service, including the recovery entry points.
+        with self.lock(self.state_dir), self.lock(self.root):
             # Never rewrite the state/backup of an already prepared transaction.
             require(absent(self.state_dir / "deployment.json"))
             try:
@@ -297,20 +313,21 @@ class Deployment:
         delay = int(os.environ.get("WD_SECS", "600"))
         require(0 <= delay <= 86400)
         time.sleep(delay)
-        self.load()
-        with self.lock():
-            current = self.read_state()
-            if current == "aborted-unchanged":
-                return 0
-            if current == "rollback-FAILED":
-                return 1
-            if current == "verified":
-                self.ownership()
-                require(digest(self.config) == self.plan["rendered"])
-                require(digest(self.auth) == self.plan["auth_sha256"])
-                require(digest(self.artifact) == self.plan["artifact_sha256"])
-                return 0
-            return self.rollback_locked()
+        with self.lock(self.state_dir):
+            self.load()
+            with self.lock(self.root):
+                current = self.read_state()
+                if current == "aborted-unchanged":
+                    return 0
+                if current == "rollback-FAILED":
+                    return 1
+                if current == "verified":
+                    self.ownership()
+                    require(digest(self.config) == self.plan["rendered"])
+                    require(digest(self.auth) == self.plan["auth_sha256"])
+                    require(digest(self.artifact) == self.plan["artifact_sha256"])
+                    return 0
+                return self.rollback_locked()
 
 
 def main(argv):

@@ -16,10 +16,10 @@ and `rm` with GNU-compatible options. No Python packages are installed.
 | `STATE_DIR=... bash cliproxy_plugin_deploy.sh watchdog` | One delayed check of the recorded transaction | 0 checked terminal success; 1 failure; 75 busy |
 | invalid arguments | Usage only | 2 |
 
-All three entry points return **75** if another transaction holds the service
-lock. Contention is not completion. Retry only after the holder exits; the new
-invocation acquires the lock and checks the actual disk state. No invocation
-claims the other process completed successfully.
+All three entry points return **75** if another transaction holds either the state
+or service lock. Contention is not completion. Retry only after the holder exits;
+the new invocation acquires both locks and checks the actual disk state. No
+invocation claims the other process completed successfully.
 
 `run` starts one detached watchdog before applying changes (`WD_SECS`, default
 600; integer range 0–86400). This is a per-invocation safety check, not an installed
@@ -42,14 +42,17 @@ The forward path additionally requires these environment values:
 
 - `S`: absolute canonical service directory, containing `config.yaml`.
 - `AUTH_REL`, `ARTIFACT_REL`: distinct relative destination files below `S`;
-  parents must already exist. Neither may be the config file.
+  parents must already exist. Neither may be the config file or use the reserved
+  top-level `.cliproxy-plugin-owner` or `.cliproxy-plugin.lock` paths.
 - `ARTIFACT_SRC`, `SO_SHA`: release file and its lowercase 64-character SHA-256.
 - `DEPLOY_ADAPTER`: absolute executable path to a separately reviewed adapter.
 
 Paths must be canonical, without symlink components. Directories must not be
-writable by other users (sticky temporary-directory ancestors are allowed for
-fixtures). The service/state directories and target parents must be owned by the
-invoking user. Run under the already-authorized service identity: this wrapper
+writable by other users. Only root-owned sticky ancestors are allowed for
+fixtures; service/state directories and target parents themselves must never be
+group- or world-writable, even with the sticky bit. Ancestors must be owned by
+root or the invoking user. The service/state directories and target parents must
+be owned by the invoking user. Run under the already-authorized service identity: this wrapper
 does not call `sudo` or change permissions on a host to gain access. It assumes
 other writers cooperate with the service lock; it is not a sandbox against a
 malicious same-user process or a privileged administrator.
@@ -85,15 +88,22 @@ must itself be clean; helpers are trusted code, not untrusted plugins.
 Preparation saves a mode-0600 byte copy as `config.yaml.orig`, asks the adapter for
 `config.yaml.new`, and saves `deployment.json` containing schema version 1, a
 random deployment ID, canonical root/destination/adapter paths and hashes of the
-original/rendered configs, auth record and artifact. The service's
+original/rendered configs, auth record and artifact. The wrapper fsyncs the
+validated rendered file before committing preparation. Manifest writing and
+loading share a 16-KiB serialized-byte limit: oversized records are refused before
+committing a manifest or changing service data, including paths expanded by JSON
+Unicode escaping. The service's
 `.cliproxy-plugin-owner` binds that ID to the manifest digest. It prevents an old
 state directory from rolling back a newer deployment. These private records are
 not public artifacts: paths, hashes and config backups may be sensitive. Do not
 attach them to a public issue or commit them.
 
-A service-wide `.cliproxy-plugin.lock` serializes forward, manual and watchdog
-paths, including different state directories. Lock acquisition is nonblocking;
-no lock file is deleted to steal ownership. The new owner marker supersedes
+Each entry point first locks `STATE_DIR/.cliproxy-plugin.lock`, before reading or
+writing transaction records, then locks the service-wide `.cliproxy-plugin.lock`.
+This serializes both shared-state/different-service and shared-service/different-
+state invocations. Lock acquisition is nonblocking and consistently state-first;
+existing lock inodes must be regular, invoking-user-owned, mode 0600 and have only
+one link. No lock file is deleted to steal ownership. The new owner marker supersedes
 prior deployments only after preparation. `run` creates auth/artifact files
 exclusively, then atomically replaces config with the rendered bytes, checks
 adapter verification and verifies all recorded hashes before `verified`.
@@ -123,8 +133,9 @@ The rollback checks every mutation return code, independently of health:
 3. Remove the artifact; require both files absent and live config equal/mode 0600.
 4. Require baseline models and routes. If unhealthy, require adapter restart
    success and then both health checks. There is no swallowed restart failure.
-5. Recheck ownership and all disk postconditions after helpers, then durably write
-   `rolledback`. Repeated rollback does the same checks: a marker alone proves
+5. Recheck ownership and all disk postconditions after helpers, fsync both removal
+   parent directories, then durably write `rolledback`. A directory-sync failure
+   is a rollback failure. Repeated rollback does the same checks: a marker alone proves
    nothing and cannot hide drift or an incorrect mode.
 
 `state` contains one of `preflight`, `aborted-unchanged`, `applying`, `loading`,
@@ -134,7 +145,9 @@ postcondition, helper, or state-write failure returns nonzero; the wrapper tries
 to persist `rollback-FAILED`. **Partial failure is not automatically undone.**
 For example, auth may already be absent while config restoration failed and the
 artifact remains. Retain private state and reconcile that exact deployment via
-an authorized recovery procedure. No automatic deletion of evidence occurs.
+an authorized recovery procedure. Interrupted forward writes can leave a partial
+auth/artifact file whose hash is not the recorded identity; rollback refuses it
+rather than guessing ownership. No automatic deletion of evidence occurs.
 If storage cannot persist even the failure state, the previous word may remain;
 state text is never sufficient evidence without the process exit and fresh disk
 checks. Forward failure returns 1 even if its rollback subsequently succeeds.
@@ -151,7 +164,13 @@ stubbed. No container, credential, live probe or network fixture is needed.
 Coverage includes failing and successful-no-op copy/chmod/removals, equality and
 mode checks, state persistence/replace failures, lock contention followed by
 retry, repeat rollback, identity drift, symlink refusal, health failure, forward
-failure, watchdog exit propagation and successful restoration. The unsafe control
+failure, watchdog exit propagation and successful restoration. Additional fixtures
+cover state-directory contention across service roots, state-locked recovery,
+sticky target and insecure lock refusal, removal-directory sync ordering/failure,
+rendered-file fsync failure, reserved destinations, oversized Unicode manifests,
+and a nonzero restart action. These injected persistence checks are not a real
+power-loss/storage qualification, and detached watchdog lifecycle/environment
+remains untested end to end. The unsafe control
 is a clearly labeled **synthetic reconstruction**, not execution of any original
 operational script: green routes and ignored mutations produce a success marker
 that the corrected filesystem oracle rejects. There is no claimed pre-fix Git

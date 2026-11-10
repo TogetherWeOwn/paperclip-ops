@@ -162,9 +162,17 @@ class Deployment:
         for path, key in ((self.auth, "auth_sha256"), (self.artifact, "artifact_sha256")):
             require(absent(path) or digest(path) == self.plan[key])
 
+    def config_metadata(self):
+        info = regular(self.config).stat()
+        parent = self.root.stat()
+        group = parent.st_gid if parent.st_mode & stat.S_ISGID else os.getegid()
+        # Atomic replacements use the invoking owner and the directory's creation group.
+        require(stat.S_IMODE(info.st_mode) == 0o600)
+        require(info.st_uid == os.geteuid() and info.st_gid == group)
+
     def postconditions(self):
         require(digest(self.config) == self.plan["original"])
-        require(stat.S_IMODE(self.config.stat().st_mode) == 0o600)
+        self.config_metadata()
         require(absent(self.auth) and absent(self.artifact))
 
     def restore_config(self):
@@ -238,6 +246,7 @@ class Deployment:
                      "artifact_sha256": sha, "original": digest(self.config)}
         self.helper("preflight")
         require(self.healthy())
+        self.config_metadata()
         original = regular(self.config).read_bytes()
         require(hashlib.sha256(original).hexdigest() == self.plan["original"])
         atomic(self.state_dir / "config.yaml.orig", original)
@@ -304,7 +313,7 @@ class Deployment:
                 require(digest(self.config) == self.plan["rendered"])
                 require(digest(self.auth) == self.plan["auth_sha256"])
                 require(digest(self.artifact) == self.plan["artifact_sha256"])
-                require(stat.S_IMODE(self.config.stat().st_mode) == 0o600)
+                self.config_metadata()
                 self.state("verified")
                 return 0
             except (OSError, ValueError, KeyError, Refusal, subprocess.SubprocessError):

@@ -281,6 +281,36 @@ esac
                 self.assertFalse(list(target.parent.glob(".transaction-*")))
                 self.assertEqual(self.config.read_bytes(), self.original)
 
+    def test_incompatible_baseline_metadata_refuses_before_service_writes(self):
+        self.assertEqual(self.deploy.rollback(), 0)
+        owner_marker = (self.root / ".cliproxy-plugin-owner").read_bytes()
+        real_stat = Path.stat
+        for fault in ("mode", "owner", "group"):
+            with self.subTest(fault=fault):
+                fresh = self.base / ("metadata-" + fault)
+                fresh.mkdir(mode=0o700)
+                self.config.write_bytes(self.original)
+                self.auth.unlink(missing_ok=True)
+                self.artifact.unlink(missing_ok=True)
+                (self.root / ".cliproxy-plugin-owner").write_bytes(owner_marker)
+                self.config.chmod(0o644 if fault == "mode" else 0o600)
+                def injected(path, *args, **kwargs):
+                    info = real_stat(path, *args, **kwargs)
+                    if path == self.config and fault in ("owner", "group"):
+                        fields = list(info)
+                        fields[4 if fault == "owner" else 5] += 1
+                        return os.stat_result(fields)
+                    return info
+                with patch.object(Path, "stat", injected):
+                    self.assertEqual(subject.Deployment(fresh).run(), 3)
+                self.assertEqual((fresh / "state").read_text().strip(), "aborted-unchanged")
+                self.assertFalse((fresh / "deployment.json").exists())
+                self.assertEqual((self.root / ".cliproxy-plugin-owner").read_bytes(), owner_marker)
+                self.assertEqual(self.config.read_bytes(), self.original)
+                self.assertEqual(stat.S_IMODE(self.config.stat().st_mode),
+                                 0o644 if fault == "mode" else 0o600)
+                self.assertFalse(self.auth.exists() or self.artifact.exists())
+
     def test_preflight_config_drift_refuses_before_service_writes(self):
         self.assertEqual(self.deploy.rollback(), 0)
         fresh = self.base / "preflight-drift"
@@ -500,6 +530,28 @@ esac
             self.deploy.postconditions()
         self.assertNotEqual(self.config.read_bytes(), self.original)
         self.assertTrue(self.auth.exists() and self.artifact.exists())
+
+
+class PrerequisiteTests(unittest.TestCase):
+    def test_rollback_plan_requires_python311(self):
+        inventory = json.loads((SOURCE / "scripts/verify-fast-inventory.json").read_text())
+        suite = next(s for s in inventory["suites"] if s["id"] == "cliproxy-plugin-rollback")
+        self.assertEqual(suite["prerequisites"], ["bash", "python3>=3.11"])
+        spec = importlib.util.spec_from_file_location("verify_plan", SOURCE / "scripts/verify-fast-plan.py")
+        planner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(planner)
+        real_run = subprocess.run
+        for version, ready in (((3, 10), False), ((3, 11), True)):
+            with self.subTest(version=version):
+                def injected(argv, **kwargs):
+                    self.assertEqual(argv[:3], ["python3", "-I", "-c"])
+                    code = f"import sys; sys.version_info = {version!r}; " + argv[3]
+                    return real_run([*argv[:3], code], **kwargs)
+                with patch.object(planner.subprocess, "run", side_effect=injected):
+                    plan, _ = planner.build_plan({**inventory, "suites": [suite]}, SOURCE)
+                prereqs = {p["name"]: p["ready"] for p in plan["suites"][0]["prerequisites"]}
+                self.assertTrue(prereqs["bash"])
+                self.assertEqual(prereqs["python3>=3.11"], ready)
 
 
 if __name__ == "__main__":

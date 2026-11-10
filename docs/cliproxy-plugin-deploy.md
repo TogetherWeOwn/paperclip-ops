@@ -13,7 +13,7 @@ and `rm` with GNU-compatible options. No Python packages are installed.
 | --- | --- | --- |
 | `STATE_DIR=... bash cliproxy_plugin_deploy.sh run` | Prepare a new deployment and apply it through a separately reviewed adapter | 0 verified; 3 preflight refusal before service data changes; 1 failure |
 | `STATE_DIR=... bash cliproxy_plugin_deploy.sh rollback` | Restore the deployment recorded in that private state directory | 0 checked restoration; 1 refused/incomplete |
-| `STATE_DIR=... bash cliproxy_plugin_deploy.sh watchdog` | One delayed check of the recorded transaction | 0 checked terminal success; 1 failure; 75 busy |
+| `STATE_DIR=... bash cliproxy_plugin_deploy.sh watchdog` | One delayed check of the recorded transaction | 0 `verified` identities rechecked, rollback completed, or historical `rolledback`/`aborted-unchanged` (not rechecked); 1 failure; 75 busy |
 | invalid arguments | Usage only | 2 |
 
 All three entry points return **75** if another transaction holds either the state
@@ -40,7 +40,13 @@ service or state location is guessed.
 
 The forward path additionally requires these environment values:
 
-- `S`: absolute canonical service directory, containing `config.yaml`.
+- `S`: absolute canonical service directory, containing `config.yaml`. The config
+  must already have mode 0600, be owned by the invoking user, and have the group
+  used for new files in `S` (its group when setgid, otherwise the invoking effective
+  group). Preparation refuses other metadata before service data writes; it does
+  not silently convert a group-readable config. Atomic replacement preserves these
+  required POSIX mode/owner/group values, not inode identity, ACLs or extended
+  attributes. Deployments relying on additional metadata are not qualified.
 - `AUTH_REL`, `ARTIFACT_REL`: distinct relative destination files below `S`;
   parents must already exist. Neither may be the config file or use the reserved
   top-level `.cliproxy-plugin-owner` or `.cliproxy-plugin.lock` paths.
@@ -136,7 +142,8 @@ The rollback checks every mutation return code, independently of health:
 1. Remove auth and require absence, including absence of dangling symlinks.
 2. Copy the saved config into a same-filesystem temporary file; require successful
    copy and chmod, byte equality and exact mode 0600 before replacing live config.
-3. Remove the artifact; require both files absent and live config equal/mode 0600.
+3. Remove the artifact; require both files absent, live config bytes equal, mode
+   0600, and the required invoking owner/creation group.
 4. Require baseline models and routes. If unhealthy, require adapter restart
    success and then both health checks. There is no swallowed restart failure.
 5. Recheck ownership and all disk postconditions after helpers, fsync both removal

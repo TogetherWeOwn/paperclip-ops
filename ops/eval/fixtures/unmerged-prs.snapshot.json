@@ -1,0 +1,22 @@
+{
+  "schema": "m25-snapshot/v2",
+  "complete": true,
+  "now": "2026-11-10T06:00:00.000Z",
+  "days": 3,
+  "scope": {
+    "claim": "enumerated-repositories-only",
+    "evidence": ["synthetic frozen audit; not live company coverage"],
+    "repositories": ["example/repo"]
+  },
+  "coverage": [{"name": "synthetic-fixture", "complete": true}],
+  "repositories": [{"name": "example/repo", "archived": false}],
+  "cards": [
+    {"id": "source-a", "identifier": "source-a", "status": "backlog", "assigneeAgentId": "owner-a", "workProducts": [{"id": "wp-a", "type": "pull_request", "url": "https://github.com/example/repo/pull/1", "status": "active"}]},
+    {"id": "source-b", "identifier": "source-b", "status": "done", "assigneeAgentId": "owner-b", "completedAt": "2026-11-09T12:00:00Z", "body": "Closed unmerged: superseded by https://github.com/example/repo/pull/1; unique work: kept at https://github.com/example/repo/pull/1; follow-ups: none", "comments": [], "commentsComplete": true, "workProducts": [{"id": "wp-b", "type": "pull_request", "url": "https://github.com/example/repo/pull/2", "status": "active"}]}
+  ],
+  "prs": [
+    {"number": 1, "url": "https://github.com/example/repo/pull/1", "state": "OPEN", "isDraft": true, "author": "fixture[bot]", "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"number": 2, "url": "https://github.com/example/repo/pull/2", "state": "CLOSED", "isDraft": false, "body": "", "comments": [], "commentsComplete": true, "headRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+    {"number": 3, "url": "https://github.com/example/repo/pull/3", "state": "OPEN", "isDraft": false, "headRefOid": "cccccccccccccccccccccccccccccccccccccccc"}
+  ]
+}

@@ -986,6 +986,34 @@ jobs:
         with:
           node-version: '24'
 
+      - name: managed PR inventory exact-source fixtures and replay
+        if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'
+        run: |
+          node --test ops/eval/unmerged-prs.test.mjs
+          sha256sum ops/eval/unmerged-prs.mjs ops/eval/unmerged-prs.test.mjs ops/eval/fixtures/unmerged-prs.snapshot.json
+          node ops/eval/unmerged-prs.mjs --inventory --from-file ops/eval/fixtures/unmerged-prs.snapshot.json --out "$RUNNER_TEMP/m25-a.json"
+          node ops/eval/unmerged-prs.mjs --inventory --from-file ops/eval/fixtures/unmerged-prs.snapshot.json --out "$RUNNER_TEMP/m25-b.json"
+          cmp "$RUNNER_TEMP/m25-a.json" "$RUNNER_TEMP/m25-b.json"
+          sha256sum "$RUNNER_TEMP/m25-a.json"
+          mutant="$(mktemp -d)"
+          trap 'rm -rf "$mutant"' EXIT
+          cp ops/eval/unmerged-prs.mjs ops/eval/unmerged-prs.test.mjs "$mutant/"
+          cp -r ops/eval/fixtures "$mutant/fixtures"
+          python3 - "$mutant/unmerged-prs.mjs" <<'PY'
+          import pathlib, sys
+          p = pathlib.Path(sys.argv[1])
+          source = p.read_text()
+          needle = "const nonterminal = provenance.some(l => !['done', 'cancelled'].includes(l.status));"
+          assert source.count(needle) == 1
+          p.write_text(source.replace(needle, 'const nonterminal = false;'))
+          PY
+          if node --test "$mutant/unmerged-prs.test.mjs" > "$RUNNER_TEMP/m25-mutant.log" 2>&1; then
+            printf 'inventory regression mutant survived\n' >&2
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/m25-mutant.log"
+          printf 'GREEN exact-source fixtures; RED nonterminal-inventory regression mutant\n'
+
       # Frozen evidence only; the same assertions must kill semantic mutants.
       - name: delivery-effectiveness assertions and negative controls
         if: needs.changes.outputs.full == 'true' || needs.changes.outputs.core == 'true'

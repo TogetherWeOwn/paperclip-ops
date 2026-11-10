@@ -207,6 +207,19 @@ esac
             self.assertEqual(self.deploy.rollback(), 0)
         self.assert_restored()
 
+    def test_watchdog_does_not_reopen_completed_rollback(self):
+        self.assertEqual(self.deploy.rollback(), 0)
+        old_state = (self.state / "state").read_bytes()
+        self.config.write_bytes(b"newer deployment config\n")
+        (self.root / ".cliproxy-plugin-owner").write_text("newer deployment\n")
+        with patch.object(self.deploy, "rollback_locked", wraps=self.deploy.rollback_locked) as rollback, \
+                patch.object(self.deploy, "helper") as helper:
+            self.assertEqual(self.deploy.watchdog(), 0)
+        rollback.assert_not_called()
+        helper.assert_not_called()
+        self.assertEqual((self.state / "state").read_bytes(), old_state)
+        self.assertEqual(self.config.read_bytes(), b"newer deployment config\n")
+
     def test_watchdog_propagates_rollback_failure_and_rechecks_repeat(self):
         self.deploy.state("loading")
         with patch.object(self.deploy, "restore_config", side_effect=OSError("copy failed")):
@@ -216,7 +229,87 @@ esac
         self.assertEqual(self.deploy.rollback(), 0)
         self.assertEqual(self.deploy.watchdog(), 0)
         self.config.write_bytes(b"later config")
-        self.assertEqual(self.deploy.watchdog(), 1)
+        self.assertEqual(self.deploy.watchdog(), 0)  # historical completion, not fresh qualification
+        self.assertEqual(self.marker(), "rolledback")
+
+    def test_forward_copy_failure_does_not_publish_partial_material(self):
+        self.assertEqual(self.deploy.rollback(), 0)
+        real = subject.os.fsync
+        for target in (self.artifact, self.auth):
+            with self.subTest(target=target.name):
+                fresh = self.base / (target.name + "-write-fault")
+                fresh.mkdir(mode=0o700)
+                fired = False
+                def injected(fd):
+                    nonlocal fired
+                    path = Path(f"/proc/self/fd/{fd}").resolve()
+                    if not fired and path.parent == target.parent and stat.S_ISREG(os.fstat(fd).st_mode):
+                        fired = True
+                        raise OSError("injected forward copy persistence failure")
+                    return real(fd)
+                second = subject.Deployment(fresh)
+                with patch.object(subject.os, "fsync", side_effect=injected):
+                    self.assertEqual(second.run(), 1)
+                self.assertTrue(fired)
+                self.assertEqual(second.read_state(), "rolledback")
+                self.assertFalse(self.auth.exists() or self.artifact.exists())
+                self.assertFalse(list(target.parent.glob(".transaction-*")))
+                self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_partial_forward_write_never_reaches_destination(self):
+        self.assertEqual(self.deploy.rollback(), 0)
+        real = subject.os.fdopen
+        for target in (self.artifact, self.auth):
+            with self.subTest(target=target.name):
+                fresh = self.base / (target.name + "-partial-write")
+                fresh.mkdir(mode=0o700)
+                def injected(fd, *args, **kwargs):
+                    path = Path(f"/proc/self/fd/{fd}").resolve()
+                    stream = real(fd, *args, **kwargs)
+                    if path.parent == target.parent:
+                        write = stream.write
+                        def partial(data):
+                            write(data[:1])
+                            raise OSError("injected partial forward write")
+                        stream.write = partial
+                    return stream
+                second = subject.Deployment(fresh)
+                with patch.object(subject.os, "fdopen", side_effect=injected):
+                    self.assertEqual(second.run(), 1)
+                self.assertEqual(second.read_state(), "rolledback")
+                self.assertFalse(self.auth.exists() or self.artifact.exists())
+                self.assertFalse(list(target.parent.glob(".transaction-*")))
+                self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_preflight_config_drift_refuses_before_service_writes(self):
+        self.assertEqual(self.deploy.rollback(), 0)
+        fresh = self.base / "preflight-drift"
+        fresh.mkdir(mode=0o700)
+        second = subject.Deployment(fresh)
+        real = second.helper
+        def injected(action):
+            if action == "preflight":
+                self.config.write_bytes(b"external config edit\n")
+            return real(action)
+        with patch.object(second, "helper", side_effect=injected):
+            self.assertEqual(second.run(), 3)
+        self.assertEqual(second.read_state(), "aborted-unchanged")
+        self.assertFalse((fresh / "deployment.json").exists())
+        self.assertFalse(self.auth.exists() or self.artifact.exists())
+        self.assertEqual(self.config.read_bytes(), b"external config edit\n")
+
+    def test_preapply_identity_drift_refuses_before_exclusive_copies(self):
+        self.assertEqual(self.deploy.rollback(), 0)
+        fresh = self.base / "preapply-drift"
+        fresh.mkdir(mode=0o700)
+        second = subject.Deployment(fresh)
+        def injected():
+            self.config.write_bytes(b"external config edit\n")
+        with patch.object(second, "start_watchdog", side_effect=injected):
+            self.assertEqual(second.run(), 1)
+        self.assertEqual(second.read_state(), "rollback-FAILED")
+        self.assertFalse(self.auth.exists() or self.artifact.exists())
+        self.assertEqual(self.config.read_bytes(), b"external config edit\n")
 
     def test_forward_failure_returns_nonzero_even_after_successful_rollback(self):
         # Use a fresh state and restored service; the old state remains immutable.

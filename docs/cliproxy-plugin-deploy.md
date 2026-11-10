@@ -11,7 +11,7 @@ and `rm` with GNU-compatible options. No Python packages are installed.
 
 | Command | Meaning | Exit |
 | --- | --- | --- |
-| `bash cliproxy_plugin_deploy.sh run` | Prepare a new deployment and apply it through a separately reviewed adapter | 0 verified; 3 preflight refusal before service data changes; 1 failure |
+| `STATE_DIR=... bash cliproxy_plugin_deploy.sh run` | Prepare a new deployment and apply it through a separately reviewed adapter | 0 verified; 3 preflight refusal before service data changes; 1 failure |
 | `STATE_DIR=... bash cliproxy_plugin_deploy.sh rollback` | Restore the deployment recorded in that private state directory | 0 checked restoration; 1 refused/incomplete |
 | `STATE_DIR=... bash cliproxy_plugin_deploy.sh watchdog` | One delayed check of the recorded transaction | 0 checked terminal success; 1 failure; 75 busy |
 | invalid arguments | Usage only | 2 |
@@ -103,10 +103,16 @@ writing transaction records, then locks the service-wide `.cliproxy-plugin.lock`
 This serializes both shared-state/different-service and shared-service/different-
 state invocations. Lock acquisition is nonblocking and consistently state-first;
 existing lock inodes must be regular, invoking-user-owned, mode 0600 and have only
-one link. No lock file is deleted to steal ownership. The new owner marker supersedes
-prior deployments only after preparation. `run` creates auth/artifact files
-exclusively, then atomically replaces config with the rendered bytes, checks
-adapter verification and verifies all recorded hashes before `verified`.
+one link. No lock file is deleted to steal ownership. Preparation checks the actual
+saved backup against the initial config digest before committing its manifest.
+The new owner marker supersedes prior deployments only after preparation. `run`
+rechecks ownership before any forward data write. It writes and fsyncs temporary
+auth/artifact files, then publishes them with exclusive hard links (never replacing
+an existing destination). A write/flush/fsync failure before publication leaves no
+partial destination. This requires same-filesystem hard-link support; unsupported
+publication fails rather than falling back to an unsafe copy. It then atomically
+replaces config with the rendered bytes, checks adapter verification and verifies
+all recorded hashes before `verified`.
 
 Rollback ignores forward-path environment overrides and loads the saved manifest.
 Before any rollback mutation it requires:
@@ -145,14 +151,19 @@ postcondition, helper, or state-write failure returns nonzero; the wrapper tries
 to persist `rollback-FAILED`. **Partial failure is not automatically undone.**
 For example, auth may already be absent while config restoration failed and the
 artifact remains. Retain private state and reconcile that exact deployment via
-an authorized recovery procedure. Interrupted forward writes can leave a partial
-auth/artifact file whose hash is not the recorded identity; rollback refuses it
-rather than guessing ownership. No automatic deletion of evidence occurs.
+an authorized recovery procedure. Abrupt termination can leave transaction
+temporaries; these are not published auth/artifact destinations and require
+private reconciliation. Identity drift still refuses rollback rather than guessing
+ownership or deleting unrelated material.
 If storage cannot persist even the failure state, the previous word may remain;
 state text is never sufficient evidence without the process exit and fresh disk
 checks. Forward failure returns 1 even if its rollback subsequently succeeds.
 The watchdog propagates rollback failure and reports `rollback-FAILED` as failure,
 not a successful terminal state. A `verified` watchdog also rechecks identities.
+A `rolledback` watchdog returns 0 for historical completion without rechecking or
+mutating service data, invoking helpers, or rewriting the state. That result is
+not a fresh disk/health qualification; use an explicitly authorized manual rollback
+for a current recheck, which still refuses superseded ownership.
 
 ## Verification and limits
 
@@ -168,7 +179,8 @@ failure, watchdog exit propagation and successful restoration. Additional fixtur
 cover state-directory contention across service roots, state-locked recovery,
 sticky target and insecure lock refusal, removal-directory sync ordering/failure,
 rendered-file fsync failure, reserved destinations, oversized Unicode manifests,
-and a nonzero restart action. These injected persistence checks are not a real
+a nonzero restart action, completed-rollback watchdog isolation, preflight/preapply
+config drift, and forward-copy persistence failure before publication. These injected persistence checks are not a real
 power-loss/storage qualification, and detached watchdog lifecycle/environment
 remains untested end to end. The unsafe control
 is a clearly labeled **synthetic reconstruction**, not execution of any original

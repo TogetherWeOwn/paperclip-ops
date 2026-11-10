@@ -63,7 +63,7 @@ def sync_dir(path):
         os.close(fd)
 
 
-def atomic(path, data, mode=0o600):
+def atomic(path, data, mode=0o600, exclusive=False):
     fd, name = tempfile.mkstemp(prefix=".transaction-", dir=path.parent)
     tmp = Path(name)
     try:
@@ -72,7 +72,11 @@ def atomic(path, data, mode=0o600):
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(tmp, path)
+        if exclusive:
+            # Publish only complete bytes without replacing any existing destination.
+            os.link(tmp, path)
+        else:
+            os.replace(tmp, path)
         sync_dir(path.parent)
     finally:
         tmp.unlink(missing_ok=True)
@@ -234,7 +238,10 @@ class Deployment:
                      "artifact_sha256": sha, "original": digest(self.config)}
         self.helper("preflight")
         require(self.healthy())
-        atomic(self.state_dir / "config.yaml.orig", self.config.read_bytes())
+        original = regular(self.config).read_bytes()
+        require(hashlib.sha256(original).hexdigest() == self.plan["original"])
+        atomic(self.state_dir / "config.yaml.orig", original)
+        require(digest(self.state_dir / "config.yaml.orig") == self.plan["original"])
         self.helper("render")
         rendered = self.state_dir / "config.yaml.new"
         require(stat.S_IMODE(regular(rendered).stat().st_mode) == 0o600)
@@ -284,16 +291,11 @@ class Deployment:
             try:
                 self.start_watchdog()
                 self.state("applying")
-                # Exclusive creation never overwrites existing plugin/auth material.
+                self.ownership()
+                # Exclusive publication never exposes partial plugin/auth material.
                 for path, data, mode in ((self.artifact, source.read_bytes(), 0o755),
                                          (self.auth, auth, 0o600)):
-                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
-                    with os.fdopen(fd, "wb") as stream:
-                        os.fchmod(stream.fileno(), mode)
-                        stream.write(data)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    sync_dir(path.parent)
+                    atomic(path, data, mode, exclusive=True)
                 self.ownership()
                 atomic(self.config, (self.state_dir / "config.yaml.new").read_bytes())
                 self.state("loading")
@@ -317,7 +319,8 @@ class Deployment:
             self.load()
             with self.lock(self.root):
                 current = self.read_state()
-                if current == "aborted-unchanged":
+                if current in ("aborted-unchanged", "rolledback"):
+                    # Historical completion must not mutate a newer deployment.
                     return 0
                 if current == "rollback-FAILED":
                     return 1

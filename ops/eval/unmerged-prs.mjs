@@ -67,6 +67,30 @@ export async function collectPages(request, { name, maxPages = 10000, connection
   return fail('page-cap');
 }
 
+// Installed native contracts are not interchangeable: complete arrays for
+// work-products/projects/workspaces/interactions; afterId for issues; older-than
+// `after` for descending comments. Unknown envelopes must not become empty EOF.
+export async function collectNativeList(native, path, { name = path, mode = 'array', maxPages = 10000 } = {}) {
+  if (mode === 'array') {
+    let response; try { response = await native(path); } catch { return { name, rows: [], complete: false, problem: 'unavailable' }; }
+    const body = response?.body;
+    const observed = Array.isArray(body) ? body : body?.items ?? body?.nodes;
+    const rows = (Array.isArray(observed) ? observed : []).filter(r => r && typeof r === 'object' && !Array.isArray(r));
+    const complete = response?.ok === true && Array.isArray(body) && rows.length === body.length && !hasError(body);
+    return { name, rows, complete, ...(complete ? {} : { problem: 'malformed-or-partial-array' }) };
+  }
+  return collectPages(async cursor => {
+    const suffix = mode === 'comments' ? 'order=desc&limit=100' : 'sortField=id&sortDir=asc&limit=100';
+    const key = mode === 'comments' ? 'after' : 'afterId';
+    const response = await native(`${path}${path.includes('?') ? '&' : '?'}${suffix}${cursor === 0 ? '' : `&${key}=${encodeURIComponent(cursor)}`}`);
+    if (!Array.isArray(response?.body)) return { ok: false, body: response?.body };
+    const rows = response.body, last = rows.at(-1)?.id;
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    const valid = rows.every(r => typeof r?.id === 'string' && uuid.test(r.id));
+    return { ok: response.ok, body: { nodes: rows, ...(valid ? {} : { error: 'malformed-cursor' }), pageInfo: { hasNextPage: rows.length > 0, endCursor: last } } };
+  }, { name, maxPages });
+}
+
 function evidenceLink(value) {
   try {
     const u = new URL(value);
@@ -89,6 +113,9 @@ export function disposition(pr, cards) {
       for (const line of item.body.split(/\r?\n/)) {
         const m = /^Closed unmerged: (duplicate of|superseded by|need lost|mismatch|burden) (\S+); unique work: (none|kept at \S+); follow-ups: (none|live cards .+)$/.exec(line.trim());
         if (!m || !evidenceLink(m[2])) continue;
+        const sourcePRs = new Set((s.workProducts ?? []).map(w => canonicalPR(w.url)?.url).filter(Boolean));
+        if (s.name !== 'pr' && sourcePRs.size > 1) continue;
+        if (canonicalPR(pr.url) && canonicalPR(m[2])?.url === canonicalPR(pr.url).url) continue;
         if (m[3] !== 'none' && !evidenceLink(m[3].slice(8))) continue;
         if (m[4] !== 'none' && !m[4].slice(11).split(/,\s*/).every(evidenceLink)) continue;
         reasons.push({ source: item.source, reason: m[1], link: m[2], uniqueWork: m[3], followUps: m[4] });
@@ -166,6 +193,10 @@ export function report(input, { inventory = false } = {}) {
     repos.add(r.name.toLowerCase());
     if (r.archived) archived.add(r.name.toLowerCase());
   }
+  for (const link of links) {
+    const canonical = canonicalPR(link.url);
+    if (canonical && !archived.has(canonical.repo) && !states.has(canonical.url)) gap(`pr:${canonical.url}`, 'linked-pr-state-missing');
+  }
   const open = [], closedUnmerged = [], inventoryStale = [];
   const inventoryComplete = complete && coverage.every(c => c.complete === true);
   for (const p of [...states.values()].sort((a, b) => a.url.localeCompare(b.url, 'en'))) {
@@ -234,15 +265,15 @@ export async function collect({ inventory = false, days = 3, now = new Date().to
   const company = process.env.PAPERCLIP_COMPANY_ID;
   if (!company) throw new Error('company-required');
   const coverage = [];
-  const nativeList = async (path, name) => {
-    const r = await collectPages(offset => native(`${path}${path.includes('?') ? '&' : '?'}limit=100&offset=${offset}`), { name });
+  const nativeList = async (path, name, mode = 'array') => {
+    const r = await collectNativeList(native, path, { name, mode });
     coverage.push({ name, complete: r.complete, ...(r.problem ? { problem: r.problem } : {}) }); return r;
   };
   const githubList = async (path, name) => {
     const r = await collectPages((_, page) => github(`${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${page}`), { name });
     coverage.push({ name, complete: r.complete, ...(r.problem ? { problem: r.problem } : {}) }); return r;
   };
-  const issueResult = await nativeList(`/companies/${company}/issues${inventory ? '' : '?status=done'}`, 'cards');
+  const issueResult = await nativeList(`/companies/${company}/issues?includePluginOperations=true&includeRoutineExecutions=true${inventory ? '' : '&status=done'}`, 'cards', 'issues');
   const cards = issueResult.rows.filter(c => inventory || timestamp(c.completedAt || c.updatedAt) >= timestamp(now) - days * 86400000);
   for (const c of cards) c.workProducts = (await nativeList(`/issues/${encodeURIComponent(c.id)}/work-products`, `work-products:${c.id}`)).rows;
   const linked = cards.flatMap(c => c.workProducts.filter(w => w.type === 'pull_request').map(w => canonicalPR(w.url))).filter(Boolean);
@@ -300,13 +331,25 @@ export async function collect({ inventory = false, days = 3, now = new Date().to
       let result; try { result = await github(null, query); } catch { result = null; }
       for (const [i, p] of chunk.entries()) {
         const value = result?.body?.data?.[`p${i}`]?.pullRequest;
-        const aliasError = result?.body?.errors?.some(e => !e.path || e.path[0] === `p${i}`);
-        if (value) {
+        const errors = result?.body?.errors;
+        const malformedErrors = errors !== undefined && !Array.isArray(errors);
+        const aliasError = Array.isArray(errors) && errors.some(e => !e || !Array.isArray(e.path) || e.path[0] === `p${i}`);
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
           const row = { ...value, ...p, author: value.author?.login ?? null };
           if (legacyLinked.some(l => l.url === p.url)) legacyPrs.push(row);
-          if (inventory && !prs.some(existing => canonicalPR(existing.url)?.url === p.url)) prs.push(row);
+          if (inventory) {
+            const index = prs.findIndex(existing => canonicalPR(existing.url)?.url === p.url);
+            const old = prs[index];
+            if (old && ['state', 'isDraft', 'headRefOid'].some(key => old[key] !== row[key])) {
+              // Preserve both contradictory observations; report invalidates the
+              // row instead of declaring either live state authoritative.
+              prs.push(row);
+              coverage.push({ name: `pr:${p.url}`, complete: false, problem: 'conflicting-observations' });
+            } else if (old) prs[index] = { ...old, ...row };
+            else prs.push(row);
+          }
         }
-        if (!value || aliasError) coverage.push({ name: `pr:${p.url}`, complete: false, problem: 'partial-or-unavailable' });
+        if (!value || result?.ok !== true || malformedErrors || aliasError || result.body?.partial || result.body?.error) coverage.push({ name: `pr:${p.url}`, complete: false, problem: 'partial-or-unavailable' });
       }
     }
   }
@@ -323,7 +366,7 @@ export async function collect({ inventory = false, days = 3, now = new Date().to
     for (const c of cards) {
       c.body = c.description ?? '';
       if (!c.workProducts.some(w => prs.some(p => p.state === 'CLOSED' && canonicalPR(w.url)?.url === canonicalPR(p.url)?.url))) continue;
-      const comments = await nativeList(`/issues/${encodeURIComponent(c.id)}/comments`, `card-reasons:${c.id}`);
+      const comments = await nativeList(`/issues/${encodeURIComponent(c.id)}/comments`, `card-reasons:${c.id}`, 'comments');
       c.comments = comments.rows; c.commentsComplete = comments.complete;
     }
   }

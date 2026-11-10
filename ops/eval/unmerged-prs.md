@@ -30,8 +30,15 @@ Partial reads, malformed responses, alias errors, repeated cursors/pages, page
 caps and unavailable data produce UNKNOWN completeness and null sensitive totals.
 Observed lower bounds are separately named; they are not zero-completeness claims.
 The default page safety cap is 10,000 requests per list. Reaching it is UNKNOWN,
-never successful exhaustion. Offset lists request through the empty terminal page,
-not merely a short page; cursor lists require explicit terminal pageInfo.
+never successful exhaustion. GitHub page-number lists request through the empty
+terminal page, not merely a short page; cursor connections require explicit
+terminal pageInfo. Installed native contracts use `afterId` for sorted issues and
+older-than `after` for descending comments, both through an empty page. Native
+work products, projects, workspaces and interactions are complete unpaginated
+arrays, not offset lists; unsupported envelopes are UNKNOWN. Issue discovery
+explicitly includes plugin operations, routine executions and backlog cards.
+Missing linked PR states or contradictory REST/GraphQL observations invalidate
+completeness rather than silently asserting a stale OPEN row or a passing zero.
 
 ## Universe and reason coverage
 
@@ -66,7 +73,9 @@ Without a recognized convention, any nonempty body/comment is retained verbatim
 in `rationaleEvidence` with source provenance and yields UNKNOWN/manual review,
 not a missing-reason claim. Absence requires complete reads and no nonempty text.
 This deliberately conservative fallback also covers plain GitHub references and
-historical prose that the finite parser does not understand.
+historical prose that the finite parser does not understand. A card-level reason
+on a card linking several distinct PRs is ambiguous, not credited to every PR;
+its text is retained for manual attribution. Self-supersession is not accepted.
 Supersession is a legitimate disposition, not delivery and not an instruction to
 reopen a replaced PR. Unique-work and follow-up text is retained for source-owner
 judgment. Closure recommendations name all observed source cards and assigned

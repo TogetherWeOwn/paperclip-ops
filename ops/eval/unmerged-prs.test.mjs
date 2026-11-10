@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { canonicalPR, collect, collectPages, disposition, guardLabelFix, report } from './unmerged-prs.mjs';
+import { canonicalPR, collect, collectNativeList, collectPages, disposition, guardLabelFix, report } from './unmerged-prs.mjs';
 
 const clock = '2026-11-10T06:00:00.000Z';
 const url = n => `https://github.com/example/repo/pull/${n}`;
@@ -133,17 +133,17 @@ test('collector wires exhaustive native lists, owner repository enumeration and 
   const oldCompany = process.env.PAPERCLIP_COMPANY_ID;
   process.env.PAPERCLIP_COMPANY_ID = 'fixture';
   const called = [];
-  const sources = [card('active', 'backlog', [1]), card('done', 'done', [2])];
+  const ids = ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'];
+  const sources = [card(ids[0], 'backlog', [1]), card(ids[1], 'done', [2])];
   const native = async path => {
-    called.push(path); const u = new URL('https://fixture.test' + path); const offset = Number(u.searchParams.get('offset'));
-    let rows;
-    if (u.pathname.endsWith('/issues')) rows = sources.map(({ workProducts, ...c }) => c);
-    else if (u.pathname.endsWith('/projects')) rows = [{ id: 'project' }];
-    else if (u.pathname.endsWith('/workspaces')) rows = [{ sourceType: 'git_repo', repoUrl: 'https://github.com/example/repo' }];
-    else if (u.pathname.endsWith('/work-products')) rows = sources.find(c => u.pathname.includes('/' + c.id + '/')).workProducts;
-    else if (u.pathname.endsWith('/comments')) rows = [{ id: 'c1', body: '' }, { id: 'c2', body: '' }];
-    else throw new Error('unexpected-native-route');
-    return { ok: true, body: rows.slice(offset, offset + 1) };
+    called.push(path); const u = new URL('https://fixture.test' + path);
+    if (u.pathname.endsWith('/projects')) return { ok: true, body: [{ id: 'project' }] };
+    if (u.pathname.endsWith('/workspaces')) return { ok: true, body: [{ sourceType: 'git_repo', repoUrl: 'https://github.com/example/repo' }] };
+    if (u.pathname.endsWith('/work-products')) return { ok: true, body: sources.find(c => u.pathname.includes('/' + c.id + '/')).workProducts };
+    const rows = u.pathname.endsWith('/issues') ? sources.map(({ workProducts, ...c }) => c) : ids.map(id => ({ id, body: '' }));
+    const cursor = u.searchParams.get(u.pathname.endsWith('/issues') ? 'afterId' : 'after');
+    const index = cursor === null ? 0 : ids.indexOf(cursor) + 1;
+    return { ok: true, body: rows.slice(index, index + 1) };
   };
   const github = async (path, query) => {
     if (query) return { ok: false, body: { data: { p0: { pullRequest: { state: 'OPEN', isDraft: true, headRefOid: 'a'.repeat(40), body: '' } }, p1: { pullRequest: { state: 'CLOSED', isDraft: false, headRefOid: 'b'.repeat(40), body: '' } } }, errors: [{ path: ['p0'] }] } };
@@ -160,9 +160,89 @@ test('collector wires exhaustive native lists, owner repository enumeration and 
     assert.equal(r.counts.closed_unmerged_on_done, 1, 'successful partial alias must survive');
     assert.equal(r.inventory.completeness, 'UNKNOWN');
     assert.equal(r.inventory.closedUnmerged[0].disposition.status, 'absent-with-complete-read');
-    assert(called.some(p => p.includes('/workspaces?') && p.includes('offset=1')));
-    assert(called.some(p => p.includes('/comments?') && p.includes('offset=2')));
+    assert(called.some(p => p.endsWith('/workspaces')));
+    assert(called.some(p => p.includes('/comments?') && p.includes('after=' + ids[1])));
+    assert(called.some(p => p.includes('/issues?') && p.includes('afterId=' + ids[1])));
     assert(called.every(p => !p.includes('checkout')), 'collector never checks out sources');
+  } finally {
+    if (oldCompany === undefined) delete process.env.PAPERCLIP_COMPANY_ID; else process.env.PAPERCLIP_COMPANY_ID = oldCompany;
+  }
+});
+
+test('native list contracts distinguish complete arrays, issue afterId and descending comment after', async () => {
+  const ids = ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'];
+  const paths = [];
+  const native = async path => {
+    paths.push(path); const u = new URL('https://fixture.test' + path);
+    if (u.pathname.endsWith('/work-products')) {
+      assert.equal(u.search, ''); return { ok: true, body: [{ id: 'wp' }] };
+    }
+    const comments = u.pathname.endsWith('/comments');
+    const cursor = u.searchParams.get(comments ? 'after' : 'afterId');
+    if (comments) assert.equal(u.searchParams.get('order'), 'desc');
+    const index = cursor === null ? 0 : ids.indexOf(cursor) + 1;
+    return { ok: true, body: index < 2 ? [{ id: ids[index] }] : [] };
+  };
+  assert.equal((await collectNativeList(native, '/issues/source/work-products', { mode: 'array' })).complete, true);
+  for (const [path, mode] of [['/companies/fixture/issues', 'issues'], ['/issues/source/comments', 'comments']]) {
+    const r = await collectNativeList(native, path, { mode }); assert.equal(r.complete, true); assert.equal(r.rows.length, 2);
+  }
+  assert.equal(paths.filter(p => p.includes('work-products')).length, 1);
+  const bad = await collectNativeList(async () => ({ ok: true, body: [{ id: 'not-a-uuid' }] }), '/issues/source/comments', { mode: 'comments' });
+  assert.equal(bad.complete, false); assert.equal(bad.rows.length, 1);
+});
+
+test('all linked inventory states are required even for backlog replay', () => {
+  const b = bundle(); b.prs = b.prs.filter(p => p.number !== 1);
+  const r = report(b, { inventory: true }).inventory;
+  assert.equal(r.completeness, 'UNKNOWN'); assert.equal(r.totals.open, null);
+  assert(r.coverage.some(c => c.problem === 'linked-pr-state-missing'));
+});
+
+test('one source card reason cannot clear multiple unrelated closures', () => {
+  const b = bundle(); b.cards[1].workProducts.push({ id: 'second-closure', type: 'pull_request', url: url(6), status: 'closed' });
+  b.prs.push(pr(6, 'CLOSED')); b.cards[1].body = `Closed unmerged: superseded by ${url(6)}; unique work: none; follow-ups: none`;
+  const rows = report(b, { inventory: true }).inventory.closedUnmerged;
+  assert(rows.every(p => p.disposition.status === 'UNKNOWN'));
+  assert(rows.every(p => p.disposition.rationaleEvidence.length === 1));
+});
+
+test('collector preserves partial aliases on malformed errors and refuses transport/conflicting-state completeness', async () => {
+  const oldCompany = process.env.PAPERCLIP_COMPANY_ID; process.env.PAPERCLIP_COMPANY_ID = 'fixture';
+  const source = card('00000000-0000-4000-8000-000000000001', 'backlog', [1]);
+  const native = async path => {
+    const u = new URL('https://fixture.test' + path);
+    if (u.pathname.endsWith('/issues')) {
+      assert.equal(u.searchParams.get('includePluginOperations'), 'true');
+      assert.equal(u.searchParams.get('includeRoutineExecutions'), 'true');
+      return { ok: true, body: u.searchParams.has('afterId') ? [] : [source] };
+    }
+    if (u.pathname.endsWith('/work-products')) return { ok: true, body: source.workProducts };
+    return { ok: true, body: [] };
+  };
+  try {
+    for (const errors of [{ message: 'bad' }, 'bad', undefined]) {
+      const github = async (path, query) => {
+        if (query) return { ok: false, body: { data: { p0: { pullRequest: pr(1, 'CLOSED') } }, ...(errors === undefined ? {} : { errors }) } };
+        if (path.startsWith('users/')) return { ok: true, body: { type: 'Organization' } };
+        const u = new URL('https://fixture.test/' + path), page = Number(u.searchParams.get('page'));
+        if (u.pathname.endsWith('/repos')) return { ok: true, body: page === 1 ? [{ full_name: 'example/repo' }] : [] };
+        if (u.pathname.endsWith('/pulls')) return { ok: true, body: [] };
+        if (u.pathname.endsWith('/comments') || u.pathname.endsWith('/reviews')) return { ok: true, body: [] };
+        return { ok: true, body: { archived: false } };
+      };
+      const opts = { inventory: true, now: clock, scope: { repositories: ['example/repo'], evidence: ['frozen audit'] } };
+      const b = await collect(opts, native, github);
+      assert.equal(b.prs[0].state, 'CLOSED'); assert.equal(report(b, opts).inventory.completeness, 'UNKNOWN');
+      const contradictory = await collect(opts, native, async (path, query) => {
+        if (query) return { ok: true, body: { data: { p0: { pullRequest: pr(1, 'CLOSED') } } } };
+        if (path.includes('/pulls?')) return { ok: true, body: new URL('https://fixture.test/' + path).searchParams.get('page') === '1' ? [{ number: 1, html_url: url(1), state: 'open', draft: false, head: { sha: 'a'.repeat(40) } }] : [] };
+        return github(path, query);
+      });
+      const r = report(contradictory, opts).inventory;
+      assert.equal(r.completeness, 'UNKNOWN'); assert.equal(r.totals.open, null);
+      assert.equal(r.open.length, 0, 'contradictory state is not asserted as current OPEN');
+    }
   } finally {
     if (oldCompany === undefined) delete process.env.PAPERCLIP_COMPANY_ID; else process.env.PAPERCLIP_COMPANY_ID = oldCompany;
   }

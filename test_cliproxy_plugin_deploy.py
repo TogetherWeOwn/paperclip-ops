@@ -311,6 +311,108 @@ esac
                                  0o644 if fault == "mode" else 0o600)
                 self.assertFalse(self.auth.exists() or self.artifact.exists())
 
+    def test_release_source_replacement_uses_only_validated_bytes(self):
+        self.assertEqual(self.deploy.rollback(), 0)
+        fresh = self.base / "release-replacement"
+        fresh.mkdir(mode=0o700)
+        second = subject.Deployment(fresh)
+        validated = self.source.read_bytes()
+        real = second.helper
+        def injected(action):
+            if action == "preflight":
+                replacement = self.base / "updated-release.so"
+                replacement.write_bytes(b"different release bytes\n")
+                os.replace(replacement, self.source)
+            return real(action)
+        with patch.object(second, "helper", side_effect=injected):
+            self.assertEqual(second.run(), 0)
+        self.assertEqual(self.artifact.read_bytes(), validated)
+        self.assertEqual(subject.digest(self.artifact), self.env["SO_SHA"])
+        self.assertNotEqual(self.artifact.read_bytes(), self.source.read_bytes())
+        self.assertEqual(second.rollback(), 0)
+        self.assertEqual(self.config.read_bytes(), self.original)
+        self.assertFalse(self.auth.exists() or self.artifact.exists())
+
+    def test_release_snapshot_mismatch_refuses_before_service_publication(self):
+        self.assertEqual(self.deploy.rollback(), 0)
+        fresh = self.base / "release-read-drift"
+        fresh.mkdir(mode=0o700)
+        real_read = Path.read_bytes
+        def injected(path):
+            if path == self.source:
+                return b"unexpected bytes returned by release read\n"
+            return real_read(path)
+        marker = (self.root / ".cliproxy-plugin-owner").read_bytes()
+        with patch.object(Path, "read_bytes", injected):
+            self.assertEqual(subject.Deployment(fresh).run(), 3)
+        self.assertFalse((fresh / "deployment.json").exists())
+        self.assertEqual((self.root / ".cliproxy-plugin-owner").read_bytes(), marker)
+        self.assertEqual(self.config.read_bytes(), self.original)
+        self.assertFalse(self.auth.exists() or self.artifact.exists())
+
+    def test_recovery_group_context_drift_refuses_before_mutation(self):
+        baseline_gid = self.config.stat().st_gid
+        other_gid = baseline_gid + 1
+        real_stat = Path.stat
+        for context in ("effective-group", "setgid-directory"):
+            with self.subTest(context=context):
+                def injected(path, *args, **kwargs):
+                    info = real_stat(path, *args, **kwargs)
+                    fields = list(info)
+                    if path == self.root:
+                        fields[0] = ((fields[0] | stat.S_ISGID) if context == "setgid-directory"
+                                     else fields[0] & ~stat.S_ISGID)
+                        fields[5] = other_gid
+                    elif path == self.config or path.name.startswith(".restore-"):
+                        # Model files created in recovery group B without changing host identity.
+                        fields[5] = other_gid
+                    return os.stat_result(fields)
+                with patch.object(subject.os, "getegid", return_value=other_gid), \
+                        patch.object(Path, "stat", injected), \
+                        patch.object(subject, "command", wraps=subject.command) as mutation:
+                    self.assertEqual(subject.Deployment(self.state).rollback(), 1)
+                mutation.assert_not_called()
+                self.assertEqual(self.config.read_bytes(), self.rendered)
+                self.assertTrue(self.auth.exists() and self.artifact.exists())
+                self.assertEqual(self.marker(), "rollback-FAILED")
+        self.assertEqual(subject.Deployment(self.state).rollback(), 0)
+        self.assertEqual(self.config.stat().st_gid, baseline_gid)
+        self.assert_restored()
+
+    def test_manifest_binds_baseline_metadata_and_legacy_schema_refuses(self):
+        manifest_path = self.state / "deployment.json"
+        manifest = json.loads(manifest_path.read_text())
+        info = self.config.stat()
+        self.assertEqual(manifest["schema"], 2)
+        self.assertEqual(manifest["config_metadata"],
+                         {"mode": 0o600, "uid": info.st_uid, "gid": info.st_gid})
+        manifest["schema"] = 1
+        del manifest["config_metadata"]
+        manifest_path.write_text(json.dumps(manifest))
+        marker = manifest["id"] + " " + subject.digest(manifest_path) + "\n"
+        (self.root / ".cliproxy-plugin-owner").write_text(marker)
+        with patch.object(subject, "command", wraps=subject.command) as mutation:
+            self.assertEqual(subject.main(["rollback"]), 1)
+        mutation.assert_not_called()
+        self.assertEqual(self.marker(), "verified")
+        self.assertEqual(self.config.read_bytes(), self.rendered)
+        self.assertTrue(self.auth.exists() and self.artifact.exists())
+
+    def test_restore_temporary_group_drift_is_not_published(self):
+        real_stat = Path.stat
+        def injected(path, *args, **kwargs):
+            info = real_stat(path, *args, **kwargs)
+            if path.name.startswith(".restore-"):
+                fields = list(info)
+                fields[5] += 1
+                return os.stat_result(fields)
+            return info
+        with patch.object(Path, "stat", injected):
+            self.assertEqual(self.deploy.rollback(), 1)
+        self.assertEqual(self.config.read_bytes(), self.rendered)
+        self.assertEqual(self.marker(), "rollback-FAILED")
+        self.assertTrue(self.artifact.exists())
+
     def test_preflight_config_drift_refuses_before_service_writes(self):
         self.assertEqual(self.deploy.rollback(), 0)
         fresh = self.base / "preflight-drift"

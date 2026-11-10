@@ -140,7 +140,7 @@ class Deployment:
         path = self.state_dir / "deployment.json"
         require(regular(path).stat().st_size <= MANIFEST_MAX_BYTES)
         self.plan = json.loads(path.read_text())
-        require(self.plan["schema"] == 1)
+        require(self.plan["schema"] == 2)
         require(re.fullmatch(r"[a-f0-9]{32}", self.plan["id"]) is not None)
         self.root = Path(self.plan["root"])
         secure_dir(self.root)
@@ -162,13 +162,19 @@ class Deployment:
         for path, key in ((self.auth, "auth_sha256"), (self.artifact, "artifact_sha256")):
             require(absent(path) or digest(path) == self.plan[key])
 
-    def config_metadata(self):
-        info = regular(self.config).stat()
+    def creation_metadata(self):
         parent = self.root.stat()
         group = parent.st_gid if parent.st_mode & stat.S_ISGID else os.getegid()
-        # Atomic replacements use the invoking owner and the directory's creation group.
-        require(stat.S_IMODE(info.st_mode) == 0o600)
-        require(info.st_uid == os.geteuid() and info.st_gid == group)
+        return {"mode": 0o600, "uid": os.geteuid(), "gid": group}
+
+    def config_metadata(self, path=None):
+        info = regular(self.config if path is None else path).stat()
+        actual = {"mode": stat.S_IMODE(info.st_mode), "uid": info.st_uid, "gid": info.st_gid}
+        require(actual == self.plan["config_metadata"])
+
+    def restorable_metadata(self):
+        # Refuse recovery under a different creation identity before any service mutation.
+        require(self.creation_metadata() == self.plan["config_metadata"])
 
     def postconditions(self):
         require(digest(self.config) == self.plan["original"])
@@ -183,7 +189,7 @@ class Deployment:
             command("cp", "--", str(self.state_dir / "config.yaml.orig"), str(tmp))
             command("chmod", "0600", "--", str(tmp))
             require(digest(tmp) == self.plan["original"])
-            require(stat.S_IMODE(tmp.stat().st_mode) == 0o600)
+            self.config_metadata(tmp)
             with tmp.open("rb") as stream:
                 os.fsync(stream.fileno())
             os.replace(tmp, self.config)
@@ -194,6 +200,7 @@ class Deployment:
     def rollback_locked(self):
         try:
             self.ownership()
+            self.restorable_metadata()
             self.state("rolling-back")
             # Every command must succeed even when a later health check is green.
             command("rm", "-f", "--", str(self.auth))
@@ -239,11 +246,14 @@ class Deployment:
         require(adapter.is_absolute() and os.access(regular(adapter), os.X_OK))
         source = Path(os.environ["ARTIFACT_SRC"])
         sha = os.environ["SO_SHA"]
-        require(re.fullmatch(r"[a-f0-9]{64}", sha) is not None and digest(source) == sha)
-        self.plan = {"schema": 1, "id": uuid.uuid4().hex, "root": str(self.root),
+        require(re.fullmatch(r"[a-f0-9]{64}", sha) is not None)
+        artifact = regular(source).read_bytes()
+        require(hashlib.sha256(artifact).hexdigest() == sha)
+        self.plan = {"schema": 2, "id": uuid.uuid4().hex, "root": str(self.root),
                      "adapter": str(adapter), "auth": str(self.auth.relative_to(self.root)),
                      "artifact": str(self.artifact.relative_to(self.root)),
-                     "artifact_sha256": sha, "original": digest(self.config)}
+                     "artifact_sha256": sha, "original": digest(self.config),
+                     "config_metadata": self.creation_metadata()}
         self.helper("preflight")
         require(self.healthy())
         self.config_metadata()
@@ -269,7 +279,7 @@ class Deployment:
         atomic(self.state_dir / "deployment.json", manifest)
         marker = self.plan["id"] + " " + digest(self.state_dir / "deployment.json") + "\n"
         atomic(self.root / ".cliproxy-plugin-owner", marker.encode())
-        return source, auth
+        return artifact, auth
 
     def start_watchdog(self):
         delay = int(os.environ.get("WD_SECS", "600"))
@@ -293,7 +303,7 @@ class Deployment:
             require(absent(self.state_dir / "deployment.json"))
             try:
                 self.state("preflight")
-                source, auth = self.prepare()
+                artifact, auth = self.prepare()
             except (OSError, ValueError, KeyError, Refusal, subprocess.SubprocessError):
                 self.state("aborted-unchanged")
                 return 3
@@ -302,7 +312,7 @@ class Deployment:
                 self.state("applying")
                 self.ownership()
                 # Exclusive publication never exposes partial plugin/auth material.
-                for path, data, mode in ((self.artifact, source.read_bytes(), 0o755),
+                for path, data, mode in ((self.artifact, artifact, 0o755),
                                          (self.auth, auth, 0o600)):
                     atomic(path, data, mode, exclusive=True)
                 self.ownership()

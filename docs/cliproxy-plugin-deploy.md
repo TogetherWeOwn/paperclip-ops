@@ -51,6 +51,10 @@ The forward path additionally requires these environment values:
   parents must already exist. Neither may be the config file or use the reserved
   top-level `.cliproxy-plugin-owner` or `.cliproxy-plugin.lock` paths.
 - `ARTIFACT_SRC`, `SO_SHA`: release file and its lowercase 64-character SHA-256.
+  Preparation reads one immutable in-memory byte snapshot and hashes that exact
+  snapshot before any service publication. Applying uses only those validated
+  bytes, never a later read of the release path; replacing that path during
+  preparation cannot substitute another release. The artifact must fit in memory.
 - `DEPLOY_ADAPTER`: absolute executable path to a separately reviewed adapter.
 
 Paths must be canonical, without symlink components. Directories must not be
@@ -92,9 +96,14 @@ must itself be clean; helpers are trusted code, not untrusted plugins.
 ## Transaction identity and private state
 
 Preparation saves a mode-0600 byte copy as `config.yaml.orig`, asks the adapter for
-`config.yaml.new`, and saves `deployment.json` containing schema version 1, a
-random deployment ID, canonical root/destination/adapter paths and hashes of the
-original/rendered configs, auth record and artifact. The wrapper fsyncs the
+`config.yaml.new`, and saves `deployment.json` containing schema version 2, a
+random deployment ID, canonical root/destination/adapter paths, baseline config
+mode/UID/GID and hashes of the original/rendered configs, auth record and artifact.
+The owner marker binds the baseline metadata as part of the manifest digest.
+Schema-1 records lack that baseline and are refused before recovery mutations;
+there is no automatic migration or inference from the recovery process. Retain
+old records for separately authorized reconciliation, never edit them to bypass
+this refusal. The wrapper fsyncs the
 validated rendered file before committing preparation. Manifest writing and
 loading share a 16-KiB serialized-byte limit: oversized records are refused before
 committing a manifest or changing service data, including paths expanded by JSON
@@ -129,6 +138,10 @@ Before any rollback mutation it requires:
    unrelated edit.
 3. Each auth/artifact is either absent or a regular, non-symlink file with the
    deployment's exact content hash. A changed file is not deleted.
+4. The recovery process's UID and file-creation group still reproduce the saved
+   baseline metadata. A changed effective group or setgid-directory group that
+   would change restored ownership refuses before auth removal or config/artifact
+   mutation. No `chown`, host identity change or permission escalation is attempted.
 
 Identity here is content plus the service ownership record, not inode identity.
 A same-content replacement is deliberately treated as the same material. It does
@@ -141,9 +154,10 @@ The rollback checks every mutation return code, independently of health:
 
 1. Remove auth and require absence, including absence of dangling symlinks.
 2. Copy the saved config into a same-filesystem temporary file; require successful
-   copy and chmod, byte equality and exact mode 0600 before replacing live config.
-3. Remove the artifact; require both files absent, live config bytes equal, mode
-   0600, and the required invoking owner/creation group.
+   copy and chmod, byte equality and the saved baseline mode/UID/GID before
+   replacing live config.
+3. Remove the artifact; require both files absent, live config bytes equal and
+   mode/UID/GID equal to the saved baseline, not the current process's expectations.
 4. Require baseline models and routes. If unhealthy, require adapter restart
    success and then both health checks. There is no swallowed restart failure.
 5. Recheck ownership and all disk postconditions after helpers, fsync both removal
@@ -187,7 +201,11 @@ cover state-directory contention across service roots, state-locked recovery,
 sticky target and insecure lock refusal, removal-directory sync ordering/failure,
 rendered-file fsync failure, reserved destinations, oversized Unicode manifests,
 a nonzero restart action, completed-rollback watchdog isolation, preflight/preapply
-config drift, and forward-copy persistence failure before publication. These injected persistence checks are not a real
+config drift, forward-copy persistence failure before publication, release-source
+replacement, exact snapshot hash mismatch, saved metadata/legacy-schema refusal,
+synthetic effective-group/setgid-directory drift, and temporary-config group drift.
+Group fixtures mock metadata only and never change the host identity or groups.
+These injected persistence checks are not a real
 power-loss/storage qualification, and detached watchdog lifecycle/environment
 remains untested end to end. The unsafe control
 is a clearly labeled **synthetic reconstruction**, not execution of any original

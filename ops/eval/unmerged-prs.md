@@ -61,10 +61,19 @@ Closed unmerged: <duplicate of|superseded by|need lost|mismatch|burden> <https-l
 
 `reason-found`, `absent-with-complete-read`, and `UNKNOWN` are distinct. A reason
 may be found despite incomplete remaining reads, which remain recorded as such.
+The convention is a positive fixture, not an exhaustive definition of rationale.
+Without a recognized convention, any nonempty body/comment is retained verbatim
+in `rationaleEvidence` with source provenance and yields UNKNOWN/manual review,
+not a missing-reason claim. Absence requires complete reads and no nonempty text.
+This deliberately conservative fallback also covers plain GitHub references and
+historical prose that the finite parser does not understand.
 Supersession is a legitimate disposition, not delivery and not an instruction to
 reopen a replaced PR. Unique-work and follow-up text is retained for source-owner
-judgment. No close, reopen, merge, reassignment, source status repair, automatic
-child creation, checkout, comment or finding disposition is authorized.
+judgment. Closure recommendations name all observed source cards and assigned
+owners, reuse an existing open finishing envelope, and never direct comments to
+terminal cards. Unknown rationale calls for judgment, not a demand to rewrite a
+substantive historical reason. No close, reopen, merge, reassignment, source status
+repair, automatic child creation, checkout, comment or finding disposition is authorized.
 
 ## Mutation containment
 

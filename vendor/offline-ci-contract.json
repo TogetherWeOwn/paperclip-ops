@@ -355,7 +355,8 @@
     "shell-substitution JSON acceptance:1",
     "public-comment hygiene JSON suite:1",
     "devin eval harness suite:1",
-    "delivery-effectiveness assertions and negative controls:1"
+    "delivery-effectiveness assertions and negative controls:1",
+    "managed PR inventory exact-source fixtures and replay:1"
   ],
   "retained": [
     {
@@ -2012,6 +2013,11 @@
       "name": "delivery-effectiveness assertions and negative controls",
       "definition_sha256": "4b9a7077a8cbd8781a346cd635c5d59fdf83071e4ee719d6e743788af25dc310",
       "id": "delivery-effectiveness assertions and negative controls:1"
+    },
+    {
+      "name": "managed PR inventory exact-source fixtures and replay",
+      "definition_sha256": "b737accc38c494694b0dc1eeead3d820b57a578c2dd0b3f33bc4408e422b8936",
+      "id": "managed PR inventory exact-source fixtures and replay:1"
     }
   ],
   "removed": [

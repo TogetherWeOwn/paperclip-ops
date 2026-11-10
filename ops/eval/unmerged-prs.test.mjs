@@ -43,11 +43,33 @@ test('reason on either PR or source card, supersession is not delivery or reopen
   assert.equal(d.status, 'reason-found'); assert.equal(d.reasons[0].source, 'card:source:body'); assert.equal(d.delivered, false);
   assert.equal(disposition({ body: '', comments: [], commentsComplete: true }, []).status, 'absent-with-complete-read');
   assert.equal(disposition({ body: '', comments: [], commentsComplete: false }, []).status, 'UNKNOWN');
-  assert.equal(disposition({ body: 'Closed unmerged: superseded by nonsense', comments: [], commentsComplete: true }, []).status, 'absent-with-complete-read');
+  assert.equal(disposition({ body: 'Closed unmerged: superseded by nonsense', comments: [], commentsComplete: true }, []).status, 'UNKNOWN');
   const b = bundle(); b.prs[3].body = reason; b.prs[3].commentsComplete = true; b.prs[3].comments = [];
   const inv = report(b, { inventory: true }).inventory;
   assert.equal(inv.closedUnmerged[0].disposition.status, 'reason-found');
   assert.equal(inv.open.some(p => p.number === 6), false, 'reason links never create ownership or discovered PRs');
+});
+
+test('nonconventional rationale retains its exact text and provenance for manual judgment', () => {
+  for (const body of ['Replaced by #6; all unique changes retained there.', 'Closed unmerged: superseded by #6; unique work: none; follow-ups: none']) {
+    const d = disposition({ body: '', comments: [], commentsComplete: true }, [{ id: 'source', body: '', commentsComplete: true, comments: [{ id: 'why', body }] }]);
+    assert.equal(d.status, 'UNKNOWN'); assert.equal(d.readComplete, true);
+    assert.deepEqual(d.rationaleEvidence, [{ source: 'card:source:comment:why', body }]);
+    assert.equal(d.manualReviewRequired, true);
+  }
+});
+
+test('reason recommendations reuse every named source owner without acting on terminal cards', () => {
+  const b = bundle();
+  let row = report(b, { inventory: true }).inventory.recommendations.find(p => p.kind === 'closure-reason');
+  assert.equal(row.reasonStatus, 'absent-with-complete-read');
+  assert.deepEqual(row.owners, ['owner-done']); assert.equal(row.sourceCards[0].issueId, 'done');
+  assert.equal(row.operationalPermission, false); assert.match(row.action, /never comment on terminal cards/);
+  b.prs[3].body = 'Superseded by #6 with unique work preserved.';
+  row = report(b, { inventory: true }).inventory.recommendations.find(p => p.kind === 'closure-reason');
+  assert.equal(row.reasonStatus, 'UNKNOWN'); assert.match(row.action, /manual review/);
+  b.prs[3].body = `Closed unmerged: superseded by ${url(6)}; unique work: none; follow-ups: none`;
+  assert.equal(report(b, { inventory: true }).inventory.recommendations.some(p => p.kind === 'closure-reason'), false);
 });
 
 test('archived repositories are excluded explicitly, not counted as live', () => {

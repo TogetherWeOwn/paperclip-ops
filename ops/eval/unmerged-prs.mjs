@@ -75,7 +75,7 @@ function evidenceLink(value) {
 }
 
 export function disposition(pr, cards) {
-  const reasons = [];
+  const reasons = [], rationaleEvidence = [];
   let complete = pr.commentsComplete === true && typeof pr.body === 'string';
   const sources = [{ name: 'pr', ...pr }, ...cards.map(c => ({ ...c, name: `card:${c.id}` }))];
   for (const s of sources) {
@@ -83,6 +83,9 @@ export function disposition(pr, cards) {
     const texts = [{ body: s.body, source: `${s.name}:body` }, ...(s.comments ?? []).map(c => ({ body: c.body, source: `${s.name}:comment:${c.id}` }))];
     for (const item of texts) {
       if (typeof item.body !== 'string') { complete = false; continue; }
+      // A finite convention parser cannot establish absence of substantive prose.
+      // Retain all nonempty source text rather than invent a missing-reason claim.
+      if (item.body.trim()) rationaleEvidence.push(item);
       for (const line of item.body.split(/\r?\n/)) {
         const m = /^Closed unmerged: (duplicate of|superseded by|need lost|mismatch|burden) (\S+); unique work: (none|kept at \S+); follow-ups: (none|live cards .+)$/.exec(line.trim());
         if (!m || !evidenceLink(m[2])) continue;
@@ -92,7 +95,8 @@ export function disposition(pr, cards) {
       }
     }
   }
-  return { status: reasons.length ? 'reason-found' : complete ? 'absent-with-complete-read' : 'UNKNOWN', readComplete: complete, reasons: sort(reasons), delivered: false, operationalPermission: false };
+  const status = reasons.length ? 'reason-found' : complete && !rationaleEvidence.length ? 'absent-with-complete-read' : 'UNKNOWN';
+  return { status, readComplete: complete, reasons: sort(reasons), rationaleEvidence: sort(rationaleEvidence), manualReviewRequired: status === 'UNKNOWN', delivered: false, operationalPermission: false };
 }
 
 // Reads are not a transactional source-action grant. In particular, null run IDs do
@@ -182,7 +186,18 @@ export function report(input, { inventory = false } = {}) {
     schema: 'm25-inventory/v2', operationalPermission: false, scope: input.scope ?? { claim: 'UNKNOWN' }, completeness: allComplete ? 'complete' : 'UNKNOWN',
     totals: Object.fromEntries(Object.entries(lower).map(([k, v]) => [k, allComplete ? v : null])), observedLowerBounds: lower,
     coverage: sort(coverage), excludedArchivedRepositories: [...archived].sort(), open, closedUnmerged, staleLabels: sort(inventoryStale),
-    recommendations: open.filter(p => p.ownership !== 'nonterminal').map(p => ({ url: p.url, owners: p.owners, action: 'source-owner: reuse existing open finishing envelope; resolve ownership and disposition; preserve provenance and obligations', operationalPermission: false })),
+    recommendations: sort([
+      ...open.filter(p => p.ownership !== 'nonterminal').map(p => ({ kind: 'ownership', url: p.url, owners: p.owners, action: 'source-owner: reuse existing open finishing envelope; resolve ownership and disposition; preserve provenance and obligations', operationalPermission: false })),
+      ...closedUnmerged.filter(p => p.disposition.status !== 'reason-found').map(p => ({
+        kind: 'closure-reason', url: p.url, owners: p.owners,
+        sourceCards: sort(p.provenance.map(l => ({ issueId: l.issueId, issue: l.issue, status: l.status, assigneeAgentId: l.assigneeAgentId, assigneeUserId: l.assigneeUserId, workProductId: l.workProductId }))),
+        reasonStatus: p.disposition.status,
+        action: p.disposition.status === 'UNKNOWN'
+          ? 'source-owner: manual review of retained rationale and read coverage; reuse existing open finishing envelope and assigned owners; preserve legitimate closure, unique work and obligations; never comment on terminal cards'
+          : 'source-owner: record closure rationale via existing open finishing envelope and assigned owners; preserve unique work and obligations; never comment on terminal cards',
+        operationalPermission: false,
+      })),
+    ]),
   };
   return out;
 }

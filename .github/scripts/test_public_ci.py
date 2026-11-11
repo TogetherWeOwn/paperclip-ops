@@ -31,6 +31,36 @@ REVIEW_RULES_GUARD = (
 REVIEW_RULES_PACKS = frozenset({"rust", "ts", "python-shell-ci", "php", "security"})
 # Input keys accepted by the pinned review-rules reusable at REVIEW_RULES_GUARD.
 REVIEW_RULES_INPUTS = frozenset({"packs", "mode", "runs-on-json"})
+# Reviewed immutable org PR-size callees (TWO-5870 thin caller): all three
+# pinned to the same org main SHA. Repinning any ref requires re-inspection
+# here, not blind trust in the pin.
+PR_SIZE_LABEL = (
+    "TogetherWeOwn/.github/.github/workflows/pr-size.yml@"
+    "2ef8ad6447e11d019ac3098bcfd011193b75266a"
+)
+PR_SIZE_GATE = (
+    "TogetherWeOwn/.github/.github/workflows/pr-size-gate.yml@"
+    "2ef8ad6447e11d019ac3098bcfd011193b75266a"
+)
+PR_SIZE_WEEKLY = (
+    "TogetherWeOwn/.github/.github/workflows/pr-size-weekly.yml@"
+    "2ef8ad6447e11d019ac3098bcfd011193b75266a"
+)
+# Exact job-level permission maps each size caller may carry: the labeller
+# and gate stamp comments and labels (write); the weekly tally only reads.
+PR_SIZE_CALLER_PERMISSIONS = {
+    PR_SIZE_LABEL: {"contents": "read", "issues": "write", "pull-requests": "write"},
+    PR_SIZE_GATE: {"contents": "read", "issues": "write", "pull-requests": "write"},
+    PR_SIZE_WEEKLY: {"contents": "read", "issues": "read", "pull-requests": "read"},
+}
+# Exact event guards the size callers may carry: event narrowing only, so a
+# callee runs only on its intended events. Anything wider needs inspection.
+PR_SIZE_EVENT_IF = (
+    "github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''",
+    "github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.pr_number == '')",
+)
+# Input keys accepted by the pinned size callees.
+PR_SIZE_INPUTS = frozenset({"pr-number", "exclude-extra"})
 # Exact job-level permission maps a test-guard caller may carry (absent also
 # passes): the read-only workflow floor, or the explicit audited pair.
 TEST_GUARD_CALLER_PERMISSIONS = (
@@ -63,17 +93,28 @@ class PublicCI(unittest.TestCase):
                 self.assertIsInstance(job, dict, label)
                 if "uses" in job:
                     self.assertIn(job["uses"],
-                                  (HOSTED_TEST_GUARD, REVIEW_RULES_GUARD), label)
+                                  (HOSTED_TEST_GUARD, REVIEW_RULES_GUARD)
+                                  + tuple(PR_SIZE_CALLER_PERMISSIONS), label)
                     self.assertNotIn("runs-on", job, label)
                     # Fail closed on job-level keys that can widen authority
-                    # or execution (secrets inherit, env, if, strategy,
-                    # concurrency, ...). `name` is display-only and kept for
-                    # the test-guard caller's byte-identical id/name contract.
-                    self.assertFalse(
-                        set(job) - {"uses", "with", "permissions", "name"}, label)
+                    # or execution (secrets inherit, env, strategy,
+                    # concurrency, ...). The PR-size callers additionally
+                    # carry an exact event guard; `name` is display-only and
+                    # kept for the test-guard caller's byte-identical
+                    # id/name contract.
+                    allowed_keys = {"uses", "with", "permissions", "name"}
+                    if job["uses"] in PR_SIZE_CALLER_PERMISSIONS:
+                        allowed_keys.add("if")
+                    self.assertFalse(set(job) - allowed_keys, label)
                     inputs = job.get("with", {})
                     self.assertIsInstance(inputs, dict, label)
-                    if job["uses"] == REVIEW_RULES_GUARD:
+                    if job["uses"] in PR_SIZE_CALLER_PERMISSIONS:
+                        self.assertIn(job.get("if"), PR_SIZE_EVENT_IF, label)
+                        self.assertEqual(job.get("permissions"),
+                                         PR_SIZE_CALLER_PERMISSIONS[job["uses"]],
+                                         label)
+                        self.assert_pr_size_inputs(job["uses"], inputs, label)
+                    elif job["uses"] == REVIEW_RULES_GUARD:
                         self.assertEqual(job.get("permissions"),
                                          {"contents": "read"}, label)
                         self.assert_review_rules_inputs(inputs, label)
@@ -99,6 +140,21 @@ class PublicCI(unittest.TestCase):
                     # private labels, and missing routes. This public snapshot
                     # needs no private branch in its routing expression.
                     self.assertEqual(job.get("runs-on"), "ubuntu-latest", label)
+
+    def assert_pr_size_inputs(self, uses, inputs, label):
+        # Fail closed on unknown inputs and dynamic values: the weekly
+        # tally takes no inputs; the labeller and gate take exactly the
+        # pinned set, with pr-number bound to the caller's own dispatch
+        # input and a literal exclude-extra path list.
+        if uses == PR_SIZE_WEEKLY:
+            self.assertFalse(set(inputs), label)
+            return
+        self.assertEqual(set(inputs), PR_SIZE_INPUTS, label)
+        self.assertEqual(inputs.get("pr-number"),
+                         "${{ inputs.pr_number || '' }}", label)
+        extra = inputs.get("exclude-extra", "")
+        self.assertIsInstance(extra, str, label)
+        self.assertNotIn("${{", extra, label)
 
     def assert_review_rules_inputs(self, inputs, label):
         # Fail closed on unknown inputs, expressions, enforcement mode,
@@ -143,6 +199,21 @@ class PublicCI(unittest.TestCase):
             (directory / "review.yml").write_text(
                 "on: pull_request\njobs:\n  review-rules:\n    name: review-rules\n    permissions:\n      contents: read\n    uses: " + REVIEW_RULES_GUARD
                 + "\n    with:\n      packs: python-shell-ci,security,ts\n      mode: warn\n")
+            (directory / "pr-size.yml").write_text(
+                "on: pull_request\njobs:\n  pr-size:\n    name: pr-size\n"
+                "    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''\n"
+                "    permissions:\n      contents: read\n      issues: write\n      pull-requests: write\n"
+                "    uses: " + PR_SIZE_LABEL
+                + "\n    with:\n      pr-number: ${{ inputs.pr_number || '' }}\n      exclude-extra: ''\n"
+                "  pr-size-gate:\n    name: pr-size-gate\n"
+                "    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''\n"
+                "    permissions:\n      contents: read\n      issues: write\n      pull-requests: write\n"
+                "    uses: " + PR_SIZE_GATE
+                + "\n    with:\n      pr-number: ${{ inputs.pr_number || '' }}\n      exclude-extra: ''\n"
+                "  pr-size-weekly:\n    name: pr-size-weekly\n"
+                "    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.pr_number == '')\n"
+                "    permissions:\n      contents: read\n      issues: read\n      pull-requests: read\n"
+                "    uses: " + PR_SIZE_WEEKLY + "\n")
             self.assert_public_hosted_routes(directory)
 
     def test_public_routing_guard_rejects_private_dynamic_and_unreviewed_jobs(self):
@@ -202,6 +273,47 @@ class PublicCI(unittest.TestCase):
                 + "\n    permissions:\n      contents: read\n      pull-requests: read\n      issues: read\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
             "test-guard-permissions-contents-extra-read": "    uses: " + HOSTED_TEST_GUARD
                 + "\n    permissions:\n      contents: read\n      actions: read\n    with:\n      runs-on-json: '[\"ubuntu-latest\"]'\n",
+            "pr-size-unreviewed-ref": "    uses: TogetherWeOwn/.github/.github/workflows/pr-size-gate.yml@"
+                + "b" * 40 + "\n",
+            "pr-size-missing-if": "    uses: " + PR_SIZE_GATE
+                + "\n    permissions:\n      contents: read\n      issues: write\n      pull-requests: write\n"
+                + "    with:\n      pr-number: ${{ inputs.pr_number || '' }}\n      exclude-extra: ''\n",
+            "pr-size-widened-if": "    uses: " + PR_SIZE_GATE
+                + "\n    permissions:\n      contents: read\n      issues: write\n      pull-requests: write\n"
+                + "    if: github.event_name == 'pull_request' || github.event_name == 'push'\n"
+                + "    with:\n      pr-number: ${{ inputs.pr_number || '' }}\n      exclude-extra: ''\n",
+            "pr-size-missing-permissions": "    uses: " + PR_SIZE_GATE
+                + "\n    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''\n"
+                + "    with:\n      pr-number: ${{ inputs.pr_number || '' }}\n      exclude-extra: ''\n",
+            "pr-size-weekly-write": "    uses: " + PR_SIZE_WEEKLY
+                + "\n    permissions:\n      contents: read\n      issues: write\n      pull-requests: write\n"
+                + "    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.pr_number == '')\n",
+            "pr-size-unknown-input": "    uses: " + PR_SIZE_GATE
+                + "\n    permissions:\n      contents: read\n      issues: write\n      pull-requests: write\n"
+                + "    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''\n"
+                + "    with:\n      pr-number: ${{ inputs.pr_number || '' }}\n      exclude-extra: ''\n      unreviewed-input: 'yes'\n",
+            "pr-size-expression-exclude-extra": "    uses: " + PR_SIZE_GATE
+                + "\n    permissions:\n      contents: read\n      issues: write\n      pull-requests: write\n"
+                + "    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''\n"
+                + "    with:\n      pr-number: ${{ inputs.pr_number || '' }}\n      exclude-extra: ${{ inputs.paths }}\n",
+            "pr-size-pr-number-expression": "    uses: " + PR_SIZE_GATE
+                + "\n    permissions:\n      contents: read\n      issues: write\n      pull-requests: write\n"
+                + "    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''\n"
+                + "    with:\n      pr-number: ${{ github.event.pull_request.number }}\n      exclude-extra: ''\n",
+            "pr-size-weekly-input": "    uses: " + PR_SIZE_WEEKLY
+                + "\n    permissions:\n      contents: read\n      issues: read\n      pull-requests: read\n"
+                + "    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.pr_number == '')\n"
+                + "    with:\n      exclude-extra: ''\n",
+            "pr-size-secrets-inherit": "    uses: " + PR_SIZE_GATE
+                + "\n    permissions:\n      contents: read\n      issues: write\n      pull-requests: write\n"
+                + "    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''\n"
+                + "    secrets: inherit\n"
+                + "    with:\n      pr-number: ${{ inputs.pr_number || '' }}\n      exclude-extra: ''\n",
+            "pr-size-strategy": "    uses: " + PR_SIZE_GATE
+                + "\n    permissions:\n      contents: read\n      issues: write\n      pull-requests: write\n"
+                + "    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''\n"
+                + "    strategy:\n      matrix:\n        shard: [a]\n"
+                + "    with:\n      pr-number: ${{ inputs.pr_number || '' }}\n      exclude-extra: ''\n",
         }
         for name, job in bad_jobs.items():
             for suffix in (".yml", ".yaml"):

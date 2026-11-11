@@ -1,0 +1,40 @@
+name: Policy boundary fixture (unavailable)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/policy-boundary-fixture.yml'
+      - 'scripts/policy-refusal/**'
+
+permissions:
+  contents: read
+
+jobs:
+  refusal-tests:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test refusal contract
+        run: python3 -I -B scripts/policy-refusal/test_refusal.py
+
+  unavailable:
+    if: github.event_name == 'workflow_dispatch'
+    permissions: {}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Refuse unqualified boundary
+        shell: bash
+        run: |
+          printf '%s\n' \
+            'qualification=POLICY_ONLY' \
+            'stock_reference=UNESTABLISHED' \
+            'upstream_defect_eligible=false' \
+            'scenario_observation=NOT_RUN' \
+            'ERROR: boundary fixture, reviewed pins, and isolation are not established.'
+          exit 1

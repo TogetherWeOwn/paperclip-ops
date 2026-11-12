@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   refusal-tests:
+    name: paperclip-ops-policy-boundary-fixture-refusal-tests
     if: github.event_name == 'pull_request'
     permissions:
       contents: read
@@ -22,6 +23,7 @@ jobs:
         run: python3 -I -B scripts/policy-refusal/test_refusal.py
 
   unavailable:
+    name: paperclip-ops-policy-boundary-fixture-unavailable
     if: github.event_name == 'workflow_dispatch'
     permissions: {}
     runs-on: ubuntu-latest

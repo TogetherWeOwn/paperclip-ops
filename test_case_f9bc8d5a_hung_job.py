@@ -396,6 +396,22 @@ class Behaviour(Harness):
                 out = self.classify("Private mutation gates", minutes, seconds)
                 self.assertEqual((out["verdict"], out["success"]), (verdict, success))
 
+    def test_policy_boundary_names_use_only_their_qualified_thresholds(self):
+        for job in ("refusal-tests", "unavailable"):
+            with self.subTest(job=job):
+                name = f"paperclip-ops-policy-boundary-fixture-{job}"
+                at_limit = self.classify(name, 17)
+                self.assertEqual((at_limit["verdict"], at_limit["success"], at_limit["unknown"]),
+                                 ("WARN", True, 0))
+                over_limit = self.classify(name, 17, 1)
+                self.assertEqual((over_limit["verdict"], over_limit["success"]), ("HUNG", False))
+                bare = self.classify(job, 17, 1)
+                self.assertEqual((bare["verdict"], bare["success"], bare["unknown"]),
+                                 ("HEALTHY", True, 1))
+                self.assertIn("UNKNOWN-threshold", bare["text"])
+                default_limit = self.classify(job, 375, 1)
+                self.assertEqual((default_limit["verdict"], default_limit["success"]), ("HUNG", False))
+
     def test_warn_never_pages_on_its_own(self):
         out = self.classify("Offline suites", 130)
         self.assertEqual((out["verdict"], out["success"]), ("WARN", True))
